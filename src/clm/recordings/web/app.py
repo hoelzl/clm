@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from loguru import logger
 
 from clm.__version__ import __version__
+from clm.infrastructure.web_security import install_web_security
 
 from .routes import router
 
@@ -97,6 +98,9 @@ def create_app(
     stability_check_count: int = 3,
     auphonic_api_key: str = "",
     auphonic_preset: str = "",
+    bind_host: str | None = None,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
 ) -> FastAPI:
     """Create the recordings dashboard FastAPI application.
 
@@ -114,6 +118,18 @@ def create_app(
             ``processing_backend == "auphonic"``; ignored otherwise).
         auphonic_preset: Optional managed preset name to reference on
             every Auphonic production. Empty means inline algorithms.
+        bind_host: Address the server will bind, folded into the ``Host``
+            allowlist so a non-loopback bind keeps working.
+        allowed_hosts: Extra ``Host`` values to accept (``--allowed-host``).
+        allowed_origins: Extra origins allowed to drive mutating routes
+            (``--allowed-origin``).
+
+    Notes:
+        Every mutating route is guarded against cross-origin drivers and the
+        app rejects a ``Host`` it does not recognise — see
+        :mod:`clm.infrastructure.web_security`. The dashboard has no login, so
+        without these a page open in another tab could arm decks, start
+        recordings, and upload local files to the processing backend.
     """
     from clm.infrastructure.config import AuphonicConfig, RecordingsConfig
     from clm.recordings.state import CourseRecordingState, load_or_create, save_state
@@ -132,6 +148,14 @@ def create_app(
         version=__version__,
         lifespan=lifespan,
     )
+
+    effective_hosts = install_web_security(
+        app,
+        bind_host=bind_host,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins or (),
+    )
+    logger.debug("Recordings dashboard accepts Host values: {}", effective_hosts)
 
     # Ensure directory structure
     ensure_root(recordings_root)

@@ -46,6 +46,15 @@ def app(recording_root: Path):
             recordings_root=recording_root,
             obs_host="localhost",
             obs_port=4455,
+            # TestClient sends ``Host: testserver``; the production default
+            # (loopback only) would 400 every request here. This override
+            # reaches the *host* guard only. The origin guard is also inert
+            # across this suite, but for a different reason: TestClient sends
+            # neither Origin nor Sec-Fetch-Site, which is deliberately allowed
+            # (non-browser clients are not the threat model — decision D4).
+            # Both defaults are exercised in tests/recordings/test_web_security.py,
+            # which builds an app without this override.
+            allowed_hosts=["testserver"],
         )
         # Prevent lifespan from trying to connect
         mock_obs.connect.side_effect = ConnectionError("OBS not running")

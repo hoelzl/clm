@@ -910,6 +910,119 @@ class TestServeRecordingsCommand:
         assert result.exit_code == 1
         assert "Server error" in result.output
 
+    def test_wildcard_bind_warns_about_the_host_allowlist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A wildcard bind promises reach the Host allowlist cannot deliver.
+
+        Without this the symptom is a dashboard that starts normally and then
+        400s every remote request, explained only in a log nobody watches.
+        """
+        self._install_stubs(monkeypatch)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            recordings_group,
+            ["serve", str(tmp_path), "--no-browser", "--host", "0.0.0.0"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "--allowed-host" in result.output
+
+    def test_loopback_bind_does_not_warn(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        self._install_stubs(monkeypatch)
+
+        runner = CliRunner()
+        result = runner.invoke(recordings_group, ["serve", str(tmp_path), "--no-browser"])
+
+        assert result.exit_code == 0, result.output
+        assert "--allowed-host" not in result.output
+
+    def test_allowed_hosts_reach_the_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _, fake_app_module, _ = self._install_stubs(monkeypatch)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            recordings_group,
+            [
+                "serve",
+                str(tmp_path),
+                "--no-browser",
+                "--allowed-host",
+                "box.ts.net",
+                "--allowed-origin",
+                "https://box.ts.net",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        kwargs = fake_app_module.create_app.call_args.kwargs
+        assert kwargs["allowed_hosts"] == ["box.ts.net"]
+        assert kwargs["allowed_origins"] == ["https://box.ts.net"]
+        assert kwargs["bind_host"] == "127.0.0.1"
+
+
+class TestWebSecurityLogBridge:
+    """The bridge that puts refusals into the recordings forensic log."""
+
+    def test_installing_twice_leaves_one_handler(self):
+        """A guard that cannot fire leaks handlers and duplicates every line.
+
+        Defining the handler class inside the installer made
+        ``isinstance(h, _ToLoguru)`` false for handlers a previous call had
+        installed, so each ``clm recordings serve`` in a process added another
+        one — and the test suite starts several.
+        """
+        import logging
+
+        from clm.infrastructure import web_security
+
+        target = logging.getLogger(web_security.__name__)
+        original = list(target.handlers)
+        original_propagate = target.propagate
+        try:
+            for handler in list(target.handlers):
+                target.removeHandler(handler)
+
+            recordings_module._forward_web_security_logs_to_loguru()
+            recordings_module._forward_web_security_logs_to_loguru()
+            recordings_module._forward_web_security_logs_to_loguru()
+
+            bridges = [
+                h
+                for h in target.handlers
+                if isinstance(h, recordings_module._StdlibToLoguruHandler)
+            ]
+            assert len(bridges) == 1
+        finally:
+            for handler in list(target.handlers):
+                target.removeHandler(handler)
+            for handler in original:
+                target.addHandler(handler)
+            target.propagate = original_propagate
+
+    def test_an_unknown_level_does_not_raise_through_the_caller(self):
+        """``logging.Handler.handle`` does not wrap ``emit``.
+
+        A level loguru does not know would otherwise propagate out of the
+        middleware's ``log.warning`` and turn a 403 into a 500.
+        """
+        import logging
+
+        handler = recordings_module._StdlibToLoguruHandler()
+        record = logging.LogRecord(
+            name="clm.infrastructure.web_security",
+            level=42,
+            pathname=__file__,
+            lineno=1,
+            msg="refused something",
+            args=(),
+            exc_info=None,
+        )
+        record.levelname = "Level 42"
+
+        handler.emit(record)  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # backends command (list_backends)

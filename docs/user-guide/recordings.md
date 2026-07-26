@@ -153,6 +153,49 @@ The recordings dashboard is a browser-based UI for the recording workflow:
 clm recordings serve <recordings-root> --spec-file course.xml
 ```
 
+### Who can reach the dashboard
+
+The dashboard has no login. Anyone who can send it a request can arm a deck,
+start a recording, or submit a file for processing — which, with the Auphonic
+backend, uploads that file to a third-party service. Two guards keep that
+"anyone" down to *you, in this browser, on this machine*:
+
+- **Host allowlist.** Requests must carry a `Host` header naming this server
+  (`localhost`, `127.0.0.1`, `::1`, plus whatever you passed to `--host`).
+  Without this, a site that points its own DNS name at `127.0.0.1` would count
+  as same-origin and every other check would pass.
+- **Origin check on actions.** Any state-changing request (`POST` and friends)
+  must come from the dashboard's own pages. A page on another site can submit
+  a form to `http://127.0.0.1:8008/record` without your involvement; that now
+  gets a `403`. Reading pages is unaffected.
+
+Both are on by default and need no configuration for the normal
+`clm recordings serve ~/Recordings` workflow. If you deliberately reach the
+dashboard under a different name — a Tailscale hostname, a reverse proxy —
+tell it so, or requests arrive as `400 Invalid host header`:
+
+```bash
+clm recordings serve ~/Recordings --host 0.0.0.0 \
+    --allowed-host box.tailnet.ts.net \
+    --allowed-origin https://box.tailnet.ts.net
+```
+
+`--allowed-host '*'` turns the host check off entirely. These guards protect
+against *other web pages*; they do not (and cannot) protect against another
+program running as you on the same machine, which can set any header it likes.
+
+**Behind a reverse proxy**, prefer a config that forwards the original `Host`
+including its port — nginx's `proxy_set_header Host $http_host`, not `$host`,
+which drops the port. With the port dropped, the dashboard cannot tell that
+`Origin: https://box.example:8443` belongs to the request it received, and
+refuses actions on clients that do not send `Sec-Fetch-Site` (older browsers).
+`--allowed-origin https://box.example:8443` is the escape hatch if you cannot
+change the proxy config.
+
+Paths are contained too: file processing submitted through the dashboard must
+resolve under the recordings root, and course/section/deck names may not
+contain path separators or `..`.
+
 ### Lecture Selection
 
 The **Lectures** page lists every slide deck in the course, grouped by

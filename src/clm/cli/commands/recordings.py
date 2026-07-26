@@ -619,6 +619,20 @@ def assemble(root_dir: Path, raw_suffix: str | None, dry_run: bool):
 )
 @click.option("--obs-password", default=None, help="OBS WebSocket password.")
 @click.option("--no-browser", is_flag=True, help="Do not auto-open browser.")
+@click.option(
+    "--allowed-host",
+    multiple=True,
+    help="Extra Host header value to accept (repeatable). Needed when you reach "
+    "the dashboard under a name other than localhost — e.g. a Tailscale "
+    "hostname. Pass '*' to disable the check entirely.",
+)
+@click.option(
+    "--allowed-origin",
+    multiple=True,
+    help="Extra origin allowed to drive actions (repeatable), e.g. "
+    "https://host.tailnet.ts.net. Only needed behind a reverse proxy that "
+    "rewrites the Host header.",
+)
 def serve_recordings(
     root_dir: Path,
     host: str,
@@ -628,6 +642,8 @@ def serve_recordings(
     obs_port: int | None,
     obs_password: str | None,
     no_browser: bool,
+    allowed_host: tuple[str, ...],
+    allowed_origin: tuple[str, ...],
 ):
     """Start the recordings dashboard web UI.
 
@@ -637,6 +653,13 @@ def serve_recordings(
 
     ROOT_DIR is the recordings root containing to-process/, final/,
     and archive/ subdirectories (created automatically if missing).
+
+    The dashboard has no login: anyone who can reach it can arm decks and
+    start recordings. It therefore binds localhost by default, only accepts
+    requests whose Host names this server, and refuses actions driven from
+    another origin — which is what keeps a web page open in another tab from
+    driving it. Use --allowed-host / --allowed-origin when you deliberately
+    reach it under a different name.
     """
     try:
         import uvicorn
@@ -644,6 +667,7 @@ def serve_recordings(
         console.print("[red]uvicorn is required. It should be a core CLM dependency.[/red]")
         raise SystemExit(1) from exc
 
+    from clm.infrastructure.web_security import remote_access_warning
     from clm.recordings.web.app import create_app
 
     # Resolve OBS settings from CLI args or CLM config
@@ -671,9 +695,19 @@ def serve_recordings(
         stability_check_count=cfg_stab_count,
         auphonic_api_key=cfg_auphonic_key,
         auphonic_preset=cfg_auphonic_preset,
+        bind_host=host,
+        allowed_hosts=list(allowed_host),
+        allowed_origins=list(allowed_origin),
     )
 
     url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
+
+    # A wildcard bind promises remote access the Host allowlist cannot deliver
+    # on its own; say so here rather than letting the user discover it as a
+    # wall of 400s from another machine.
+    reach_warning = remote_access_warning(host, allowed_host)
+    if reach_warning:
+        console.print(f"[yellow]Note:[/yellow] {reach_warning}")
 
     if not no_browser:
         import webbrowser
@@ -726,7 +760,71 @@ def _configure_recordings_event_log(root_dir: Path) -> None:
             "{thread.name} | {name}:{function}:{line} - {message}"
         ),
     )
+    _forward_web_security_logs_to_loguru()
     console.print(f"[dim]Event log: {log_path}[/dim]")
+
+
+class _StdlibToLoguruHandler(logging.Handler):
+    """Forward stdlib log records to loguru.
+
+    Defined at module scope, not inside the installer: a class created inside
+    a function is a *new* class object per call, so an
+    ``isinstance(h, _ToLoguru)`` guard would never recognise a handler an
+    earlier call installed. Every ``clm recordings serve`` in one process (the
+    test suite does several) would then add another handler and write every
+    refusal to ``events.log`` one more time — corrupting the forensic record
+    the bridge exists to produce.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        from loguru import logger as _loguru
+
+        try:
+            # loguru rejects a level it does not know, and stdlib allows any
+            # name via ``addLevelName`` (plus the synthesized "Level 42").
+            # Mapping by severity keeps a future custom level from raising
+            # inside a middleware and turning a 403 into a 500.
+            try:
+                level = _loguru.level(record.levelname).name
+            except ValueError:
+                level = "INFO" if record.levelno < logging.WARNING else "WARNING"
+            # The sink's ``{name}`` would resolve to *this* module, so the
+            # originating logger goes into the message. Binding it into
+            # ``extra`` instead would need a format placeholder that every
+            # other (unbound) record in the process would then KeyError on.
+            _loguru.opt(exception=record.exc_info).log(
+                level, f"[{record.name}] {record.getMessage()}"
+            )
+        except Exception:  # pragma: no cover - logging must never break a request
+            # ``logging.Handler.handle`` does not wrap ``emit``, so anything
+            # raised here would propagate out of the caller's ``log.warning``.
+            self.handleError(record)
+
+
+def _forward_web_security_logs_to_loguru() -> None:
+    """Route :mod:`clm.infrastructure.web_security` refusals into the event log.
+
+    That module is app-agnostic and so uses stdlib ``logging``, while the rest
+    of the recordings stack uses loguru — and only loguru has the
+    ``events.log`` sink. Without this bridge, a refused ``Host`` or a refused
+    cross-origin action would be the one class of event missing from the
+    forensic record, which is precisely the class you go looking for after an
+    incident.
+
+    Scoped to that single logger rather than installed on the root: a global
+    intercept would re-route every library's logging as a side effect of
+    starting the dashboard. Idempotent — safe to call once per server start.
+    """
+    from clm.infrastructure import web_security
+
+    target = logging.getLogger(web_security.__name__)
+    if any(isinstance(h, _StdlibToLoguruHandler) for h in target.handlers):
+        return
+    target.addHandler(_StdlibToLoguruHandler())
+    target.setLevel(logging.INFO)
+    # Records are now delivered to loguru; letting them also climb to the root
+    # logger would double every refusal as soon as anything configures root.
+    target.propagate = False
 
 
 def _get_obs_config() -> tuple[str, int, str]:

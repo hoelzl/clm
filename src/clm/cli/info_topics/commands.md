@@ -4208,6 +4208,8 @@ clm recordings serve ROOT_DIR [OPTIONS]
 | `--obs-port INT` | OBS WebSocket port (default: from config) |
 | `--obs-password TEXT` | OBS WebSocket password |
 | `--no-browser` | Do not auto-open browser |
+| `--allowed-host TEXT` | Extra `Host` header value to accept (repeatable); `*` disables the check |
+| `--allowed-origin TEXT` | Extra origin allowed to drive actions (repeatable) |
 
 Examples:
 
@@ -4216,6 +4218,25 @@ clm recordings serve ~/Recordings
 clm recordings serve ~/Recordings --spec-file course.xml
 clm recordings serve ~/Recordings --obs-host 192.168.1.5 --port 9000
 ```
+
+**Access control.** The dashboard has no login — anyone who can reach it can
+arm decks, start recordings and submit files for processing. Since {version}
+it therefore:
+
+- binds `127.0.0.1` by default (unchanged);
+- answers only requests whose `Host` header names this server (`localhost`,
+  `127.0.0.1`, `::1`, plus whatever `--host` and `--allowed-host` name), which
+  is what stops a DNS-rebinding page from reaching it; and
+- refuses any state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) that a
+  *different* origin drove, judged by `Sec-Fetch-Site` and `Origin`. Reads are
+  unaffected.
+
+Nothing changes for normal use. If you reach the dashboard under another name
+— a Tailscale hostname, a reverse proxy — name it with `--allowed-host` (and
+`--allowed-origin` if the proxy rewrites `Host`), otherwise you get
+`400 Invalid host header` or `403`. Requests carrying neither `Origin` nor
+`Sec-Fetch-Site` (`curl`, scripts) are still accepted: this guards against
+*other web pages*, not against other processes on your machine.
 
 #### `clm recordings backends`
 
