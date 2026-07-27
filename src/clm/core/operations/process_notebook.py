@@ -3,6 +3,7 @@ import logging
 from base64 import b64encode
 from functools import cache
 from importlib.resources import files as package_files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,39 @@ from clm.infrastructure.utils.path_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_template_bytes(data: bytes) -> bytes:
+    """Collapse CRLF to LF before hashing.
+
+    The same clm version can legitimately carry either line ending: an
+    editable install reads the working tree (CRLF on Windows with
+    ``core.autocrlf=true``), while a wheel/sdist copy is LF-normalized.
+    Hashing raw bytes made two installs of one version disagree on the
+    fingerprint — and therefore on every notebook content hash — so
+    alternating installs thrashed each other's cache (issue #711). The
+    templates are Jinja text; their line endings do not affect rendered
+    output semantics for cache-key purposes.
+    """
+    return data.replace(b"\r\n", b"\n")
+
+
+def _hash_template_dir(prog_lang: str, template_dir: Traversable) -> str:
+    """Digest of *prog_lang* plus the (newline-normalized) files in *template_dir*.
+
+    Split from :func:`compute_template_fingerprint` so tests can point it at
+    synthetic directories (CRLF vs LF twins) instead of the bundled package.
+    """
+    from clm import __version__
+
+    hasher = hashlib.sha256()
+    hasher.update(f"{__version__}:{prog_lang}".encode())
+    if template_dir.is_dir():
+        entries = sorted((entry.name, entry) for entry in template_dir.iterdir() if entry.is_file())
+        for name, entry in entries:
+            hasher.update(f"\n{name}:".encode())
+            hasher.update(_normalize_template_bytes(entry.read_bytes()))
+    return hasher.hexdigest()
 
 
 @cache
@@ -59,18 +93,14 @@ def compute_template_fingerprint(prog_lang: str) -> str:
 
     ``cache`` makes this a one-time cost per prog_lang per process; the
     template directories are a handful of small files.
-    """
-    from clm import __version__
 
-    hasher = hashlib.sha256()
-    hasher.update(f"{__version__}:{prog_lang}".encode())
+    Template bytes are newline-normalized (CRLF → LF) before hashing: an
+    editable install on Windows reads CRLF working-tree files while a wheel
+    install carries LF, and the two must not disagree on the cache key for
+    the same clm version (issue #711).
+    """
     template_dir = package_files("clm") / "workers" / "notebook" / f"templates_{prog_lang}"
-    if template_dir.is_dir():
-        entries = sorted((entry.name, entry) for entry in template_dir.iterdir() if entry.is_file())
-        for name, entry in entries:
-            hasher.update(f"\n{name}:".encode())
-            hasher.update(entry.read_bytes())
-    return hasher.hexdigest()
+    return _hash_template_dir(prog_lang, template_dir)
 
 
 def worker_image_identity_for(execution_mode: str, image: str | None) -> str:
