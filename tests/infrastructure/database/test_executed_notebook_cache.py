@@ -11,6 +11,7 @@ import pytest
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 from clm.infrastructure.database.executed_notebook_cache import (
+    _USER_VERSION_JSON_ONLY,
     PAYLOAD_FORMAT,
     ExecutedNotebookCache,
 )
@@ -331,3 +332,53 @@ class TestPickleEradication:
             cache.conn.commit()
 
             assert cache.get("/path/nb.py", "hash1", "en", "python") is None
+
+    def test_marks_database_migrated_via_user_version(self, temp_db_path):
+        """Opening stamps ``PRAGMA user_version`` so later opens can skip the
+        migration scan (issue #711 — the per-op opens in the replay gate made
+        the full-scan DELETE 15% of cached-phase host time)."""
+        with ExecutedNotebookCache(temp_db_path):
+            pass
+        conn = sqlite3.connect(str(temp_db_path))
+        (user_version,) = conn.execute("PRAGMA user_version").fetchone()
+        conn.close()
+        assert user_version == _USER_VERSION_JSON_ONLY
+
+    def test_migration_runs_once_not_on_every_open(self, temp_db_path, sample_notebook):
+        """After migration, reopening must NOT rerun the full-scan DELETE.
+
+        A legacy-format row written *after* migration (e.g. by an older clm
+        sharing the cache DB) surviving a reopen proves the scan was gated
+        off. The row is still harmless: readers treat it as a cache miss.
+        """
+        with ExecutedNotebookCache(temp_db_path) as cache:
+            cache.store("/path/nb.py", "hash-json", "en", "python", sample_notebook)
+
+        # Simulate an older clm writing a pickle row into the migrated DB.
+        conn = sqlite3.connect(str(temp_db_path))
+        conn.execute(
+            "INSERT INTO executed_notebooks "
+            "(input_file, content_hash, language, prog_lang, executed_notebook, payload_format) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "/path/old.py",
+                "hash-legacy",
+                "en",
+                "python",
+                pickle.dumps(sample_notebook),
+                "pickle",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        with ExecutedNotebookCache(temp_db_path) as cache:
+            rows = cache.conn.execute(
+                "SELECT COUNT(*) FROM executed_notebooks WHERE payload_format != ?",
+                (PAYLOAD_FORMAT,),
+            ).fetchone()[0]
+            assert rows == 1  # not purged again — the DELETE did not rerun
+            # ...but it still cannot be read back as a hit.
+            assert cache.get("/path/old.py", "hash-legacy", "en", "python") is None
+            # And the JSON row written before is unaffected.
+            assert cache.get("/path/nb.py", "hash-json", "en", "python") is not None

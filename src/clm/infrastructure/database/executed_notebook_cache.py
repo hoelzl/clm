@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 #: Anything else is from a version that stored pickles and is unreadable here.
 PAYLOAD_FORMAT = "nbformat-json"
 
+# Value for ``PRAGMA user_version`` marking that the legacy-payload migration
+# (the full-scan DELETE below) has already run for this database file.
+# 0/absent = unmigrated (may contain pickle-era rows); 1 = JSON-only.
+# The marker travels with the DB file, so every process that opens it —
+# backend, workers, CLI — pays the scan at most once per database, instead
+# of on every connection open (issue #711: the per-op opens in the
+# recording/speaker replay gate made this 15% of cached-phase host time).
+_USER_VERSION_JSON_ONLY = 1
+
 
 class ExecutedNotebookCache:
     """Manages caching of executed notebooks for reuse across HTML variants.
@@ -91,7 +100,14 @@ class ExecutedNotebookCache:
         deletes every row this version cannot read. The delete is deliberate
         and not recoverable — a pickle payload is exactly what we refuse to
         deserialize, and this is a cache: the entries regenerate on the next
-        build.
+        build. Any legacy row that slips past (e.g. written by an older clm
+        after migration) is still safe: readers treat unparsable payloads as
+        cache misses.
+
+        The migration runs once per database file, gated on
+        ``PRAGMA user_version`` — not on every connection open. Steady-state
+        opens (several hundred per build via the recording/speaker replay
+        gate) then cost only the CREATE IF NOT EXISTS schema checks.
         """
         assert self.conn is not None, "Connection not initialized"
         cursor = self.conn.cursor()
@@ -123,15 +139,18 @@ class ExecutedNotebookCache:
                 "payload_format TEXT NOT NULL DEFAULT 'pickle'"
             )
 
-        cursor.execute(
-            "DELETE FROM executed_notebooks WHERE payload_format != ?",
-            (PAYLOAD_FORMAT,),
-        )
-        if cursor.rowcount > 0:
-            logger.info(
-                f"Discarded {cursor.rowcount} executed-notebook cache entries in the "
-                f"legacy pickle format; they will be re-executed and re-cached."
+        (user_version,) = cursor.execute("PRAGMA user_version").fetchone()
+        if user_version < _USER_VERSION_JSON_ONLY:
+            cursor.execute(
+                "DELETE FROM executed_notebooks WHERE payload_format != ?",
+                (PAYLOAD_FORMAT,),
             )
+            if cursor.rowcount > 0:
+                logger.info(
+                    f"Discarded {cursor.rowcount} executed-notebook cache entries in the "
+                    f"legacy pickle format; they will be re-executed and re-cached."
+                )
+            cursor.execute(f"PRAGMA user_version = {_USER_VERSION_JSON_ONLY}")
 
         assert self.conn is not None  # Already checked above, but reassure mypy
         self.conn.commit()

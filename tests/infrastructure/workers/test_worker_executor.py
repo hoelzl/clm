@@ -478,6 +478,127 @@ class TestDirectWorkerExecutor:
             assert mock_killpg.call_count == 2
 
 
+class TestLivenessScan:
+    """System-wide WORKER_ID scan used when the worker is not in the local
+    process dict (worker started by a different executor instance).
+
+    The scan must stay cheap on Windows: reading a process environment is a
+    PEB read per process, so only Python interpreters may pay it, and a
+    monitor cycle (one call per worker) must share a single scan (#711).
+    """
+
+    @staticmethod
+    def _fake_proc(pid, name, env=None, environ_raises=None):
+        proc = MagicMock()
+        proc.info = {"pid": pid, "name": name}
+        if environ_raises is not None:
+            proc.environ.side_effect = environ_raises
+        else:
+            proc.environ.return_value = env or {}
+        return proc
+
+    def test_scan_reads_environ_only_for_python_processes(self, db_path, workspace_path):
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        worker = self._fake_proc(101, "python.exe", {"WORKER_ID": "direct-notebook-0-aaa"})
+        system_proc = self._fake_proc(
+            102, "svchost.exe", environ_raises=AssertionError("must not read environ")
+        )
+        other = self._fake_proc(
+            103, "chrome.exe", environ_raises=AssertionError("must not read environ")
+        )
+
+        with (
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.process_iter",
+                return_value=[system_proc, worker, other],
+            ),
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.pid_exists", return_value=True
+            ),
+        ):
+            assert executor.is_worker_running("direct-notebook-0-aaa") is True
+
+    def test_scan_unknown_worker_returns_false(self, db_path, workspace_path):
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        worker = self._fake_proc(101, "python.exe", {"WORKER_ID": "direct-notebook-0-aaa"})
+
+        with patch(
+            "clm.infrastructure.workers.worker_executor.psutil.process_iter", return_value=[worker]
+        ):
+            assert executor.is_worker_running("direct-notebook-1-bbb") is False
+
+    def test_scan_is_cached_across_calls_within_ttl(self, db_path, workspace_path):
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        procs = [
+            self._fake_proc(101, "python.exe", {"WORKER_ID": "w-a"}),
+            self._fake_proc(102, "python.exe", {"WORKER_ID": "w-b"}),
+        ]
+
+        with (
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.process_iter", return_value=procs
+            ) as mock_iter,
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.pid_exists", return_value=True
+            ),
+        ):
+            assert executor.is_worker_running("w-a") is True
+            assert executor.is_worker_running("w-b") is True
+            assert mock_iter.call_count == 1  # one scan served both lookups
+
+    def test_scan_cache_expires_after_ttl(self, db_path, workspace_path):
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        procs = [self._fake_proc(101, "python.exe", {"WORKER_ID": "w-a"})]
+
+        with (
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.process_iter", return_value=procs
+            ) as mock_iter,
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.pid_exists", return_value=True
+            ),
+        ):
+            assert executor.is_worker_running("w-a") is True
+            # Force the cache to expire.
+            ts, cached = executor._liveness_scan_cache
+            executor._liveness_scan_cache = (ts - executor._LIVENESS_SCAN_TTL_SECONDS - 1, cached)
+            assert executor.is_worker_running("w-a") is True
+            assert mock_iter.call_count == 2
+
+    def test_scan_tolerates_access_denied(self, db_path, workspace_path):
+        import psutil
+
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        denied = self._fake_proc(100, "python.exe", environ_raises=psutil.AccessDenied(pid=100))
+        worker = self._fake_proc(101, "python.exe", {"WORKER_ID": "w-a"})
+
+        with (
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.process_iter",
+                return_value=[denied, worker],
+            ),
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.pid_exists", return_value=True
+            ),
+        ):
+            assert executor.is_worker_running("w-a") is True
+
+    def test_crash_after_scan_detected_via_pid_exists(self, db_path, workspace_path):
+        """The TTL-cached map must not mask a crash: pid_exists re-verifies."""
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        procs = [self._fake_proc(101, "python.exe", {"WORKER_ID": "w-a"})]
+
+        with (
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.process_iter", return_value=procs
+            ),
+            patch(
+                "clm.infrastructure.workers.worker_executor.psutil.pid_exists", return_value=False
+            ),
+        ):
+            assert executor.is_worker_running("w-a") is False
+
+
 class TestDockerWorkerExecutor:
     """Tests for DockerWorkerExecutor."""
 

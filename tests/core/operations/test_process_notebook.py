@@ -8,6 +8,7 @@ directory, shipped via ``NotebookPayload.template_fingerprint``) and
 """
 
 from clm.core.operations.process_notebook import (
+    _hash_template_dir,
     compute_template_fingerprint,
     compute_worker_image_identity,
     worker_image_identity_for,
@@ -50,6 +51,37 @@ class TestComputeTemplateFingerprint:
         compute_template_fingerprint.cache_clear()
         second = compute_template_fingerprint("cpp")
         assert first == second
+
+    def test_crlf_and_lf_templates_hash_identically(self, tmp_path):
+        """A CRLF working tree (Windows editable install, autocrlf=true) and
+        an LF-normalized copy (wheel/sdist install) of the SAME templates
+        must yield the same fingerprint — raw-byte hashing made two installs
+        of one clm version disagree on every notebook cache key and thrash
+        each other's cache (issue #711)."""
+        lf_dir = tmp_path / "lf"
+        crlf_dir = tmp_path / "crlf"
+        lf_dir.mkdir()
+        crlf_dir.mkdir()
+        (lf_dir / "macros.j2").write_bytes(b"{% macro a() %}\nbody\n{% endmacro %}\n")
+        (crlf_dir / "macros.j2").write_bytes(b"{% macro a() %}\r\nbody\r\n{% endmacro %}\r\n")
+        assert _hash_template_dir("python", lf_dir) == _hash_template_dir("python", crlf_dir)
+
+    def test_content_difference_still_changes_fingerprint(self, tmp_path):
+        """Newline normalization must not blunt real content sensitivity:
+        actually different template text still produces a different key."""
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        (dir_a / "macros.j2").write_bytes(b"version A\n")
+        (dir_b / "macros.j2").write_bytes(b"version B\n")
+        assert _hash_template_dir("python", dir_a) != _hash_template_dir("python", dir_b)
+
+    def test_missing_dir_hashes_version_and_lang_only(self, tmp_path):
+        """A nonexistent template dir must not crash and must still vary by
+        prog_lang (mirrors the unknown-language behavior of the public API)."""
+        missing = tmp_path / "no-such-dir"
+        assert _hash_template_dir("python", missing) != _hash_template_dir("cpp", missing)
 
 
 class TestWorkerImageIdentity:

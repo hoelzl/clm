@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -623,6 +624,8 @@ class DirectWorkerExecutor(WorkerExecutor):
         self.notebook_kernel_python = notebook_kernel_python
         self.processes: dict[str, subprocess.Popen] = {}
         self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
+        # TTL cache for the system-wide WORKER_ID scan, see _scan_worker_processes.
+        self._liveness_scan_cache: tuple[float, dict[str, int]] | None = None
 
         # Provision the course kernelspec once (idempotent) so every notebook
         # worker this executor starts shares one JUPYTER_PATH root. Fails fast
@@ -906,16 +909,49 @@ class DirectWorkerExecutor(WorkerExecutor):
 
         # If not in our dict, check if process exists system-wide via psutil.
         # This handles the case where a different executor instance started it.
-        for proc in psutil.process_iter(["pid", "environ"]):
+        pid = self._scan_worker_processes().get(worker_id)
+        if pid is None:
+            return False
+        # The map is TTL-cached; re-verify the PID is actually alive so a
+        # worker that crashed mid-cycle is still detected promptly.
+        return bool(psutil.pid_exists(pid))
+
+    # How long a system-wide WORKER_ID → PID scan stays valid. The health
+    # monitor checks every worker once per cycle, so calls cluster: one scan
+    # serves the whole cycle instead of one scan per worker.
+    _LIVENESS_SCAN_TTL_SECONDS = 5.0
+
+    def _scan_worker_processes(self) -> dict[str, int]:
+        """Map WORKER_ID → PID for clm worker processes, system-wide (TTL-cached).
+
+        Reading a process's environment on Windows is an OpenProcess + PEB
+        read *per process*, so the previous
+        ``process_iter(["pid", "environ"])`` + ``environ()`` sweep over every
+        process on the system cost seconds per scan under load — and the
+        health monitor ran it per worker per cycle (measured: ~57% of all
+        host-process samples during a build, issue #711). Process names are
+        cheap to read, so only Python interpreters (the only processes that
+        can be clm workers) pay the ``environ()`` call, and the result is
+        cached for a few seconds so a monitor cycle scans at most once.
+        """
+        now = time.monotonic()
+        if self._liveness_scan_cache is not None:
+            ts, cached = self._liveness_scan_cache
+            if now - ts < self._LIVENESS_SCAN_TTL_SECONDS:
+                return cached
+        workers: dict[str, int] = {}
+        for proc in psutil.process_iter(["pid", "name"]):
             try:
+                if "python" not in (proc.info.get("name") or "").lower():
+                    continue
                 env = proc.environ()
-                if env.get("WORKER_ID") == worker_id:
-                    return bool(proc.is_running())
+                worker_id = env.get("WORKER_ID")
+                if worker_id:
+                    workers[worker_id] = proc.info["pid"]
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
-
-        # Could not verify - assume not running
-        return False
+        self._liveness_scan_cache = (now, workers)
+        return workers
 
     def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get resource usage statistics for a direct process worker.
