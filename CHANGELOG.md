@@ -9,6 +9,154 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.23.1] - 2026-07-28
+
+### Fixed
+
+- Fixed the nightly flake in `test_cache_miss_falls_back_to_direct_execution`
+  (#694): a three-hop cross-test poisoning chain — a config test reloaded the
+  process-global `ClmConfig` singleton under a monkeypatched
+  `CLM_LOGGING__LOG_LEVEL=ERROR` (monkeypatch reverts the env var, not the
+  singleton), a later in-process `clm build` applied the poisoned level via
+  `setup_logging` → `getLogger("clm").setLevel(ERROR)`, and every later
+  `clm.*` WARNING on that xdist worker was silently swallowed. Added an
+  autouse `_restore_worker_global_state` fixture in `tests/conftest.py` that
+  snapshots/restores the clm logger chain and the config singleton around
+  every test (pinned by `tests/test_global_state_isolation.py`), and guarded
+  the three caplog-asserting tests that lacked a `caplog.set_level` guard
+  (the other 35 caplog-using files already had one).
+
+- **The Mobile Deck Studio's tier-2 cell preview now actually runs, with its HTML
+  sanitized on the server.** The tier expands a cell's Jinja server-side so the
+  phone shows a rendered header instead of raw `{{ header_de("…") }}` — and its
+  in-page consumer had been unreachable since it was written, gated on
+  `cell.cell_type === "markdown"` while the API types a Jinja cell as `"j2"`. The
+  gate is now the cell's own `is_j2` flag, as a named function with tests on both
+  sides of the contract (the predicate under `node`, and the payload the real
+  service emits). Because the header macros deliberately emit markup — centered
+  `<div>`s and the course logo as a `data:` image — escaping the output would
+  delete the feature, so `POST /api/studio/deck/render-cell` now returns a
+  **sanitized** `html` fragment (allowlist in `clm.web.studio.sanitize`, backed by
+  `nh3`, new in the `[web]` extra) that the client injects verbatim, with `body`
+  echoing the request for the tier-1 fallback. The `%%`-delimiter drop and
+  comment-prefix strip moved server-side in the same change, so what gets injected
+  is exactly what was sanitized. Without `nh3` the preview fails closed to tier-1
+  rather than injecting unchecked HTML. `data:` URIs are confined to `<img src>`
+  images (a `data:` link is a navigation vector); authority-relative targets
+  (`//host`, and the `\\` / `/\` / `\/` spellings a URL parser treats the same
+  way) are refused, as the client's tier-1 `safeUrl()` already refused them;
+  `style` is reduced to an inert property allowlist, with `class` disallowed
+  because the app's own `.toast { position: fixed }` would otherwise hand
+  injected markup the overlay that allowlist exists to refuse; and script /
+  iframe / object / form content is removed *with its text* rather than
+  unwrapped.
+
+- **`clm slides sync record` no longer blesses a divergence hidden in a voiceover
+  companion.** The ledger write gate ran the structural checks on the two deck
+  halves while `sync verify` ran them on the companion-inlined projection, so the
+  two verbs disagreed about the same pair: `verify` failed on a byte-diverged
+  *shared* narration cell while `record` banked it as verified — and a banked
+  "verified" divergence is what later lets a mirror or a propagation overwrite
+  content that only ever existed on one side. `record` and `apply`'s post-write
+  ledger save now gate on the same projection `verify` reads, so a one-sided
+  id'd narrative member, a diverged shared companion cell, a duplicated companion
+  id, or a pair CLM cannot project at all (mixed / cross-language layout, orphaned
+  `for_slide`) refuses the write instead of being trusted.
+  `--allow-diverged-companion` is the documented override on both verbs: it drops
+  **only** the violations the companion projection introduced — a corruption in
+  the deck halves themselves still refuses — and logs each one at WARNING.
+  Measured before shipping: of 1063 split pairs across PythonCourses, CppCourses
+  and CSharpCourses, zero start failing (229 project differently and all stay
+  clean). `clm harvest`'s write path deliberately keeps the deck-halves-only gate
+  — a one-sided narrative member is its sanctioned pending state, and the two
+  entry points now sit side by side in `clm.slides.sync_verify` so the difference
+  is a documented choice rather than a per-call-site accident.
+
+- Sped up cached builds: `ExecutedNotebookCache` ran its legacy-payload
+  migration (a full-scan `DELETE` + commit) on *every* connection open — and
+  the recording/speaker replay gate opens a fresh connection per HTML op,
+  several hundred times per build (measured: 15% of host time in the cached
+  phase of a large-course build, #711). The migration now runs once per
+  database file, gated on `PRAGMA user_version`; steady-state opens cost only
+  the `CREATE IF NOT EXISTS` schema checks.
+
+- Fixed cross-install cache thrash from line-ending drift:
+  `compute_template_fingerprint` hashed raw template bytes, so an editable
+  install on Windows (CRLF working tree, `core.autocrlf=true`) and a
+  wheel/sdist install (LF) of the *same* clm version produced different
+  fingerprints — and therefore different content hashes for every notebook —
+  invalidating the whole cache whenever a build switched between installs
+  (#711). Template bytes are now newline-normalized (CRLF → LF) before
+  hashing. Note: this changes the fingerprint value for CRLF installs once,
+  causing a one-time cache refresh on their next build (same effect as a
+  template change).
+
+- Sped up worker health monitoring on Windows: when a worker was not in the
+  executor's local process table, `is_worker_running` fell back to a
+  system-wide `psutil.process_iter(["pid", "environ"])` sweep that read every
+  process's environment block (a PEB read per process — seconds per scan
+  under load), once per worker per 10 s monitor cycle; profiling showed it
+  consuming ~57% of all host-process samples during a build (#711). The scan
+  now reads process names first and only pays the `environ()` call for
+  Python interpreters (the only processes that can be clm workers), caches
+  the WORKER_ID → PID map for 5 s so a monitor cycle scans at most once, and
+  re-verifies liveness per call with `psutil.pid_exists`.
+
+### Security
+
+- **A course repo can no longer choose which program CLM runs.** `clm.toml` /
+  `.clm/config.toml` are discovered by walking up from the working directory, so
+  they are found *inside a cloned course repo* — and
+  `external_tools.drawio_executable` reached `subprocess` with no validation at
+  all: clone a course repo, run `clm build`, and a repo-supplied binary executes
+  on the first `.drawio` file, on the host, in every worker mode, before any of
+  that repo's own content runs. Both executable-path keys
+  (`external_tools.plantuml_jar`, `external_tools.drawio_executable`) are now
+  dropped from the *project* config tier with a warning naming the file; the
+  operator tiers (user config, `PLANTUML_JAR` / `DRAWIO_EXECUTABLE`) are
+  unchanged, and `CLM_ALLOW_PROJECT_TOOL_PATHS=1` opts back in per invocation —
+  an environment variable because a repo cannot set one.
+  `[jupyter] kernel_python` is deliberately still allowed from a project config
+  (it is documented, load-bearing, and selects the interpreter for the repo's own
+  notebook code, which a Direct-mode build executes on the host regardless).
+- **Git remote URLs derived from a course spec are validated, and the `ext::`
+  transport is disabled.** `<repository-base>` / `<remote-template>` become a URL
+  handed to `git clone` / `git ls-remote`, and git's `ext::<command>` transport
+  **executes its argument as a shell command** (`protocol.ext.allow` defaults to
+  `user`, i.e. allowed for exactly this kind of direct invocation). Derived URLs
+  are now checked against a scheme allowlist (`https`, `http`, `ssh`, `git`,
+  `file`, the scp-like `user@host:path` form, or a local path) with an error
+  naming the spec element, and every git invocation additionally runs with
+  `-c protocol.ext.allow=never` — which also covers remotes CLM never derived,
+  such as one hand-edited into an output repo's `.git/config`.
+
+- **`clm serve` now sends a Content-Security-Policy and related security
+  headers on every response** (except FastAPI's `/docs` and `/redoc`, which
+  need CDN assets and inline script). The policy forbids inline script and
+  event handlers (`script-src 'self'`) and confines `fetch`/XHR/WebSocket to
+  the server's own origin (`connect-src 'self'`), so a miss in any
+  HTML-sanitizing layer — the Studio's tier-2 preview sanitizer or the
+  client-side markdown renderer — can no longer execute script or exfiltrate
+  the Studio's bearer token; it degrades to a defacement bug. Inline styles
+  and off-origin images remain allowed deliberately (the sanitizer governs
+  CSS; the image rule is the documented tier-1 parity decision). The
+  recordings dashboard is not covered yet — its base template embeds an
+  inline `<script>` by design — and `SecurityHeadersMiddleware` documents why.
+
+- **Studio tier-2 preview: the course logo is now a same-origin asset, and
+  `data:` is gone from the sanitizer entirely.** The bundled header macros
+  still embed the logo as a `data:` URI for self-contained student notebooks,
+  but the Studio's render-cell endpoint rewrites the *bundled* logo's URI to
+  `GET /api/studio/asset/logo/<prog_lang>` (a new route serving the packaged
+  logo files) **before** sanitizing. `ALLOWED_URL_SCHEMES` drops `data`, and
+  the `<img src>`-only confinement rule — the sanitizer's most complex
+  hand-rolled piece and the site of the first bypass found in the #704
+  adversarial rounds — is deleted rather than hardened. The `clm serve` CSP
+  (`#705`) no longer needs a `data:` exception in `img-src` and loses it too.
+  A course author's own `data:` images in custom macros no longer render in
+  the phone's tier-2 preview (they are refused like any other unlisted
+  scheme); student-facing slides and notebooks are unaffected.
+
 ## [1.23.0] - 2026-07-26
 
 ### Added
