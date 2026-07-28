@@ -598,7 +598,15 @@ class _Executor(DeckEmitter):
         target = _other(source)
         if member.side(target) is not None:
             raise _ItemError(f"the {target} side of {item.key} already exists")
-        new_cell = evolve(moved, lines=moved.lines)
+        if moved.lang_attr:
+            # A lang-attr'd source must mint the TARGET half's variant (#717):
+            # copying `lang="en"` verbatim into the DE file would make the
+            # re-parse gate refuse the whole pass as a wrong_language_cell.
+            # Same swap `translate_new` performs when minting a twin.
+            header = swap_lang(moved.header, target)
+            new_cell = evolve(moved, lines=(header, *moved.lines[1:]), lang_attr=target)
+        else:
+            new_cell = evolve(moved, lines=moved.lines)
         self.insert_mirrored(member, source, target, moved.part, new_cell)
 
     def mirror_remove(self, item: DiffItem, gone: Lang) -> None:
