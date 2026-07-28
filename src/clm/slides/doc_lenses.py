@@ -480,6 +480,16 @@ class _Parser:
           shared-class id'd cell with a *different* body is a genuinely new
           one-sided member: only its own side's cursor advances, so the
           remaining id-less cells still align.
+
+          Adoption additionally requires that the id'd side's pool residue is
+          not *longer* than the id-less side's (issue #716): a genuine stamp
+          preserves pool cardinality, while a newly INSERTED id'd cell leaves
+          its side with surplus cells — adopting there marries the id-less
+          cursor cell to the insertion and orphans its true twin behind it
+          (which the differ would then mechanically remove: silent data
+          loss), or hands a new localized cell another slide's translation.
+          Under a surplus the id'd cell is skipped like any unrelated
+          one-sided cell — a framed member, never a guessed marriage.
         - both sides id'd (necessarily different ids, or the global by-id
           pass would have paired them): two one-sided members.
 
@@ -503,7 +513,15 @@ class _Parser:
                 j += 1
                 continue
             idd_cell, idless_cell = (de_cell, en_cell) if de_id else (en_cell, de_cell)
-            adopt = idless_cell.lang_attr is not None or idd_cell.lines[1:] == idless_cell.lines[1:]
+            idd_residue, idless_residue = (
+                (len(de_pool) - i, len(en_pool) - j)
+                if de_id
+                else (len(en_pool) - j, len(de_pool) - i)
+            )
+            forced = idd_residue <= idless_residue
+            adopt = forced and (
+                idless_cell.lang_attr is not None or idd_cell.lines[1:] == idless_cell.lines[1:]
+            )
             if adopt:
                 self.pairs[(part, de_pool[i])] = (part, en_pool[j])
                 idless_side: Lang = "en" if de_id else "de"
