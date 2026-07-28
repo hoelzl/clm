@@ -844,6 +844,63 @@ class TestStampVsNew:
         deck.assert_converged()
 
 
+class TestGroupRenameLedgerIntegrity:
+    """Issue #718 (the #656 field report): a both-halves anchor rename
+    recorded through the sync loop must leave ZERO dangling `id:<old>`
+    references in the committed ledger — owner refs and member-order handle
+    values included, not just the re-keyed scopes."""
+
+    def test_record_group_rename_leaves_no_dangling_refs(self, tmp_path: Path):
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("grp", "de", "Titel"),
+                _shared_code("x"),
+                _localized("grp-m", "de", "DE Text"),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("grp", "en", "Title"),
+                _shared_code("x"),
+                _localized("grp-m", "en", "EN text"),
+            ),
+        )
+        deck.record()
+        deck.edit_de('slide_id="grp"', 'slide_id="grp2"')
+        deck.edit_en('slide_id="grp"', 'slide_id="grp2"')
+        _, diff = deck.diff()
+        assert any(i.action == "record_group_rename" for i in diff.items), [
+            (i.key, i.action) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        section = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        dangling = {
+            "member_keys": [k for k in section.members if "grp/" in k or k == "id:grp"],
+            "owners": [
+                (k, lm.entry.owner)
+                for k, lm in section.members.items()
+                if lm.entry.owner == "id:grp"
+            ],
+            "handles": [
+                (scope, handles)
+                for scope, handles in section.member_order.items()
+                if "id:grp" in handles or scope[1] == "grp"
+            ],
+            "group_order": [g for g in section.group_order if g == "grp"],
+        }
+        assert dangling == {
+            "member_keys": [],
+            "owners": [],
+            "handles": [],
+            "group_order": [],
+        }, dangling
+        assert doc_ledger.prune_dangling_refs(section) == 0
+        deck.assert_converged()
+
+
 class TestCopyNewLangSwap:
     """Issue #717: ``copy_new`` must mint the TARGET half's lang variant for a
     lang-attr'd source cell. A verbatim copy would plant e.g. ``lang="de"``
