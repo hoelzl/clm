@@ -2051,13 +2051,18 @@ nothing**. Confirms the pair is a valid split: it unifies back into one
 bilingual source (byte-identical shared cells, matching header, clean
 alignment), the `de_id == en_id` symmetry holds, and no `(slide_id, role)`
 key is duplicated within a half; warns (never fails) on an id'd cell dropped
-vs git `HEAD` and on a cross-side tag-parity mismatch (twin cells whose tag
+vs git `HEAD`, on a cross-side tag-parity mismatch (twin cells whose tag
 sets differ — tags are language-independent, and `report` frames the fix as a
-tag row). Exit `0` = structurally sound, `2` = corrupt. Answers *"did
+tag row), and on an **order-parity** divergence (the halves order their
+common id'd cells differently — a group swap or one-sided move). Exit `0` =
+structurally sound, `2` = corrupt. Answers *"did
 this edit corrupt the pair?"*, not *"is it in sync?"* — run it in CI freely.
 The same checks, **over the same companion-inlined projection**, gate every
 ledger write (`record`, and `apply`'s ledger updates), so a corrupt pair can
-never be recorded as trusted (CLM {version}: the gate used to read the deck
+never be recorded as trusted. The order-parity finding is a *warning* in
+`verify` output but **blocks the write gate**: an order-divergent pair
+refuses `record` and withholds `apply`'s ledger save until one half is
+reordered to mirror the other (CLM {version}: the gate used to read the deck
 halves alone, so a divergence living in a separated voiceover companion failed
 `verify` while `record` blessed it — see `clm info migration`).
 

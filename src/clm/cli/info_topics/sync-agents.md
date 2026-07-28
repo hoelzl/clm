@@ -240,7 +240,12 @@ unresolved sibling item — nothing was banked; it re-frames on the next
 report. (A *file-mutating* row in the same situation stays `applied`, with
 the reason suffix `(recording deferred: unresolved sibling item on this
 member)`.) `ledger_recorded: false` with `verify_violations` means writes
-landed but nothing was trusted — fix the pair, then `record`.
+landed but nothing was trusted — fix the pair, then `record`. One violation
+kind worth knowing by name: `order-parity` (the halves order their common
+id'd cells differently — a group swap or a one-sided cell move). It is only
+a warning in `sync verify` output, but it **blocks** `record` and `apply`'s
+ledger save: reorder one half so the twins mirror (`clm validate` names the
+diverging sequences too), then re-run.
 
 ## Cold members and `record`
 
