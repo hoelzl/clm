@@ -37,6 +37,7 @@ runners).
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from attrs import define, evolve, field, frozen
@@ -296,15 +297,59 @@ def _to_json(ledger: TopicLedger) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+def prune_dangling_refs(deck_ledger: DeckLedger, deck_key: str = "?") -> int:
+    """Drop internal references that resolve to no member entry (issue #718).
+
+    The trust store must not carry claims it cannot back: a ``member_order``
+    handle or an ``owner`` reference naming a nonexistent member key is
+    silently ignored by every consumer (the differ intersects stale handles
+    away), so a dangling reference is pure erosion — order trust evaporates
+    with no signal. Pruning is behavior-neutral for the differ and makes the
+    committed artifact honest. Dangling handles are removed from their scope
+    lists; a dangling ``owner`` degrades to ``None`` (the differ then frames
+    a mechanical ``record_owner`` against the current owner — self-healing —
+    while the entry's fingerprint trust, which is not in doubt, is kept).
+
+    Returns the number of pruned references; a nonzero count is logged, since
+    post-#718 nothing should create them.
+    """
+    pruned = 0
+    keys = set(deck_ledger.members)
+    for scope_key, handles in list(deck_ledger.member_order.items()):
+        kept = [h for h in handles if h in keys]
+        if len(kept) != len(handles):
+            pruned += len(handles) - len(kept)
+            deck_ledger.member_order[scope_key] = kept
+    for key, lm in list(deck_ledger.members.items()):
+        owner = lm.entry.owner
+        if owner is not None and owner not in keys:
+            deck_ledger.members[key] = evolve(lm, entry=evolve(lm.entry, owner=None))
+            pruned += 1
+    if pruned:
+        logging.getLogger(__name__).warning(
+            "sync ledger deck %s: pruned %d dangling reference(s) "
+            "(stale member_order handles / owner refs — see issue #718)",
+            deck_key,
+            pruned,
+        )
+    return pruned
+
+
 def save(ledger: TopicLedger, path: Path) -> bool:
     """Write the ledger atomically (canonical JSON), creating ``.clm/``.
 
     Skips the write entirely — and returns ``False`` — when the canonical
     serialization is byte-identical to the file already on disk: a repo-wide
     ``record`` sweep must be write-free on clean pairs (issue #555).
+
+    Every deck section is swept for dangling internal references first
+    (:func:`prune_dangling_refs`) — ledgers damaged by the pre-#718
+    ``record_group_rename`` heal on their next save.
     """
     from clm.infrastructure.utils.path_utils import atomic_write_bytes
 
+    for deck_key, deck_ledger in ledger.decks.items():
+        prune_dangling_refs(deck_ledger, deck_key)
     payload = _to_json(ledger).encode("utf-8")
     try:
         if path.is_file() and path.read_bytes() == payload:
@@ -535,9 +580,17 @@ def rename_group_scopes(target: DeckLedger, old_group: str, new_group: str) -> N
     """Re-key every scope referencing a renamed group (§7.3 group rename).
 
     Covers the ``pos:`` member keys (their group token), the member-order
-    scopes, and the group-order lists. The anchor's own ``id:`` entry is
-    re-keyed by the caller through the member migration path.
+    scopes **and the ``id:`` handle values inside their lists**, the
+    group-order lists, and ``owner`` references (every member of a group —
+    not only companions — carries ``owner = the anchor's key``). The
+    anchor's own ``id:`` entry is re-keyed by the caller through the member
+    migration path. Issue #718: the owner/handle rewrites were originally
+    left to :func:`clm.slides.rename_id.migrate_ledger_key`, so the apply
+    executor's ``record_group_rename`` (which called this function bare)
+    committed ledgers with dangling ``id:<old>`` references.
     """
+    old_key = f"id:{old_group}"
+    new_key_id = f"id:{new_group}"
     for key in [k for k in target.members if k.startswith(f"pos:{old_group}/")]:
         lm = target.members.pop(key)
         suffix = key[len(f"pos:{old_group}/") :]
@@ -548,7 +601,7 @@ def rename_group_scopes(target: DeckLedger, old_group: str, new_group: str) -> N
             layout=lm.entry.layout,
             kind=lm.entry.kind,
             role=lm.entry.role,
-            owner=lm.entry.owner,
+            owner=new_key_id if lm.entry.owner == old_key else lm.entry.owner,
             de_fp=lm.entry.de_fp,
             en_fp=lm.entry.en_fp,
             de_body_fp=lm.entry.de_body_fp,
@@ -565,8 +618,18 @@ def rename_group_scopes(target: DeckLedger, old_group: str, new_group: str) -> N
             hash_version=lm.hash_version,
             confirmed_commit=lm.confirmed_commit,
         )
+    # Owner references outside the group's pos: keys (id'd members owned by
+    # the renamed anchor — companions, subslides).
+    for key, lm in list(target.members.items()):
+        if lm.entry.owner == old_key:
+            target.members[key] = evolve(lm, entry=evolve(lm.entry, owner=new_key_id))
     for lang, group, part in [k for k in target.member_order if k[1] == old_group]:
         target.member_order[(lang, new_group, part)] = target.member_order.pop((lang, group, part))
+    # Handle VALUES inside every member-order list (the anchor's own handle
+    # appears in its group's scopes; a moved member's in others).
+    for scope_key, handles in list(target.member_order.items()):
+        if old_key in handles:
+            target.member_order[scope_key] = [new_key_id if h == old_key else h for h in handles]
     target.group_order = [new_group if g == old_group else g for g in target.group_order]
     target.group_order_by_side = {
         lang: [new_group if g == old_group else g for g in order]

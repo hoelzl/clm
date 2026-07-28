@@ -272,6 +272,69 @@ class TestKeyMigration:
         assert "pos:s0/code/0" not in members
 
 
+class TestGroupRenameIntegrity:
+    """Issue #718: `rename_group_scopes` must rewrite EVERY reference class —
+    owner refs and member-order handle values included — or the sole trust
+    store commits dangling `id:<old>` references that silently erode order
+    trust (`_compare_order` intersects them away with no signal)."""
+
+    @staticmethod
+    def _renamed_ledger() -> doc_ledger.DeckLedger:
+        ledger = _recorded_ledger()
+        deck = ledger.decks["slides_x"]
+        doc_ledger.rename_group_scopes(deck, "s0", "s0-new")
+        # The caller's half of the contract: re-key the anchor's own entry.
+        lm = deck.members.pop("id:s0")
+        from attrs import evolve
+
+        deck.members["id:s0-new"] = evolve(lm, entry=evolve(lm.entry, key="id:s0-new"))
+        return deck
+
+    def test_owner_refs_are_rewritten(self):
+        deck = self._renamed_ledger()
+        stale = {k: lm.entry.owner for k, lm in deck.members.items() if lm.entry.owner == "id:s0"}
+        assert stale == {}, stale
+        owners = {lm.entry.owner for lm in deck.members.values()} - {None}
+        assert owners == {"id:s0-new"}
+
+    def test_member_order_handles_are_rewritten(self):
+        deck = self._renamed_ledger()
+        stale = {
+            scope: handles for scope, handles in deck.member_order.items() if "id:s0" in handles
+        }
+        assert stale == {}, stale
+        assert any("id:s0-new" in handles for handles in deck.member_order.values())
+
+
+class TestDanglingRefPrune:
+    """Issue #718: a save sweeps dangling internal references, healing ledgers
+    damaged by the pre-fix `record_group_rename`."""
+
+    def test_save_prunes_stale_handles_and_owners(self, tmp_path: Path):
+        ledger = _recorded_ledger()
+        deck = ledger.decks["slides_x"]
+        # Simulate the field damage: a dead handle in an order scope and a
+        # dead owner ref on a surviving entry.
+        scope = next(iter(deck.member_order))
+        deck.member_order[scope] = [*deck.member_order[scope], "id:ghost"]
+        victim = next(k for k, lm in deck.members.items() if lm.entry.owner is not None)
+        from attrs import evolve
+
+        lm = deck.members[victim]
+        deck.members[victim] = evolve(lm, entry=evolve(lm.entry, owner="id:ghost"))
+        path = tmp_path / "ledger.json"
+        doc_ledger.save(ledger, path)
+        restored = doc_ledger.load(path).decks["slides_x"]
+        assert all("id:ghost" not in handles for handles in restored.member_order.values())
+        assert restored.members[victim].entry.owner is None
+        # Fingerprint trust is untouched — only the reference degraded.
+        assert restored.members[victim].entry.de_fp == lm.entry.de_fp
+
+    def test_consistent_ledger_prunes_nothing(self):
+        ledger = _recorded_ledger()
+        assert doc_ledger.prune_dangling_refs(ledger.decks["slides_x"]) == 0
+
+
 class TestDeckKeys:
     def test_deck_key_strips_language_and_suffix(self):
         assert doc_ledger.deck_key_for(Path("slides_intro.de.py")) == "slides_intro"
