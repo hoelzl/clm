@@ -523,6 +523,100 @@ class TestPairingAlignment:
         obs = [o for o in deck.observations if o.kind == "id_stamp_pending_twin"]
         assert len(obs) == 1 and obs[0].side == "de"
 
+    def test_new_idd_clone_before_pos_twin_does_not_steal_it(self):
+        # Issue #716 (C1): a NEW id'd shared cell byte-identical to an un-id'd
+        # positional cell, inserted BEFORE it on one half, must NOT adopt the
+        # other half's positional cell as its twin — the insertion leaves the
+        # id'd side's pool residue longer, so the correspondence is not forced.
+        de = _strip_final_blank(HEADER_DE + _slide("g", "de", "G") + _shared_code("data", 1))
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + '# %% tags=["keep"] slide_id="new-x"\ndata = 1\n\n'
+            + _shared_code("data", 1)
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        new = deck.member_by_key(MemberKey.for_id("new-x"))
+        assert new is not None
+        assert new.de is None  # one-sided: nothing adopted
+        kinds = [o.kind for o in deck.observations]
+        assert "id_stamp_pending_twin" not in kinds
+        # The untouched positional cell still pairs with its real twin.
+        pos = [m for m in deck.members() if m.key.render().startswith("pos:g/")]
+        assert len(pos) == 1
+        assert pos[0].de is not None and pos[0].en is not None
+
+    def test_new_idd_clone_between_two_pos_twins_does_not_steal(self):
+        # Issue #716 (C1, P9 shape): the clone sits BETWEEN two byte-identical
+        # positional cells; both positional pairs must survive intact.
+        de = _strip_final_blank(
+            HEADER_DE + _slide("g", "de", "G") + _shared_code("data", 1) + _shared_code("data", 1)
+        )
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + _shared_code("data", 1)
+            + '# %% tags=["keep"] slide_id="new-x"\ndata = 1\n\n'
+            + _shared_code("data", 1)
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        new = deck.member_by_key(MemberKey.for_id("new-x"))
+        assert new is not None and new.de is None
+        pos = [m for m in deck.members() if m.key.render().startswith("pos:g/")]
+        assert len(pos) == 2
+        assert all(m.de is not None and m.en is not None for m in pos)
+
+    def test_new_localized_cell_above_pending_stamp_does_not_mismarry(self):
+        # Issue #716 (C2): a NEW one-sided localized id'd cell inserted above a
+        # #443 pending-stamp twin must not adopt the pending twin's id-less
+        # cell — the marriage belongs to the cell behind it.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("a", "de", "A")
+            + _localized("brand-new", "de", "Neu")
+            + _localized("old-pair", "de", "Alt")
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + '# %% [markdown] lang="en"\n# Old translation\n\n'
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        old = deck.member_by_key(MemberKey.for_id("old-pair"))
+        assert old is not None
+        assert old.de is not None and old.en is not None  # the true marriage
+        new = deck.member_by_key(MemberKey.for_id("brand-new"))
+        assert new is not None
+        assert new.en is None  # one-sided, nothing adopted
+        obs = [o for o in deck.observations if o.kind == "id_stamp_pending_twin"]
+        assert len(obs) == 1
+        assert obs[0].member == MemberKey.for_id("old-pair")
+
+    def test_443_stamp_with_idless_side_addition_still_adopts(self):
+        # The guard must only fire on an id'd-side surplus: a stamp coexisting
+        # with a NEW id-less cell on the other side (id-less residue longer)
+        # is still the forced #443 correspondence.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + '# %% tags=["keep"] slide_id="x-cell"\ndata = 1\n\n'
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("g", "en", "G") + _shared_code("data", 1) + _shared_code("extra", 2)
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        member = deck.member_by_key(MemberKey.for_id("x-cell"))
+        assert member is not None
+        assert member.de is not None and member.en is not None
+        obs = [o for o in deck.observations if o.kind == "id_stamp_pending_twin"]
+        assert len(obs) == 1 and obs[0].member == MemberKey.for_id("x-cell")
+
 
 class TestObservationKeys:
     """Observations must carry the member's FINAL key (P1: identity computed

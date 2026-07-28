@@ -683,6 +683,62 @@ def test_every_direction_is_member_local(side: str):
     }
 
 
+class TestLensAdoptionGuard:
+    """Issue #716: the lens's rule-2 adoption must not guess under an id'd-side
+    pool surplus — the differ must never frame a mechanical removal of an
+    authored cell whose twin the lens mis-adopted (C1), nor mis-marry a new
+    localized cell to another slide's translation (C2)."""
+
+    def test_new_idd_clone_before_pos_twin_frames_add_not_remove(self):
+        de0 = _build(HEADER_DE, _slide("g", "de", "G"), _shared_code("data"))
+        en0 = _build(HEADER_EN, _slide("g", "en", "G"), _shared_code("data"))
+        base = _snapshot(de0, en0)
+        en1 = _build(
+            HEADER_EN,
+            _slide("g", "en", "G"),
+            '# %% tags=["keep"] slide_id="new-x"\ndata = 1\n\n',
+            _shared_code("data"),
+        )
+        diff = _diff(base, de0, en1)
+        actions = [(i.key, i.action) for i in diff.items]
+        assert not any(a == "mirror_remove" for _, a in actions), actions
+        # The new cell is a one-sided add; the authored positional cell is
+        # untouched (in sync against its recorded fingerprints).
+        assert ("id:new-x", "copy_new_shared") in actions, actions
+        keys = [k for k, _ in actions]
+        assert keys.count("id:new-x") == 1  # one handle, one item
+
+    def test_new_localized_above_pending_stamp_keeps_the_true_marriage(self):
+        # Warm base holds the #443 pending pair (old-pair id'd on DE, id-less
+        # EN twin). Inserting brand-new above it must frame work for
+        # brand-new only — old-pair stays in sync.
+        de0 = _build(
+            HEADER_DE,
+            _slide("a", "de", "A"),
+            _localized("old-pair", "de", "Alt"),
+        )
+        en0 = _build(
+            HEADER_EN,
+            _slide("a", "en", "A"),
+            '# %% [markdown] lang="en"\n# Old translation\n\n',
+        )
+        base = _snapshot(de0, en0)
+        de1 = _build(
+            HEADER_DE,
+            _slide("a", "de", "A"),
+            _localized("brand-new", "de", "Neu"),
+            _localized("old-pair", "de", "Alt"),
+        )
+        diff = _diff(base, de1, en0)
+        # old-pair keeps its true EN marriage: its only item is the STANDING
+        # mechanical #443 stamp (present in a no-op self-diff of this state
+        # too) — never a translate_new for a "lost" twin, never a removal.
+        old_actions = [i.action for i in diff.items if i.key == "id:old-pair"]
+        assert old_actions == ["stamp_twin_id"], [(i.key, i.action, i.detail) for i in diff.items]
+        assert any(i.key == "id:brand-new" for i in diff.items)
+        assert not any(i.action == "mirror_remove" for i in diff.items)
+
+
 class TestAdversarialReviewRegressions:
     """Shapes from the Phase 2 pre-merge adversarial review (30 raw → 25
     confirmed findings, every one with a verified repro). Each test pins one
