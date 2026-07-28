@@ -16,7 +16,7 @@ import pytest
 from attrs import evolve
 
 from clm.slides import doc_apply, doc_ledger, sync_diff
-from clm.slides.bilingual_doc import SideCell
+from clm.slides.bilingual_doc import MemberKey, SideCell
 from clm.slides.doc_lenses import LoadedBundle, load_bundle
 from clm.slides.sync_diff import DeckDiff, DiffItem, diff_outcome
 
@@ -842,6 +842,42 @@ class TestStampVsNew:
         assert de.count("x = 10") == 1 and de.count("y = 20") == 1
         assert "x = 1\n" not in de and "y = 2\n" not in de
         deck.assert_converged()
+
+
+class TestCopyNewLangSwap:
+    """Issue #717: ``copy_new`` must mint the TARGET half's lang variant for a
+    lang-attr'd source cell. A verbatim copy would plant e.g. ``lang="de"``
+    in the EN file, and the re-parse gate would then abort the whole pass as
+    a ``wrong_language_cell`` — downgrading every co-landed item (P7)."""
+
+    def test_copy_new_swaps_the_lang_attribute(self, tmp_path: Path):
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("solo", "de", "Nur DE")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        bundle = deck.load()
+        doc = bundle.outcome.deck
+        assert doc is not None
+        member = doc.member_by_key(MemberKey.for_id("solo"))
+        assert member is not None
+        assert member.de is not None and member.en is None
+        ex = doc_apply._Executor(deck=doc, bundle=bundle, comment_token="#")
+        item = DiffItem(
+            key="id:solo",
+            outcome="add",
+            action="copy_new_shared",
+            direction="de_to_en",
+            detail="",
+            member=member,
+            side="de",
+        )
+        ex.copy_new(item, "de")
+        minted = member.en
+        assert minted is not None
+        assert minted.lang_attr == "en"
+        assert 'lang="en"' in minted.lines[0]
+        assert minted.lines[1:] == member.de.lines[1:]  # body verbatim
 
 
 class TestTitleMacroBody:
