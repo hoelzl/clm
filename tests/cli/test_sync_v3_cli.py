@@ -360,3 +360,34 @@ def _head_sha(cwd: Path) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+class TestOrderObservationRender:
+    """#654: the one observation kind that suppresses is_clean must be
+    visible in the text report (an observation-only unclean report would
+    otherwise read "0 item(s)" with no cause)."""
+
+    def test_group_order_divergence_observation_is_printed(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de = tmp_path / "slides_g.de.py"
+        en = tmp_path / "slides_g.en.py"
+        slide_de = '# %% [markdown] lang="de" tags=["slide"] slide_id="{sid}"\n#\n# # {t}\n\n'
+        slide_en = '# %% [markdown] lang="en" tags=["slide"] slide_id="{sid}"\n#\n# # {t}\n\n'
+        de.write_text(
+            HEADER_DE + slide_de.format(sid="s0", t="Eins") + slide_de.format(sid="s1", t="Zwei"),
+            encoding="utf-8",
+        )
+        en.write_text(
+            HEADER_EN + slide_en.format(sid="s0", t="One") + slide_en.format(sid="s1", t="Two"),
+            encoding="utf-8",
+        )
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        en.write_text(
+            HEADER_EN + slide_en.format(sid="s1", t="Two") + slide_en.format(sid="s0", t="One"),
+            encoding="utf-8",
+        )
+        result = cli_runner.invoke(slides_sync_group, ["report", str(de)])
+        assert result.exit_code == 1
+        assert "observation/group_order_divergence" in result.output
+        assert "mirror_order" in result.output
