@@ -247,6 +247,14 @@ a warning in `sync verify` output, but it **blocks** `record` and `apply`'s
 ledger save: reorder one half so the twins mirror (`clm validate` names the
 diverging sequences too), then re-run.
 
+The same divergence has a write-path guard: minting a slide's missing twin
+(`copy_new_shared` / `translate_new` on a slide or subslide cell) **fails
+that one item** when the computed insert position would separate the slide
+from its group's existing cells on the other half — the reason reads
+"cannot mint the … twin … the halves' group order diverges". This is not a
+whole-pass abort: all other items still land. The remedy is the same as for
+`order-parity` — reorder one half so the twins mirror, then re-apply.
+
 ## Cold members and `record`
 
 A brand-new checkout, a never-synced deck, or a deck whose ledger entries

@@ -453,6 +453,19 @@ urgency).**
    offenders degrade to cold) (C6).
 5. `copy_new` lang-attribute swap on `treat_as_new`/`keep` paths (M9).
 
+*Status: **complete 2026-07-29** — issues #716–#720, PRs #721–#725, merged
+sequentially, each with failing-before regression tests, a §13 amendments
+row in the design note, and a changelog fragment (item 1 → #716, item 2 →
+#720, item 3 → #719, item 4 → #718, item 5 → #717). Two documented
+deviations from the prescriptions above: item 4 shipped as an extended
+`rename_group_scopes` (all four reference classes: pos keys, order-scope
+keys, owner refs, member-order `id:` handles) plus a save-time
+`prune_dangling_refs` sweep, rather than `migrate_ledger_key` — stale
+handles are dropped and a dangling owner degrades to `None`, not cold; item
+5's severity was corrected to defense-in-depth on the issue (the e2e probes
+showed the suspect shapes route to `fork_pending_twin` before reaching
+`copy_new`). See the design note's §13 rows for the shipped mechanisms.*
+
 **Phase 1 — make order first-class (the #615 treatment).** Frame
 `order_decision` from *current* cross-side evidence even with no/thin base
 (the executor already resolves `de`/`en` from current state); keep
