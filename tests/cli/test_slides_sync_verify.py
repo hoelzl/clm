@@ -147,6 +147,50 @@ class TestStructuralViolations:
         assert structural_violations(de, en, "#") == []
 
 
+class TestOrderParityViolations:
+    """Issue #719 (#652 instance 2): a cross-side divergence in the relative
+    order of common id'd cells must warn in verify and BLOCK the whole-deck
+    write gate — unify interleaves localized cells permissively, so a
+    localized-only group swap previously reached the ledger as 'verified'."""
+
+    SWAP_DE = _half(_md("de", "a", "A de"), _md("de", "b", "B de"))
+    SWAP_EN = _half(_md("en", "b", "B en"), _md("en", "a", "A en"))
+
+    def test_localized_swap_is_a_warning_not_an_error(self):
+        vs = structural_violations(self.SWAP_DE, self.SWAP_EN, "#")
+        assert [v.kind for v in vs] == ["order-parity"], [(v.kind, v.message) for v in vs]
+        assert vs[0].severity == "warning"
+        assert "'a'" in vs[0].message and "'b'" in vs[0].message
+
+    def test_whole_deck_gate_blocks_on_order_divergence(self):
+        gate = structural_gate(self.SWAP_DE, self.SWAP_EN, "#")
+        assert [v.kind for v in gate] == ["order-parity"], gate
+
+    def test_scoped_gate_keeps_the_per_slide_doctrine(self):
+        # A whole-pair order divergence must not block recording ONE slide.
+        assert structural_gate(self.SWAP_DE, self.SWAP_EN, "#", slide_id="a") == []
+
+    def test_in_sync_pair_has_no_order_finding(self):
+        assert structural_violations(_valid_de(), _valid_en(), "#") == []
+
+    def test_one_sided_id_is_excluded_from_the_comparison(self):
+        # Mid-#443: a cell id'd on DE only sits between common cells — the
+        # common-key sequences still match, so no order finding (sidedness is
+        # the transition machinery's concern).
+        de = _half(_md("de", "a", "A"), _md("de", "only-de", "X"), _md("de", "b", "B"))
+        en = _half(_md("en", "a", "A en"), _md("en", "b", "B en"))
+        vs = structural_violations(de, en, "#")
+        assert "order-parity" not in {v.kind for v in vs}
+
+    def test_gate_projected_pair_blocks_the_record_path(self, tmp_path: Path):
+        # The write gate every sync verb uses must refuse the swapped pair.
+        from clm.slides.sync_verify import gate_projected_pair
+
+        de_path, en_path = _write(tmp_path, self.SWAP_DE, self.SWAP_EN)
+        gate = gate_projected_pair(de_path, en_path)
+        assert "order-parity" in {v.kind for v in gate}
+
+
 class TestTagParityViolations:
     """Issue #615 — the cross-side tag-parity warning (tags are language-independent)."""
 

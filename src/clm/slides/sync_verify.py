@@ -108,7 +108,9 @@ class VerifyViolation:
     #   ("companion-refusal" is gate-only — see :func:`gate_projected_pair`; verify
     #   reports the same condition as a warning, since an unprojectable *layout* is
     #   not an edit that corrupted the pair)
-    # warning kinds: "tag-parity" | "dropped-id" | "companion-refusal"
+    # warning kinds: "tag-parity" | "order-parity" | "dropped-id" | "companion-refusal"
+    #   ("order-parity" is promoted to BLOCKING by the whole-deck
+    #   :func:`structural_gate` — see #719; the CLI ``verify`` keeps it a warning)
     kind: str
     message: str
     slide_id: str | None = None
@@ -173,8 +175,60 @@ def structural_violations(de_text: str, en_text: str, comment_token: str) -> lis
     )
     violations.extend(_duplicate_id_violations(de_keys, "DE"))
     violations.extend(_duplicate_id_violations(en_keys, "EN"))
+    violations.extend(order_parity_violations(de_keys, en_keys))
     violations.extend(tag_parity_violations(de_text, en_text, comment_token))
     return violations
+
+
+def order_parity_violations(
+    de_keys: list[tuple[str, str | None]], en_keys: list[tuple[str, str | None]]
+) -> list[VerifyViolation]:
+    """Warn when the halves order their common id'd cells differently (#719).
+
+    The halves of an in-sync pair are order-parallel streams; a cross-side
+    divergence in the *relative order* of the id'd cells (a group swap, a
+    one-sided slide move) is a structural corruption none of the other checks
+    reliably see — ``unify_texts`` interleaves language-tagged cells
+    permissively, so a reorder whose moved region holds only localized cells
+    passes it (issue #652 instance 2, where the ledger certified an
+    order-divergent pair). Comparison is over the ``(slide_id, role)`` keys
+    **common to both halves** in first-occurrence document order: a
+    mid-transition cell id'd on one half only is excluded (its sidedness is
+    the transition machinery's concern, not an order fault), and duplicated
+    keys are ``duplicate-id``'s concern.
+
+    Severity is ``warning`` here — the ``sync verify`` CLI surfaces it without
+    hard-failing CI on pre-existing committed divergences (the tag-parity
+    precedent) — but :func:`structural_gate` **promotes it to blocking** in
+    whole-deck mode: the trust store must never record a pair whose halves
+    disagree about member order.
+    """
+    de_first = list(dict.fromkeys(de_keys))
+    en_first = list(dict.fromkeys(en_keys))
+    common = set(de_first) & set(en_first)
+    de_common = [k for k in de_first if k in common]
+    en_common = [k for k in en_first if k in common]
+    if de_common == en_common:
+        return []
+    mismatch = next(
+        (i for i, (d, e) in enumerate(zip(de_common, en_common, strict=True)) if d != e),
+        0,
+    )
+    de_sid, _ = de_common[mismatch]
+    en_sid, _ = en_common[mismatch]
+    return [
+        VerifyViolation(
+            severity="warning",
+            kind="order-parity",
+            message=(
+                f"id'd cell order diverges between the halves: at position "
+                f"{mismatch} of the common sequence DE has '{de_sid}' where EN "
+                f"has '{en_sid}' — reorder one half so the twins mirror "
+                f"(DE: {[sid for sid, _ in de_common]}, "
+                f"EN: {[sid for sid, _ in en_common]})"
+            ),
+        )
+    ]
 
 
 def tag_parity_violations(de_text: str, en_text: str, comment_token: str) -> list[VerifyViolation]:
@@ -349,10 +403,18 @@ def structural_gate(
     by translation by design) — byte-identity governs only the id-less neutral cells,
     which carry no ``slide_id`` to scope to.
     """
-    errors = [
-        v for v in structural_violations(de_text, en_text, comment_token) if v.severity == "error"
-    ]
+    all_violations = structural_violations(de_text, en_text, comment_token)
+    errors = [v for v in all_violations if v.severity == "error"]
     if slide_id is None:
+        # Whole-deck gate: promote order-parity to blocking (#719). The CLI
+        # ``verify`` reports it as a warning (pre-existing committed
+        # divergences must not hard-fail CI), but the trust store must never
+        # record a pair whose halves disagree about member order — that is
+        # exactly the #652 corruption class the ledger certified. The scoped
+        # (per-slide) gate keeps the existing doctrine: a whole-pair order
+        # divergence must not block recording the one slide an agent just
+        # reconciled.
+        errors.extend(v for v in all_violations if v.kind == "order-parity")
         return errors
     return [v for v in errors if _scoped_to(v, slide_id, role)]
 
