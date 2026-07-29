@@ -2381,3 +2381,106 @@ class TestOrderDecisionExecution:
         dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
         for _scope, handles in dl.member_order.items():
             assert all(h in dl.members for h in handles), dl.member_order
+
+
+class TestBodyWriteNormalization:
+    """Issue #655 (review M10): decision bodies are normalized to the
+    engine's canonical cell shape at the write boundary — a markdown body
+    missing its leading blank comment line used to land verbatim, making
+    `clm validate` warn on the engine's own output and forcing an
+    out-of-band fix plus a zero-content keep_twin round."""
+
+    def _edit_item(self, deck: _Deck):
+        deck.edit_de("# DE Text", "# DE Text NEU")
+        _, diff = deck.diff()
+        assert [i.action for i in diff.items] == ["translate_edit"]
+        return diff.items[0]
+
+    def test_markdown_body_without_blank_lead_gains_it(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        item = self._edit_item(deck)
+        outcome = deck.apply(
+            decisions={item.key: doc_apply.Decision(item.key, body="# ## EN heading")}
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        cell_start = en.index('slide_id="s0-m"')
+        cell = en[cell_start:].split("\n")
+        assert cell[1] == "#", cell[:4]  # the canonical blank comment line
+        assert cell[2] == "# ## EN heading", cell[:4]
+        deck.assert_converged()
+
+    def test_markdown_body_with_bare_blank_first_line_is_promoted(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        item = self._edit_item(deck)
+        outcome = deck.apply(decisions={item.key: doc_apply.Decision(item.key, body="\n# EN body")})
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        cell = en[en.index('slide_id="s0-m"') :].split("\n")
+        assert cell[1] == "#", cell[:4]
+        assert cell[2] == "# EN body", cell[:4]
+        deck.assert_converged()
+
+    def test_markdown_body_already_canonical_is_untouched(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        item = self._edit_item(deck)
+        outcome = deck.apply(
+            decisions={item.key: doc_apply.Decision(item.key, body="#\n# EN body")}
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        cell = en[en.index('slide_id="s0-m"') :].split("\n")
+        assert cell[1] == "#" and cell[2] == "# EN body", cell[:4]
+        assert cell[3] == "", cell[:5]  # no doubled blank comment
+        deck.assert_converged()
+
+    def test_code_cell_body_is_not_prefixed(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.edit_de("x = 1", "x = 3")
+        deck.edit_en("x = 1", "x = 4")
+        _, diff = deck.diff()
+        assert [i.action for i in diff.items] == ["conflict_shared"]
+        item = diff.items[0]
+        outcome = deck.apply(decisions={item.key: doc_apply.Decision(item.key, body="x = 5")})
+        assert outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "x = 5" in de
+        assert "#\nx = 5" not in de  # code cells get no comment line
+        deck.assert_converged()
+
+    def test_choice_plus_body_rejection_explains_the_inference(self):
+        _, errors = doc_apply.load_decisions_text(
+            '{"decisions": [{"key": "id:x", "choice": "body", "body": "# t"}]}'
+        )
+        assert len(errors) == 1
+        assert "never add choice: 'body'" in errors[0]
+
+    def test_unify_choice_parity_copy_stays_verbatim_and_converges(self, tmp_path: Path):
+        """#655 review I1: the unify side-choice is a PARITY copy — the twin
+        must land byte-equal to the chosen side even when that side's body
+        is non-canonical, or the ledger banks a divergent shared pair and a
+        phantom pending_divergence round frames right after all_applied."""
+        deck = _deck(tmp_path)
+        # Drop both lang attrs: the localized pair id:s0-m becomes a
+        # half-completed unify with diverged bodies (`# DE Text` has no
+        # canonical blank lead — exactly the shape that regressed).
+        deck.edit_de(' lang="de" slide_id="s0-m"', ' slide_id="s0-m"')
+        deck.edit_en(' lang="en" slide_id="s0-m"', ' slide_id="s0-m"')
+        _, diff = deck.diff()
+        actions = {i.action for i in diff.items}
+        assert "unify_choose_body" in actions, [(i.key, i.action) for i in diff.items]
+        item = next(i for i in diff.items if i.action == "unify_choose_body")
+        outcome = deck.apply(decisions={item.key: doc_apply.Decision(item.key, choice="de")})
+        assert outcome.error is None
+        de_cell = deck.de_path.read_text(encoding="utf-8")
+        en_cell = deck.en_path.read_text(encoding="utf-8")
+        assert "# DE Text" in en_cell
+        assert "#\n# DE Text" not in en_cell  # verbatim — no one-sided normalize
+        assert "#\n# DE Text" not in de_cell
+        deck.assert_converged()
+
+    def test_neither_choice_nor_body_gets_a_plain_message(self):
+        _, errors = doc_apply.load_decisions_text('{"decisions": [{"key": "id:x"}]}')
+        assert len(errors) == 1
+        assert "supply either" in errors[0]
+        assert "never add" not in errors[0]

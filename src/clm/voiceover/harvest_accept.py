@@ -239,8 +239,12 @@ def _guard_body(body: str, comment_token: str) -> None:
 
 
 def _replace_body(cell: SideCell, body: str) -> tuple[str, ...]:
-    """The cell's lines with a new body, preserving its trailing separator
-    (the :mod:`clm.slides.doc_apply` rule)."""
+    """The cell's lines with a new body, preserving its trailing separator.
+
+    Verbatim (no #655-style markdown-blank-lead normalization, unlike
+    :mod:`clm.slides.doc_apply`'s writer): harvest bodies come from
+    :func:`_render_body`, which already emits the canonical leading
+    ``comment_token`` line."""
     old_body = cell.lines[1:]
     trailing = 0
     for line in reversed(old_body):

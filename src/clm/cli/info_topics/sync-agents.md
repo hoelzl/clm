@@ -205,6 +205,19 @@ One JSON document answers any subset of framed items:
   individually with a reason** while every valid answer still lands. Nothing
   already applied is lost.
 
+  A markdown body that *omits* the leading blank `#` line is accepted and
+  **normalized at write** (CLM {version}): apply inserts the canonical
+  blank comment line the validator expects, so a body opening directly
+  with `# ## Title` no longer produces `markdown cell body does not start
+  with a blank comment line` warnings right after a clean apply. The
+  delimiter rule is unchanged — bodies must still exclude the `# %%` line
+  (the report's `de`/`en` excerpts *include* it, so strip the first line
+  when reusing them).
+
+  `choice` and `body` are **mutually exclusive** per decision: a `body`
+  alone already selects the body answer — never add `choice: "body"`
+  alongside it (rejected with `give exactly one of 'choice' or 'body'`).
+
   **Exception — single-line j2 macro members** (e.g. `id:title`, the deck's
   header macro): the cell is one j2 line, so the `body` answer is either the
   full replacement line (`# {{ header_de("Neuer Titel") }}`) or the bare
