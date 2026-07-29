@@ -155,6 +155,16 @@ not order-blind:
   confirm-seeded ledger, a same-pass rename+edit of a slide) → framed
   `order_decision` naming both sequences. Answer `de` or `en` to adopt that
   side's order, or reorder one half by hand and re-report.
+- **A single cell sitting under different slides per half** with no
+  recorded placement (typically a cold member) → framed `order_decision`
+  keyed on the **member** (`id:<slide-id>`), not on a scope. Answer
+  `de`/`en` to adopt that side's placement — `apply` re-homes the twin
+  cell under the chosen side's group. The member's `verify_cold` row is
+  suppressed for that pass (two framed rows on one key cannot both be
+  answered — the `conflict_tags` precedent), and the placement answer
+  **banks nothing**: the member re-frames for verification on the next
+  report. On an order-blind ledger this member-keyed row can co-frame with
+  a body row on the same key; answer one — the other re-frames next pass.
 - **Order trust seeds itself through the loop**: any `apply` pass that
   resolves every item banks order trust for the scopes whose sides agree —
   after your first fully-clean apply, later one-sided moves frame as

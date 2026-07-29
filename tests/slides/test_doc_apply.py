@@ -2333,18 +2333,24 @@ class TestOrderDecisionExecution:
         deck = _Deck(tmp_path, de, en)
         _, diff = deck.diff()
         assert {i.key: i.action for i in diff.items}.get("id:m") == "order_decision"
+        # The suppressed verify_cold sibling means nothing on id:m was
+        # reviewed — the placement answer must not bank the member (#654
+        # review round 2: it used to _upsert the full fresh snapshot,
+        # bypassing every confirm guard).
         outcome = deck.apply({"id:m": doc_apply.Decision(key="id:m", choice="de")})
         assert outcome.error is None
         results = {r.key: r for r in outcome.results}
         assert results["id:m"].status == "applied", results["id:m"].reason
         en_text = deck.en_path.read_text(encoding="utf-8")
         assert en_text.index('slide_id="m"') < en_text.index('slide_id="s1"')
-        # Once placed, the member re-frames cold (nothing was silently
-        # confirmed by the placement answer).
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks.get("slides_t")
+        assert dl is None or "id:m" not in dl.members, sorted(dl.members)
+        # Once placed, the member ITSELF re-frames cold (nothing was
+        # silently confirmed by the placement answer).
         _, rediff = deck.diff()
-        assert {i.action for i in rediff.items} == {"verify_cold"}, [
-            (i.key, i.action) for i in rediff.items
-        ]
+        rows = {(i.key, i.action) for i in rediff.items}
+        assert ("id:m", "verify_cold") in rows, sorted(rows)
+        assert {i.action for i in rediff.items} == {"verify_cold"}, sorted(rows)
 
     def test_order_scope_recording_never_carries_unbacked_handles(self, tmp_path: Path, caplog):
         """#654 review finding 2: a landed order item beside pending cold

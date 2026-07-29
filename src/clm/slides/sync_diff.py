@@ -286,6 +286,11 @@ class DiffItem:
     #: carries every present side. The Phase-3 executor resolves each side
     #: through this convention so it always acts on the right cell.
     twin: Member | None = None
+    #: Landing this row must NOT record the member (the conflict_tags
+    #: doctrine): its resolution mutates placement only, and the suppressed
+    #: verify_cold sibling means the pair was never reviewed — the member
+    #: re-frames and banks on the next pass (#654 review round 2).
+    defer_recording: bool = False
 
     def payload(self) -> dict:
         entry: dict = {
@@ -455,6 +460,7 @@ class _Differ:
         member: Member | None = None,
         base: MemberBaseline | None = None,
         twin: Member | None = None,
+        defer_recording: bool = False,
     ) -> None:
         if action not in MECHANICAL_ACTIONS and action not in FRAMED_ACTIONS:
             raise ValueError(f"unregistered diff action: {action}")  # pragma: no cover
@@ -470,6 +476,7 @@ class _Differ:
                 member=member,
                 base=base,
                 twin=twin if twin is not member else None,
+                defer_recording=defer_recording,
             )
         )
 
@@ -3180,6 +3187,9 @@ class _Differ:
             f"(de: {de_group!r}, en: {en_group!r}) and no recorded placement "
             f"covers it — answer de/en to adopt that side's placement",
             member=member,
+            # The suppressed verify_cold sibling means the pair was never
+            # reviewed: landing the placement must not bank the member.
+            defer_recording=True,
         )
 
     def _suppress_placement_verify_cold(self) -> None:
