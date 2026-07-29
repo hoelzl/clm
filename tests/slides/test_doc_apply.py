@@ -2454,3 +2454,33 @@ class TestBodyWriteNormalization:
         )
         assert len(errors) == 1
         assert "never add choice: 'body'" in errors[0]
+
+    def test_unify_choice_parity_copy_stays_verbatim_and_converges(self, tmp_path: Path):
+        """#655 review I1: the unify side-choice is a PARITY copy — the twin
+        must land byte-equal to the chosen side even when that side's body
+        is non-canonical, or the ledger banks a divergent shared pair and a
+        phantom pending_divergence round frames right after all_applied."""
+        deck = _deck(tmp_path)
+        # Drop both lang attrs: the localized pair id:s0-m becomes a
+        # half-completed unify with diverged bodies (`# DE Text` has no
+        # canonical blank lead — exactly the shape that regressed).
+        deck.edit_de(' lang="de" slide_id="s0-m"', ' slide_id="s0-m"')
+        deck.edit_en(' lang="en" slide_id="s0-m"', ' slide_id="s0-m"')
+        _, diff = deck.diff()
+        actions = {i.action for i in diff.items}
+        assert "unify_choose_body" in actions, [(i.key, i.action) for i in diff.items]
+        item = next(i for i in diff.items if i.action == "unify_choose_body")
+        outcome = deck.apply(decisions={item.key: doc_apply.Decision(item.key, choice="de")})
+        assert outcome.error is None
+        de_cell = deck.de_path.read_text(encoding="utf-8")
+        en_cell = deck.en_path.read_text(encoding="utf-8")
+        assert "# DE Text" in en_cell
+        assert "#\n# DE Text" not in en_cell  # verbatim — no one-sided normalize
+        assert "#\n# DE Text" not in de_cell
+        deck.assert_converged()
+
+    def test_neither_choice_nor_body_gets_a_plain_message(self):
+        _, errors = doc_apply.load_decisions_text('{"decisions": [{"key": "id:x"}]}')
+        assert len(errors) == 1
+        assert "supply either" in errors[0]
+        assert "never add" not in errors[0]

@@ -190,11 +190,17 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
         if body is not None and not isinstance(body, str):
             errors.append(f"decision #{i} ({row['key']}): 'body' must be a string")
             continue
-        if (choice is None) == (body is None):
+        if choice is not None and body is not None:
             errors.append(
                 f"decision #{i} ({row['key']}): give exactly one of 'choice' or "
                 "'body' — a 'body' alone already selects the body answer, so "
                 "never add choice: 'body' alongside it"
+            )
+            continue
+        if choice is None and body is None:
+            errors.append(
+                f"decision #{i} ({row['key']}): supply either a 'choice' (one of "
+                "the item's advertised answers) or a 'body'"
             )
             continue
         if side is not None and side not in ("de", "en"):
@@ -426,18 +432,28 @@ def _set_for_slide(header: str, for_slide: str | None) -> str:
     return stripped.rstrip() + f' for_slide="{for_slide}"'
 
 
-def _replace_body(cell: SideCell, body: str, comment_token: str = "#") -> tuple[str, ...]:
+def _replace_body(
+    cell: SideCell, body: str, comment_token: str, *, normalize: bool = True
+) -> tuple[str, ...]:
     """The cell's lines with a new body, preserving its trailing separator.
 
-    The body is normalized to the engine's canonical cell shape at this
-    write boundary (issue #655): a markdown cell's body starts with a blank
-    comment line (the normalizer's ``markdown-blank-lead`` rule) — without
-    this, a decision body opening directly with ``# ## Title`` landed
-    verbatim and ``clm validate`` warned on the engine's own output,
-    forcing an out-of-band fix plus a zero-content ``keep_twin`` round.
-    Idempotent on canonical input; j2 cells never reach this function
-    (:func:`_replacement_lines` routes macro cells separately, and
-    ``unify``/``conflict`` bodies come from parsed markdown/code cells).
+    An agent-supplied body is normalized to the engine's canonical cell
+    shape at this write boundary (issue #655): a markdown cell's body
+    starts with a blank comment line (the normalizer's
+    ``markdown-blank-lead`` rule) — without this, a decision body opening
+    directly with ``# ## Title`` landed verbatim and ``clm validate``
+    warned on the engine's own output, forcing an out-of-band fix plus a
+    zero-content ``keep_twin`` round. Idempotent on canonical input; j2
+    cells never reach this function (:func:`_replacement_lines` routes
+    macro cells separately, and ``cell_type == "j2"`` iff ``is_j2``).
+
+    ``normalize=False`` is for **parity copies** (``unify_choose_body``'s
+    side choice), where the body comes from the twin's own parsed cell and
+    byte-parity with that side is the whole point — normalizing only the
+    written side would bank a divergent pair and frame a phantom
+    ``pending_divergence`` round (#655 adversarial review). Same doctrine
+    as ``propagate``'s verbatim copy: repo content is the normalizer's
+    job, not apply's.
     """
     old_body = cell.lines[1:]
     trailing = 0
@@ -449,7 +465,7 @@ def _replace_body(cell: SideCell, body: str, comment_token: str = "#") -> tuple[
     new_body = body.split("\n")
     while new_body and new_body[-1] == "":
         new_body.pop()
-    if new_body and cell.cell_type == "markdown":
+    if normalize and new_body and cell.cell_type == "markdown":
         first = new_body[0]
         if first.strip() == "":
             new_body[0] = comment_token  # promote a bare blank to the blank comment
@@ -1328,7 +1344,12 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             ex.set_side(
                 twin_holder,
                 _other(side),
-                evolve(twin, lines=_replace_body(twin, chosen.body, ex.comment_token)),
+                # Parity copy: byte-equality with the chosen side completes
+                # the unify — never normalize one side of a parity pair.
+                evolve(
+                    twin,
+                    lines=_replace_body(twin, chosen.body, ex.comment_token, normalize=False),
+                ),
             )
             return
         if action == "conflict_owner":
