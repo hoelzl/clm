@@ -191,7 +191,11 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
             errors.append(f"decision #{i} ({row['key']}): 'body' must be a string")
             continue
         if (choice is None) == (body is None):
-            errors.append(f"decision #{i} ({row['key']}): give exactly one of 'choice' or 'body'")
+            errors.append(
+                f"decision #{i} ({row['key']}): give exactly one of 'choice' or "
+                "'body' — a 'body' alone already selects the body answer, so "
+                "never add choice: 'body' alongside it"
+            )
             continue
         if side is not None and side not in ("de", "en"):
             errors.append(f"decision #{i} ({row['key']}): 'side' must be 'de' or 'en'")
@@ -313,7 +317,7 @@ def _replacement_lines(
     error = _validate_body(body, comment_token)
     if error:
         raise _ItemError(error)
-    return _replace_body(cell, body)
+    return _replace_body(cell, body, comment_token)
 
 
 # ---------------------------------------------------------------------------
@@ -422,8 +426,19 @@ def _set_for_slide(header: str, for_slide: str | None) -> str:
     return stripped.rstrip() + f' for_slide="{for_slide}"'
 
 
-def _replace_body(cell: SideCell, body: str) -> tuple[str, ...]:
-    """The cell's lines with a new body, preserving its trailing separator."""
+def _replace_body(cell: SideCell, body: str, comment_token: str = "#") -> tuple[str, ...]:
+    """The cell's lines with a new body, preserving its trailing separator.
+
+    The body is normalized to the engine's canonical cell shape at this
+    write boundary (issue #655): a markdown cell's body starts with a blank
+    comment line (the normalizer's ``markdown-blank-lead`` rule) — without
+    this, a decision body opening directly with ``# ## Title`` landed
+    verbatim and ``clm validate`` warned on the engine's own output,
+    forcing an out-of-band fix plus a zero-content ``keep_twin`` round.
+    Idempotent on canonical input; j2 cells never reach this function
+    (:func:`_replacement_lines` routes macro cells separately, and
+    ``unify``/``conflict`` bodies come from parsed markdown/code cells).
+    """
     old_body = cell.lines[1:]
     trailing = 0
     for line in reversed(old_body):
@@ -434,6 +449,12 @@ def _replace_body(cell: SideCell, body: str) -> tuple[str, ...]:
     new_body = body.split("\n")
     while new_body and new_body[-1] == "":
         new_body.pop()
+    if new_body and cell.cell_type == "markdown":
+        first = new_body[0]
+        if first.strip() == "":
+            new_body[0] = comment_token  # promote a bare blank to the blank comment
+        elif first.strip() != comment_token:
+            new_body.insert(0, comment_token)
     return (cell.lines[0], *new_body, *([""] * trailing))
 
 
@@ -1305,7 +1326,9 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             _, chosen = ex._moved_cell(item, side)
             twin_holder, twin = ex._locate_twin(item, _other(side))
             ex.set_side(
-                twin_holder, _other(side), evolve(twin, lines=_replace_body(twin, chosen.body))
+                twin_holder,
+                _other(side),
+                evolve(twin, lines=_replace_body(twin, chosen.body, ex.comment_token)),
             )
             return
         if action == "conflict_owner":

@@ -2022,7 +2022,10 @@ to overwrite, turning cold recovery into one pass instead of hand-editing the
 file then `confirm`-ing (issue #572); `side` is rejected on any other action.
 Each answer is validated individually — a body smuggling a cell delimiter, a
 wrong choice, a `side` where it is meaningless, or a stale handle is rejected
-with a reason while the valid answers still land. A single-line j2 macro
+with a reason while the valid answers still land. A markdown `body` missing
+its leading blank comment line (`#`) is accepted and normalized at write to
+the canonical cell shape (CLM {version}, issue #655) — no more validate
+warnings on engine output. A single-line j2 macro
 member (e.g. `id:title`) takes its `body` as the full replacement j2 line or
 as bare text spliced into the macro's quoted argument — the line is replaced
 in place (issue #609). The mutated bundle is
