@@ -60,6 +60,7 @@ from clm.slides.doc_ledger import (
     record_preamble_scope,
     rename_group_scopes,
     rerecord_pool,
+    seed_order_scopes,
     snapshot_deck,
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
@@ -1598,10 +1599,18 @@ def apply_deck(
     # unresolved list. Without this, a co-landed same-key row (e.g. a
     # conflict_owner answered by the very same handle-keyed decision)
     # would _upsert the fresh snapshot and bank the suppressed body drift.
-    unresolved_keys |= {item.key for item, _ in landed if item.action == "conflict_tags"}
+    # A landed no-evidence placement row (#654 round 2) is unresolved for
+    # recording purposes exactly like conflict_tags: its verify_cold
+    # sibling was suppressed at the differ, so nothing on this member was
+    # reviewed — recording the fresh snapshot would bless an unreviewed
+    # pair while bypassing every confirm guard. The placement mutation
+    # stays; the member re-frames cold and banks on the next pass.
+    unresolved_keys |= {
+        item.key for item, _ in landed if item.action == "conflict_tags" or item.defer_recording
+    }
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
         if item.key in unresolved_keys:
-            if item.action == "conflict_tags":
+            if item.action == "conflict_tags" or item.defer_recording:
                 continue  # records nothing BY DESIGN — no deferral suffix
             deferral = " (recording deferred: unresolved sibling item on this member)"
             for i, result in enumerate(outcome.results):
@@ -1637,7 +1646,7 @@ def apply_deck(
     ] + [
         holder
         for item, _ in landed
-        if item.action == "conflict_tags"
+        if item.action == "conflict_tags" or item.defer_recording
         for holder in (item.member, item.twin)
         if holder is not None
     ]
@@ -1647,6 +1656,24 @@ def apply_deck(
     # (adversarial review of #615: a landed stamp_twin_id with a pending
     # framed sibling would otherwise lose the divergence's only record).
     _sweep_migrated_pos(target, [e for e in landed if e[0].key not in unresolved_keys])
+    # Order-trust seeding (issue #654, review C3): a pass that resolved
+    # every item may bank order trust for scopes whose sides agree — the
+    # only way a confirm-seeded deck ever acquires order trust through the
+    # verb loop. Divergent scopes are never seeded, and the caller's
+    # structural gate still arbitrates whether this save happens at all.
+    if not unresolved_keys:
+        seed_order_scopes(target, fresh)
+    # Order scopes must not carry handles the ledger cannot back: a landed
+    # order item beside still-pending members of its scope would otherwise
+    # record handles that prune_dangling_refs strips at save with a
+    # spurious #718 damage warning (#654 review finding 2). Quiet, local
+    # filter; the scope re-records complete once the members resolve.
+    for scope_key, handles in list(target.member_order.items()):
+        kept = [h for h in handles if h in target.members]
+        if not kept:
+            target.member_order.pop(scope_key)
+        elif len(kept) != len(handles):
+            target.member_order[scope_key] = kept
     outcome.ledger_changed = True
     return outcome
 

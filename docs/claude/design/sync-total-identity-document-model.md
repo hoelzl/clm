@@ -276,6 +276,56 @@ entry := {
   `unverified` where they disagree (re-check item). Append-only history is not
   required — git history of the file is the audit trail.
 
+### 5.1 Order scopes (specified with #654; shipped earlier unspecified — D3)
+
+Alongside its member entries, each deck section records **order scopes**,
+the trust context for §6.2's `order` outcome:
+
+```
+deck := {
+  members:             {key: entry},
+  group_order:         [anchor_id],                 # merged view (rename detection)
+  group_order_by_side: {de: [anchor_id], en: [anchor_id]},
+  member_order:        {(lang, group, part): [id-keyed member handle]},
+  preamble_fps:        {(lang, part): h}
+}
+```
+
+- **Id-keyed handles only.** Positional handles alias across states
+  (ordinals renumber on any insert/remove), so the pool alignment owns
+  their order; `member_order` never lists them.
+- **Seeding.** A full `record`, `split`, or `translate-bootstrap` snapshots
+  every scope; a landed order item records its own scope; and — issue #654,
+  closing the C3 bootstrap circularity — an `apply` pass that ends with
+  **zero unresolved items** seeds every scope whose two sides currently
+  agree, compared over the handles both sides carry. A scope whose sides
+  disagree is never seeded from agreement, and the structural write gate
+  (#719) still arbitrates whether the save happens at all.
+- **Absence frames, never trusts** (issue #654). Order is a *pair*
+  invariant — the #615 lesson applied to sequences: the differ checks the
+  sides' **current** orders against each other unconditionally (over their
+  common two-sided handles, minus members carrying their own cross-group
+  move item) and frames an `order_decision` on divergence, cold decks
+  included. Recorded order trust *refines* that verdict into the directed
+  mechanical rows (`mirror_order` / `record_order`); it is not a
+  precondition for seeing the divergence. A parse-observed
+  `group_order_divergence` also suppresses `report`'s `is_clean` — the
+  observation's coverage is wider than the differ's item coverage.
+- **Cross-bracket placement with no evidence frames on the member, and
+  banks nothing** (#654 adversarial rounds 1–2). A member whose sides sit
+  under different *physical* group brackets, with no recorded placement,
+  frames a member-keyed `order_decision` ("adopt that side's placement";
+  the executor re-homes the twin cell) — never a scope reorder, because
+  the merged owner token cannot express which side is displaced and a
+  scope answer would permute cells across brackets. Its same-key
+  `verify_cold` row is suppressed for the pass (the `conflict_tags`
+  precedent), and the landed placement row is **recording-deferred** like
+  an answered `conflict_tags`: nothing on the member was reviewed, so the
+  member re-frames cold and banks on the next pass. Apply additionally
+  keeps `member_order` scope lists filtered to recorded members, so a
+  landed order item beside pending members cannot commit unbacked
+  handles.
+
 ---
 
 ## 6. The diff: one 3-way, derived once
@@ -298,7 +348,7 @@ comparison.
 | `conflict` | both sides moved off base and differ | framed decision (de-wins / en-wins / merged body / "it's a fork" §7), full excerpts by construction |
 | `transition` | class change (§7): fork, unify, id-stamp, relayout | mechanical when complete, framed when transitional |
 | `unverified` | no ledger entry (cold), **two-sided** (§5 — a one-sided un-ledgered member frames as `add`) | framed verification task; answers: `confirm` (banks both sides as-is, §9), plus `body`+`side` naming the stale twin on an id-keyed member (#572) |
-| `order` | group-level member-sequence divergence | sequence diff over MemberKeys; mechanical when one side moved, decision when both |
+| `order` | group-level member-sequence divergence | sequence diff over MemberKeys; mechanical when one side moved off recorded order, decision when both — or when no recorded order covers the divergence (the §5.1 pair-parity check, #654) |
 
 Direction is decided **per member** by which side's fingerprint moved off base
 — no deck-level direction inference, no mtime tiebreaks, no "established
@@ -523,6 +573,17 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
   removes the most common way a warm member fell cold; a known-stale twin on
   a cold id-keyed member is recovered in one pass with the `body`+`side`
   answer (#572).
+- **A scope with fewer than two two-sided id'd members is
+  order-untrackable** (#654 residue, review M4): one handle has no relative
+  order, so a lone id'd cell among positional siblings can sit at different
+  positions per side with no item and no observation. Minting ids makes
+  order trackable; the structural gate's `(slide_id, role)` order-parity
+  check (#719) is the deck-part backstop.
+- **Mid-move members contaminate same-pass order evidence** (review N11,
+  bounded): a member being moved cross-group contributes its merged-token
+  position to the destination scope's sequences. The pair-parity check
+  excludes members carrying their own cross-group move item; residual
+  contamination is limited to same-pass verdicts and re-frames next pass.
 
 ---
 
@@ -663,3 +724,4 @@ row here (or an edit to the section it refines) has skipped the checklist.
 | #718 — group-rename ledger integrity: `rename_group_scopes` now rewrites ALL FOUR reference classes (pos: keys, order-scope keys, **owner refs** — every group member carries `owner = the anchor's key` — and **`id:` handle values inside member-order lists**), so the apply executor's `record_group_rename` no longer commits dangling `id:<old>` references into the sole trust store; `save` additionally sweeps every deck section for dangling handles/owners (`prune_dangling_refs`) — stale handles are dropped (the differ silently intersects them away anyway, eroding order trust with no signal), a dangling owner degrades to `None` (self-heals via a mechanical `record_owner`), and field-damaged ledgers heal on their next save | §5, §7.3 | defect fix: the trust store must not carry claims it cannot back (adversarial-review finding C6; the #656 field report) |
 | #719 — order parity in the structural gate: `structural_violations` gains an `order-parity` check (the halves' common `(slide_id, role)` keys in first-occurrence document order must match — one-sided ids are excluded, they are the transition machinery's concern) — a *warning* in `sync verify` (pre-existing committed divergences must not hard-fail CI; the #615 tag-parity precedent) that the **whole-deck `structural_gate` promotes to blocking**: the trust store must never record a pair whose halves disagree about member order (`unify_texts` interleaves language-tagged cells permissively, so a localized-only group swap previously reached the ledger as verified — #652 instance 2). The scoped per-slide gate keeps its doctrine (a whole-pair order divergence does not block recording one reconciled slide) | §8 (verify), §6.2 `order` row's trust boundary | defect fix: verify ⊉ validate on exactly the property the field failures hit (adversarial-review finding C4); framing order divergence as an actionable item stays Phase 1 |
 | #720 — anchor-adjacency guard on `insert_mirrored`: minting an **anchor** (slide/subslide) twin refuses when the mirrored-predecessor slot would separate it from its group's existing target-side cells (the group's cells are identified on the SOURCE side — the members following the anchor up to the next anchor — so a renamed anchor id cannot dodge the check); the violation fails the one item with an actionable reason, others proceed. For a non-anchor member with a two-sided anchor the predecessor rule is span-correct by construction (the predecessor is the anchor or a later same-group member), so no guard is needed there — the reachable corruption class was exactly the anchor mint under divergent group order, which previously wrote the twin at file end and re-parented cells on re-parse (#652 instance 1) | §8 (apply), §6.2 `order` row's write path | defect fix: the executor presumed order parity instead of checking it (adversarial-review finding C5); P8 — frame, never guess |
+| #654 — order first-class (remediation Phase 1, the #615 treatment): order becomes a pair invariant checked from **current** cross-side evidence unconditionally — the differ compares the sides' current sequences over their common two-sided handles (minus members carrying their own cross-group move item) for every scope, base-covered or not, cold decks included, and frames `order_decision` on divergence; recorded order trust only *refines* the verdict into the directed `mirror_order`/`record_order` rows, and `record_order` additionally requires pair parity on the wider current evidence (a convergence on base-covered handles must not bank a divergence on uncovered ones). The C3 bootstrap circularity closes from the other side too: an `apply` pass ending with zero unresolved items seeds every order scope whose sides currently agree (`seed_order_scopes`), so confirm-seeded ledgers acquire order trust through the verb loop and later one-sided moves frame *directed*. A parse-observed `group_order_divergence` suppresses `is_clean` (observation coverage > item coverage), and the text report prints that observation. §5.1 specifies the order-scope schema the code had shipped unspecified (D3). Pre-merge adversarial rounds added: a no-evidence **cross-bracket placement** frames a member-keyed `order_decision` (executor re-homes the twin cell; the scope pair check excludes such members — a scope answer would permute cells across brackets), its same-key `verify_cold` row is suppressed AND the landed row is recording-deferred like an answered `conflict_tags` (the placement answer banks nothing; the member re-frames cold next pass), and apply filters `member_order` scope lists to recorded members so a landed order item beside pending members cannot commit unbacked handles | §5.1 (new), §6.2 `order` row, §9 (M4 + N11 residue entries) | defect fix: the #652/#654 order-blindness class (adversarial-review C3, M1, M3; D3/D6 doc debt) — frame from evidence, direct from trust |

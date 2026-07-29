@@ -1962,11 +1962,19 @@ Read-only. Prints one `outcome/action` row per non-in-sync member; exit `0`
 clean / `1` work pending / `2` error. The JSON envelope is self-describing
 (`"schema": 3, "engine": "v3"`) and carries the stable booleans:
 
-- `is_clean` — nothing to do;
+- `is_clean` — nothing to do (also false, with an `observations` entry, when
+  the halves' group order visibly diverges — even if no item is framed);
 - `needs_model` — at least one framed translation task (`translate_edit` /
   `translate_new`) exists;
 - `needs_agent` — judgment beyond translation is required (a conflict, a cold
   member, a normalize refusal).
+
+Order divergence frames from the **current** cross-side state whether or not
+the ledger carries recorded order trust (CLM {version}): with trust, a
+one-sided move is a mechanical `mirror_order`; without it (a cold deck, a
+confirm-seeded ledger), the divergence frames an `order_decision` — answer
+`de`/`en` to adopt that side's order. An `apply` pass that resolves every
+item seeds order trust for the scopes whose sides agree.
 
 **Mechanical actions** (`apply` executes them deterministically):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,

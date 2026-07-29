@@ -2205,3 +2205,179 @@ class TestTagParity:
         assert any(i.action == "pending_divergence" for i in diff.items), [
             (i.key, i.action, i.detail) for i in diff.items
         ]
+
+
+class TestOrderTrustSeeding:
+    """Issue #654 (adversarial review C3): the verb loop seeds order trust.
+
+    Order scopes used to be seeded only by a full ``record``/``split``/
+    ``translate-bootstrap`` — a ledger built through report → confirm →
+    apply carried member trust but no order trust, so a later one-sided
+    move framed nothing while the report said clean."""
+
+    TWO_GROUP_DE = (
+        HEADER_DE,
+        _slide("s0", "de", "Eins"),
+        _localized("m", "de", "DE"),
+        _slide("s1", "de", "Zwei"),
+        _localized("n", "de", "DE2"),
+    )
+    TWO_GROUP_EN = (
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("m", "en", "EN"),
+        _slide("s1", "en", "Two"),
+        _localized("n", "en", "EN2"),
+    )
+
+    def _confirm_all(self, deck: _Deck) -> None:
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"verify_cold"}
+        decisions = {i.key: doc_apply.Decision(key=i.key, choice="confirm") for i in diff.items}
+        outcome = deck.apply(decisions)
+        assert outcome.error is None
+        assert all(r.status in ("applied", "recorded") for r in outcome.results), [
+            (r.key, r.status, r.reason) for r in outcome.results
+        ]
+
+    def test_fully_resolved_confirm_pass_seeds_order_scopes(self, tmp_path: Path):
+        deck = _Deck(tmp_path, _build(*self.TWO_GROUP_DE), _build(*self.TWO_GROUP_EN))
+        self._confirm_all(deck)
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        assert dl.group_order_by_side.get("de") == ["title", "s0", "s1"]
+        assert dl.group_order_by_side.get("en") == ["title", "s0", "s1"]
+        assert dl.member_order, "member-order scopes must be seeded too"
+        # The seeded trust closes the #654 loop: a one-sided EN group move
+        # now diffs as a DIRECTED mechanical mirror, not silence.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s1", "en", "Two"),
+            _localized("n", "en", "EN2"),
+            _slide("s0", "en", "One"),
+            _localized("m", "en", "EN"),
+        )
+        _, diff = deck.diff()
+        assert {(i.outcome, i.action, i.direction) for i in diff.items} == {
+            ("order", "mirror_order", "en_to_de")
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+
+    def test_partial_pass_does_not_seed_order_scopes(self, tmp_path: Path):
+        deck = _Deck(tmp_path, _build(*self.TWO_GROUP_DE), _build(*self.TWO_GROUP_EN))
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"verify_cold"}
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="confirm")
+            for i in diff.items
+            if i.key != "id:m"  # one member left unresolved
+        }
+        outcome = deck.apply(decisions)
+        assert outcome.error is None
+        assert any(r.status == "pending" for r in outcome.results)
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        assert not dl.group_order_by_side
+        assert not dl.member_order
+
+
+class TestOrderDecisionExecution:
+    """#654 review finding 3: the new no-trust order_decision paths must be
+    pinned through apply_deck, not just the differ."""
+
+    def test_answering_no_trust_group_order_decision_reorders_the_twin(self, tmp_path: Path):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Eins"),
+            _localized("m", "de", "DE"),
+            _slide("s1", "de", "Zwei"),
+            _localized("n", "de", "DE2"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s1", "en", "Two"),
+            _localized("n", "en", "EN2"),
+            _slide("s0", "en", "One"),
+            _localized("m", "en", "EN"),
+        )
+        deck = _Deck(tmp_path, de, en)  # cold: no ledger at all
+        _, diff = deck.diff()
+        scope_key = "pos:~groups/order.deck/0"
+        actions = {i.key: i.action for i in diff.items}
+        assert actions.get(scope_key) == "order_decision"
+        outcome = deck.apply({scope_key: doc_apply.Decision(key=scope_key, choice="de")})
+        assert outcome.error is None
+        results = {r.key: r for r in outcome.results}
+        assert results[scope_key].status == "applied", results[scope_key].reason
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert en_text.index('slide_id="s0"') < en_text.index('slide_id="s1"')
+        # Group order lists anchor ids, not member handles — it records
+        # even while the members themselves are still cold.
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        assert dl.group_order_by_side.get("en") == dl.group_order_by_side.get("de")
+
+    def test_answering_cold_cross_placement_rehomes_the_twin_cell(self, tmp_path: Path):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Eins"),
+            _localized("m", "de", "DE-m"),
+            _localized("k", "de", "DE-k"),
+            _slide("s1", "de", "Zwei"),
+            _localized("n", "de", "DE-n"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "One"),
+            _localized("k", "en", "EN-k"),
+            _slide("s1", "en", "Two"),
+            _localized("m", "en", "EN-m"),
+            _localized("n", "en", "EN-n"),
+        )
+        deck = _Deck(tmp_path, de, en)
+        _, diff = deck.diff()
+        assert {i.key: i.action for i in diff.items}.get("id:m") == "order_decision"
+        # The suppressed verify_cold sibling means nothing on id:m was
+        # reviewed — the placement answer must not bank the member (#654
+        # review round 2: it used to _upsert the full fresh snapshot,
+        # bypassing every confirm guard).
+        outcome = deck.apply({"id:m": doc_apply.Decision(key="id:m", choice="de")})
+        assert outcome.error is None
+        results = {r.key: r for r in outcome.results}
+        assert results["id:m"].status == "applied", results["id:m"].reason
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert en_text.index('slide_id="m"') < en_text.index('slide_id="s1"')
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks.get("slides_t")
+        assert dl is None or "id:m" not in dl.members, sorted(dl.members)
+        # Once placed, the member ITSELF re-frames cold (nothing was
+        # silently confirmed by the placement answer).
+        _, rediff = deck.diff()
+        rows = {(i.key, i.action) for i in rediff.items}
+        assert ("id:m", "verify_cold") in rows, sorted(rows)
+        assert {i.action for i in rediff.items} == {"verify_cold"}, sorted(rows)
+
+    def test_order_scope_recording_never_carries_unbacked_handles(self, tmp_path: Path, caplog):
+        """#654 review finding 2: a landed order item beside pending cold
+        members must not record handles the ledger cannot back (they were
+        pruned at save with a spurious #718 damage warning)."""
+        import logging
+
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "T"),
+            _localized("m1", "de", "eins"),
+            _localized("m2", "de", "zwei"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _localized("m2", "en", "two"),
+            _localized("m1", "en", "one"),
+        )
+        deck = _Deck(tmp_path, de, en)
+        _, diff = deck.diff()
+        scope_key = "pos:s0/order.deck/0"
+        assert {i.key: i.action for i in diff.items}.get(scope_key) == "order_decision"
+        with caplog.at_level(logging.WARNING):
+            outcome = deck.apply({scope_key: doc_apply.Decision(key=scope_key, choice="de")})
+        assert outcome.error is None
+        assert not [r for r in caplog.records if "dangling" in r.getMessage()]
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        for _scope, handles in dl.member_order.items():
+            assert all(h in dl.members for h in handles), dl.member_order

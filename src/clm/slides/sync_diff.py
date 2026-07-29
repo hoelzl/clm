@@ -286,6 +286,11 @@ class DiffItem:
     #: carries every present side. The Phase-3 executor resolves each side
     #: through this convention so it always acts on the right cell.
     twin: Member | None = None
+    #: Landing this row must NOT record the member (the conflict_tags
+    #: doctrine): its resolution mutates placement only, and the suppressed
+    #: verify_cold sibling means the pair was never reviewed — the member
+    #: re-frames and banks on the next pass (#654 review round 2).
+    defer_recording: bool = False
 
     def payload(self) -> dict:
         entry: dict = {
@@ -318,7 +323,16 @@ class DeckDiff:
 
     @property
     def is_clean(self) -> bool:
-        return not self.items and self.refusal is None
+        # A parse-observed group-order divergence is never clean (issue
+        # #654): the differ frames what it can, but observation coverage is
+        # wider than item coverage (e.g. groups without a two-sided
+        # deck-part anchor cell), and "clean" must not certify a pair whose
+        # halves visibly disagree about group order.
+        return (
+            not self.items
+            and self.refusal is None
+            and not any(o.kind == "group_order_divergence" for o in self.observations)
+        )
 
     @property
     def needs_model(self) -> bool:
@@ -418,6 +432,16 @@ class _Differ:
         self.absorbed_pos: set[int] = set()
         #: id-keyed members consumed by another member's conflict item
         self.consumed_id_members: set[str] = set()
+        #: handles with a framed/mechanical cross-group move item — their
+        #: placement is that item's job; the scope pair-parity check must
+        #: not double-frame it (#654)
+        self._cross_moved: set[str] = set()
+        #: handles whose placement was framed with NO base evidence (a cold
+        #: or order-blind member under different brackets per side) — their
+        #: same-key verify_cold row is suppressed for the pass (#654; the
+        #: conflict_tags precedent: two framed rows on one key cannot both
+        #: be answered)
+        self._placement_framed: set[str] = set()
         #: content fps of migrated base entries → the winning id handle
         self.migrated_fps: dict[str, str] = {}
 
@@ -436,6 +460,7 @@ class _Differ:
         member: Member | None = None,
         base: MemberBaseline | None = None,
         twin: Member | None = None,
+        defer_recording: bool = False,
     ) -> None:
         if action not in MECHANICAL_ACTIONS and action not in FRAMED_ACTIONS:
             raise ValueError(f"unregistered diff action: {action}")  # pragma: no cover
@@ -451,6 +476,7 @@ class _Differ:
                 member=member,
                 base=base,
                 twin=twin if twin is not member else None,
+                defer_recording=defer_recording,
             )
         )
 
@@ -468,6 +494,8 @@ class _Differ:
                     group=group,
                     member=member,
                 )
+            self._frame_cold_order_divergence()
+            self._suppress_placement_verify_cold()
             return self._finish()
 
         members = list(_iter_with_groups(self.current))
@@ -483,6 +511,7 @@ class _Differ:
         self._diff_pos_pools(pos_members)
         self._diff_removed_id_members()
         self._diff_cross_group_moves(id_members)
+        self._suppress_placement_verify_cold()
         self._diff_order()
         self._diff_preambles()
         return self._finish()
@@ -2820,18 +2849,8 @@ class _Differ:
 
     # -- cross-group moves ---------------------------------------------------------
 
-    def _diff_cross_group_moves(self, id_members: list[tuple[Member, str]]) -> None:
-        """A member whose two sides live under *different* group anchors.
-
-        Global by-id pairing deliberately keeps a mid-move member one member
-        (P2), so the parse records no divergence — the differ derives each
-        side's physical group by bracketing the cell index between anchor
-        indexes and compares against that side's OWN base group. A side that
-        moved off its base placement → mechanical order mirror; both moved
-        differently → decision; a split already carried at base (or forced
-        by a one-sided anchor) is never reported as a fresh move.
-        """
-        assert self.base is not None
+    def _anchor_brackets(self) -> tuple[dict[Lang, list[tuple[int, str]]], dict[str, bool]]:
+        """Per-side anchor cell indexes + two-sidedness, for physical brackets."""
         anchor_index: dict[Lang, list[tuple[int, str]]] = {"de": [], "en": []}
         two_sided_anchor: dict[str, bool] = {}
         for group in self.current.groups:
@@ -2846,15 +2865,37 @@ class _Differ:
                     anchor_index[lang].append((cell.index, group.anchor_id))
         for lang in _SIDES:
             anchor_index[lang].sort()
+        return anchor_index, two_sided_anchor
+
+    @staticmethod
+    def _bracket_of(
+        anchor_index: dict[Lang, list[tuple[int, str]]], lang: Lang, cell: SideCell
+    ) -> str | None:
+        """The group whose anchor physically brackets ``cell`` on ``lang``."""
+        token = None
+        for idx, gid in anchor_index[lang]:
+            if idx <= cell.index:
+                token = gid
+            else:
+                break
+        return token
+
+    def _diff_cross_group_moves(self, id_members: list[tuple[Member, str]]) -> None:
+        """A member whose two sides live under *different* group anchors.
+
+        Global by-id pairing deliberately keeps a mid-move member one member
+        (P2), so the parse records no divergence — the differ derives each
+        side's physical group by bracketing the cell index between anchor
+        indexes and compares against that side's OWN base group. A side that
+        moved off its base placement → mechanical order mirror; both moved
+        differently → decision; a split already carried at base (or forced
+        by a one-sided anchor) is never reported as a fresh move.
+        """
+        assert self.base is not None
+        anchor_index, two_sided_anchor = self._anchor_brackets()
 
         def group_of(lang: Lang, cell: SideCell) -> str | None:
-            token = None
-            for idx, gid in anchor_index[lang]:
-                if idx <= cell.index:
-                    token = gid
-                else:
-                    break
-            return token
+            return self._bracket_of(anchor_index, lang, cell)
 
         base_group_of: dict[tuple[Lang, str], str] = {}
         for (lang, base_token, part), handles in self.base.member_order.items():
@@ -2894,6 +2935,7 @@ class _Differ:
             moved_en = base_en is not None and en_group != base_en
             if not moved_de and not moved_en:
                 if base_de is not None and base_en is not None:
+                    self._cross_moved.add(handle)
                     self.emit(
                         handle,
                         "order",
@@ -2904,9 +2946,19 @@ class _Differ:
                         f"carried divergent placement, decide",
                         member=member,
                     )
+                else:
+                    # No recorded placement covers a member whose sides sit
+                    # under different physical brackets (a cold member on a
+                    # warm deck, an order-blind ledger). Frame the placement
+                    # itself — the scope pair check cannot express it (the
+                    # merged owner token hides which side is displaced), and
+                    # a scope-level answer would permute cells ACROSS
+                    # brackets (#654 review finding 1).
+                    self._frame_cross_placement(handle, member, de_group, en_group)
                 continue
             if moved_de != moved_en:
                 moved: Lang = "de" if moved_de else "en"
+                self._cross_moved.add(handle)
                 self.emit(
                     handle,
                     "order",
@@ -2920,6 +2972,7 @@ class _Differ:
                     member=member,
                 )
             else:
+                self._cross_moved.add(handle)
                 self.emit(
                     handle,
                     "order",
@@ -2936,10 +2989,14 @@ class _Differ:
         assert self.base is not None
         self._diff_group_order()
         current_orders = self._current_member_orders()
+        # Union of base and current scopes: an unseeded scope (never
+        # order-recorded — C3's bootstrap hole) must still get the
+        # cross-side pair check; base-only scopes degrade harmlessly
+        # (no current members → nothing to compare).
         scopes = {
             (self.group_map.get(group, group), part)
             for (_lang, group, part) in self.base.member_order
-        }
+        } | {(group, part) for (_lang, group, part) in current_orders}
         for group, part in sorted(scopes):
             base_of: dict[Lang, list[str]] = {}
             cur_of: dict[Lang, list[str]] = {}
@@ -2978,14 +3035,43 @@ class _Differ:
         already disagreed about order at base must diff clean-of-mechanics
         (a carried divergence is a framed decision, never a fresh
         one-sided reorder with an arbitrary direction).
+
+        Order is a PAIR invariant (issue #654, the #615 treatment): the
+        sides' current sequences are compared cross-side *unconditionally*
+        — over the handles both sides carry now, regardless of base
+        coverage — and base evidence only refines the verdict into a
+        directed mechanical row. Absence of order trust (an unseeded
+        scope, base evidence destroyed by a same-pass rename+edit) frames
+        an ``order_decision`` instead of silently passing; without this, a
+        confirm-seeded ledger was permanently order-blind while reporting
+        clean.
         """
+        # A handle mid-cross-group-move already carries its own placement
+        # item — exclude it from the pair evidence or the scope row would
+        # double-frame the same divergence.
+        cur_common = (set(cur_of["de"]) & set(cur_of["en"])) - self._cross_moved
+        cur_pair = {lang: [h for h in cur_of[lang] if h in cur_common] for lang in _SIDES}
+        pair_diverged = len(cur_common) >= 2 and cur_pair["de"] != cur_pair["en"]
+        handle = MemberKey.positional(group, f"order.{part}", 0).render()
+
         common_set = set(base_of["de"]) & set(base_of["en"]) & set(cur_of["de"]) & set(cur_of["en"])
         if len(common_set) < 2:
+            if pair_diverged:
+                self.emit(
+                    handle,
+                    "order",
+                    "order_decision",
+                    "none",
+                    f"recorded order trust does not cover this divergence in group "
+                    f"{group!r} ({part}): the sides order it differently "
+                    f"(de: {cur_pair['de']}, en: {cur_pair['en']}) — answer de/en "
+                    f"to adopt that side's order, or reorder one half by hand",
+                    group=group,
+                )
             return
         base_orders = {lang: [h for h in base_of[lang] if h in common_set] for lang in _SIDES}
         cur_orders = {lang: [h for h in cur_of[lang] if h in common_set] for lang in _SIDES}
         moved = {lang: cur_orders[lang] != base_orders[lang] for lang in _SIDES}
-        handle = MemberKey.positional(group, f"order.{part}", 0).render()
         if not moved["de"] and not moved["en"]:
             if cur_orders["de"] != cur_orders["en"]:
                 self.emit(
@@ -2997,21 +3083,53 @@ class _Differ:
                     f"at base — carried divergence, decide",
                     group=group,
                 )
+            elif pair_diverged:
+                # The base-covered view is clean but the pair currently
+                # diverges on handles outside base evidence (e.g. a renamed
+                # anchor dropped from the comparison) — frame, never pass.
+                self.emit(
+                    handle,
+                    "order",
+                    "order_decision",
+                    "none",
+                    f"the sides order group {group!r} ({part}) differently on "
+                    f"members the recorded order does not cover "
+                    f"(de: {cur_pair['de']}, en: {cur_pair['en']}) — answer de/en "
+                    f"to adopt that side's order, or reorder one half by hand",
+                    group=group,
+                )
             return
         if moved["de"] and moved["en"]:
-            action = "record_order" if cur_orders["de"] == cur_orders["en"] else "order_decision"
+            converged = cur_orders["de"] == cur_orders["en"] and not pair_diverged
+            action = "record_order" if converged else "order_decision"
             self.emit(
                 handle,
                 "order",
                 action,
                 "both",
                 f"members of group {group!r} reordered on both sides "
-                f"(de: {cur_orders['de']}, en: {cur_orders['en']})",
+                f"(de: {cur_pair['de']}, en: {cur_pair['en']})",
                 group=group,
             )
             return
         moved_side: Lang = "de" if moved["de"] else "en"
         if cur_orders["de"] == cur_orders["en"]:
+            if pair_diverged:
+                # Converged on the base-covered handles, but the pair still
+                # diverges on handles base evidence never covered — the
+                # direction for those is unknowable: frame, never guess.
+                self.emit(
+                    handle,
+                    "order",
+                    "order_decision",
+                    "none",
+                    f"the sides order group {group!r} ({part}) differently on "
+                    f"members the recorded order does not cover "
+                    f"(de: {cur_pair['de']}, en: {cur_pair['en']}) — answer de/en "
+                    f"to adopt that side's order, or reorder one half by hand",
+                    group=group,
+                )
+                return
             # The moved side converged on the twin's order: record, don't mirror.
             self.emit(
                 handle,
@@ -3039,7 +3157,10 @@ class _Differ:
             lang: [self.group_map.get(g, g) for g in self.base.group_order_by_side.get(lang, [])]
             for lang in _SIDES
         }
-        cur_of: dict[Lang, list[str]] = {}
+        self._compare_order("~groups", "deck", base_of, self._current_group_orders())
+
+    def _current_group_orders(self) -> dict[Lang, list[str]]:
+        """Anchor ids in each side's current deck-part file order."""
         current_by_side: dict[Lang, list[tuple[int, str]]] = {"de": [], "en": []}
         for group in self.current.groups:
             anchor = group.anchor
@@ -3049,9 +3170,83 @@ class _Differ:
                 cell = anchor.side(lang)
                 if cell is not None and cell.part == "deck":
                     current_by_side[lang].append((cell.index, group.anchor_id))
-        for lang in _SIDES:
-            cur_of[lang] = [gid for _, gid in sorted(current_by_side[lang])]
-        self._compare_order("~groups", "deck", base_of, cur_of)
+        return {lang: [gid for _, gid in sorted(current_by_side[lang])] for lang in _SIDES}
+
+    def _frame_cross_placement(
+        self, handle: str, member: Member | None, de_group: str | None, en_group: str | None
+    ) -> None:
+        """Frame a no-evidence cross-bracket placement as its own decision."""
+        self._cross_moved.add(handle)
+        self._placement_framed.add(handle)
+        self.emit(
+            handle,
+            "order",
+            "order_decision",
+            "none",
+            f"the sides place this member under different groups "
+            f"(de: {de_group!r}, en: {en_group!r}) and no recorded placement "
+            f"covers it — answer de/en to adopt that side's placement",
+            member=member,
+            # The suppressed verify_cold sibling means the pair was never
+            # reviewed: landing the placement must not bank the member.
+            defer_recording=True,
+        )
+
+    def _suppress_placement_verify_cold(self) -> None:
+        """Drop verify_cold rows whose member got a placement decision.
+
+        Two framed rows on one key cannot both be answered (the
+        conflict_tags precedent) — the placement resolves first, and the
+        member re-frames cold on the next report once the sides agree
+        where it lives."""
+        if self._placement_framed:
+            self.items = [
+                i
+                for i in self.items
+                if not (i.key in self._placement_framed and i.action == "verify_cold")
+            ]
+
+    def _frame_cold_order_divergence(self) -> None:
+        """The cross-side order check for decks with no base at all (#654).
+
+        A wholly-cold deck frames ``verify_cold`` per member; without this,
+        a cross-side order divergence surfaced only at the write gate
+        (#719), *after* the agent had already confirmed every member.
+        Frame it up front from current evidence — same pair check, empty
+        base. Cross-bracket members are framed as *placement* decisions
+        first (never as scope reorders: the merged owner token cannot
+        express which side is displaced, and a scope answer would permute
+        cells across brackets — #654 review finding 1)."""
+        anchor_index, two_sided_anchor = self._anchor_brackets()
+        anchor_ids = {g.anchor_id for g in self.current.groups}
+        for member, _group in _iter_with_groups(self.current):
+            if member.key.scheme != "id":
+                continue
+            de, en = member.de, member.en
+            if de is None or en is None or de.part != "deck" or en.part != "deck":
+                continue
+            if member.role in ("slide", "subslide") or member.key.value in anchor_ids:
+                continue  # anchors define groups
+            de_group = self._bracket_of(anchor_index, "de", de)
+            en_group = self._bracket_of(anchor_index, "en", en)
+            if de_group == en_group:
+                continue
+            if not (
+                de_group
+                and en_group
+                and two_sided_anchor.get(de_group)
+                and two_sided_anchor.get(en_group)
+            ):
+                # A one-sided anchor forces the twin's cells under another
+                # bracket — placement there is an artifact, not a choice.
+                continue
+            self._frame_cross_placement(member.key.render(), member, de_group, en_group)
+        empty: dict[Lang, list[str]] = {lang: [] for lang in _SIDES}
+        self._compare_order("~groups", "deck", empty, self._current_group_orders())
+        current_orders = self._current_member_orders()
+        for group, part in sorted({(g, p) for (_lang, g, p) in current_orders}):
+            cur_of = {lang: current_orders.get((lang, group, part), []) for lang in _SIDES}
+            self._compare_order(group, part, empty, cur_of)
 
     # -- preambles ------------------------------------------------------------------
 
