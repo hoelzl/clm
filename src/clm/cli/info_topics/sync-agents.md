@@ -46,7 +46,11 @@ writes**. The default is "tell me what is necessary", not "do it".
 `report --json` emits a schema-3 envelope (`"schema": 3, "engine": "v3"`).
 Branch on the stable booleans rather than scanning the lists:
 
-- `is_clean` — nothing to do; **stop**.
+- `is_clean` — nothing to do; **stop**. One non-item state suppresses it:
+  a parse-observed `group_order_divergence` (the halves order their common
+  groups differently). If `is_clean` is false with zero `items`, read
+  `observations` — the text report prints the same line — and reorder one
+  half, or answer the order item when one is framed.
 - `needs_model` — framed **translation** work exists (`translate_edit` /
   `translate_new`).
 - `needs_agent` — judgment beyond translation (conflicts, cold members, a
@@ -137,6 +141,25 @@ way layout and owner changes get their own rows):
   `confirm`/`keep_twin` answered in the same document as a co-framed
   mechanical `mirror_tags` still lands in one pass — the mirror executes
   first and the guard sees the reconciled state.
+
+## Order parity (order is language-independent, like tags)
+
+The twins must order their id'd cells and their slide groups identically;
+the differ checks this **cross-side on the current state**, whether or not
+the ledger carries recorded order trust — a cold or confirm-seeded deck is
+not order-blind:
+
+- **Recorded order trust exists and one side moved** → mechanical
+  `mirror_order` (directed). Trust it.
+- **No recorded order covers the divergence** (a cold deck, a
+  confirm-seeded ledger, a same-pass rename+edit of a slide) → framed
+  `order_decision` naming both sequences. Answer `de` or `en` to adopt that
+  side's order, or reorder one half by hand and re-report.
+- **Order trust seeds itself through the loop**: any `apply` pass that
+  resolves every item banks order trust for the scopes whose sides agree —
+  after your first fully-clean apply, later one-sided moves frame as
+  directed mechanical mirrors instead of decisions. (A full `sync record`
+  seeds order trust wholesale, as before.)
 
 ## The decision document
 
