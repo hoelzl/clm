@@ -557,6 +557,144 @@ class TestOrderAndMoves:
         assert all(i.direction == "de_to_en" for i in diff.items)
 
 
+def _order_blind(base: DeckBaseline) -> DeckBaseline:
+    """The confirm-seeded ledger's view (issue #654, review C3): member
+    entries exist, but no order scope was ever seeded."""
+    base.group_order = []
+    base.group_order_by_side = {}
+    base.member_order = {}
+    base.complete = False
+    return base
+
+
+class TestOrderFirstClass:
+    """Issue #654 (adversarial review C3/M1): order is a pair invariant.
+
+    Cross-side divergence of the *current* sequences must frame even when
+    no base order trust exists — a confirm-seeded ledger used to be
+    permanently order-blind while reporting ``is_clean``."""
+
+    DE3 = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Eins"),
+        _localized("m", "de", "DE"),
+        _slide("s1", "de", "Zwei"),
+        _localized("n", "de", "DE2"),
+        _slide("s2", "de", "Drei"),
+    )
+    EN3 = _build(
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("m", "en", "EN"),
+        _slide("s1", "en", "Two"),
+        _localized("n", "en", "EN2"),
+        _slide("s2", "en", "Three"),
+    )
+    # s2 moved between s0 and s1 on the EN side only — the #654 shape.
+    EN3_MOVED = _build(
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("m", "en", "EN"),
+        _slide("s2", "en", "Three"),
+        _slide("s1", "en", "Two"),
+        _localized("n", "en", "EN2"),
+    )
+
+    def test_order_blind_one_sided_slide_move_frames_order_decision(self):
+        """The #654 regression: an EN-side slide move on an order-blind
+        ledger framed nothing and reported clean."""
+        base = _order_blind(_snapshot(self.DE3, self.EN3))
+        diff = _diff(base, self.DE3, self.EN3_MOVED)
+        assert [(i.outcome, i.action, i.key, i.direction) for i in diff.items] == [
+            ("order", "order_decision", "pos:~groups/order.deck/0", "none")
+        ]
+        assert "no recorded order trust" in diff.items[0].detail
+        assert not diff.is_clean
+
+    def test_order_blind_agreeing_sides_stay_clean(self):
+        base = _order_blind(_snapshot(self.DE3, self.EN3))
+        assert _diff(base, self.DE3, self.EN3).is_clean
+
+    def test_order_blind_within_group_reorder_frames(self):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "T"),
+            _localized("m1", "de", "eins"),
+            _localized("m2", "de", "zwei"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _localized("m1", "en", "one"),
+            _localized("m2", "en", "two"),
+        )
+        en_swapped = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _localized("m2", "en", "two"),
+            _localized("m1", "en", "one"),
+        )
+        base = _order_blind(_snapshot(de, en))
+        diff = _diff(base, de, en_swapped)
+        assert [(i.outcome, i.action, i.key) for i in diff.items] == [
+            ("order", "order_decision", "pos:s0/order.deck/0")
+        ]
+
+    def test_cold_deck_with_divergent_order_frames_order_item(self):
+        """A wholly-cold divergent deck must not hide the divergence behind
+        its verify_cold items — the write gate (#719) would only reject it
+        after the agent had confirmed every member."""
+        diff = diff_deck(_parse(self.DE3, self.EN3_MOVED), None)
+        order_items = [i for i in diff.items if i.outcome == "order"]
+        assert [(i.action, i.key) for i in order_items] == [
+            ("order_decision", "pos:~groups/order.deck/0")
+        ]
+        assert {i.action for i in diff.items} == {"verify_cold", "order_decision"}
+
+    def test_cold_deck_with_agreeing_order_frames_no_order_item(self):
+        diff = diff_deck(_parse(self.DE3, self.EN3), None)
+        assert {i.action for i in diff.items} == {"verify_cold"}
+
+    def test_renamed_and_edited_anchor_move_still_frames(self):
+        """Review M1: a same-pass rename+edit of a group anchor fails rename
+        detection and used to destroy the order evidence — the move
+        vanished. The pair check on current sequences must still frame."""
+        base = _snapshot(self.DE3, self.EN3)
+        de = self.DE3.replace('slide_id="s2"', 'slide_id="s2x"').replace("Drei", "Drei NEU")
+        en_moved = _build(
+            HEADER_EN,
+            _slide("s0", "en", "One"),
+            _localized("m", "en", "EN"),
+            _slide("s2x", "en", "Three NEW"),
+            _slide("s1", "en", "Two"),
+            _localized("n", "en", "EN2"),
+        )
+        diff = _diff(base, de, en_moved)
+        order_scope_items = [i for i in diff.items if i.key == "pos:~groups/order.deck/0"]
+        assert [(i.action, i.direction) for i in order_scope_items] == [
+            ("order_decision", "none")
+        ], [(i.outcome, i.action, i.key, i.detail) for i in diff.items]
+
+    def test_seeded_base_keeps_the_directed_mirror(self):
+        """Base order trust still refines the same move into a mechanical
+        directed row — the decision is framed only when direction is
+        unknowable."""
+        base = _snapshot(self.DE3, self.EN3)
+        diff = _diff(base, self.DE3, self.EN3_MOVED)
+        assert [(i.outcome, i.action, i.direction) for i in diff.items] == [
+            ("order", "mirror_order", "en_to_de")
+        ]
+
+    def test_group_order_divergence_observation_suppresses_is_clean(self):
+        from clm.slides.bilingual_doc import Observation
+
+        diff = DeckDiff(
+            items=[],
+            observations=[Observation(kind="group_order_divergence", detail="probe")],
+        )
+        assert not diff.is_clean
+
+
 class TestPreambles:
     def test_preamble_edit_on_one_side_propagates(self):
         base = _snapshot("# preamble\n" + DE0, "# preamble\n" + EN0)

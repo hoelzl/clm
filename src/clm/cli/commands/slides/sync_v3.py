@@ -87,6 +87,12 @@ def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
         lines.append(
             f"  {item.outcome}/{item.action} {item.key} ({item.direction}) {item.detail}{suffix}"
         )
+    for obs in diff.observations:
+        # The one observation kind that suppresses is_clean (issue #654):
+        # without a line here, an observation-only unclean report reads
+        # "0 item(s)" with no visible cause.
+        if obs.kind == "group_order_divergence":
+            lines.append(f"  observation/{obs.kind}: {obs.detail}")
     hint = cold_sweep_hint(diff)
     if hint is not None:
         lines.append(f"  hint: {hint}")

@@ -60,6 +60,7 @@ from clm.slides.doc_ledger import (
     record_preamble_scope,
     rename_group_scopes,
     rerecord_pool,
+    seed_order_scopes,
     snapshot_deck,
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
@@ -1647,6 +1648,13 @@ def apply_deck(
     # (adversarial review of #615: a landed stamp_twin_id with a pending
     # framed sibling would otherwise lose the divergence's only record).
     _sweep_migrated_pos(target, [e for e in landed if e[0].key not in unresolved_keys])
+    # Order-trust seeding (issue #654, review C3): a pass that resolved
+    # every item may bank order trust for scopes whose sides agree — the
+    # only way a confirm-seeded deck ever acquires order trust through the
+    # verb loop. Divergent scopes are never seeded, and the caller's
+    # structural gate still arbitrates whether this save happens at all.
+    if not unresolved_keys:
+        seed_order_scopes(target, fresh)
     outcome.ledger_changed = True
     return outcome
 

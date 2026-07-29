@@ -2205,3 +2205,74 @@ class TestTagParity:
         assert any(i.action == "pending_divergence" for i in diff.items), [
             (i.key, i.action, i.detail) for i in diff.items
         ]
+
+
+class TestOrderTrustSeeding:
+    """Issue #654 (adversarial review C3): the verb loop seeds order trust.
+
+    Order scopes used to be seeded only by a full ``record``/``split``/
+    ``translate-bootstrap`` — a ledger built through report → confirm →
+    apply carried member trust but no order trust, so a later one-sided
+    move framed nothing while the report said clean."""
+
+    TWO_GROUP_DE = (
+        HEADER_DE,
+        _slide("s0", "de", "Eins"),
+        _localized("m", "de", "DE"),
+        _slide("s1", "de", "Zwei"),
+        _localized("n", "de", "DE2"),
+    )
+    TWO_GROUP_EN = (
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("m", "en", "EN"),
+        _slide("s1", "en", "Two"),
+        _localized("n", "en", "EN2"),
+    )
+
+    def _confirm_all(self, deck: _Deck) -> None:
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"verify_cold"}
+        decisions = {i.key: doc_apply.Decision(key=i.key, choice="confirm") for i in diff.items}
+        outcome = deck.apply(decisions)
+        assert outcome.error is None
+        assert all(r.status in ("applied", "recorded") for r in outcome.results), [
+            (r.key, r.status, r.reason) for r in outcome.results
+        ]
+
+    def test_fully_resolved_confirm_pass_seeds_order_scopes(self, tmp_path: Path):
+        deck = _Deck(tmp_path, _build(*self.TWO_GROUP_DE), _build(*self.TWO_GROUP_EN))
+        self._confirm_all(deck)
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        assert dl.group_order_by_side.get("de") == ["title", "s0", "s1"]
+        assert dl.group_order_by_side.get("en") == ["title", "s0", "s1"]
+        assert dl.member_order, "member-order scopes must be seeded too"
+        # The seeded trust closes the #654 loop: a one-sided EN group move
+        # now diffs as a DIRECTED mechanical mirror, not silence.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s1", "en", "Two"),
+            _localized("n", "en", "EN2"),
+            _slide("s0", "en", "One"),
+            _localized("m", "en", "EN"),
+        )
+        _, diff = deck.diff()
+        assert {(i.outcome, i.action, i.direction) for i in diff.items} == {
+            ("order", "mirror_order", "en_to_de")
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+
+    def test_partial_pass_does_not_seed_order_scopes(self, tmp_path: Path):
+        deck = _Deck(tmp_path, _build(*self.TWO_GROUP_DE), _build(*self.TWO_GROUP_EN))
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"verify_cold"}
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="confirm")
+            for i in diff.items
+            if i.key != "id:m"  # one member left unresolved
+        }
+        outcome = deck.apply(decisions)
+        assert outcome.error is None
+        assert any(r.status == "pending" for r in outcome.results)
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        assert not dl.group_order_by_side
+        assert not dl.member_order

@@ -566,6 +566,38 @@ def record_group_order(target: DeckLedger, fresh: DeckLedger) -> None:
     }
 
 
+def seed_order_scopes(target: DeckLedger, fresh: DeckLedger) -> int:
+    """Adopt order trust from a fully-resolved pass, where the sides agree.
+
+    Issue #654 (adversarial-review C3): order scopes were seeded only by a
+    full ``record``, ``split``, or ``translate-bootstrap`` — the verb loop
+    (report → confirm → apply) never seeded them, so a confirm-seeded deck
+    stayed permanently order-blind while presenting as verified. An apply
+    pass that ends with **zero unresolved items** may bank order trust for
+    every scope whose two sides currently agree — compared over the handles
+    both sides carry (a one-sided member has no cross-side order to
+    disagree about). A scope whose sides disagree is left untouched: order
+    trust is seeded from agreement, never blessed over a divergence.
+
+    Returns the number of scopes adopted.
+    """
+    seeded = 0
+    de_groups = fresh.group_order_by_side.get("de", [])
+    en_groups = fresh.group_order_by_side.get("en", [])
+    common_groups = set(de_groups) & set(en_groups)
+    if [g for g in de_groups if g in common_groups] == [g for g in en_groups if g in common_groups]:
+        record_group_order(target, fresh)
+        seeded += 1
+    for group, part in sorted({(g, p) for (_lang, g, p) in fresh.member_order}):
+        de_seq = fresh.member_order.get(("de", group, part), [])
+        en_seq = fresh.member_order.get(("en", group, part), [])
+        common = set(de_seq) & set(en_seq)
+        if [h for h in de_seq if h in common] == [h for h in en_seq if h in common]:
+            record_order_scope(target, fresh, group, part)
+            seeded += 1
+    return seeded
+
+
 def record_preamble_scope(target: DeckLedger, fresh: DeckLedger, part: str) -> None:
     """Adopt the fresh preamble fingerprints for ``part`` (both sides)."""
     for lang in _SIDES:
