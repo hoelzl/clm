@@ -176,8 +176,63 @@ class DeckEmitter:
                 break
             interposed.remove(fp)
             insert_at += 1
+        self._check_anchor_adjacency(
+            member, source, target, insert_at, source_stream, target_stream
+        )
         target_stream.insert(insert_at, member)
         self.set_side(member, target, new_cell)
+
+    @staticmethod
+    def _check_anchor_adjacency(
+        member: Member,
+        source: Lang,
+        target: Lang,
+        insert_at: int,
+        source_stream: list[Member],
+        target_stream: list[Member],
+    ) -> None:
+        """Refuse to mint an ANCHOR twin away from its group's existing cells (#720).
+
+        The mirrored-predecessor rule assumes the streams are order-parallel.
+        For a *non-anchor* member with a two-sided group anchor that holds by
+        construction (the predecessor is the anchor or a later same-group
+        member). For an inserted **anchor** (slide/subslide) it does not: when
+        the group moved on the source side (or its anchor was renamed, so no
+        two-sided anchor exists), the predecessor's twin sits wherever the
+        *unmoved* target-side group sits, and the minted anchor lands away
+        from the group's existing cells — up to file end (#652 instance 1),
+        which re-parents cells on re-parse and corrupts the pair. The group's
+        cells are identified on the SOURCE side (the members following the
+        anchor up to the next anchor — the author's own bracketing), so a
+        renamed anchor id cannot dodge the check. An anchor with existing
+        target-side group cells must land exactly at the first of them; a
+        violation fails this item (P8: frame, never guess), the others
+        proceed.
+        """
+        if member.role not in ("slide", "subslide"):
+            return
+        pos = next(i for i, m in enumerate(source_stream) if m is member)
+        member_slots: list[int] = []
+        for m in source_stream[pos + 1 :]:
+            if m.role in ("slide", "subslide"):
+                break
+            if m.side(target) is None:
+                continue
+            for j, t in enumerate(target_stream):
+                if t is m:
+                    member_slots.append(j)
+                    break
+        if not member_slots:
+            return
+        first = min(member_slots)
+        if insert_at != first:
+            raise DeckWriteError(
+                f"cannot mint the {target} twin of {member.key.render()} at the "
+                f"mirrored-predecessor slot: it would separate the slide from its "
+                f"group's existing {target} cells — the halves' group order "
+                f"diverges. Reorder one half so the twins mirror (sync verify "
+                f"names the diverging sequences), then re-apply"
+            )
 
 
 def new_companion_path(bundle: LoadedBundle, lang: Lang) -> Path:

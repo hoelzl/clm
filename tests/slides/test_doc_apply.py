@@ -901,6 +901,74 @@ class TestGroupRenameLedgerIntegrity:
         deck.assert_converged()
 
 
+class TestAnchorAdjacencyGuard:
+    """Issue #720 (#652 instance 1): minting an ANCHOR twin must refuse when
+    the mirrored-predecessor slot would separate the slide from its group's
+    existing target-side cells (divergent group order previously wrote the
+    twin at file end, structurally corrupting the pair)."""
+
+    X1 = '# %% tags=["keep"] slide_id="x1"\nx1 = 1\n\n'
+    X2 = '# %% tags=["keep"] slide_id="x2"\nx2 = 2\n\n'
+
+    def _executor(self, deck: _Deck):
+        bundle = deck.load()
+        doc = bundle.outcome.deck
+        assert doc is not None
+        return doc, doc_apply._Executor(deck=doc, bundle=bundle, comment_token="#")
+
+    def test_anchor_mint_away_from_its_group_cells_refuses(self, tmp_path: Path):
+        from clm.slides.doc_write import DeckWriteError
+
+        # DE swapped the groups AND renamed A's anchor (a -> a2); EN still has
+        # the old order. a2's mirrored predecessor is x2, whose EN twin sits at
+        # the END of the EN file — minting there would orphan a2 from x1.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("b", "de", "B"), self.X2, _slide("a2", "de", "A2"), self.X1),
+            _build(HEADER_EN, _slide("a", "en", "A"), self.X1, _slide("b", "en", "B"), self.X2),
+        )
+        doc, ex = self._executor(deck)
+        member = doc.member_by_key(MemberKey.for_id("a2"))
+        assert member is not None and member.en is None
+        item = DiffItem(
+            key="id:a2",
+            outcome="add",
+            action="copy_new_shared",
+            direction="de_to_en",
+            detail="",
+            member=member,
+            side="de",
+        )
+        with pytest.raises(DeckWriteError, match="separate the slide from its group"):
+            ex.copy_new(item, "de")
+        assert member.en is None  # nothing was written
+
+    def test_new_anchor_without_existing_group_cells_mints(self, tmp_path: Path):
+        # A genuinely new slide appended on DE has no target-side group cells
+        # to bracket — the predecessor rule stands and the mint lands.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("a", "de", "A"), self.X1, _slide("c", "de", "Neu")),
+            _build(HEADER_EN, _slide("a", "en", "A"), self.X1),
+        )
+        doc, ex = self._executor(deck)
+        member = doc.member_by_key(MemberKey.for_id("c"))
+        assert member is not None and member.en is None
+        item = DiffItem(
+            key="id:c",
+            outcome="add",
+            action="copy_new_shared",
+            direction="de_to_en",
+            detail="",
+            member=member,
+            side="de",
+        )
+        ex.copy_new(item, "de")
+        assert member.en is not None
+        stream = ex.streams[("en", "deck")]
+        assert stream[-1] is member  # appended after the group, at the end
+
+
 class TestCopyNewLangSwap:
     """Issue #717: ``copy_new`` must mint the TARGET half's lang variant for a
     lang-attr'd source cell. A verbatim copy would plant e.g. ``lang="de"``
