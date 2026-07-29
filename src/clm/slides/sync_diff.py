@@ -1245,7 +1245,10 @@ class _Differ:
                 "conflict",
                 "broken_owner",
                 "none",
-                f"owner reference {de_owner or en_owner!r} matches no slide anchor",
+                f"owner reference {de_owner or en_owner!r} matches no slide anchor "
+                f"(its slide was removed or renamed) — answer 'remove' to prune "
+                f"the orphaned narration from both halves, or fix the cell's "
+                f"for_slide / restore the slide by hand and re-report (#650)",
                 group=group,
                 member=member,
                 base=entry,

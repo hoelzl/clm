@@ -2484,3 +2484,78 @@ class TestBodyWriteNormalization:
         assert len(errors) == 1
         assert "supply either" in errors[0]
         assert "never add" not in errors[0]
+
+
+class TestBrokenOwnerRemove:
+    """Issue #650: a removed/renamed slide orphans its separated companion
+    narration (`for_slide` dangles). The dangling state was already framed
+    (`broken_owner`) and gate-blocked, but the action carried no answers —
+    the only remedy was the hand-edit the doctrine forbids. `remove` now
+    prunes the orphaned narration from both halves mechanically."""
+
+    def _deck_with_companions(self, tmp_path: Path) -> _Deck:
+        de = _build(HEADER_DE, _slide("s0", "de", "Eins"), _slide("s1", "de", "Zwei"))
+        en = _build(HEADER_EN, _slide("s0", "en", "One"), _slide("s1", "en", "Two"))
+        deck = _Deck(tmp_path, de, en)
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(
+                _vo_cell("s0-vo", "s0", "de", "Hallo"), _vo_cell("s1-vo", "s1", "de", "Zwei VO")
+            ),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(_vo_cell("s0-vo", "s0", "en", "Hello"), _vo_cell("s1-vo", "s1", "en", "Two VO")),
+            encoding="utf-8",
+        )
+        deck.record()
+        return deck
+
+    def _remove_slide_both_halves(self, deck: _Deck) -> None:
+        for path, lang in ((deck.de_path, "de"), (deck.en_path, "en")):
+            text = path.read_text(encoding="utf-8")
+            start = text.index(f'# %% [markdown] lang="{lang}" tags=["slide"] slide_id="s1"')
+            path.write_text(text[:start].rstrip("\n") + "\n", encoding="utf-8")
+
+    def test_broken_owner_advertises_remove(self, tmp_path: Path):
+        deck = self._deck_with_companions(tmp_path)
+        self._remove_slide_both_halves(deck)
+        _, diff = deck.diff()
+        rows = {i.action for i in diff.items}
+        assert rows == {"record_remove", "broken_owner"}, [(i.key, i.action) for i in diff.items]
+        item = next(i for i in diff.items if i.action == "broken_owner")
+        assert item.key == "id:s1-vo"
+        assert doc_apply.item_answers(item) == ("remove",)
+        assert "answer 'remove'" in item.detail
+
+    def test_remove_answer_prunes_both_companion_halves(self, tmp_path: Path):
+        deck = self._deck_with_companions(tmp_path)
+        self._remove_slide_both_halves(deck)
+        outcome = deck.apply(
+            decisions={"id:s1-vo": doc_apply.Decision(key="id:s1-vo", choice="remove")}
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        vo_de = (tmp_path / "voiceover" / "voiceover_t.de.py").read_text(encoding="utf-8")
+        vo_en = (tmp_path / "voiceover" / "voiceover_t.en.py").read_text(encoding="utf-8")
+        assert "s1-vo" not in vo_de and "Zwei VO" not in vo_de
+        assert "s1-vo" not in vo_en and "Two VO" not in vo_en
+        # The surviving narration is untouched.
+        assert "s0-vo" in vo_de and "s0-vo" in vo_en
+        # The pair passes the structural gate and the ledger converges —
+        # the #650 build-time trap is resolved at the edit site.
+        from clm.slides.sync_verify import gate_projected_pair
+
+        bundle = deck.load()
+        assert not gate_projected_pair(bundle.de_path, bundle.en_path, bundle.comment_token)
+        deck.assert_converged()
+
+    def test_wrong_choice_is_rejected_with_the_vocabulary(self, tmp_path: Path):
+        deck = self._deck_with_companions(tmp_path)
+        self._remove_slide_both_halves(deck)
+        outcome = deck.apply(
+            decisions={"id:s1-vo": doc_apply.Decision(key="id:s1-vo", choice="confirm")}
+        )
+        results = {r.key: r for r in outcome.results}
+        assert results["id:s1-vo"].status == "rejected"
+        assert "remove" in results["id:s1-vo"].reason

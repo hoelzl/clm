@@ -93,7 +93,12 @@ group on one half, so the "removals" the other half would mirror are really
 the same untouched cells under a new anchor — mirror the inserted slide on
 the twin (e.g. answer its `translate_new`), then re-report; or a genuine
 deletion that merely coincides with a duplicate cell elsewhere — answer
-`remove` to execute it), `ambiguous_alignment` (genuinely ambiguous residue
+`remove` to execute it), `broken_owner` (a voiceover/notes companion cell
+whose `for_slide` matches no slide anchor — its owning slide was removed or
+renamed; answer `remove` to prune the orphaned narration from **both**
+halves, or hand-fix the `for_slide` / restore the slide and re-report;
+until it is resolved the write gate refuses to record the pair, #650),
+`ambiguous_alignment` (genuinely ambiguous residue
 — rival id stamps, both sides adding different content into one pool;
 carries **no** answers: reconcile by editing, minting ids, then re-report),
 and the normalize-refusal deck item (run `clm slides normalize`, then
