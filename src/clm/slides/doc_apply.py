@@ -1655,6 +1655,17 @@ def apply_deck(
     # structural gate still arbitrates whether this save happens at all.
     if not unresolved_keys:
         seed_order_scopes(target, fresh)
+    # Order scopes must not carry handles the ledger cannot back: a landed
+    # order item beside still-pending members of its scope would otherwise
+    # record handles that prune_dangling_refs strips at save with a
+    # spurious #718 damage warning (#654 review finding 2). Quiet, local
+    # filter; the scope re-records complete once the members resolve.
+    for scope_key, handles in list(target.member_order.items()):
+        kept = [h for h in handles if h in target.members]
+        if not kept:
+            target.member_order.pop(scope_key)
+        elif len(kept) != len(handles):
+            target.member_order[scope_key] = kept
     outcome.ledger_changed = True
     return outcome
 

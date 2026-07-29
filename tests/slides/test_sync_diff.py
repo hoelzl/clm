@@ -608,7 +608,7 @@ class TestOrderFirstClass:
         assert [(i.outcome, i.action, i.key, i.direction) for i in diff.items] == [
             ("order", "order_decision", "pos:~groups/order.deck/0", "none")
         ]
-        assert "no recorded order trust" in diff.items[0].detail
+        assert "recorded order trust does not cover" in diff.items[0].detail
         assert not diff.is_clean
 
     def test_order_blind_agreeing_sides_stay_clean(self):
@@ -1493,3 +1493,58 @@ class TestTagParity:
         assert item.twin is not None and item.twin.en is not None  # pair_twin convention
         assert item.member.de.tags == ("voiceover",)
         assert item.twin.en.tags == ("notes",)
+
+
+class TestCrossPlacedNoEvidence:
+    """#654 review finding 1: a member sitting under different physical
+    group brackets per side, with no recorded placement evidence, frames a
+    PLACEMENT decision on the member — never a scope reorder (the merged
+    owner token cannot express which side is displaced, and a scope-level
+    answer would permute cells across group brackets)."""
+
+    DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Eins"),
+        _localized("m", "de", "DE-m"),
+        _localized("k", "de", "DE-k"),
+        _slide("s1", "de", "Zwei"),
+        _localized("n", "de", "DE-n"),
+    )
+    EN_ALIGNED = _build(
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("m", "en", "EN-m"),
+        _localized("k", "en", "EN-k"),
+        _slide("s1", "en", "Two"),
+        _localized("n", "en", "EN-n"),
+    )
+    # m sits under s0 on DE but under s1 on EN.
+    EN_CROSS = _build(
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("k", "en", "EN-k"),
+        _slide("s1", "en", "Two"),
+        _localized("m", "en", "EN-m"),
+        _localized("n", "en", "EN-n"),
+    )
+
+    def test_cold_cross_placed_member_frames_placement_not_scope_reorder(self):
+        diff = diff_deck(_parse(self.DE, self.EN_CROSS), None)
+        order_items = [i for i in diff.items if i.outcome == "order"]
+        assert [(i.action, i.key, i.direction) for i in order_items] == [
+            ("order_decision", "id:m", "none")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        assert "different groups" in order_items[0].detail
+        # The placement decision suppresses the member's verify_cold row
+        # (two framed rows on one key cannot both be answered); the member
+        # re-frames cold once placed.
+        assert not any(i.action == "verify_cold" and i.key == "id:m" for i in diff.items)
+
+    def test_order_blind_cross_placed_member_frames_placement(self):
+        base = _order_blind(_snapshot(self.DE, self.EN_ALIGNED))
+        diff = _diff(base, self.DE, self.EN_CROSS)
+        # The EN body edit is the move itself — content unchanged, so the
+        # placement row is the only item.
+        assert [(i.outcome, i.action, i.key) for i in diff.items] == [
+            ("order", "order_decision", "id:m")
+        ], [(i.key, i.action, i.detail) for i in diff.items]

@@ -2276,3 +2276,102 @@ class TestOrderTrustSeeding:
         dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
         assert not dl.group_order_by_side
         assert not dl.member_order
+
+
+class TestOrderDecisionExecution:
+    """#654 review finding 3: the new no-trust order_decision paths must be
+    pinned through apply_deck, not just the differ."""
+
+    def test_answering_no_trust_group_order_decision_reorders_the_twin(self, tmp_path: Path):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Eins"),
+            _localized("m", "de", "DE"),
+            _slide("s1", "de", "Zwei"),
+            _localized("n", "de", "DE2"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s1", "en", "Two"),
+            _localized("n", "en", "EN2"),
+            _slide("s0", "en", "One"),
+            _localized("m", "en", "EN"),
+        )
+        deck = _Deck(tmp_path, de, en)  # cold: no ledger at all
+        _, diff = deck.diff()
+        scope_key = "pos:~groups/order.deck/0"
+        actions = {i.key: i.action for i in diff.items}
+        assert actions.get(scope_key) == "order_decision"
+        outcome = deck.apply({scope_key: doc_apply.Decision(key=scope_key, choice="de")})
+        assert outcome.error is None
+        results = {r.key: r for r in outcome.results}
+        assert results[scope_key].status == "applied", results[scope_key].reason
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert en_text.index('slide_id="s0"') < en_text.index('slide_id="s1"')
+        # Group order lists anchor ids, not member handles — it records
+        # even while the members themselves are still cold.
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        assert dl.group_order_by_side.get("en") == dl.group_order_by_side.get("de")
+
+    def test_answering_cold_cross_placement_rehomes_the_twin_cell(self, tmp_path: Path):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Eins"),
+            _localized("m", "de", "DE-m"),
+            _localized("k", "de", "DE-k"),
+            _slide("s1", "de", "Zwei"),
+            _localized("n", "de", "DE-n"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "One"),
+            _localized("k", "en", "EN-k"),
+            _slide("s1", "en", "Two"),
+            _localized("m", "en", "EN-m"),
+            _localized("n", "en", "EN-n"),
+        )
+        deck = _Deck(tmp_path, de, en)
+        _, diff = deck.diff()
+        assert {i.key: i.action for i in diff.items}.get("id:m") == "order_decision"
+        outcome = deck.apply({"id:m": doc_apply.Decision(key="id:m", choice="de")})
+        assert outcome.error is None
+        results = {r.key: r for r in outcome.results}
+        assert results["id:m"].status == "applied", results["id:m"].reason
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert en_text.index('slide_id="m"') < en_text.index('slide_id="s1"')
+        # Once placed, the member re-frames cold (nothing was silently
+        # confirmed by the placement answer).
+        _, rediff = deck.diff()
+        assert {i.action for i in rediff.items} == {"verify_cold"}, [
+            (i.key, i.action) for i in rediff.items
+        ]
+
+    def test_order_scope_recording_never_carries_unbacked_handles(self, tmp_path: Path, caplog):
+        """#654 review finding 2: a landed order item beside pending cold
+        members must not record handles the ledger cannot back (they were
+        pruned at save with a spurious #718 damage warning)."""
+        import logging
+
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "T"),
+            _localized("m1", "de", "eins"),
+            _localized("m2", "de", "zwei"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _localized("m2", "en", "two"),
+            _localized("m1", "en", "one"),
+        )
+        deck = _Deck(tmp_path, de, en)
+        _, diff = deck.diff()
+        scope_key = "pos:s0/order.deck/0"
+        assert {i.key: i.action for i in diff.items}.get(scope_key) == "order_decision"
+        with caplog.at_level(logging.WARNING):
+            outcome = deck.apply({scope_key: doc_apply.Decision(key=scope_key, choice="de")})
+        assert outcome.error is None
+        assert not [r for r in caplog.records if "dangling" in r.getMessage()]
+        dl = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path)).decks["slides_t"]
+        for _scope, handles in dl.member_order.items():
+            assert all(h in dl.members for h in handles), dl.member_order
