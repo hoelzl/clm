@@ -149,9 +149,10 @@ Diagram results replay from the jobs DB keyed on `(output_file,
 content_hash)`. Since issue #744 the `ImagePayload.content_hash` folds in,
 besides the diagram source: the `IMAGE_CACHE_HASH_SCHEMA_VERSION`, the
 **effective worker-image identity** of the rendering worker type
-(`"direct"` / `"docker:<image>"`), and the output format — so a rebuilt
-converter image re-renders unchanged sources instead of replaying the old
-image's bytes. CLI image overrides (`--notebook-image` /
+(`"direct"` / `"docker:<image>"`), and the payload's `output_format` field
+(constant in current production — the actual format is discriminated by
+the `output_file` half of the cache key) — so a rebuilt converter image
+re-renders unchanged sources instead of replaying the old image's bytes. CLI image overrides (`--notebook-image` /
 `--plantuml-image` / `--drawio-image`) are visible to every cache key:
 `clm build` records the post-override identities
 (`clm.infrastructure.workers.image_identity.set_effective_worker_identities`)

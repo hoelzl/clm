@@ -211,6 +211,25 @@ def _isolate_db_path_env():
 
 
 @pytest.fixture(autouse=True)
+def _reset_effective_worker_identities():
+    """Keep the #744 image-identity registry hermetic per test.
+
+    ``configure_workers`` records the effective worker-image identities in
+    a module-level registry; any test driving it (build-command tests, the
+    config-loader tests) would otherwise leak the recording process-wide
+    and change what later tests observe from the singleton-fallback path —
+    same reasoning as ``_isolate_db_path_env``.
+    """
+    from clm.infrastructure.workers.image_identity import (
+        reset_effective_worker_identities,
+    )
+
+    reset_effective_worker_identities()
+    yield
+    reset_effective_worker_identities()
+
+
+@pytest.fixture(autouse=True)
 def _worker_api_env(request):
     """Isolate the Worker API env vars, and give each Docker test its own port.
 
