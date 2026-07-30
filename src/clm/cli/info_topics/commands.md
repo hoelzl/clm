@@ -2999,8 +2999,11 @@ shown but marked excluded (its bytes are deliberately not part of the key).
 
 Run it with the same global `--cache-db-path` / `--jobs-db-path` as your
 builds — **and the same `--workers` / image flags** — or the lookups miss
-spuriously. Entirely read-only: databases are opened in read-only mode and
-no output directories are created.
+spuriously. One residual gap: explain does not auto-load the course
+`.env` (the build does), so `CLM_WORKER_MANAGEMENT__*` vars set only
+there must be exported in the shell for explain to see them. Entirely
+read-only: databases are opened in read-only mode and no output
+directories are created.
 
 ```bash
 clm cache explain slides/.../slides_shared_ptr.cpp --spec cpp-einsteiger.xml

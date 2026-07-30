@@ -258,5 +258,13 @@ class TestExplainImageOverrides:
         assert data["components"]["worker_image_identity"] == "docker:candidate:9"
 
     def test_no_flags_matches_the_config_fallback(self, tmp_path):
+        """The no-flag contract pinned exactly: explain's recording equals
+        the singleton-derived identity, not arbitrary recorded state."""
+        from clm.infrastructure.config import get_config
+        from clm.infrastructure.workers.image_identity import worker_image_identity_for
+
+        wm = get_config().worker_management
+        mode = wm.notebook.execution_mode or wm.default_execution_mode
+        expected = worker_image_identity_for(mode, wm.notebook.image, "notebook")
         data = _explain_json(tmp_path)
-        assert data["components"]["worker_image_identity"].startswith(("direct", "docker:"))
+        assert data["components"]["worker_image_identity"] == expected
