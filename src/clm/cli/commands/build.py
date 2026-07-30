@@ -2335,7 +2335,7 @@ async def main_build(
 @click.option(
     "--notebook-image",
     type=str,
-    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker.",
+    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker. Caches do not key on the image — pass --force-execute/--ignore-cache when testing a new image (issue #744).",
 )
 @click.option(
     "--plantuml-image",
