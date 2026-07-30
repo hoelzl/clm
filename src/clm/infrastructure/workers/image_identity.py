@@ -72,10 +72,12 @@ def _direct_binary_fingerprint(worker_type: str) -> str:
     binary that will actually render — including one configured only in a
     config file's ``[external_tools]`` section (#747 review F1). Residue:
     a binary replaced in place with identical size and mtime keeps the
-    key (the same trade every size+mtime scheme makes); and a bare
+    key (the same trade every size+mtime scheme makes); the bare DEFAULT
     Draw.io name is which()-resolved for statting while the spawn
     resolves at exec time — a PATHEXT shim shadowing the real .exe can
-    make the two diverge (spurious re-render at worst). Defensive ``""``
+    make the two diverge (spurious re-render at worst) — and an env- or
+    config-set bare name is stat'd directly, fails, and degrades to
+    identity-less keying (a knowingly-open corner). Defensive ``""``
     on any error — identity degrades to ``"direct"``.
     """
     import hashlib
