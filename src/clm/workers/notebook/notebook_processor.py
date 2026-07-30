@@ -443,6 +443,18 @@ def _strip_lines_to_next_cell(cells: Iterable[Cell]) -> None:
             metadata.pop("lines_to_next_cell", None)
 
 
+def _drop_start_cells(cells: Iterable[Cell]) -> list[Cell]:
+    """Drop ``start``-tagged cells from an export view of the cached notebook.
+
+    The caching spec retains starters in the cached artifact for the
+    cached-partial path (#734); every non-partial export view (Recording's
+    own HTML, completed/trainer-from-cache) drops them here — the same
+    output those views produced when the spec's delete set removed the
+    cells before caching.
+    """
+    return [cell for cell in cells if "start" not in get_tags(cell)]
+
+
 def _strip_internal_cell_metadata(cells: Iterable[Cell]) -> None:
     """Strip ``slide_id``/``for_slide`` and the synthetic post-workshop tag.
 
@@ -716,6 +728,17 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
         Returns:
             Tuple of (processed cell, resources)
         """
+        # #734: starter cells ride along in the caching spec's notebook so
+        # the cached-partial path can keep them in-range — but starters are
+        # often deliberately incomplete (the student fills them in), so they
+        # must NEVER execute. The non-caching pipeline deletes them before
+        # execution; the caching pipeline skips them here instead.
+        if (
+            cell.get("cell_type") == "code"
+            and "start" in cell.get("metadata", {}).get("tags", [])
+            and self.processor.output_spec.should_cache_execution
+        ):
+            return cell, resources
         # Set the current cell context before execution
         self.processor._current_cell = CellContext(
             cell_index=cell_index,
@@ -1004,7 +1027,10 @@ class NotebookProcessor:
         filtered_nb.cells = [
             cell
             for cell in filtered_nb.get("cells", [])
-            if not {"notes", "voiceover"}.intersection(get_tags(cell))
+            # ``start`` joined the drop set with #734: the cached notebook
+            # now retains starters (for the cached-partial path); this view
+            # mirrors Completed/Trainer, whose delete sets drop them.
+            if not {"notes", "voiceover", "start"}.intersection(get_tags(cell))
         ]
         # The cached notebook retains slide_id/for_slide (#732) — never let
         # them reach the exported HTML.
@@ -1033,7 +1059,11 @@ class NotebookProcessor:
         # strip below runs only after the ranges are fixed.
         ranges = find_workshop_ranges(cells)
 
-        pre_drop = {"notes", "voiceover"}
+        # Pre-workshop mirrors Completed, which drops ``start`` — the cached
+        # notebook retains starters since #734 precisely so the IN-RANGE
+        # branch below can keep them (fresh-partial parity: scaffolding
+        # shown, outputs cleared).
+        pre_drop = {"notes", "voiceover", "start"}
         post_drop = {"alt", "completed", "del", "notes", "voiceover"}
         post_retain_code = {"keep", "start"}
         post_blank_markdown = {"answer"}
@@ -1229,10 +1259,15 @@ class NotebookProcessor:
     ) -> NotebookNode:
         source_cells = nb.get("cells", [])
         self.output_spec.annotate_cells(source_cells)
+        # The caching spec (Recording HTML) retains ``start`` cells the spec
+        # itself would delete (#734): the cached-partial path needs them
+        # in-range, and every export view drops or blanks them at its own
+        # boundary. They are excluded from execution in preprocess_cell.
+        keep_start = self.output_spec.should_cache_execution
         new_cells = [
             await self._process_cell(cell, index, payload)
             for index, cell in enumerate(source_cells)
-            if self.output_spec.is_cell_included(cell)
+            if self.output_spec.is_cell_included(cell) or (keep_start and "start" in get_tags(cell))
         ]
         # Strip slide_id/for_slide (internal CLM metadata that must never
         # appear in output) and the synthetic _post_workshop tag attached by
@@ -1990,7 +2025,11 @@ class NotebookProcessor:
                     self._cache_executed_notebook(processed_nb, payload)
         # The caching spec kept slide_id/for_slide through the cache write
         # (#732) — strip them at the export boundary. Idempotent for every
-        # other spec (already stripped during processing).
+        # other spec (already stripped during processing). It also kept the
+        # ``start`` cells its own delete set excludes (#734) — drop them
+        # here so Recording's HTML is unchanged.
+        if self.output_spec.should_cache_execution:
+            processed_nb.cells = _drop_start_cells(processed_nb.get("cells", []))
         _strip_internal_cell_metadata(processed_nb.get("cells", []))
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)

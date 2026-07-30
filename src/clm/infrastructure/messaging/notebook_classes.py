@@ -15,7 +15,11 @@ from clm.infrastructure.messaging.base_classes import Payload, ProcessingError, 
 # cell metadata (the cached-partial path recomputes workshop ranges and must
 # see the slide_id opener form); pre-v3 artifacts lack it and would silently
 # keep the tag-only range detection.
-CACHE_HASH_SCHEMA_VERSION = 3
+# v4 (#734): cached executed notebooks additionally retain unexecuted
+# ``start`` cells (the cached-partial path keeps them in-range; every other
+# view drops them at its boundary); pre-v4 artifacts lack the starters and
+# would silently keep emitting scaffolding-less partial HTML.
+CACHE_HASH_SCHEMA_VERSION = 4
 
 
 def notebook_metadata(kind, prog_lang, language, output_format) -> str:

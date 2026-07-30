@@ -3236,3 +3236,84 @@ class TestCachedPartialSlideIdOpener:
         filtered = completed._filter_notes_cells_from_cached(cached_nb)
         assert all("slide_id" not in c["metadata"] for c in filtered["cells"])
         assert len(filtered["cells"]) == 1  # notes dropped
+
+
+class TestCachedPartialStarters:
+    """Issue #734: the cached artifact retains unexecuted ``start`` cells so
+    cache-hit partial HTML keeps workshop scaffolding — Recording used to
+    delete them before caching, so the cache-hit and fresh partial paths
+    diverged on exactly the cells the workshop exists for."""
+
+    def _workshop_nb(self) -> NotebookNode:
+        return make_notebook_node(
+            [
+                make_cell("markdown", "# Workshop", tags=["slide", "workshop"]),
+                make_cell("code", "# TODO", tags=["start"]),
+                make_cell("code", "answer = 42", tags=["completed"]),
+                make_cell("code", "check = 1"),
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_cached_partial_keeps_the_in_range_starter(self):
+        recording = NotebookProcessor(RecordingOutput(format="html"))
+        payload = make_payload("", kind="speaker", format_="html")
+        cached_nb = await recording._process_notebook_node(self._workshop_nb(), payload)
+        starters = [c for c in cached_nb["cells"] if "start" in c["metadata"]["tags"]]
+        assert len(starters) == 1  # retained in the cached artifact...
+        assert starters[0].get("outputs", []) == []  # ...unexecuted
+
+        partial = NotebookProcessor(PartialOutput(format="html"))
+        filtered = partial._filter_cached_notebook_for_partial(cached_nb)
+        sources = [c["source"] for c in filtered["cells"]]
+        assert "# TODO" in sources  # fresh-partial parity: scaffolding shown
+        assert "answer = 42" not in sources
+
+    @pytest.mark.asyncio
+    async def test_cached_completed_view_still_drops_starters(self):
+        recording = NotebookProcessor(RecordingOutput(format="html"))
+        payload = make_payload("", kind="speaker", format_="html")
+        cached_nb = await recording._process_notebook_node(self._workshop_nb(), payload)
+        completed = NotebookProcessor(CompletedOutput(format="html"))
+        filtered = completed._filter_notes_cells_from_cached(cached_nb)
+        assert all("start" not in c["metadata"]["tags"] for c in filtered["cells"])
+
+    @pytest.mark.asyncio
+    async def test_pre_workshop_starter_still_dropped_on_cached_partial(self):
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "# TODO pre", tags=["start"]),
+                make_cell("markdown", "# Workshop", tags=["slide", "workshop"]),
+                make_cell("code", "# TODO in", tags=["start"]),
+            ]
+        )
+        recording = NotebookProcessor(RecordingOutput(format="html"))
+        payload = make_payload("", kind="speaker", format_="html")
+        cached_nb = await recording._process_notebook_node(notebook, payload)
+        partial = NotebookProcessor(PartialOutput(format="html"))
+        filtered = partial._filter_cached_notebook_for_partial(cached_nb)
+        sources = [c["source"] for c in filtered["cells"]]
+        assert "# TODO pre" not in sources  # pre-range mirrors Completed
+        assert "# TODO in" in sources
+
+    def test_recording_export_view_drops_starters(self):
+        from clm.workers.notebook.notebook_processor import _drop_start_cells
+
+        cells = [
+            make_cell("code", "# TODO", tags=["start"]),
+            make_cell("code", "x = 1", tags=["keep"]),
+        ]
+        kept = _drop_start_cells(cells)
+        assert [c["source"] for c in kept] == ["x = 1"]
+
+    def test_start_cells_skip_execution_under_the_caching_spec(self):
+        """The starters ride along UNEXECUTED: they are often deliberately
+        incomplete, so preprocess_cell must return them untouched (no
+        kernel interaction — this test has no kernel and would error on
+        any execution attempt)."""
+        processor = NotebookProcessor(RecordingOutput(format="html"))
+        tep = TrackingExecutePreprocessor(processor)
+        cell = make_cell("code", "value = ", tags=["start"])
+        result_cell, _resources = tep.preprocess_cell(cell, {}, 0)
+        assert result_cell is cell
+        assert cell.get("outputs", []) == []
