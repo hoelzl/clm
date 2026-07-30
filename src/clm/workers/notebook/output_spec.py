@@ -10,7 +10,6 @@ output that should be generated.
 - `TrainerOutput`: Private output for trainers — keeps speaker notes, strips voiceover.
 - `RecordingOutput`: Private output for video recording — keeps both notes and voiceover.
 - `SpeakerOutput`: Deprecated alias for ``RecordingOutput`` (removed in CLM 1.8).
-- `EditScriptOutput`: Output type that generates an edit script to update from codealong to completed notebook.
 """
 
 import logging

@@ -997,14 +997,16 @@ class NotebookProcessor:
 
         logger.info(f"{cid}:Cache hit - reusing executed notebook for '{payload.input_file_name}'")
 
-        # Translate the cached Speaker notebook into the consuming kind.
-        # Completed drops notes/voiceover; Partial additionally blanks and
-        # clears outputs for every cell at or after the workshop boundary so
-        # no workshop code is ever executed under the Partial kind.
+        # Translate the cached Recording notebook into the consuming kind.
+        # Non-partial kinds project through their own delete set (issue
+        # #736: a hard-coded notes/voiceover drop silently lost the notes
+        # Trainer keeps on a cache miss); Partial additionally blanks and
+        # clears outputs for every cell inside a workshop range so no
+        # workshop code is ever presented as executed.
         if isinstance(self.output_spec, PartialOutput):
             filtered_nb = self._filter_cached_notebook_for_partial(cached_nb)
         else:
-            filtered_nb = self._filter_notes_cells_from_cached(cached_nb)
+            filtered_nb = self._filter_cached_notebook_for_spec(cached_nb)
 
         # Export to HTML (no execution needed)
         traitlets_logger = traitlets.log.get_logger()
@@ -1016,22 +1018,28 @@ class NotebookProcessor:
         logger.debug(f"{cid}:Successfully reused cached execution for '{payload.input_file_name}'")
         return body
 
-    def _filter_notes_cells_from_cached(self, nb: NotebookNode) -> NotebookNode:
-        """Filter out notes and voiceover cells from a cached executed notebook.
+    def _filter_cached_notebook_for_spec(self, nb: NotebookNode) -> NotebookNode:
+        """Project Recording's cached executed notebook onto this spec's view.
 
-        This is used when reusing Speaker's executed notebook for Completed HTML.
-        Notes and voiceover cells are markdown cells that should not appear in
-        Completed output.
+        Drops the cells the consuming spec's own delete set would have
+        removed during processing — issue #736: a hard-coded
+        notes/voiceover drop here silently lost the ``notes`` cells that
+        Trainer keeps on a cache miss. ``start`` is always dropped: the
+        cached artifact retains unexecuted starters solely for the
+        cached-partial path (#734), and no non-partial view may show them.
         """
+        # This projection drops cells but never blanks contents — a spec
+        # that blanks (code-along style) must not reuse the cache through
+        # it, or full solution code would ship into its HTML.
+        assert not self.output_spec.blanks_code_cells, (
+            "cache projection does not blank cell contents — this spec must "
+            "not take the non-partial reuse path"
+        )
         # Make a deep copy to avoid modifying the cached notebook
         filtered_nb = copy.deepcopy(nb)
+        drop = set(self.output_spec.tags_to_delete_cell) | {"start"}
         filtered_nb.cells = [
-            cell
-            for cell in filtered_nb.get("cells", [])
-            # ``start`` joined the drop set with #734: the cached notebook
-            # now retains starters (for the cached-partial path); this view
-            # mirrors Completed/Trainer, whose delete sets drop them.
-            if not {"notes", "voiceover", "start"}.intersection(get_tags(cell))
+            cell for cell in filtered_nb.get("cells", []) if not drop.intersection(get_tags(cell))
         ]
         # The cached notebook retains slide_id/for_slide (#732) — never let
         # them reach the exported HTML.
