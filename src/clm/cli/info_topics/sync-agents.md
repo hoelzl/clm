@@ -94,11 +94,15 @@ the same untouched cells under a new anchor — mirror the inserted slide on
 the twin (e.g. answer its `translate_new`), then re-report; or a genuine
 deletion that merely coincides with a duplicate cell elsewhere — answer
 `remove` to execute it), `broken_owner` (a voiceover/notes companion cell
-whose `for_slide` matches no slide anchor — its owning slide was removed or
-renamed; answer `remove` to prune the orphaned narration from **both**
-halves, or hand-fix the `for_slide` / restore the slide and re-report;
-until it is resolved the write gate refuses to record the pair, #650),
-`ambiguous_alignment` (genuinely ambiguous residue
+whose `for_slide` matches no slide anchor — its owning slide was removed;
+answer `remove` to prune the orphaned narration from every present half,
+or hand-fix the `for_slide` / restore the slide and re-report. A framed
+`broken_owner` suppresses the member's other rows for the pass, and until
+it is resolved the write gate refuses to record the pair. A slide *rename*
+the differ can see in the same pass never frames this: it emits the
+mechanical `retarget_owner`, which rewrites the companion's `for_slide` to
+follow the rename — narration is never a removal decision when its slide
+still exists, #650), `ambiguous_alignment` (genuinely ambiguous residue
 — rival id stamps, both sides adding different content into one pool;
 carries **no** answers: reconcile by editing, minting ids, then re-report),
 and the normalize-refusal deck item (run `clm slides normalize`, then

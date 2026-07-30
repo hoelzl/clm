@@ -2559,3 +2559,82 @@ class TestBrokenOwnerRemove:
         results = {r.key: r for r in outcome.results}
         assert results["id:s1-vo"].status == "rejected"
         assert "remove" in results["id:s1-vo"].reason
+
+    def test_one_sided_orphan_frames_a_single_answerable_row(self, tmp_path: Path):
+        """#650 review finding 1: the one-sided orphan (harvest DE-only, slide
+        removed) used to co-frame translate_new under the same key — the
+        advertised remove then rejected on the sibling. broken_owner now
+        suppresses the member's other rows; one answer resolves the pass."""
+        de = _build(HEADER_DE, _slide("s0", "de", "Eins"), _slide("s1", "de", "Zwei"))
+        en = _build(HEADER_EN, _slide("s0", "en", "One"), _slide("s1", "en", "Two"))
+        deck = _Deck(tmp_path, de, en)
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(_vo_cell("s1-vo", "s1", "de", "Zwei VO")), encoding="utf-8"
+        )
+        deck.record()
+        self._remove_slide_both_halves(deck)
+        _, diff = deck.diff()
+        vo_rows = [(i.key, i.action) for i in diff.items if i.key == "id:s1-vo"]
+        assert vo_rows == [("id:s1-vo", "broken_owner")], [(i.key, i.action) for i in diff.items]
+        outcome = deck.apply(
+            decisions={"id:s1-vo": doc_apply.Decision(key="id:s1-vo", choice="remove")}
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        assert "s1-vo" not in (vo_dir / "voiceover_t.de.py").read_text(encoding="utf-8")
+        deck.assert_converged()
+
+    def test_pruning_the_last_cell_leaves_a_sound_empty_companion(self, tmp_path: Path):
+        de = _build(HEADER_DE, _slide("s1", "de", "Zwei"))
+        en = _build(HEADER_EN, _slide("s1", "en", "Two"))
+        deck = _Deck(tmp_path, de, en)
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(_vo_cell("s1-vo", "s1", "de", "Zwei VO")), encoding="utf-8"
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(_vo_cell("s1-vo", "s1", "en", "Two VO")), encoding="utf-8"
+        )
+        deck.record()
+        for path, lang in ((deck.de_path, "de"), (deck.en_path, "en")):
+            text = path.read_text(encoding="utf-8")
+            start = text.index(f'# %% [markdown] lang="{lang}" tags=["slide"] slide_id="s1"')
+            path.write_text(
+                text[:start] + _slide("s2", lang, "Neu" if lang == "de" else "New"),
+                encoding="utf-8",
+            )
+        _, diff = deck.diff()
+        decisions = {"id:s1-vo": doc_apply.Decision(key="id:s1-vo", choice="remove")}
+        for item in diff.items:
+            if item.action == "verify_cold":
+                decisions[item.key] = doc_apply.Decision(key=item.key, choice="confirm")
+        outcome = deck.apply(decisions=decisions)
+        assert outcome.error is None, outcome.to_payload()
+        assert "s1-vo" not in (vo_dir / "voiceover_t.de.py").read_text(encoding="utf-8")
+        from clm.slides.sync_verify import gate_projected_pair
+
+        bundle = deck.load()
+        assert not gate_projected_pair(bundle.de_path, bundle.en_path, bundle.comment_token)
+
+    def test_same_pass_rename_retargets_mechanically_and_keeps_narration(self, tmp_path: Path):
+        """#650 review finding 2: a both-halves slide rename must never steer
+        the agent into pruning live narration — the differ holds the rename
+        evidence and retargets for_slide mechanically."""
+        deck = self._deck_with_companions(tmp_path)
+        for path in (deck.de_path, deck.en_path):
+            text = path.read_text(encoding="utf-8")
+            path.write_text(text.replace('slide_id="s1"', 'slide_id="s1x"'), encoding="utf-8")
+        _, diff = deck.diff()
+        vo_rows = [(i.key, i.action) for i in diff.items if i.key == "id:s1-vo"]
+        assert vo_rows == [("id:s1-vo", "retarget_owner")], [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        vo_de = (tmp_path / "voiceover" / "voiceover_t.de.py").read_text(encoding="utf-8")
+        vo_en = (tmp_path / "voiceover" / "voiceover_t.en.py").read_text(encoding="utf-8")
+        assert 'for_slide="s1x"' in vo_de and 'for_slide="s1x"' in vo_en
+        assert "Zwei VO" in vo_de and "Two VO" in vo_en  # narration survived
+        deck.assert_converged()

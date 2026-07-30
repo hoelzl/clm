@@ -1990,7 +1990,8 @@ removal that may be a group split — answer `remove` when it is a genuine
 deletion whose bytes merely coincide with another group's new one-sided cell,
 otherwise mirror the inserted slide on the twin and re-report),
 `broken_owner` (a companion cell whose `for_slide` matches no slide — answer
-`remove` to prune the orphaned narration from both halves, #650), `conflict_tags` (the
+`remove` to prune the orphaned narration from every present half; a
+same-pass slide *rename* retargets mechanically instead, #650), `conflict_tags` (the
 twins' tag sets diverged with no attributable direction — answer `de`/`en` to
 mirror **only that side's tag set** onto the twin, bodies untouched; while it
 is framed it suppresses the member's other rows — body, layout, and owner —
