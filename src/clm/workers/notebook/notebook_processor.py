@@ -1028,6 +1028,13 @@ class NotebookProcessor:
         cached artifact retains unexecuted starters solely for the
         cached-partial path (#734), and no non-partial view may show them.
         """
+        # This projection drops cells but never blanks contents — a spec
+        # that blanks (code-along style) must not reuse the cache through
+        # it, or full solution code would ship into its HTML.
+        assert not self.output_spec.blanks_code_cells, (
+            "cache projection does not blank cell contents — this spec must "
+            "not take the non-partial reuse path"
+        )
         # Make a deep copy to avoid modifying the cached notebook
         filtered_nb = copy.deepcopy(nb)
         drop = set(self.output_spec.tags_to_delete_cell) | {"start"}
