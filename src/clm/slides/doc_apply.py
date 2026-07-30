@@ -133,6 +133,11 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "order_decision": ("de", "en"),
     "stamp_vs_new": ("treat_as_new",),
     "remove_vs_split": ("remove",),
+    #: #650: prune the orphaned narration whose owning slide was removed or
+    #: renamed — both halves' cells, surfaced as this framed decision, never
+    #: silently. The non-remove remedies (retarget for_slide, restore the
+    #: slide) stay hand-edits: they need a target no answer shape carries.
+    "broken_owner": ("remove",),
 }
 
 
@@ -485,6 +490,7 @@ _PHASES: dict[str, int] = {
     "propagate_shared_edit": 0,
     "mirror_tags": 0,
     "mirror_owner": 0,
+    "retarget_owner": 0,
     "stamp_twin_id": 0,
     "translate_edit": 0,
     "conflict_shared": 0,
@@ -704,6 +710,29 @@ class _Executor(DeckEmitter):
                 for_slide=moved.for_slide,
             ),
         )
+
+    def retarget_owner(self, item: DiffItem) -> None:
+        """Follow a same-pass owner-slide rename on every present half (#650).
+
+        ``item.group`` carries the renamed-to anchor id (the differ's
+        ``group_map`` evidence); the companion cells still reference the old
+        id, so both headers are rewritten in place — no cell moves.
+        """
+        member = item.member
+        new_owner = item.group
+        if member is None or not new_owner:
+            raise _ItemError(f"{item.key} carries no member/renamed owner to retarget")
+        for lang in _SIDES:
+            holder = self._holder(item, lang)
+            cell = holder.side(lang) if holder is not None else None
+            if holder is None or cell is None:
+                continue
+            new_header = _set_for_slide(cell.header, new_owner)
+            self.set_side(
+                holder,
+                lang,
+                evolve(cell, lines=(new_header, *cell.lines[1:]), for_slide=new_owner),
+            )
 
     def mirror_layout(self, item: DiffItem, moved_side: Lang) -> None:
         """Complete a half-done inline↔companion relayout on the twin."""
@@ -1370,6 +1399,23 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             return
         raise _ItemError(f"'{action}' does not accept a side choice")
     if choice == "remove":
+        if action == "broken_owner":
+            # #650: the owning slide is gone (removed or renamed) — prune the
+            # orphaned narration from EVERY present half. Unlike the survivor
+            # removals below there is no gone side: the companion cells still
+            # exist on both halves, only their owner does not.
+            removed = False
+            for lang in _SIDES:
+                holder = ex._holder(item, lang)
+                cell = holder.side(lang) if holder is not None else None
+                if holder is None or cell is None:
+                    continue
+                ex.stream_remove(lang, cell.part, holder)
+                ex.set_side(holder, lang, None)
+                removed = True
+            if not removed:
+                raise _ItemError(f"{item.key} has no cells to remove")
+            return
         # A deliberate removal: delete the SURVIVING side of the slot. Only
         # ``item.side`` (the already-gone side) tells which cell is the
         # slot's — under a shifted pool pairing the member's other-side cell
@@ -1469,6 +1515,8 @@ def _execute_mechanical(ex: _Executor, item: DiffItem) -> None:
         if side is None:
             raise _ItemError("item names no moved side")
         ex.mirror_owner(item, side)
+    elif action == "retarget_owner":
+        ex.retarget_owner(item)
     elif action == "mirror_layout":
         if side is None:
             raise _ItemError("item names no moved side")

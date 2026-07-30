@@ -138,6 +138,7 @@ MECHANICAL_ACTIONS = frozenset(
         "mirror_layout",  # §7.3 relayout on one half — complete on twin
         "mirror_owner",  # owner reference moved on one side
         "record_owner",  # owner reference moved identically on both
+        "retarget_owner",  # owner slide renamed this pass — follow it (#650)
         "mirror_order",  # §6.2 order: one side reordered
         "record_order",  # both sides reordered identically
         "record_group_rename",  # anchor id renamed, anchor content matched
@@ -1064,7 +1065,14 @@ class _Differ:
             return
         # Layout transitions (§7.3 relayout) — orthogonal to content rows.
         self._check_layout(member, group, entry, handle)
-        self._check_owner(member, group, entry, handle)
+        owner_verdict = self._check_owner(member, group, entry, handle)
+        if owner_verdict == "framed":
+            # A framed broken_owner suppresses the member's other rows for
+            # the pass (the conflict_tags precedent above): content work on
+            # narration whose owner is gone cannot be answered alongside it
+            # under one key, and is moot until the orphan is resolved. The
+            # member re-frames on the next report.
+            return
         stable_class = (
             member.role == "header"
             or entry.role == "header"
@@ -1215,11 +1223,19 @@ class _Differ:
                 base=entry,
             )
 
-    def _check_owner(self, member: Member, group: str, entry: MemberBaseline, handle: str) -> None:
+    def _check_owner(
+        self, member: Member, group: str, entry: MemberBaseline, handle: str
+    ) -> str | None:
+        """Owner-reference rows. Returns ``"framed"``/``"mechanical"``/``None``
+        like :meth:`_check_tags` — a framed ``broken_owner`` suppresses the
+        member's content rows for the pass (#650 adversarial review: the
+        one-sided/edited orphan otherwise co-frames ``translate_new``/
+        ``translate_edit`` under the same key, and one decision cannot
+        answer two framed rows)."""
         de_owner = member.de.for_slide if member.de else None
         en_owner = member.en.for_slide if member.en else None
         if member.layout != "companion" and entry.layout != "companion":
-            return
+            return None
         both_companion = (
             member.de is not None
             and member.en is not None
@@ -1237,20 +1253,43 @@ class _Differ:
                 member=member,
                 base=entry,
             )
-            return
+            return None
         current_owner = member.owner.render() if member.owner else None
         if group == ORPHAN_GROUP:
+            dangling = de_owner or en_owner
+            renamed_to = self.group_map.get(dangling) if dangling else None
+            if renamed_to is not None and renamed_to != dangling:
+                # The owning slide was RENAMED this pass (the differ holds
+                # the evidence in group_map) and the companion did not
+                # follow — retargeting is mechanical, never a removal
+                # decision (#650 adversarial review: the only advertised
+                # answer must not delete narration for a live slide).
+                self.emit(
+                    handle,
+                    "mechanical",
+                    "retarget_owner",
+                    "both",
+                    f"owner {dangling!r} was renamed to {renamed_to!r} — "
+                    f"retarget the companion's for_slide on every present half",
+                    group=renamed_to,
+                    member=member,
+                    base=entry,
+                )
+                return "mechanical"
             self.emit(
                 handle,
                 "conflict",
                 "broken_owner",
                 "none",
-                f"owner reference {de_owner or en_owner!r} matches no slide anchor",
+                f"owner reference {dangling!r} matches no slide anchor "
+                f"(its slide was removed or renamed) — answer 'remove' to prune "
+                f"the orphaned narration from every present half, or fix the "
+                f"cell's for_slide / restore the slide by hand and re-report (#650)",
                 group=group,
                 member=member,
                 base=entry,
             )
-            return
+            return "framed"
         base_owner = entry.owner
         if base_owner is not None and current_owner is not None and base_owner != current_owner:
             mapped = self.key_migrations.get(base_owner, base_owner)
@@ -1265,6 +1304,8 @@ class _Differ:
                     member=member,
                     base=entry,
                 )
+                return "mechanical"
+        return None
 
     def _check_tags(
         self,
