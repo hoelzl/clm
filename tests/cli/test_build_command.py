@@ -75,6 +75,8 @@ def _make_config(**overrides) -> BuildConfig:
         "plantuml_workers": None,
         "drawio_workers": None,
         "notebook_image": None,
+        "plantuml_image": None,
+        "drawio_image": None,
     }
     defaults.update(overrides)
     return BuildConfig(**defaults)
@@ -377,6 +379,8 @@ class TestConfigureWorkers:
             drawio_workers=1,
             max_workers=8,
             notebook_image="myimage:tag",
+            plantuml_image="pimage:tag",
+            drawio_image="dimage:tag",
         )
         worker_config = configure_workers(config)
 
@@ -386,6 +390,23 @@ class TestConfigureWorkers:
         assert worker_config.drawio.count == 1
         assert worker_config.max_workers_cap == 8
         assert worker_config.notebook.image == "myimage:tag"
+        assert worker_config.plantuml.image == "pimage:tag"
+        assert worker_config.drawio.image == "dimage:tag"
+
+    def test_bare_tags_expand_per_service(self) -> None:
+        """Issue #690: the bare-tag shorthand expands against each service's
+        default repository, not the notebook one."""
+        config = _make_config(
+            workers="docker",
+            notebook_image="lite",
+            plantuml_image="test",
+            drawio_image="test",
+        )
+        worker_config = configure_workers(config)
+
+        assert worker_config.notebook.image == "docker.io/mhoelzl/clm-notebook-processor:lite"
+        assert worker_config.plantuml.image == "docker.io/mhoelzl/clm-plantuml-converter:test"
+        assert worker_config.drawio.image == "docker.io/mhoelzl/clm-drawio-converter:test"
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +748,8 @@ class TestInitializePathsAndCourse:
             "plantuml_workers": None,
             "drawio_workers": None,
             "notebook_image": None,
+            "plantuml_image": None,
+            "drawio_image": None,
         }
         defaults.update(overrides)
         return BuildConfig(**defaults)
@@ -2087,3 +2110,41 @@ class TestMitmproxyTransportBindHost:
         monkeypatch.delenv("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", raising=False)
         self._run(monkeypatch, tmp_path, None)
         assert _FakeMitmManager.last_trace_dir is None
+
+
+class TestWorkerImageFlagWiring:
+    """#690 review F2: the three image flags reach ``main_build`` in the
+    right slots. The 39-argument positional chain was patched mechanically —
+    a transposition would swap two images and pass every value-level test,
+    so pin the routing BY NAME via signature binding."""
+
+    def test_image_flags_route_to_named_parameters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import inspect
+
+        real_sig = inspect.signature(build_module.main_build)
+        captured: dict = {}
+
+        async def fake_main_build(*a, **k):
+            captured.update(real_sig.bind(*a, **k).arguments)
+            return SimpleNamespace(timed_out=False, errors=[])
+
+        monkeypatch.setattr(build_module, "main_build", fake_main_build)
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        result = _invoke_build(
+            [
+                str(spec),
+                "--notebook-image",
+                "n:1",
+                "--plantuml-image",
+                "p:1",
+                "--drawio-image",
+                "d:1",
+            ],
+            tmp_path=tmp_path,
+        )
+        assert result.exit_code == 0, result.output
+        assert captured["notebook_image"] == "n:1"
+        assert captured["plantuml_image"] == "p:1"
+        assert captured["drawio_image"] == "d:1"

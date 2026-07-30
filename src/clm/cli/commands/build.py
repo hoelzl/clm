@@ -414,6 +414,8 @@ class BuildConfig:
     plantuml_workers: int | None
     drawio_workers: int | None
     notebook_image: str | None
+    plantuml_image: str | None
+    drawio_image: str | None
 
     # Hard cap on effective worker count per type; clamped against CPU/RAM
     # by clm.infrastructure.workers.pool_size_cap. Default ``None`` so
@@ -958,6 +960,10 @@ def configure_workers(config: BuildConfig):
         cli_overrides["max_workers"] = config.max_workers
     if config.notebook_image is not None:
         cli_overrides["notebook_image"] = config.notebook_image
+    if config.plantuml_image is not None:
+        cli_overrides["plantuml_image"] = config.plantuml_image
+    if config.drawio_image is not None:
+        cli_overrides["drawio_image"] = config.drawio_image
 
     return load_worker_config(cli_overrides)
 
@@ -1753,6 +1759,8 @@ async def main_build(
     drawio_workers,
     max_workers,
     notebook_image,
+    plantuml_image,
+    drawio_image,
     output_mode,
     no_progress,
     no_color,
@@ -1878,6 +1886,8 @@ async def main_build(
         drawio_workers=drawio_workers,
         max_workers=max_workers,
         notebook_image=notebook_image,
+        plantuml_image=plantuml_image,
+        drawio_image=drawio_image,
         output_mode=output_mode,
         no_progress=no_progress,
         no_color=no_color,
@@ -2325,7 +2335,23 @@ async def main_build(
 @click.option(
     "--notebook-image",
     type=str,
-    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker.",
+    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker. Caches do not key on the image — pass --force-execute/--ignore-cache when testing a new image (issue #744).",
+)
+@click.option(
+    "--plantuml-image",
+    type=str,
+    help="Docker image for PlantUML workers. Full image name or just a tag "
+    "(expands to docker.io/mhoelzl/clm-plantuml-converter:<tag>). Only used "
+    "with --workers=docker (issue #690). Caches do not key on the image — "
+    "pass --ignore-cache when testing a new image (issue #744).",
+)
+@click.option(
+    "--drawio-image",
+    type=str,
+    help="Docker image for Draw.io workers. Full image name or just a tag "
+    "(expands to docker.io/mhoelzl/clm-drawio-converter:<tag>). Only used "
+    "with --workers=docker (issue #690). Caches do not key on the image — "
+    "pass --ignore-cache when testing a new image (issue #744).",
 )
 @click.option(
     "--output-mode",
@@ -2511,6 +2537,8 @@ def build(
     drawio_workers,
     max_workers,
     notebook_image,
+    plantuml_image,
+    drawio_image,
     output_mode,
     no_progress,
     no_color,
@@ -2654,6 +2682,8 @@ def build(
             drawio_workers,
             max_workers,
             notebook_image,
+            plantuml_image,
+            drawio_image,
             output_mode,
             no_progress,
             no_color,
