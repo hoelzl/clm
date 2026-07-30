@@ -965,7 +965,15 @@ def configure_workers(config: BuildConfig):
     if config.drawio_image is not None:
         cli_overrides["drawio_image"] = config.drawio_image
 
-    return load_worker_config(cli_overrides)
+    worker_config = load_worker_config(cli_overrides)
+    # The cache keys must see the images that will actually execute (issue
+    # #744): record the post-override identity per worker type — the
+    # override lives only in this config copy, never in the singleton the
+    # identity fallback reads.
+    from clm.infrastructure.workers.image_identity import set_effective_worker_identities
+
+    set_effective_worker_identities(worker_config)
+    return worker_config
 
 
 def enable_jupyterlite_workers_if_needed(course, worker_config) -> None:
@@ -2335,23 +2343,25 @@ async def main_build(
 @click.option(
     "--notebook-image",
     type=str,
-    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker. Caches do not key on the image — pass --force-execute/--ignore-cache when testing a new image (issue #744).",
+    help="Docker image for notebook workers. Can be full image name or just a tag (e.g., 'lite', 'full'). Default is :latest which uses the lite variant. Only used with --workers=docker. Cache keys follow the image (issue #744); lingering reused workers do not — stop them when switching images.",
 )
 @click.option(
     "--plantuml-image",
     type=str,
     help="Docker image for PlantUML workers. Full image name or just a tag "
     "(expands to docker.io/mhoelzl/clm-plantuml-converter:<tag>). Only used "
-    "with --workers=docker (issue #690). Caches do not key on the image — "
-    "pass --ignore-cache when testing a new image (issue #744).",
+    "with --workers=docker (issue #690). Cache keys follow the image "
+    "(issue #744); lingering reused workers do not — stop them when "
+    "switching images.",
 )
 @click.option(
     "--drawio-image",
     type=str,
     help="Docker image for Draw.io workers. Full image name or just a tag "
     "(expands to docker.io/mhoelzl/clm-drawio-converter:<tag>). Only used "
-    "with --workers=docker (issue #690). Caches do not key on the image — "
-    "pass --ignore-cache when testing a new image (issue #744).",
+    "with --workers=docker (issue #690). Cache keys follow the image "
+    "(issue #744); lingering reused workers do not — stop them when "
+    "switching images.",
 )
 @click.option(
     "--output-mode",

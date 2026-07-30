@@ -5,7 +5,6 @@
   `docker.io/mhoelzl/clm-drawio-converter:test`). Previously only the
   notebook image was reachable from the command line; the diagram workers
   required deriving `CLM_WORKER_MANAGEMENT__*__IMAGE` env-var spellings.
-  The env-var route keeps working. Caveat (#744): the build caches do not
-  yet key on the worker image — pass `--ignore-cache` when testing a
-  rebuilt image against unchanged sources, and stop lingering reused
-  workers first (reuse is image-blind).
+  The env-var route keeps working. Caveat: worker reuse is image-blind —
+  stop lingering reused workers when switching images (cache keys follow
+  the image since #744).

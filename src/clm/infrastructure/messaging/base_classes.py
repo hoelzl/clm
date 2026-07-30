@@ -95,8 +95,30 @@ class Payload(TransferModel):
         return "default"
 
 
+#: Version tag folded into every diagram cache hash. Bump whenever the
+#: composition of ``ImagePayload.content_hash()`` changes so stale entries
+#: keyed under the old schema can never replay as hits (the notebook caches
+#: have their own ``CACHE_HASH_SCHEMA_VERSION`` with the same contract).
+IMAGE_CACHE_HASH_SCHEMA_VERSION = 1
+
+
 class ImagePayload(Payload):
     output_format: str = "png"
+    #: Identity of the worker environment that renders this image —
+    #: ``"direct"`` or ``"docker:<image>"`` (issue #744). Folded into
+    #: ``content_hash`` so a diagram cache populated under one converter
+    #: image is never replayed under another; host-known, computed at
+    #: payload construction like ``NotebookPayload.worker_image_identity``.
+    #: Default ``""`` keeps pre-#744 callers constructible (identity-less
+    #: keying for that payload only).
+    worker_image_identity: str = ""
+
+    def content_hash(self) -> str:
+        key = (
+            f"{IMAGE_CACHE_HASH_SCHEMA_VERSION}:{self.worker_image_identity}:"
+            f"{self.output_format}:{self.data}"
+        )
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def output_metadata(self) -> str:
         return self.output_format
