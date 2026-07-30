@@ -31,7 +31,11 @@ class TestPerTypeIdentity:
         )
 
     def test_direct_mode_per_type(self):
-        assert worker_image_identity_for("direct", "ignored:1", "drawio") == "direct"
+        """A configured-but-unused Docker image must not leak into the
+        direct identity (which since #747 may carry a binary fingerprint)."""
+        ident = worker_image_identity_for("direct", "ignored:1", "drawio")
+        assert ident.startswith("direct")
+        assert "ignored" not in ident
 
 
 class TestEffectiveRegistry:
@@ -101,3 +105,58 @@ class TestDiagramPayloadIdentity:
             output_file_name="x.png",
         )
         assert p.content_hash()
+
+
+class TestDirectModeDiagramFingerprint:
+    """Issue #747: direct-mode diagram identities fingerprint the binary a
+    direct build will execute — a JAR/executable upgrade invalidates the
+    diagram caches like a Docker image switch does."""
+
+    def test_jar_change_changes_the_identity(self, tmp_path, monkeypatch):
+        jar = tmp_path / "plantuml.jar"
+        jar.write_bytes(b"v1")
+        monkeypatch.setenv("PLANTUML_JAR", str(jar))
+        first = worker_image_identity_for("direct", None, "plantuml")
+        assert first.startswith("direct:") and first != "direct"
+
+        jar.write_bytes(b"v2 bigger")
+        second = worker_image_identity_for("direct", None, "plantuml")
+        assert second.startswith("direct:")
+        assert first != second
+
+    def test_same_binary_is_stable(self, tmp_path, monkeypatch):
+        exe = tmp_path / "drawio.exe"
+        exe.write_bytes(b"binary")
+        monkeypatch.setenv("DRAWIO_EXECUTABLE", str(exe))
+        a = worker_image_identity_for("direct", None, "drawio")
+        b = worker_image_identity_for("direct", None, "drawio")
+        assert a == b and a.startswith("direct:")
+
+    def test_unlocatable_binary_degrades_to_plain_direct(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PLANTUML_JAR", str(tmp_path / "missing.jar"))
+        assert worker_image_identity_for("direct", None, "plantuml") == "direct"
+
+    def test_notebook_direct_identity_is_unchanged(self):
+        assert worker_image_identity_for("direct", None, "notebook") == "direct"
+
+    def test_docker_mode_unaffected(self, monkeypatch):
+        monkeypatch.setenv("PLANTUML_JAR", "ignored")
+        assert worker_image_identity_for("docker", "img:1", "plantuml") == "docker:img:1"
+
+    def test_config_file_tool_path_is_fingerprinted(self, tmp_path, monkeypatch):
+        """#747 review F1: a jar configured only in [external_tools] (no env
+        var) reaches direct workers via the executor's env injection — the
+        fingerprint must resolve through the same precedence."""
+        jar = tmp_path / "configured.jar"
+        jar.write_bytes(b"from config file")
+        monkeypatch.delenv("PLANTUML_JAR", raising=False)
+
+        from clm.infrastructure import config as config_module
+
+        cfg = config_module.get_config()
+        monkeypatch.setattr(cfg.external_tools, "plantuml_jar", str(jar))
+        ident = worker_image_identity_for("direct", None, "plantuml")
+        assert ident.startswith("direct:") and ident != "direct"
+
+        jar.write_bytes(b"upgraded config-file jar!")
+        assert worker_image_identity_for("direct", None, "plantuml") != ident

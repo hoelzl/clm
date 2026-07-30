@@ -38,20 +38,78 @@ def worker_image_identity_for(
 ) -> str:
     """The environment identity string for one worker type.
 
-    - ``direct`` mode → ``"direct"``: the worker runs the host's own
-      environment (for notebooks its version/template content is already
-      covered by ``compute_template_fingerprint``; the diagram binaries'
-      versions are honest residue of the direct mode).
+    - ``direct`` mode → ``"direct"`` for notebooks (the host environment's
+      version/template content is already covered by
+      ``compute_template_fingerprint``); for the diagram types
+      ``"direct:<binary fingerprint>"`` (#747) — a PlantUML-JAR or Draw.io
+      upgrade must invalidate the diagram caches the same way a Docker
+      image switch does. An unlocatable binary degrades to plain
+      ``"direct"`` (the build then fails at worker startup anyway).
     - ``docker`` mode → ``"docker:<image>"`` with the same effective-image
       resolution the pool starter uses (per-type override, else the bundled
       default) — the key must describe the image that actually executes.
     """
     if execution_mode != "docker":
+        if worker_type in ("plantuml", "drawio"):
+            fingerprint = _direct_binary_fingerprint(worker_type)
+            if fingerprint:
+                return f"direct:{fingerprint}"
         return "direct"
     from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
 
     effective = image or DEFAULT_WORKER_IMAGES.get(worker_type, "")
     return f"docker:{effective}"
+
+
+def _direct_binary_fingerprint(worker_type: str) -> str:
+    """A cheap host-side fingerprint of the direct-mode diagram binary.
+
+    Path + size + mtime_ns, digested — no execution, two stat calls.
+    Resolution follows the worker executor's injection precedence
+    (``external_tools`` config with the env vars folded over it, then the
+    workers' own default resolution via
+    :mod:`clm.workers.diagram_tools`), so the fingerprint describes the
+    binary that will actually render — including one configured only in a
+    config file's ``[external_tools]`` section (#747 review F1). Residue:
+    a binary replaced in place with identical size and mtime keeps the
+    key (the same trade every size+mtime scheme makes); the bare DEFAULT
+    Draw.io name is which()-resolved for statting while the spawn
+    resolves at exec time — a PATHEXT shim shadowing the real .exe can
+    make the two diverge (spurious re-render at worst) — and an env- or
+    config-set bare name is stat'd directly, fails, and degrades to
+    identity-less keying (a knowingly-open corner). Defensive ``""``
+    on any error — identity degrades to ``"direct"``.
+    """
+    import hashlib
+    import os
+
+    try:
+        # The executor injects PLANTUML_JAR/DRAWIO_EXECUTABLE into direct
+        # workers from get_config().external_tools (env folded over the
+        # config file) — mirror that exactly, then fall back to the
+        # workers' own default resolution.
+        from clm.infrastructure.config import get_config, resolve_setting
+        from clm.workers.diagram_tools import (
+            locate_drawio_executable,
+            locate_plantuml_jar,
+        )
+
+        external_tools = get_config().external_tools
+        if worker_type == "plantuml":
+            configured = resolve_setting(None, config_value=external_tools.plantuml_jar, default="")
+            located = configured or locate_plantuml_jar()
+        else:
+            configured = resolve_setting(
+                None, config_value=external_tools.drawio_executable, default=""
+            )
+            located = configured or locate_drawio_executable()
+        if not located:
+            return ""
+        stat = os.stat(located)
+        raw = f"{located}:{stat.st_size}:{stat.st_mtime_ns}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    except Exception:  # noqa: BLE001 - identity must never fail a build
+        return ""
 
 
 def set_effective_worker_identities(worker_config: WorkersManagementConfig) -> None:

@@ -8,31 +8,22 @@ from clm.infrastructure.services.subprocess_tools import run_subprocess
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 
-# PlantUML JAR path - configurable via environment variable
-# Default order: PLANTUML_JAR env var -> /app/plantuml.jar (Docker) -> local repo jar
-_default_jar_paths = [
-    "/app/plantuml.jar",  # Docker container path
-    str(
-        Path(__file__).parents[4] / "docker" / "plantuml" / "plantuml-1.2024.6.jar"
-    ),  # Local repo path
-    str(Path(__file__).parents[3] / "plantuml-1.2024.6.jar"),  # Legacy path (src/)
-]
-_plantuml_jar_from_env = os.environ.get("PLANTUML_JAR")
-if _plantuml_jar_from_env:
-    PLANTUML_JAR = _plantuml_jar_from_env
-    if not Path(PLANTUML_JAR).exists():
-        raise FileNotFoundError(
-            f"PlantUML JAR not found at path specified in PLANTUML_JAR environment variable: {PLANTUML_JAR}"
-        )
-else:
-    # Try default paths in order
-    _found_jar = next((p for p in _default_jar_paths if Path(p).exists()), None)
-    if _found_jar is None:
-        raise FileNotFoundError(
-            f"PlantUML JAR not found. Please install PlantUML and set the PLANTUML_JAR environment variable.\n"
-            f"Searched paths: {_default_jar_paths}"
-        )
-    PLANTUML_JAR = _found_jar
+# PlantUML JAR path - configurable via environment variable. Resolution
+# lives in clm.workers.diagram_tools (issue #747: the host-side cache-key
+# identity must fingerprint the SAME binary this worker runs).
+from clm.workers.diagram_tools import PLANTUML_DEFAULT_JAR_PATHS, locate_plantuml_jar
+
+_located_jar = locate_plantuml_jar()
+if _located_jar is None:
+    raise FileNotFoundError(
+        f"PlantUML JAR not found. Please install PlantUML and set the PLANTUML_JAR environment variable.\n"
+        f"Searched paths: {PLANTUML_DEFAULT_JAR_PATHS}"
+    )
+if not Path(_located_jar).exists():
+    raise FileNotFoundError(
+        f"PlantUML JAR not found at path specified in PLANTUML_JAR environment variable: {_located_jar}"
+    )
+PLANTUML_JAR = _located_jar
 
 PLANTUML_NAME_REGEX = re.compile(r'@startuml[ \t]+(?:"([^"]+)"|(\S+))')
 

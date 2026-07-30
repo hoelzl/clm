@@ -159,7 +159,11 @@ re-renders unchanged sources instead of replaying the old image's bytes. CLI ima
 and payload construction reads them — previously the identity read the
 global config singleton, which the CLI overrides never touch (they apply to
 the deliberate #223 config copy). The mutable-tag limitation applies here
-too: re-pulling `:latest` does not change the key.
+too: re-pulling `:latest` does not change the key. In **direct** mode the
+diagram identity fingerprints the PlantUML JAR / Draw.io executable
+(path + size + mtime, #747), so a binary upgrade invalidates the diagram
+caches; a binary replaced in place with identical size and mtime keeps
+the key.
 
 ## Where each cache is consulted during a build
 
