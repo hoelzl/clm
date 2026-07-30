@@ -3233,7 +3233,7 @@ class TestCachedPartialSlideIdOpener:
         assert cached_nb["cells"][0]["metadata"].get("slide_id") == "some-slide"
 
         completed = NotebookProcessor(CompletedOutput(format="html"))
-        filtered = completed._filter_notes_cells_from_cached(cached_nb)
+        filtered = completed._filter_cached_notebook_for_spec(cached_nb)
         assert all("slide_id" not in c["metadata"] for c in filtered["cells"])
         assert len(filtered["cells"]) == 1  # notes dropped
 
@@ -3275,7 +3275,7 @@ class TestCachedPartialStarters:
         payload = make_payload("", kind="speaker", format_="html")
         cached_nb = await recording._process_notebook_node(self._workshop_nb(), payload)
         completed = NotebookProcessor(CompletedOutput(format="html"))
-        filtered = completed._filter_notes_cells_from_cached(cached_nb)
+        filtered = completed._filter_cached_notebook_for_spec(cached_nb)
         assert all("start" not in c["metadata"]["tags"] for c in filtered["cells"])
 
     @pytest.mark.asyncio
@@ -3335,3 +3335,40 @@ class TestCachedPartialStarters:
         sources = [c["source"] for c in cached_nb["cells"]]
         assert "# TODO en" in sources
         assert "# TODO de" not in sources
+
+
+class TestTrainerCacheReuseKeepsNotes:
+    """Issue #736: the non-partial cache-reuse view projects through the
+    CONSUMING spec's delete set — the hard-coded notes/voiceover drop lost
+    the notes Trainer keeps on a cache miss."""
+
+    def _cached_nb(self):
+        return make_notebook_node(
+            [
+                make_cell("markdown", "# Title", tags=["slide"]),
+                make_cell("markdown", "- speaker hint", tags=["notes"]),
+                make_cell("markdown", "read this aloud", tags=["voiceover"]),
+                make_cell("code", "# TODO", tags=["start"]),
+                make_cell("code", "x = 1", tags=["keep"]),
+            ]
+        )
+
+    def test_trainer_view_keeps_notes_drops_voiceover_and_starters(self):
+        from clm.workers.notebook.output_spec import TrainerOutput
+
+        trainer = NotebookProcessor(TrainerOutput(format="html"))
+        filtered = trainer._filter_cached_notebook_for_spec(self._cached_nb())
+        sources = [c["source"] for c in filtered["cells"]]
+        assert "- speaker hint" in sources  # the #736 regression
+        assert "read this aloud" not in sources
+        assert "# TODO" not in sources
+        assert "x = 1" in sources
+
+    def test_completed_view_unchanged(self):
+        completed = NotebookProcessor(CompletedOutput(format="html"))
+        filtered = completed._filter_cached_notebook_for_spec(self._cached_nb())
+        sources = [c["source"] for c in filtered["cells"]]
+        assert "- speaker hint" not in sources
+        assert "read this aloud" not in sources
+        assert "# TODO" not in sources
+        assert "x = 1" in sources

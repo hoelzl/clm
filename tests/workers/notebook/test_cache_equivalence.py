@@ -197,7 +197,7 @@ class TestCacheEquivalence:
             # Use processor's filter method
             completed_spec = CompletedOutput(format="html", language="en", prog_lang="python")
             processor = NotebookProcessor(completed_spec, cache=cache)
-            filtered_nb = processor._filter_notes_cells_from_cached(cached_nb)
+            filtered_nb = processor._filter_cached_notebook_for_spec(cached_nb)
 
             # Verify notes cells are removed
             filtered_notes_count = sum(
