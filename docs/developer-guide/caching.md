@@ -143,6 +143,24 @@ invalidation* (clm upgrade, worker-image/mode switch, CRLF drift, a
 `CACHE_HASH_SCHEMA_VERSION` bump), **not** eviction by retention. Confirm with
 `clm cache explain`.
 
+### Diagram (PlantUML / Draw.io) cache keys
+
+Diagram results replay from the jobs DB keyed on `(output_file,
+content_hash)`. Since issue #744 the `ImagePayload.content_hash` folds in,
+besides the diagram source: the `IMAGE_CACHE_HASH_SCHEMA_VERSION`, the
+**effective worker-image identity** of the rendering worker type
+(`"direct"` / `"docker:<image>"`), and the payload's `output_format` field
+(constant in current production — the actual format is discriminated by
+the `output_file` half of the cache key) — so a rebuilt converter image
+re-renders unchanged sources instead of replaying the old image's bytes. CLI image overrides (`--notebook-image` /
+`--plantuml-image` / `--drawio-image`) are visible to every cache key:
+`clm build` records the post-override identities
+(`clm.infrastructure.workers.image_identity.set_effective_worker_identities`)
+and payload construction reads them — previously the identity read the
+global config singleton, which the CLI overrides never touch (they apply to
+the deliberate #223 config copy). The mutable-tag limitation applies here
+too: re-pulling `:latest` does not change the key.
+
 ## Where each cache is consulted during a build
 
 `execute_operation` (`infrastructure/backends/sqlite_backend.py`) is the choke

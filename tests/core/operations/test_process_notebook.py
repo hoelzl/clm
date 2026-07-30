@@ -117,10 +117,29 @@ class TestWorkerImageIdentity:
         assert old != new
 
     def test_compute_from_global_config_is_stable_and_nonempty(self):
-        """The cached global-config wrapper returns a stable, non-empty
-        identity (cache-key components must not flap within a process)."""
-        compute_worker_image_identity.cache_clear()
+        """The global-config wrapper returns a stable, non-empty identity
+        (cache-key components must not flap within a process). Since #744
+        it resolves through the effective-identity registry; with nothing
+        recorded it falls back to the singleton, as before."""
+        from clm.infrastructure.workers.image_identity import (
+            reset_effective_worker_identities,
+        )
+
+        reset_effective_worker_identities()
         first = compute_worker_image_identity()
         second = compute_worker_image_identity()
         assert first == second
         assert first.startswith(("direct", "docker:"))
+
+    def test_effective_registry_overrides_the_singleton(self):
+        """#744 hole (b): the CLI override lives only in the config COPY —
+        the identity must prefer what the build recorded over the
+        singleton's stale view."""
+        from clm.infrastructure.workers import image_identity as ii
+
+        ii.reset_effective_worker_identities()
+        try:
+            ii._effective["notebook"] = "docker:ghcr.io/me/override:1"
+            assert compute_worker_image_identity() == "docker:ghcr.io/me/override:1"
+        finally:
+            ii.reset_effective_worker_identities()

@@ -78,12 +78,14 @@ Key options:
 | `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
 | `--provenance-manifest / --no-provenance-manifest` | Write a `.clm-manifest.json` provenance index into each output root, mapping every output file to its source commit and owning section/topic (issue #208 — needed by the per-topic solution-release workflow). **On by default since CLM {version}**; `clm git` excludes it from every distributed repo. Pass `--no-provenance-manifest` to skip it. Always suppressed under `--snapshot` / `--verify-against` (it embeds a timestamp + commit, so it must not enter a byte-reproducibility baseline). |
 
-**Image-override caveats (#744).** The build caches do not yet key on the
-worker image: when testing a rebuilt/pinned image against unchanged sources,
-pass `--ignore-cache` (or `--force-execute` for notebooks) or cached results
-from the previous image are replayed as hits. Worker *reuse* is also
-image-blind — a still-running worker pool from an earlier build keeps its
-old image, so stop lingering workers first when switching images.
+**Image-override caveats.** Since CLM {version} the build caches key on the
+effective worker image for all three worker types (#744): switching images
+re-renders cached notebooks *and* diagrams without `--ignore-cache`. Two
+residual caveats: a **mutable tag** (`:latest`) re-pulled to a new image
+does not change the key — pin versioned tags/digests for exact
+invalidation; and worker *reuse* is image-blind — a still-running worker
+pool from an earlier build keeps its old image, so stop lingering workers
+first when switching images.
 
 Examples:
 

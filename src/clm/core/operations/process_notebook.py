@@ -26,6 +26,13 @@ from clm.infrastructure.utils.path_utils import (
     relative_path_to_course_img,
 )
 
+# Re-exported for existing callers/tests; the canonical home is the
+# infrastructure module so the diagram operations and the build's
+# effective-identity registry share one implementation (issue #744).
+from clm.infrastructure.workers.image_identity import (
+    worker_image_identity_for,  # noqa: F401
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,28 +110,6 @@ def compute_template_fingerprint(prog_lang: str) -> str:
     return _hash_template_dir(prog_lang, template_dir)
 
 
-def worker_image_identity_for(execution_mode: str, image: str | None) -> str:
-    """Resolve the execution-environment identity string for the cache key.
-
-    Pure resolution logic, separated from the global-config read in
-    :func:`compute_worker_image_identity` so it is directly testable.
-
-    - ``direct`` mode → ``"direct"``: the worker runs the host's own
-      environment, whose version/template content is already covered by
-      ``compute_template_fingerprint``.
-    - ``docker`` mode → ``"docker:<image>"`` with the same effective-image
-      resolution the pool starter uses (per-type override, else the bundled
-      default) — the key must describe the image that actually executes.
-    """
-    if execution_mode != "docker":
-        return "direct"
-    from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
-
-    effective = image or DEFAULT_WORKER_IMAGES.get("notebook", "")
-    return f"docker:{effective}"
-
-
-@cache
 def compute_worker_image_identity() -> str:
     """Identity of the execution environment notebook jobs will run in.
 
@@ -135,32 +120,18 @@ def compute_worker_image_identity() -> str:
     fingerprint cannot see: a Docker worker image carries its own clm
     version, templates, and kernel (xeus-cpp etc.), so a cache populated
     under one image must not be replayed under another (issue #321 class 5,
-    the xeus-cling → xeus-cpp incident). The image reference is host-known
-    configuration, so every cache layer can compute the key identically
-    without asking the worker.
+    the xeus-cling → xeus-cpp incident).
 
-    Limitation: this is the configured image *reference*, not a content
-    digest. A mutable tag (``:latest``) that is re-pulled to point at a new
-    image does NOT change the key — pin worker images to versioned tags or
-    ``@sha256:...`` digests for the invalidation to be exact. (Resolving the
-    local digest at payload time would require a Docker API call per build
-    and a running daemon; not worth it host-side.)
-
-    Defensive ``""`` on any config error: a payload must never fail to
-    build because worker config is unreadable; an empty identity merely
-    reverts that build to the pre-#321 keying for this component.
+    Since #744 this resolves through
+    :mod:`clm.infrastructure.workers.image_identity`, so a build's CLI
+    image override (``--notebook-image``) is visible to the cache key —
+    previously the singleton config was read and the override was not.
+    See that module for the mutable-tag limitation and the defensive
+    empty-identity contract.
     """
-    try:
-        from clm.infrastructure.config import get_config
+    from clm.infrastructure.workers.image_identity import effective_worker_image_identity
 
-        worker_management = get_config().worker_management
-        execution_mode = (
-            worker_management.notebook.execution_mode or worker_management.default_execution_mode
-        )
-        return worker_image_identity_for(execution_mode, worker_management.notebook.image)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(f"Could not resolve worker image identity for cache key: {exc}")
-        return ""
+    return effective_worker_image_identity("notebook")
 
 
 def _resolve_trace_dir_for_payload() -> str:
