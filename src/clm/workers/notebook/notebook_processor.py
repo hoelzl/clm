@@ -444,6 +444,18 @@ def _strip_lines_to_next_cell(cells: Iterable[Cell]) -> None:
             metadata.pop("lines_to_next_cell", None)
 
 
+def _answer_stub(language: str) -> str:
+    """The localized stub a blanked ``answer`` markdown cell renders as.
+
+    One definition for BOTH render sites — the fresh path's markdown
+    processing and the cached-partial filter (#737): the two regaining
+    byte-parity depends on them agreeing, so divergence must be
+    structurally impossible.
+    """
+    answer_text = "Answer" if language == "en" else "Antwort"
+    return f"*{answer_text}:* "
+
+
 def _drop_start_cells(cells: Iterable[Cell]) -> list[Cell]:
     """Drop ``start``-tagged cells from an export view of the cached notebook.
 
@@ -1095,7 +1107,12 @@ class NotebookProcessor:
                         cell["execution_count"] = None
                 elif is_markdown_cell(cell):
                     if post_blank_markdown.intersection(tags):
-                        cell["source"] = ""
+                        # Fresh-partial parity (#737): the fresh path renders
+                        # a blanked answer cell as the localized stub, not as
+                        # an empty cell. The cached cell already carries the
+                        # stub prefix (Recording's processing added it) —
+                        # keep the prefix, drop the answer text.
+                        cell["source"] = _answer_stub(self.output_spec.language)
 
             new_cells.append(cell)
 
@@ -1405,8 +1422,7 @@ class NotebookProcessor:
                 "<div style='background: #FFEEBA; color: black;'>\n" + contents + "\n</div>"
             )
         if is_answer_cell(cell):
-            answer_text = "Answer" if self.output_spec.language == "en" else "Antwort"
-            prefix = f"*{answer_text}:* "
+            prefix = _answer_stub(self.output_spec.language)
             if self.output_spec.is_cell_contents_included(cell):
                 cell["source"] = prefix + cell["source"]
             else:

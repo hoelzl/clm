@@ -533,7 +533,9 @@ class TestPartialCacheFilter:
         for cell in filtered.cells:
             assert "alt" not in cell.get("metadata", {}).get("tags", [])
 
-    def test_post_workshop_answer_markdown_blanked(self, processor, cached_speaker_nb):
+    def test_post_workshop_answer_markdown_blanked_to_stub(self, processor, cached_speaker_nb):
+        """The blanked answer renders as the localized stub, matching the
+        fresh partial path (#737) — not as an empty cell."""
         filtered = processor._filter_cached_notebook_for_partial(cached_speaker_nb)
         answer_cell = next(
             c
@@ -541,7 +543,7 @@ class TestPartialCacheFilter:
             if c.get("cell_type") == "markdown"
             and "answer" in c.get("metadata", {}).get("tags", [])
         )
-        assert answer_cell["source"] == ""
+        assert answer_cell["source"] == "*Answer:* "
 
     def test_no_workshop_heading_matches_completed_filter(self, processor):
         """Without a workshop heading, Partial's filter degenerates to the

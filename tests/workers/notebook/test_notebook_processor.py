@@ -3372,3 +3372,45 @@ class TestTrainerCacheReuseKeepsNotes:
         assert "read this aloud" not in sources
         assert "# TODO" not in sources
         assert "x = 1" in sources
+
+
+class TestCachedPartialAnswerStub:
+    """Issue #737: in-range `answer` markdown renders as the localized
+    `*Answer:* ` stub on the fresh partial path but rendered as an empty
+    cell on the cached path — align the cached filter on the stub."""
+
+    @pytest.mark.asyncio
+    async def test_cached_partial_renders_the_answer_stub(self):
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Workshop", tags=["slide", "workshop"]),
+                make_cell("markdown", "The answer is 42", tags=["answer"]),
+            ]
+        )
+        recording = NotebookProcessor(RecordingOutput(format="html"))
+        payload = make_payload("", kind="speaker", format_="html")
+        cached_nb = await recording._process_notebook_node(notebook, payload)
+
+        partial = NotebookProcessor(PartialOutput(format="html"))
+        filtered = partial._filter_cached_notebook_for_partial(cached_nb)
+        answer_cells = [c for c in filtered["cells"] if "answer" in c["metadata"]["tags"]]
+        assert len(answer_cells) == 1
+        assert answer_cells[0]["source"] == "*Answer:* "
+        assert "42" not in answer_cells[0]["source"]
+
+    @pytest.mark.asyncio
+    async def test_cached_partial_answer_stub_is_localized(self):
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Workshop", tags=["slide", "workshop"]),
+                make_cell("markdown", "Die Antwort ist 42", tags=["answer"]),
+            ]
+        )
+        recording = NotebookProcessor(RecordingOutput(format="html", language="de"))
+        payload = make_payload("", kind="speaker", format_="html", language="de")
+        cached_nb = await recording._process_notebook_node(notebook, payload)
+
+        partial = NotebookProcessor(PartialOutput(format="html", language="de"))
+        filtered = partial._filter_cached_notebook_for_partial(cached_nb)
+        answer_cells = [c for c in filtered["cells"] if "answer" in c["metadata"]["tags"]]
+        assert answer_cells[0]["source"] == "*Antwort:* "
