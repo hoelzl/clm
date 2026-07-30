@@ -38,20 +38,57 @@ def worker_image_identity_for(
 ) -> str:
     """The environment identity string for one worker type.
 
-    - ``direct`` mode → ``"direct"``: the worker runs the host's own
-      environment (for notebooks its version/template content is already
-      covered by ``compute_template_fingerprint``; the diagram binaries'
-      versions are honest residue of the direct mode).
+    - ``direct`` mode → ``"direct"`` for notebooks (the host environment's
+      version/template content is already covered by
+      ``compute_template_fingerprint``); for the diagram types
+      ``"direct:<binary fingerprint>"`` (#747) — a PlantUML-JAR or Draw.io
+      upgrade must invalidate the diagram caches the same way a Docker
+      image switch does. An unlocatable binary degrades to plain
+      ``"direct"`` (the build then fails at worker startup anyway).
     - ``docker`` mode → ``"docker:<image>"`` with the same effective-image
       resolution the pool starter uses (per-type override, else the bundled
       default) — the key must describe the image that actually executes.
     """
     if execution_mode != "docker":
+        if worker_type in ("plantuml", "drawio"):
+            fingerprint = _direct_binary_fingerprint(worker_type)
+            if fingerprint:
+                return f"direct:{fingerprint}"
         return "direct"
     from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
 
     effective = image or DEFAULT_WORKER_IMAGES.get(worker_type, "")
     return f"docker:{effective}"
+
+
+def _direct_binary_fingerprint(worker_type: str) -> str:
+    """A cheap host-side fingerprint of the direct-mode diagram binary.
+
+    Path + size + mtime_ns, digested — no execution, two stat calls. The
+    locators mirror the workers' own resolution
+    (:mod:`clm.workers.diagram_tools`), so the fingerprint describes the
+    binary that will actually render. Residue: a binary replaced in place
+    with identical size and mtime keeps the key (the same trade every
+    size+mtime scheme makes); hashing multi-MB JARs per build is not worth
+    it. Defensive ``""`` on any error — identity degrades to ``"direct"``.
+    """
+    import hashlib
+    import os
+
+    try:
+        from clm.workers.diagram_tools import (
+            locate_drawio_executable,
+            locate_plantuml_jar,
+        )
+
+        located = locate_plantuml_jar() if worker_type == "plantuml" else locate_drawio_executable()
+        if not located:
+            return ""
+        stat = os.stat(located)
+        raw = f"{located}:{stat.st_size}:{stat.st_mtime_ns}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    except Exception:  # noqa: BLE001 - identity must never fail a build
+        return ""
 
 
 def set_effective_worker_identities(worker_config: WorkersManagementConfig) -> None:

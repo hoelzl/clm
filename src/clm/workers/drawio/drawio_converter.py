@@ -11,7 +11,10 @@ from clm.infrastructure.services.subprocess_tools import (
 
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
-DRAWIO_EXECUTABLE = os.environ.get("DRAWIO_EXECUTABLE", "drawio")
+# Resolution shared with the host-side cache-key identity (issue #747).
+from clm.workers.diagram_tools import locate_drawio_executable
+
+DRAWIO_EXECUTABLE = os.environ.get("DRAWIO_EXECUTABLE") or (locate_drawio_executable() or "drawio")
 
 # Retry configuration for DrawIO
 # DrawIO/Electron can crash transiently due to V8/GC race conditions,
