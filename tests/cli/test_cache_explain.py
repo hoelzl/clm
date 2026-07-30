@@ -237,3 +237,26 @@ class TestCacheExplainSeeded:
             assert "skips execution" in hit["verdict"]
         else:
             assert "output file is missing" in hit["verdict"]
+
+
+class TestExplainImageOverrides:
+    """Issue #746: explain must compute the same keys a build with the same
+    image flags would — it used to read the config singleton, which CLI
+    overrides never touch, and misattributed the resulting miss."""
+
+    def test_image_flags_reach_the_identity(self, tmp_path):
+        result = _explain(
+            tmp_path,
+            "--json",
+            "--workers",
+            "docker",
+            "--notebook-image",
+            "candidate:9",
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output[result.output.index("{") :])
+        assert data["components"]["worker_image_identity"] == "docker:candidate:9"
+
+    def test_no_flags_matches_the_config_fallback(self, tmp_path):
+        data = _explain_json(tmp_path)
+        assert data["components"]["worker_image_identity"].startswith(("direct", "docker:"))

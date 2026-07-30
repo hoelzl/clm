@@ -2993,11 +2993,14 @@ shown but marked excluded (its bytes are deliberately not part of the key).
 | `-L, --lang LANG` | Limit to output language(s) |
 | `--kind KIND` | Limit to output kind(s) |
 | `--format FORMAT` | Limit to output format(s) |
+| `--workers direct\|docker` | Match the build's worker mode for the image identity (CLM {version}, #746) |
+| `--notebook-image` / `--plantuml-image` / `--drawio-image` | Match the build's image overrides — the cache keys follow the effective image (#744), so explain must be given the same flags as the build it explains, or it misattributes the miss |
 | `--json` | Output as JSON |
 
 Run it with the same global `--cache-db-path` / `--jobs-db-path` as your
-builds, or the lookups miss spuriously. Entirely read-only: databases are
-opened in read-only mode and no output directories are created.
+builds — **and the same `--workers` / image flags** — or the lookups miss
+spuriously. Entirely read-only: databases are opened in read-only mode and
+no output directories are created.
 
 ```bash
 clm cache explain slides/.../slides_shared_ptr.cpp --spec cpp-einsteiger.xml

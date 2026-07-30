@@ -249,6 +249,33 @@ def _unwrap_operations(op) -> list:
 )
 @click.option("--kind", "kinds", multiple=True, help="Limit to output kind(s).")
 @click.option("--format", "formats", multiple=True, help="Limit to output format(s).")
+@click.option(
+    "--workers",
+    type=click.Choice(["direct", "docker"]),
+    default=None,
+    help="Match the build's --workers mode, so the explained keys use the "
+    "same worker-image identity (issue #746). Default: the configured mode.",
+)
+@click.option(
+    "--notebook-image",
+    type=str,
+    default=None,
+    help="Match the build's --notebook-image: the cache keys follow the "
+    "effective image (#744), so explain must be given the same override or "
+    "it misattributes the miss (issue #746).",
+)
+@click.option(
+    "--plantuml-image",
+    type=str,
+    default=None,
+    help="Match the build's --plantuml-image (see --notebook-image).",
+)
+@click.option(
+    "--drawio-image",
+    type=str,
+    default=None,
+    help="Match the build's --drawio-image (see --notebook-image).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.pass_context
 def explain_cmd(
@@ -260,6 +287,10 @@ def explain_cmd(
     languages: tuple[str, ...],
     kinds: tuple[str, ...],
     formats: tuple[str, ...],
+    workers: str | None,
+    notebook_image: str | None,
+    plantuml_image: str | None,
+    drawio_image: str | None,
     as_json: bool,
 ):
     """Explain the cache keys and cache state for one slide source file.
@@ -324,6 +355,26 @@ def explain_cmd(
             f"'{source_file}' is a {type(course_file).__name__}, not a notebook "
             f"slide file — only notebook execution is cached with explained keys."
         )
+
+    # Mirror the build's effective-identity recording (issues #744/#746):
+    # the cache keys follow the effective worker image, so explain must
+    # resolve identities the same way a build with these flags would —
+    # including the no-flag case (the recording then equals the config
+    # fallback, keeping no-flag explain aligned with a no-flag build).
+    from clm.infrastructure.workers.config_loader import load_worker_config
+    from clm.infrastructure.workers.image_identity import set_effective_worker_identities
+
+    identity_overrides: dict[str, object] = {}
+    if workers:
+        identity_overrides["workers"] = workers
+    for override_key, override_value in (
+        ("notebook_image", notebook_image),
+        ("plantuml_image", plantuml_image),
+        ("drawio_image", drawio_image),
+    ):
+        if override_value:
+            identity_overrides[override_key] = override_value
+    set_effective_worker_identities(load_worker_config(identity_overrides))
 
     async def _payloads():
         operations = []
