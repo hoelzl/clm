@@ -42,7 +42,7 @@ from clm.slides.slug import (
 )
 from clm.slides.split import _is_shared
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
-from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
+from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -418,13 +418,15 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
     pending_starts: dict[str | None, Cell] = {}
 
     # Flag orphan ``end-workshop`` cells (any cell type — issue #362 allows
-    # the tag on code cells too) that appear BEFORE any ``workshop`` heading
+    # the tag on code cells too) that appear BEFORE any workshop opener
     # in the file — those have no effect on the partition and almost always
-    # indicate a typo. Only markdown cells open a workshop, so only they set
-    # ``seen_workshop``. After at least one workshop has been opened,
-    # additional ``end-workshop`` markers are tolerated: bilingual slide
-    # pairs typically carry the tag on both the DE and EN heading cells, and
-    # the second one (after the first has already closed the workshop) is
+    # indicate a typo. ``seen_workshop`` uses the canonical opener predicate
+    # (issue #732): a workshop opened by the ``workshop-…`` slide_id form
+    # used to trip this warning although the scope machinery honors its
+    # closer. After at least one workshop has been opened, additional
+    # ``end-workshop`` markers are tolerated: bilingual slide pairs
+    # typically carry the tag on both the DE and EN heading cells, and the
+    # second one (after the first has already closed the workshop) is
     # harmless.
     seen_workshop = False
     for cell in cells:
@@ -432,7 +434,7 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
         if meta.is_j2:
             continue
         cell_tags = meta.tags
-        if meta.cell_type == "markdown" and "workshop" in cell_tags:
+        if is_workshop_opener(cell):
             seen_workshop = True
         elif "end-workshop" in cell_tags and not seen_workshop:
             findings.append(
@@ -442,12 +444,13 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                     file=file_path,
                     line=cell.line_number,
                     message=(
-                        "'end-workshop' tag with no preceding 'workshop' heading "
+                        "'end-workshop' tag with no preceding workshop opener "
                         "— the tag has no effect"
                     ),
                     suggestion=(
-                        "Remove 'end-workshop' or add a 'workshop'-tagged "
-                        "markdown cell earlier in the file"
+                        "Remove 'end-workshop', or open a workshop earlier in "
+                        "the file (a 'workshop'-tagged markdown cell, or a "
+                        "slide-start cell whose slide_id begins 'workshop-')"
                     ),
                 )
             )

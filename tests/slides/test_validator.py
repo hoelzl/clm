@@ -407,6 +407,29 @@ class TestCheckTags:
         ]
         assert len(warnings) == 1
 
+    def test_slide_id_opened_workshop_closer_is_not_an_orphan(self, tmp_path):
+        """Issue #732: a workshop opened by the ``workshop-…`` slide_id form
+        used to trip the orphan-``end-workshop`` warning although the scope
+        machinery honors the closer — the sub-check was tag-only."""
+        p = _write_slide(
+            tmp_path,
+            "slides_slideid_opener.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="workshop-prompting"
+            # ## Workshop: Prompting
+
+            # %% tags=["keep"]
+            x = 1
+
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"] slide_id="next-section"
+            # ## Weiter
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert [
+            w for w in result.findings if w.severity == "warning" and "end-workshop" in w.message
+        ] == [], [f.message for f in result.findings]
+
     def test_end_workshop_tag_recognized(self, tmp_path):
         """``end-workshop`` is a valid markdown tag — no unrecognized-tag error."""
         p = _write_slide(
