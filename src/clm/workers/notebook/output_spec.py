@@ -78,9 +78,12 @@ def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
     markdown-only rules are documented there and in
     ``clm info slide-format``. Shared between the per-cell filter path
     (``PartialOutput.annotate_cells``) and the Partial HTML cache-reuse
-    post-processor in the notebook processor; security-relevant coverage:
-    ``TestPartialOutput.test_slide_id_opener_blanks_the_range`` in
-    ``tests/workers/notebook/test_output_spec.py``.
+    post-processor in the notebook processor; solution-leak coverage:
+    ``TestSlideIdWorkshopOpener.test_slide_id_opener_blanks_the_range``
+    (``tests/workers/notebook/test_output_spec.py``, the annotate path) and
+    ``TestCachedPartialSlideIdOpener`` (``test_notebook_processor.py``, the
+    cache-hit path — which additionally requires the cached notebook to
+    retain ``slide_id``).
     """
     from clm.slides.workshop_scope import find_workshop_ranges as _canonical
 

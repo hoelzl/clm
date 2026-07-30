@@ -443,6 +443,27 @@ def _strip_lines_to_next_cell(cells: Iterable[Cell]) -> None:
             metadata.pop("lines_to_next_cell", None)
 
 
+def _strip_internal_cell_metadata(cells: Iterable[Cell]) -> None:
+    """Strip ``slide_id``/``for_slide`` and the synthetic post-workshop tag.
+
+    Internal CLM metadata that must never appear in an output artifact. Runs
+    at the export boundaries: inside ``_process_notebook_node`` for
+    non-caching specs, right before the HTML export for the caching spec
+    (whose *cached* notebook deliberately retains ``slide_id`` so the
+    cached-partial path can recompute workshop ranges — issue #732), and in
+    the cached-reuse filters after their range computation.
+    """
+    for cell in cells:
+        metadata = cell.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        metadata.pop("slide_id", None)
+        metadata.pop("for_slide", None)
+        tags = metadata.get("tags")
+        if tags and POST_WORKSHOP_TAG in tags:
+            metadata["tags"] = [t for t in tags if t != POST_WORKSHOP_TAG]
+
+
 # Regex pattern to match img and video tags with src="img/..." paths
 # Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
 MEDIA_SRC_PATTERN = re.compile(r'(<(?:img|video)\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
@@ -985,6 +1006,9 @@ class NotebookProcessor:
             for cell in filtered_nb.get("cells", [])
             if not {"notes", "voiceover"}.intersection(get_tags(cell))
         ]
+        # The cached notebook retains slide_id/for_slide (#732) — never let
+        # them reach the exported HTML.
+        _strip_internal_cell_metadata(filtered_nb.cells)
         return filtered_nb
 
     def _filter_cached_notebook_for_partial(self, nb: NotebookNode) -> NotebookNode:
@@ -1004,6 +1028,9 @@ class NotebookProcessor:
         """
         filtered_nb = copy.deepcopy(nb)
         cells = filtered_nb.get("cells", [])
+        # The cached notebook retains slide_id metadata precisely so this
+        # range computation can see the slide_id opener form (#732) — the
+        # strip below runs only after the ranges are fixed.
         ranges = find_workshop_ranges(cells)
 
         pre_drop = {"notes", "voiceover"}
@@ -1034,6 +1061,9 @@ class NotebookProcessor:
             new_cells.append(cell)
 
         filtered_nb.cells = new_cells
+        # Ranges are computed — the internal metadata must not reach the
+        # exported HTML (#732).
+        _strip_internal_cell_metadata(new_cells)
         return filtered_nb
 
     async def load_and_expand_jinja_template(
@@ -1204,16 +1234,16 @@ class NotebookProcessor:
             for index, cell in enumerate(source_cells)
             if self.output_spec.is_cell_included(cell)
         ]
-        # Strip slide_id and for_slide from cell metadata — these are
-        # internal CLM metadata and must never appear in output.
-        # Also strip the synthetic _post_workshop tag attached by
-        # PartialOutput.annotate_cells.
-        for cell in new_cells:
-            cell["metadata"].pop("slide_id", None)
-            cell["metadata"].pop("for_slide", None)
-            tags = cell["metadata"].get("tags")
-            if tags and POST_WORKSHOP_TAG in tags:
-                cell["metadata"]["tags"] = [t for t in tags if t != POST_WORKSHOP_TAG]
+        # Strip slide_id/for_slide (internal CLM metadata that must never
+        # appear in output) and the synthetic _post_workshop tag attached by
+        # PartialOutput.annotate_cells. A CACHING spec (Recording HTML) keeps
+        # the internal metadata through the cache write — the cached-partial
+        # path recomputes workshop ranges from the cached notebook and must
+        # still see the slide_id opener form (#732); its own HTML export
+        # strips at the export boundary instead, as do the cached-reuse
+        # filters.
+        if not self.output_spec.should_cache_execution:
+            _strip_internal_cell_metadata(new_cells)
         # Drop jupytext's ``lines_to_next_cell`` layout artifact so that split
         # and bilingual builds produce byte-equivalent output (issue #133).
         _strip_lines_to_next_cell(new_cells)
@@ -1958,6 +1988,10 @@ class NotebookProcessor:
                 # The "executed" notebook is just the processed notebook in this case
                 if self.output_spec.should_cache_execution and self.cache is not None:
                     self._cache_executed_notebook(processed_nb, payload)
+        # The caching spec kept slide_id/for_slide through the cache write
+        # (#732) — strip them at the export boundary. Idempotent for every
+        # other spec (already stripped during processing).
+        _strip_internal_cell_metadata(processed_nb.get("cells", []))
         html_exporter = HTMLExporter(template_name="classic")
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body

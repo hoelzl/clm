@@ -5,12 +5,17 @@ from typing import Any, Literal
 from clm.infrastructure.messaging.base_classes import Payload, ProcessingError, Result
 
 # Version tag folded into every notebook cache hash. Bump whenever the
-# *composition* of ``content_hash()`` / ``execution_cache_hash()`` changes so
-# that stale cache entries produced under the old key schema can never be
-# replayed as hits under the new one. Bumping invalidates all existing
-# notebook caches (one full re-execution on the next build) — deliberate and
-# visible, instead of an accidental partial overlap between key schemas.
-CACHE_HASH_SCHEMA_VERSION = 2
+# *composition* of ``content_hash()`` / ``execution_cache_hash()`` changes —
+# or the *shape of the cached artifact* itself changes — so that stale cache
+# entries produced under the old schema can never be replayed as hits under
+# the new one. Bumping invalidates all existing notebook caches (one full
+# re-execution on the next build) — deliberate and visible, instead of an
+# accidental partial overlap between key schemas.
+# v3 (#732): cached executed notebooks now retain ``slide_id``/``for_slide``
+# cell metadata (the cached-partial path recomputes workshop ranges and must
+# see the slide_id opener form); pre-v3 artifacts lack it and would silently
+# keep the tag-only range detection.
+CACHE_HASH_SCHEMA_VERSION = 3
 
 
 def notebook_metadata(kind, prog_lang, language, output_format) -> str:
