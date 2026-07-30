@@ -3106,7 +3106,7 @@ Key options for `git commit`, `git push`, and `git sync`:
 | `--channel NAME` | all | Act on the named release-channel (cohort) repo instead of output targets (issues #208, #291). With several release streams, address a channel as `STREAM/CHANNEL` (e.g. `materials/2026-04`); a bare name works when unique. Mutually exclusive with `--target`. |
 | `--all-channels` | all | Act on every release-channel (cohort) repo of every stream instead of output targets. Mutually exclusive with `--target`. |
 | `--all` | all | Act on every distributed output target **and** every release-channel repo in one pass (CLM {version}+) — the single push-everything workflow. Each destination is visited once (a path shared by several streams collapses to one repo). On a course with no `<release-channels>`, it degrades to the plain output-target set. Mutually exclusive with `--target`/`--channel`/`--all-channels`. |
-| `--dry-run` | all | Show what would be done |
+| `--dry-run` | all | Show what would be done. Read-only git queries execute for real (CLM {version}, #686), so the preview resolves the actual branch — `push --dry-run` names the branch it would push instead of `origin/''`. Mutating commands are stubbed with a `[dry-run] Would run:` line; `fetch` counts as mutating, so ahead/behind previews may compare against slightly stale remote refs. |
 
 **Non-distributed targets (issue #292).** Without `--target`, `clm git` skips
 any output target with `distribute="false"` — and, by default, any target named

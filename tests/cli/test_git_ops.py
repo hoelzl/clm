@@ -1073,22 +1073,56 @@ class TestFindOutputRepos:
 class TestDryRunMode:
     """Tests for dry-run mode functionality."""
 
-    def test_run_git_in_dry_run_mode_does_not_execute(self, tmp_path: Path):
-        """In dry-run mode, run_git should not execute the command."""
+    def test_run_git_stubs_mutating_commands_in_dry_run(self, tmp_path: Path):
+        """In dry-run mode, run_git must not execute MUTATING commands."""
         _dry_run_mode.set(True)
         try:
-            # This would fail if actually executed (no git repo)
-            result = run_git(tmp_path, "status")
+            # This would fail if actually executed (no git repo) — and must
+            # never run for real regardless.
+            result = run_git(tmp_path, "push", "-u", "origin", "main")
 
             # Should return a mock result
             assert result.returncode == 0
             assert result.stdout == ""
             assert result.stderr == ""
+            assert not (tmp_path / ".git").exists()
+        finally:
+            _dry_run_mode.set(False)
+
+    def test_run_git_executes_read_only_commands_in_dry_run(self, tmp_path: Path):
+        """Issue #686: read-only queries execute under dry-run so previews
+        resolve the real branch instead of an empty mock."""
+        _dry_run_mode.set(False)
+        assert run_git(tmp_path, "init").returncode == 0
+        run_git(tmp_path, "config", "user.email", "t@example.com")
+        run_git(tmp_path, "config", "user.name", "T")
+        run_git(tmp_path, "commit", "--allow-empty", "-m", "init")
+        run_git(tmp_path, "checkout", "-b", "next")
+        _dry_run_mode.set(True)
+        try:
+            result = run_git(tmp_path, "rev-parse", "--abbrev-ref", "HEAD")
+            assert result.stdout.strip() == "next"
+        finally:
+            _dry_run_mode.set(False)
+
+    def test_get_current_branch_resolves_in_dry_run(self, tmp_path: Path):
+        """The #686 headline symptom: get_current_branch returned '' under
+        dry-run, so `push --dry-run` previewed `push -u origin ''`."""
+        _dry_run_mode.set(False)
+        assert run_git(tmp_path, "init").returncode == 0
+        run_git(tmp_path, "config", "user.email", "t@example.com")
+        run_git(tmp_path, "config", "user.name", "T")
+        run_git(tmp_path, "commit", "--allow-empty", "-m", "init")
+        run_git(tmp_path, "checkout", "-b", "next")
+        _dry_run_mode.set(True)
+        try:
+            assert get_current_branch(tmp_path) == "next"
         finally:
             _dry_run_mode.set(False)
 
     def test_run_git_global_in_dry_run_mode_does_not_execute(self):
-        """In dry-run mode, run_git_global should not execute the command."""
+        """In dry-run mode, run_git_global still stubs non-allowlisted
+        invocations (--version is not a read-only subcommand)."""
         _dry_run_mode.set(True)
         try:
             # This would actually work, but we want to test it doesn't execute
@@ -1123,7 +1157,7 @@ class TestDryRunMode:
 
         _dry_run_mode.set(True)
         try:
-            run_git(path_with_spaces, "status")
+            run_git(path_with_spaces, "push", "-u", "origin", "main")
             captured = capsys.readouterr()
 
             # The path should be quoted in the output

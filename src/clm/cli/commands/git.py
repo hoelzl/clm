@@ -159,6 +159,40 @@ def _format_command(cmd: list[str]) -> str:
     return shlex.join(cmd)
 
 
+#: Git subcommands that only READ state (repository or remote). In dry-run
+#: mode these execute normally — silently, no preview line — so every
+#: branch-dependent preview stays accurate (issue #686: stubbing reads made
+#: `push --dry-run` preview `push -u origin ''` and "Pushed to origin/").
+#: Everything else is stubbed with a "[dry-run] Would run" line. ``fetch``
+#: is deliberately NOT read-only: it rewrites remote-tracking refs, so
+#: dry-run previews may compare against slightly stale remote state.
+_READ_ONLY_GIT_SUBCOMMANDS = frozenset(
+    {
+        "rev-parse",
+        "rev-list",
+        "status",
+        "diff",
+        "log",
+        "show",
+        "ls-files",
+        "ls-remote",
+        "show-ref",
+        "symbolic-ref",
+        "describe",
+    }
+)
+
+
+def _is_read_only_git(args: tuple[str, ...]) -> bool:
+    """Whether a git invocation only reads state (dry-run may execute it)."""
+    if not args:
+        return False
+    if args[0] in _READ_ONLY_GIT_SUBCOMMANDS:
+        return True
+    # ``remote`` mutates (add/remove/set-url) except its query forms.
+    return args[0] == "remote" and len(args) >= 2 and args[1] in ("get-url", "show", "-v")
+
+
 def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run a git command in the specified repository.
 
@@ -168,7 +202,9 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
     Returns:
         CompletedProcess with stdout/stderr captured.
-        In dry-run mode, returns a mock result with returncode=0.
+        In dry-run mode, mutating commands return a mock result with
+        returncode=0; read-only commands execute normally (issue #686), so
+        previews resolve the real branch/status.
     """
     cmd = [
         "git",
@@ -180,7 +216,7 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     ]
     logger.debug(f"Running: {_format_command(cmd)}")
 
-    if _dry_run_mode.get():
+    if _dry_run_mode.get() and not _is_read_only_git(args):
         click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
         return subprocess.CompletedProcess(
             args=cmd,
@@ -210,7 +246,7 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
     cmd = ["git", *_transport_safety_config_args(), *_token_auth_config_args(), *args]
     logger.debug(f"Running: {_format_command(cmd)}")
 
-    if _dry_run_mode.get():
+    if _dry_run_mode.get() and not _is_read_only_git(args):
         click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
         return subprocess.CompletedProcess(
             args=cmd,
@@ -265,9 +301,10 @@ def is_behind_remote(repo_path: Path, branch: str = "master") -> tuple[bool, int
     if result.returncode != 0:
         return False, 0
 
-    # Guard against empty output: git can print nothing here (e.g. the mock
-    # result returned in dry-run mode, or an unusual git state), and int("")
-    # would raise ValueError. Mirror get_remote_status()'s defensive parse.
+    # Guard against empty output: git can print nothing here in unusual git
+    # states, and int("") would raise ValueError. Mirror
+    # get_remote_status()'s defensive parse. (The dry-run mock no longer
+    # reaches this path — read-only commands execute for real since #686.)
     out = result.stdout.strip()
     if not out:
         return False, 0
