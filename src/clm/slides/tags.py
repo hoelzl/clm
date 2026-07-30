@@ -15,7 +15,8 @@ subslide     Starts a subslide within a slide
 keep         Code cell contents retained in all output variants
 start        Starter code for live coding (kept in code-along, deleted in others)
 completed    Full solution following a ``start`` cell (deleted in code-along)
-alt          Discussion/alternative content for completed variant only
+alt          Alternative solution, no ``start`` partner (deleted in code-along,
+             shown in completed/trainer/speaker — same visibility as ``completed``)
 answer       Solution text (cleared in code-along, shown in completed/speaker)
 notes        Brief speaker hints (speaker output only)
 voiceover    Text to read aloud (speaker output only)
