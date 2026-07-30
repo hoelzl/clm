@@ -57,7 +57,15 @@ replaced by `header_de()` (in `.de.*`) and `header_en()` (in `.en.*`).
 |---|---|
 | `keep` | Visible in all output kinds |
 | `start` | Starter code shown in the code-along output; paired with `completed` |
-| `completed` | Full solution shown in the completed/speaker output |
+| `completed` | Full solution shown in the completed/speaker output; **always follows a `start` cell** |
+| `alt` | Alternative solution — shown in the completed/speaker output and omitted from the code-along entirely; **never follows a `start` cell** (a `start` → `alt` sequence is the pre-`completed` legacy form: `clm validate --checks tags` errors on it, and `clm slides normalize --operations tag_migration` migrates it to `start` → `completed`) |
+
+`alt` and `completed` have **identical output visibility** (suppressed in the
+code-along, shown in the completed/trainer/speaker variants); the distinction
+is purely whether a `start` partner exists. `completed` is the solution to
+starter code the code-along shows; `alt` is an additional solution the
+code-along never shows at all. Legacy corpora still contain `start`/`alt`
+pairs — do not infer that pairing from them; it predates `completed`.
 
 The `start` / `completed` pair represents the same logical code block in two
 variants. Canonical DE/EN interleaving is:
@@ -71,12 +79,54 @@ is also valid; `clm slides normalize --operations interleaving` converts to cano
 
 | Tag | Meaning |
 |---|---|
-| `workshop` | Marks the heading cell that opens a workshop section (markdown only) |
-| `end-workshop` | Marks the first cell **after** the workshop scope — valid on any cell type (since {version}). The tagged cell is *outside* the workshop: tagging the workshop's final code cell excludes that cell from the range (it renders completed, not blanked; identical output for `keep`-tagged cells). |
+| `workshop` | Opens a workshop **scope** — a *range of cells*, not a per-cell property (markdown only; see "Workshop scope" below) |
+| `end-workshop` | Closes the workshop scope: marks the first cell **after** it — valid on any cell type (since {version}). The tagged cell is *outside* the workshop: tagging the workshop's final code cell excludes that cell from the range (it renders completed, not blanked; identical output for `keep`-tagged cells). See "Workshop scope" below for the implicit closers. |
 | `answer` | Solution text; cleared in code-along output |
 | `private` | Visible only in trainer/speaker output |
 | `del` | Removed from all outputs |
 | `nodataurl` | Prevents image inlining as data-URL |
+
+### Workshop scope
+
+A workshop is a **range of cells**. Membership is *positional* — a cell is
+inside the workshop because it sits inside the range, never because it
+carries the `workshop` tag itself. Computing "which cells are in the
+workshop" by looking for the tag per cell gives wrong answers; use the
+range rules (they are what the `partial` output kind and
+`clm validate --checks tags` use):
+
+A workshop **opens** at either
+
+- a markdown cell tagged `workshop`, or
+- a `slide`/`subslide` **markdown** cell whose `slide_id` starts with
+  `workshop-` — the deck-level convention when the announcement slide is a
+  regular slide. Voiceover/notes cells sharing that slide's id do not
+  open or fragment a scope, and neither opener form counts on a code cell.
+
+It **closes** (exclusively — the closing cell is *outside* the workshop) at
+the first of:
+
+- the next cell of **any** type tagged `end-workshop`,
+- the next workshop opener (a new workshop begins immediately), or
+- **end of notebook**. A workshop without `end-workshop` runs to the end of
+  the deck — this implicit form is the corpus norm; `end-workshop` is only
+  needed when non-workshop content follows the exercise.
+
+Worked example — which cells fall inside:
+
+```
+# %% [markdown] tags=["slide"] slide_id="workshop-basic-prompting"  ← OPENS (slide_id form)
+# %% [markdown] slide_id="workshop-basic-prompting" …task text…       inside
+# %% tags=["start"]                                                   inside
+# %% tags=["completed"]                                               inside
+# %% [markdown] tags=["slide", "end-workshop"] …next section…       ← OUTSIDE, closes the scope
+```
+
+Without the last cell, the scope would run to the end of the deck. Inside
+the range, the `partial` (code-along) output drops `alt`/`completed`/`del`
+cells, blanks the source of code cells not tagged `keep`/`start`, blanks
+`answer` markdown, and clears the outputs of every remaining code cell —
+workshop code is never shown as executed.
 
 ## `slide_id` convention
 
