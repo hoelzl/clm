@@ -48,12 +48,14 @@ class _CellLike(Protocol):
     def slide_id(self) -> str | None: ...
 
 
-def _is_workshop_opener(cell: _CellLike) -> bool:
+def is_workshop_opener(cell: _CellLike) -> bool:
     """Detect either the ``workshop`` tag or a ``workshop-…`` slide_id opener.
 
     The slide_id form only counts on slide-start cells (``slide`` /
     ``subslide``) so that voiceover or notes cells inheriting the same
     slide_id from the announcement slide do not re-trigger a new range.
+    Public since #732: the validator's orphan-``end-workshop`` check and
+    the notebook build must recognize the same openers this module does.
     """
     if cell.cell_type != "markdown":
         return False
@@ -76,7 +78,7 @@ def find_workshop_ranges(cells: Sequence[_CellLike]) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     open_start: int | None = None
     for i, cell in enumerate(cells):
-        if _is_workshop_opener(cell):
+        if is_workshop_opener(cell):
             if open_start is not None:
                 ranges.append((open_start, i))
             open_start = i

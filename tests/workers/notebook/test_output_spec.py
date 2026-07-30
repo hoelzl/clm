@@ -24,6 +24,7 @@ from clm.workers.notebook.output_spec import (
     TrainerOutput,
     create_output_spec,
     create_output_specs,
+    find_workshop_ranges,
 )
 
 
@@ -964,3 +965,59 @@ class TestEdgeCases:
             PartialOutput().get_target_subdir_fragment(),
         }
         assert len(fragments) == 5, "All canonical subdir fragments should be unique"
+
+
+class TestSlideIdWorkshopOpener:
+    """Issue #732: the build must recognize BOTH workshop opener forms.
+
+    The build side used to carry a tag-only duplicate of the range
+    detector — a workshop opened by the sanctioned ``workshop-…`` slide_id
+    form passed validation but the partial build detected no range,
+    deleted the ``start`` cell, and emitted the full ``completed``
+    solution. One canonical detector now backs the validator, exports,
+    and the build."""
+
+    def _slide_id_cell(self, make_cell, tags, source, slide_id):
+        cell = make_cell("markdown", tags, source)
+        cell["metadata"]["slide_id"] = slide_id
+        return cell
+
+    def test_slide_id_opener_is_detected(self, make_cell):
+        cells = [
+            make_cell("markdown", ["slide"], "# Intro"),
+            self._slide_id_cell(
+                make_cell, ["slide"], "# Workshop: Prompting", "workshop-basic-prompting"
+            ),
+            make_cell("code", ["start"], "# TODO"),
+            make_cell("code", ["completed"], "answer = 42"),
+        ]
+        assert find_workshop_ranges(cells) == [(1, 4)]
+
+    def test_slide_id_opener_blanks_the_range(self, make_cell):
+        """The #732 solution leak: without the fix, no range is detected —
+        the start cell is deleted (Completed rules) and the completed
+        solution ships in full."""
+        cells = [
+            self._slide_id_cell(
+                make_cell, ["slide"], "# Workshop: Prompting", "workshop-basic-prompting"
+            ),
+            make_cell("code", ["start"], "# TODO"),
+            make_cell("code", ["completed"], "answer = 42"),
+        ]
+        spec = PartialOutput()
+        spec.annotate_cells(cells)
+        assert all(POST_WORKSHOP_TAG in c["metadata"]["tags"] for c in cells)
+        # CodeAlong rules inside the range: starter kept with content,
+        # solution deleted.
+        assert spec.is_cell_included(cells[1]) is True
+        assert spec.is_cell_contents_included(cells[1]) is True
+        assert spec.is_cell_included(cells[2]) is False
+
+    def test_slide_id_on_non_slide_cell_does_not_open(self, make_cell):
+        """Voiceover/notes cells sharing the announcement slide's id must
+        not open or fragment a range (the canonical rule)."""
+        cells = [
+            self._slide_id_cell(make_cell, ["notes"], "- speaker hint", "workshop-basic-prompting"),
+            make_cell("code", [], "x = 1"),
+        ]
+        assert find_workshop_ranges(cells) == []

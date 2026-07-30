@@ -36,32 +36,58 @@ from .utils.prog_lang_utils import jupytext_format_for, suffix_for
 POST_WORKSHOP_TAG = "_post_workshop"
 
 
+class _NotebookCellView:
+    """Adapt an nbformat cell dict to the workshop-scope cell protocol.
+
+    ``slide_id`` reads the cell metadata CLM's slide pipeline carries
+    through the build (it is stripped from the *output* only at the very
+    end of processing, so it is present when ranges are computed).
+    """
+
+    __slots__ = ("_cell",)
+
+    def __init__(self, cell: Cell) -> None:
+        self._cell = cell
+
+    @property
+    def cell_type(self) -> str:
+        return str(self._cell.get("cell_type", ""))
+
+    @property
+    def tags(self) -> list[str]:
+        tags = self._cell.get("metadata", {}).get("tags", [])
+        return list(tags) if tags else []
+
+    @property
+    def slide_id(self) -> str | None:
+        slide_id = self._cell.get("metadata", {}).get("slide_id")
+        return str(slide_id) if slide_id is not None else None
+
+
 def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
     """Return ``[(start_inclusive, end_exclusive), ...]`` for each workshop.
 
-    A workshop starts at a markdown cell tagged ``workshop`` and ends —
-    exclusively — at the next cell of *any* type tagged ``end-workshop``
-    (issue #362: many workshops end with a code cell), the next ``workshop``
-    markdown cell, or end-of-notebook. Only markdown cells open a range;
-    the cell carrying ``end-workshop`` is itself outside the workshop.
-    Shared between the per-cell filter path (``PartialOutput.annotate_cells``)
-    and the Partial HTML cache-reuse post-processor in the notebook processor.
+    A thin adapter over the canonical detector in
+    :mod:`clm.slides.workshop_scope` — one implementation for the
+    validator, ``clm export``, AND the build (issue #732: this used to be
+    a tag-only duplicate, so a workshop opened by the sanctioned
+    ``workshop-…`` slide_id form passed validation but the partial build
+    detected no range, deleted the starter, and emitted the full
+    solution). Both opener forms, the three closers (``end-workshop`` cell
+    outside the range, next opener, end-of-notebook), and the
+    markdown-only rules are documented there and in
+    ``clm info slide-format``. Shared between the per-cell filter path
+    (``PartialOutput.annotate_cells``) and the Partial HTML cache-reuse
+    post-processor in the notebook processor; solution-leak coverage:
+    ``TestSlideIdWorkshopOpener.test_slide_id_opener_blanks_the_range``
+    (``tests/workers/notebook/test_output_spec.py``, the annotate path) and
+    ``TestCachedPartialSlideIdOpener`` (``test_notebook_processor.py``, the
+    cache-hit path — which additionally requires the cached notebook to
+    retain ``slide_id``).
     """
-    cells_list = list(cells)
-    ranges: list[tuple[int, int]] = []
-    open_start: int | None = None
-    for i, cell in enumerate(cells_list):
-        tags = cell.get("metadata", {}).get("tags", [])
-        if cell.get("cell_type") == "markdown" and "workshop" in tags:
-            if open_start is not None:
-                ranges.append((open_start, i))
-            open_start = i
-        elif "end-workshop" in tags and open_start is not None:
-            ranges.append((open_start, i))
-            open_start = None
-    if open_start is not None:
-        ranges.append((open_start, len(cells_list)))
-    return ranges
+    from clm.slides.workshop_scope import find_workshop_ranges as _canonical
+
+    return _canonical([_NotebookCellView(cell) for cell in cells])
 
 
 def _is_in_workshop(idx: int, ranges: Iterable[tuple[int, int]]) -> bool:

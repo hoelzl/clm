@@ -36,6 +36,7 @@ from clm.workers.notebook.output_spec import (
     CodeAlongOutput,
     CompletedOutput,
     PartialOutput,
+    RecordingOutput,
     SpeakerOutput,
     create_output_spec,
 )
@@ -3152,3 +3153,86 @@ class TestEffectiveCellTimeout:
             patch.object(notebook_processor_module, "_HTTP_REPLAY_DEFAULT_CELL_TIMEOUT", None),
         ):
             assert _effective_cell_timeout(self._payload("once")) is None
+
+
+class TestCachedPartialSlideIdOpener:
+    """Issue #732, cached-HTML path: the cached executed notebook must retain
+    ``slide_id`` so ``_filter_cached_notebook_for_partial`` can recompute
+    workshop ranges with BOTH opener forms. Before the fix the caching spec
+    stripped slide_id before the cache write, so the cache-hit partial —
+    the path partial HTML normally takes — was blind to the slide_id opener
+    and shipped the full solution unblanked."""
+
+    def _slide_id_cell(self, source: str, tags: list[str], slide_id: str) -> NotebookNode:
+        cell = make_cell("markdown", source, tags=tags)
+        cell["metadata"]["slide_id"] = slide_id
+        return cell
+
+    @pytest.mark.asyncio
+    async def test_caching_spec_retains_slide_id_through_processing(self):
+        notebook = make_notebook_node(
+            [
+                self._slide_id_cell("# Workshop: Prompting", ["slide"], "workshop-prompting"),
+                make_cell("code", "# TODO", tags=["start"]),
+                make_cell("code", "answer = 42", tags=["completed"]),
+            ]
+        )
+        spec = RecordingOutput(format="html")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="speaker", format_="html")
+        result = await processor._process_notebook_node(notebook, payload)
+        assert result["cells"][0]["metadata"].get("slide_id") == "workshop-prompting"
+
+    @pytest.mark.asyncio
+    async def test_non_caching_spec_still_strips_slide_id(self):
+        notebook = make_notebook_node([self._slide_id_cell("# Title", ["slide"], "some-slide")])
+        spec = CompletedOutput(format="notebook")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", kind="completed", format_="notebook")
+        result = await processor._process_notebook_node(notebook, payload)
+        assert "slide_id" not in result["cells"][0]["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_cached_partial_blanks_slide_id_opened_workshop(self):
+        """The end-to-end cache-hit shape: Recording processes (retaining
+        slide_id), the partial filter recomputes ranges from the cached
+        notebook and must blank the workshop — no solution leak."""
+        notebook = make_notebook_node(
+            [
+                self._slide_id_cell("# Workshop: Prompting", ["slide"], "workshop-prompting"),
+                make_cell("code", "# TODO", tags=["start"]),
+                make_cell("code", "prompt = 'THE FULL SOLUTION'", tags=["completed"]),
+                make_cell("code", "check = 1"),
+            ]
+        )
+        recording = NotebookProcessor(RecordingOutput(format="html"))
+        payload = make_payload("", kind="speaker", format_="html")
+        cached_nb = await recording._process_notebook_node(notebook, payload)
+
+        partial = NotebookProcessor(PartialOutput(format="html"))
+        filtered = partial._filter_cached_notebook_for_partial(cached_nb)
+        sources = [c["source"] for c in filtered["cells"]]
+        assert "prompt = 'THE FULL SOLUTION'" not in sources  # completed dropped
+        assert "" in sources  # untagged in-range code blanked — range detected
+        # (The starter is absent from EVERY cached-partial output — Recording
+        # deletes `start` cells before caching; pre-existing, issue #734.)
+        # The internal metadata never reaches the exported notebook.
+        assert all("slide_id" not in c["metadata"] for c in filtered["cells"])
+
+    @pytest.mark.asyncio
+    async def test_cached_completed_filter_strips_slide_id(self):
+        notebook = make_notebook_node(
+            [
+                self._slide_id_cell("# Title", ["slide"], "some-slide"),
+                make_cell("markdown", "- hint", tags=["notes"]),
+            ]
+        )
+        recording = NotebookProcessor(RecordingOutput(format="html"))
+        payload = make_payload("", kind="speaker", format_="html")
+        cached_nb = await recording._process_notebook_node(notebook, payload)
+        assert cached_nb["cells"][0]["metadata"].get("slide_id") == "some-slide"
+
+        completed = NotebookProcessor(CompletedOutput(format="html"))
+        filtered = completed._filter_notes_cells_from_cached(cached_nb)
+        assert all("slide_id" not in c["metadata"] for c in filtered["cells"])
+        assert len(filtered["cells"]) == 1  # notes dropped

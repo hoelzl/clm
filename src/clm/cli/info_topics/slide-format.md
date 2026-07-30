@@ -101,11 +101,10 @@ A workshop **opens** at either
   `workshop-` — the deck-level convention when the announcement slide is a
   regular slide. Voiceover/notes cells sharing that slide's id do not
   open or fragment a scope, and neither opener form counts on a code cell.
-  **Caveat (issue #732)**: the notebook build's `partial` output currently
-  recognizes only the **tag** form — a deck relying on the slide_id form
-  alone passes validation but its partial build detects no range (starter
-  deleted, solution emitted in full). Until #732 lands, also tag the
-  opening cell with `workshop`.
+  Both opener forms are honored everywhere — the validator, `clm export`,
+  and the notebook build's `partial` output share one detector (since
+  {version}, issue #732; older versions' partial builds recognized only
+  the tag form).
 
 It **closes** (exclusively — the closing cell is *outside* the workshop) at
 the first of:
