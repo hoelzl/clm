@@ -242,7 +242,12 @@ class RenderCellRequest(BaseModel):
     """Tier-2 (kernel-free) render request for one ``is_j2`` cell (P4)."""
 
     deck_id: str = Field(description="Slides-dir-relative deck path (for prog-lang + includes).")
-    body: str = Field(description="Raw cell body (comment-prefixed, with the j2 lines).")
+    body: str = Field(
+        max_length=2_000_000,
+        description="Raw cell body (comment-prefixed, with the j2 lines). "
+        "Capped (#698): a body above the render output limit cannot produce "
+        "a legal preview anyway, and the subprocess protocol copies it.",
+    )
     is_j2: bool = Field(default=False, description="Only is_j2 cells are server-rendered.")
     lang: str | None = Field(default=None, description='"de"/"en" Jinja global for the macros.')
 

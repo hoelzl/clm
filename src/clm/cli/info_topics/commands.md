@@ -4466,7 +4466,11 @@ authenticate with `Authorization: Bearer` only; `?token=` is **not** accepted
 (it was, until CLM {version}). The server-side `is_j2` cell preview renders in
 a Jinja sandbox: it expands the bundled header macros without a kernel, and a
 template cannot walk Python attributes (`__class__` and friends) out of the
-template namespace, nor repeat a sequence into a memory bomb. The sandbox does
+template namespace, nor repeat a sequence into a memory bomb. Since CLM
+{version} the expansion also runs in a **killable subprocess under a
+wall-clock budget** (#698), so a CPU-burning template (nested `range()`
+loops) times out into the tier-1 fallback instead of stalling the server.
+The sandbox does
 not restrict the template *loader*, so `{% include %}` can still read files.
 Traversal out of the deck's directory is refused, but the reach is that
 directory **and its whole subtree, dotfiles included** — so anything parked

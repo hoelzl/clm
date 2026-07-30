@@ -441,10 +441,14 @@ class StudioService:
 
     # ------------------------------------------------------- tier-2 render (P4)
 
-    def render_cell(
+    def render_cell_in_process(
         self, deck_id: str, body: str, *, is_j2: bool, lang: str | None = None
     ) -> tuple[bool, str | None, str | None]:
-        """Tier-2 (kernel-free) render of one cell. Returns ``(rendered, error, html)``.
+        """Tier-2 render, IN-PROCESS — tests and non-request callers only.
+
+        The request path is :meth:`render_cell_async` (#698): this variant
+        has no CPU bound, so a route must never reach for it. Returns
+        ``(rendered, error, html)``.
 
         Only ``is_j2`` cells are expanded server-side (through the build's bundled
         macros); a plain cell returns ``html=None`` for the client to render as
@@ -458,6 +462,20 @@ class StudioService:
 
         path = self._resolve_deck_id(deck_id)
         return render_j2_cell_html(path, body, lang)
+
+    async def render_cell_async(
+        self, deck_id: str, body: str, *, is_j2: bool, lang: str | None = None
+    ) -> tuple[bool, str | None, str | None]:
+        """:meth:`render_cell`, with the Jinja expansion in a killable
+        subprocess under a wall-clock budget (issue #698) — the request
+        path's variant. Same contract; never raises except
+        ``InvalidDeckIdError`` from deck-id resolution."""
+        if not is_j2:
+            return False, None, None
+        from clm.web.studio.render import render_j2_cell_html_in_subprocess
+
+        path = self._resolve_deck_id(deck_id)
+        return await render_j2_cell_html_in_subprocess(path, body, lang)
 
     def try_begin_sync(self, key: str) -> bool:
         """Claim the in-flight slot for ``key`` (the DE deck id). False if taken."""
