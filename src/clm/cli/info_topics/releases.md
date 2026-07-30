@@ -197,6 +197,14 @@ comparison is stateless (destination hash vs. manifest hash), so nothing is
 recorded in the frozen manifest and re-runs are idempotent.
 `--push` chains `clm git commit` + `clm git push` after promotion.
 
+**Evergreen freshness is fixed at build time**: the sync compares the
+cohort's copy against the *built* content, so regenerate the sources of
+evergreen files (e.g. exported outlines or schedules, often produced by a
+spec-declared task via `clm export outline` / `clm calendar generate`)
+**before** `clm build` — otherwise the sync truthfully reports `up-to-date`
+for the stale content the build baked in, and a `refresh` you expect never
+appears.
+
 ### Shared destination: several streams, one cohort repo
 
 Channels of **different** streams may point at the same `path` — both streams

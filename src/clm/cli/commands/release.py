@@ -842,7 +842,10 @@ def sync_cmd(
     Skeleton files matching an evergreen pattern (the channel's ``<evergreen>``
     declarations plus any ``--evergreen`` options) are exempt from the
     skeleton freeze: each sync re-copies a matching file whose built content
-    differs from the cohort's copy.
+    differs from the cohort's copy. Evergreen freshness is fixed at build
+    time — regenerate the sources of evergreen files (exported outlines,
+    schedules) before ``clm build``, or the sync reports ``up-to-date`` for
+    the stale content the build baked in (issue #657).
     """
     if channels or all_channels:
         if spec_file is None:
