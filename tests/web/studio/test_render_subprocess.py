@@ -167,7 +167,11 @@ class TestChildLifetime:
             assert proc.poll() is not None, "watchdog did not fire"
             from clm.web.studio.render_child import WATCHDOG_EXIT_CODE
 
-            assert proc.returncode == WATCHDOG_EXIT_CODE
+            # Windows: the watchdog timer exits with its marker code. POSIX:
+            # RLIMIT_CPU's hard limit can beat the timer and kill with
+            # SIGKILL (-9) or SIGXCPU (-24) — that is the self-limit
+            # working too, via the other belt.
+            assert proc.returncode in (WATCHDOG_EXIT_CODE, -9, -24), proc.returncode
         finally:
             if proc.poll() is None:
                 proc.kill()
