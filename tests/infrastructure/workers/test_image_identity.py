@@ -142,3 +142,21 @@ class TestDirectModeDiagramFingerprint:
     def test_docker_mode_unaffected(self, monkeypatch):
         monkeypatch.setenv("PLANTUML_JAR", "ignored")
         assert worker_image_identity_for("docker", "img:1", "plantuml") == "docker:img:1"
+
+    def test_config_file_tool_path_is_fingerprinted(self, tmp_path, monkeypatch):
+        """#747 review F1: a jar configured only in [external_tools] (no env
+        var) reaches direct workers via the executor's env injection — the
+        fingerprint must resolve through the same precedence."""
+        jar = tmp_path / "configured.jar"
+        jar.write_bytes(b"from config file")
+        monkeypatch.delenv("PLANTUML_JAR", raising=False)
+
+        from clm.infrastructure import config as config_module
+
+        cfg = config_module.get_config()
+        monkeypatch.setattr(cfg.external_tools, "plantuml_jar", str(jar))
+        ident = worker_image_identity_for("direct", None, "plantuml")
+        assert ident.startswith("direct:") and ident != "direct"
+
+        jar.write_bytes(b"upgraded config-file jar!")
+        assert worker_image_identity_for("direct", None, "plantuml") != ident

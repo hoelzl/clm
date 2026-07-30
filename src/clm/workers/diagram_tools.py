@@ -40,10 +40,13 @@ def locate_plantuml_jar() -> str | None:
 
 
 def locate_drawio_executable() -> str | None:
-    """The Draw.io executable a direct-mode worker would use, or ``None``.
+    """A stat-able path for the Draw.io executable, or ``None``.
 
-    ``DRAWIO_EXECUTABLE`` env var (as-is, may be a bare name), else
-    ``drawio`` resolved on PATH.
+    FINGERPRINT-side only (#747): the converter keeps its bare-name
+    spawn-time resolution (CreateProcess semantics which() cannot fully
+    replicate). Here: the ``DRAWIO_EXECUTABLE`` env var when it carries a
+    path separator, else the name (env-set or ``drawio``) resolved on
+    PATH via ``shutil.which`` — best effort, ``None`` when unresolvable.
     """
     from_env = os.environ.get("DRAWIO_EXECUTABLE")
     candidate = from_env or "drawio"

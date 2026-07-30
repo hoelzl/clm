@@ -64,24 +64,43 @@ def worker_image_identity_for(
 def _direct_binary_fingerprint(worker_type: str) -> str:
     """A cheap host-side fingerprint of the direct-mode diagram binary.
 
-    Path + size + mtime_ns, digested — no execution, two stat calls. The
-    locators mirror the workers' own resolution
-    (:mod:`clm.workers.diagram_tools`), so the fingerprint describes the
-    binary that will actually render. Residue: a binary replaced in place
-    with identical size and mtime keeps the key (the same trade every
-    size+mtime scheme makes); hashing multi-MB JARs per build is not worth
-    it. Defensive ``""`` on any error — identity degrades to ``"direct"``.
+    Path + size + mtime_ns, digested — no execution, two stat calls.
+    Resolution follows the worker executor's injection precedence
+    (``external_tools`` config with the env vars folded over it, then the
+    workers' own default resolution via
+    :mod:`clm.workers.diagram_tools`), so the fingerprint describes the
+    binary that will actually render — including one configured only in a
+    config file's ``[external_tools]`` section (#747 review F1). Residue:
+    a binary replaced in place with identical size and mtime keeps the
+    key (the same trade every size+mtime scheme makes); and a bare
+    Draw.io name is which()-resolved for statting while the spawn
+    resolves at exec time — a PATHEXT shim shadowing the real .exe can
+    make the two diverge (spurious re-render at worst). Defensive ``""``
+    on any error — identity degrades to ``"direct"``.
     """
     import hashlib
     import os
 
     try:
+        # The executor injects PLANTUML_JAR/DRAWIO_EXECUTABLE into direct
+        # workers from get_config().external_tools (env folded over the
+        # config file) — mirror that exactly, then fall back to the
+        # workers' own default resolution.
+        from clm.infrastructure.config import get_config, resolve_setting
         from clm.workers.diagram_tools import (
             locate_drawio_executable,
             locate_plantuml_jar,
         )
 
-        located = locate_plantuml_jar() if worker_type == "plantuml" else locate_drawio_executable()
+        external_tools = get_config().external_tools
+        if worker_type == "plantuml":
+            configured = resolve_setting(None, config_value=external_tools.plantuml_jar, default="")
+            located = configured or locate_plantuml_jar()
+        else:
+            configured = resolve_setting(
+                None, config_value=external_tools.drawio_executable, default=""
+            )
+            located = configured or locate_drawio_executable()
         if not located:
             return ""
         stat = os.stat(located)
