@@ -1095,7 +1095,13 @@ class NotebookProcessor:
                         cell["execution_count"] = None
                 elif is_markdown_cell(cell):
                     if post_blank_markdown.intersection(tags):
-                        cell["source"] = ""
+                        # Fresh-partial parity (#737): the fresh path renders
+                        # a blanked answer cell as the localized stub, not as
+                        # an empty cell. The cached cell already carries the
+                        # stub prefix (Recording's processing added it) —
+                        # keep the prefix, drop the answer text.
+                        answer_text = "Answer" if self.output_spec.language == "en" else "Antwort"
+                        cell["source"] = f"*{answer_text}:* "
 
             new_cells.append(cell)
 
