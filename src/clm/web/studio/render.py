@@ -44,10 +44,14 @@ routes them differently:
 ``{% for %}`` over ``range()`` burns hours producing two characters — so
 the request path renders in a **killable subprocess** under a wall-clock
 budget (:func:`render_j2_cell_in_subprocess`, one child per request,
-:data:`PREVIEW_TIMEOUT_SECONDS`), with a POSIX ``RLIMIT_AS`` belt in the
-child. The old thread-occupancy vector is gone with it: the route awaits
-the child on the event loop instead of holding one of the 40 shared
-threadpool tokens. The in-process value caps above stay as the memory
+:data:`PREVIEW_TIMEOUT_SECONDS`, at most
+:data:`MAX_CONCURRENT_PREVIEW_RENDERS` at once), and the child
+self-limits (watchdog + POSIX rlimits) so no parent-side failure can
+leave a burner behind. The old thread-occupancy vector shrinks with it:
+the route awaits the child on the event loop instead of holding one of
+the 40 shared threadpool tokens for the whole render — only the
+deterministic post-render tail (~90 ms worst case, size-capped input)
+briefly uses a worker thread. The in-process value caps above stay as the memory
 bound inside the child, and :func:`render_j2_cell` remains the in-process
 core for tests and non-request callers.
 
@@ -337,13 +341,76 @@ def _to_preview_html(text: str, comment_token: str) -> str:
 #: for interpreter start-up on a cold spawn.
 PREVIEW_TIMEOUT_SECONDS = 10.0
 
+#: Concurrent preview children (review MEDIUM-3). Real decks carry a median
+#: of ONE ``is_j2`` cell, so legitimate load is 1-2; without a cap, N
+#: concurrent requests saturate N cores for ``timeout`` seconds each — the
+#: only concurrency bound the old threadpool route had was its 40 tokens.
+#: Saturation degrades to tier-1 IMMEDIATELY (no queueing — a queue would
+#: recreate head-of-line blocking).
+MAX_CONCURRENT_PREVIEW_RENDERS = 4
+
+#: Longest child-supplied error string returned to the client (review
+#: LOW-4): Jinja syntax errors embed template source, so an uncapped error
+#: is O(body).
+_MAX_ERROR_CHARS = 2_000
+
+_render_semaphore = None
+
+
+def _get_render_semaphore():
+    """Lazily create the semaphore on the running loop (module import must
+    not require one)."""
+    global _render_semaphore
+    import asyncio
+
+    if _render_semaphore is None:
+        _render_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PREVIEW_RENDERS)
+    return _render_semaphore
+
+
+#: Interpreter flags for the child (review LOW-1): ``-I`` keeps the
+#: server's cwd — normally a course repo, which can plausibly hold a
+#: ``json.py`` teaching example — off the child's ``sys.path``, and ignores
+#: ``PYTHON*`` env influence.
+_CHILD_ARGS = ("-I", "-m", "clm.web.studio.render_child")
+
+
+def _child_env() -> dict[str, str]:
+    """A minimal environment for the child (review LOW-2).
+
+    The child executes client-supplied Jinja; the server's environment can
+    carry credentials (LLM keys etc.) that a sandbox escape should not
+    find. Keep only what the interpreter and imports need.
+    """
+    import os
+
+    keep = (
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "PATH",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "HOME",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "COMSPEC",
+        "LANG",
+        "LC_ALL",
+    )
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env["PYTHONUTF8"] = "1"
+    return env
+
 
 async def render_j2_cell_in_subprocess(
     deck_path: Path,
     body: str,
     lang: str | None,
     *,
-    timeout: float = PREVIEW_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> tuple[bool, str | None, str]:
     """:func:`render_j2_cell`, in a killable subprocess (issue #698).
 
@@ -352,55 +419,101 @@ async def render_j2_cell_in_subprocess(
     hours producing two characters. One child process per request (see
     :mod:`clm.web.studio.render_child`), a wall-clock ``timeout``, and a
     kill: the failure mode is the preview's ordinary tier-1 degradation.
-    Runs on the event loop — no threadpool token is held while waiting, so
-    slow renders cannot occupy the shared pool either (the second half of
-    #698).
+    No threadpool token is held while waiting.
 
-    Same return contract as :func:`render_j2_cell`; never raises.
+    Defense in depth, both directions (#698 review): the parent NEVER
+    leaves this function with a live child (``finally`` kill + bounded
+    ``wait()`` reap — ``communicate()`` would hang if a kill only reached
+    a venv launcher trampoline whose grandchild still holds the pipe; on
+    this repo's uv venvs ``sys.executable`` IS such a trampoline, and the
+    kill covers the tree only via the launcher's job object). And the
+    child self-limits with a watchdog + POSIX rlimits, so even a path the
+    parent cannot cover — cancellation mid-await, a hard server crash —
+    cannot leave an unbounded burner behind.
+
+    Same return contract as :func:`render_j2_cell`; never raises (a
+    saturated concurrency cap degrades to tier-1 immediately).
     """
     import asyncio
     import json as json_module
     import sys
 
-    request = json_module.dumps({"deck_path": str(deck_path), "body": body, "lang": lang}).encode(
-        "utf-8"
-    )
+    # Resolved at call time so tests (and future config) can adjust the
+    # module constant; a def-time default would freeze it.
+    if timeout is None:
+        timeout = PREVIEW_TIMEOUT_SECONDS
+    semaphore = _get_render_semaphore()
+    if semaphore.locked():
+        return False, "preview busy (concurrent render cap) — showing raw cell", body
+
+    request = json_module.dumps(
+        {"deck_path": str(deck_path), "body": body, "lang": lang, "budget": timeout}
+    ).encode("utf-8")
     proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "clm.web.studio.render_child",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(request), timeout=timeout)
-        if proc.returncode != 0:
-            return False, f"preview render failed (exit {proc.returncode})", body
-        response = json_module.loads(stdout.decode("utf-8"))
-        ok = bool(response.get("ok"))
-        text = response.get("text")
-        if not isinstance(text, str):
-            return False, "preview render returned no text", body
-        if len(text) > MAX_OUTPUT_CHARS:
-            # Belt: the child enforces this too, but the parent must never
-            # trust a child that was killed mid-write or misbehaved.
-            return False, f"preview output too large ({len(text)} chars)", body
-        error = response.get("error")
-        return ok, error if error is None or isinstance(error, str) else str(error), text
-    except TimeoutError:
-        if proc is not None:
-            proc.kill()
-            # Reap: an unawaited killed child leaks a zombie/handle.
-            await proc.communicate()
-        return False, f"preview timed out after {timeout:g}s", body
-    except Exception as exc:  # noqa: BLE001 - preview must never crash the request
-        logger.debug("Studio subprocess render failed for %s: %s", deck_path, exc)
-        if proc is not None and proc.returncode is None:
-            proc.kill()
-            await proc.communicate()
-        return False, str(exc), body
+    stderr_data = b""
+    async with semaphore:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                *_CHILD_ARGS,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_child_env(),
+            )
+            stdout, stderr_data = await asyncio.wait_for(proc.communicate(request), timeout=timeout)
+            if proc.returncode != 0:
+                # Systematic child failure must not be invisible (LOW-3).
+                logger.warning(
+                    "Studio preview child exited %s for %s: %s",
+                    proc.returncode,
+                    deck_path,
+                    stderr_data[-500:].decode("utf-8", "replace"),
+                )
+                return False, f"preview render failed (exit {proc.returncode})", body
+            response = json_module.loads(stdout.decode("utf-8"))
+            ok = bool(response.get("ok"))
+            text = response.get("text")
+            if not isinstance(text, str):
+                return False, "preview render returned no text", body
+            if len(text) > MAX_OUTPUT_CHARS:
+                # Belt: the child enforces this too, but the parent must never
+                # trust a child that was killed mid-write or misbehaved.
+                return False, f"preview output too large ({len(text)} chars)", body
+            error = response.get("error")
+            if error is not None and not isinstance(error, str):
+                error = str(error)
+            if error is not None and len(error) > _MAX_ERROR_CHARS:
+                error = error[:_MAX_ERROR_CHARS] + "…"
+            return ok, error, text
+        except TimeoutError:
+            return False, f"preview timed out after {timeout:g}s", body
+        except Exception as exc:  # noqa: BLE001 - preview must never crash the request
+            logger.debug("Studio subprocess render failed for %s: %s", deck_path, exc)
+            return False, str(exc), body
+        finally:
+            # The single kill/reap point (review HIGH-1/HIGH-2/MEDIUM-1):
+            # runs on success, timeout, error, AND cancellation, guarded so
+            # it can never raise out of the return paths.
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    # wait() waits on the process handle — unlike
+                    # communicate(), it cannot hang on a pipe a surviving
+                    # grandchild still holds.
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except (TimeoutError, Exception):  # noqa: BLE001
+                    pass
+                except BaseException:
+                    # Cancellation arrived while reaping: don't block the
+                    # cancel, but don't abandon the reap either — the child
+                    # was already killed; a background wait releases the
+                    # transport. The child's own watchdog is the backstop.
+                    asyncio.get_running_loop().create_task(proc.wait())
+                    raise
 
 
 def render_j2_cell_html(
@@ -432,19 +545,23 @@ async def render_j2_cell_html_in_subprocess(
     body: str,
     lang: str | None,
     *,
-    timeout: float = PREVIEW_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> tuple[bool, str | None, str | None]:
     """:func:`render_j2_cell_html` with the expansion in a killable subprocess.
 
     The untrusted part — executing the client-supplied Jinja — runs in the
     child under the wall-clock budget; the deterministic tail (delimiter
-    drop, de-prefix, logo rewrite, sanitize) runs in-process on the child's
-    size-capped output.
+    drop, de-prefix, logo rewrite, sanitize) runs in a worker thread — it
+    is pure CPU on the child's size-capped output and measures ~50-90 ms
+    at the output cap (#698 review MEDIUM-2), which must not block the
+    event loop.
     """
+    import asyncio
+
     ok, error, text = await render_j2_cell_in_subprocess(deck_path, body, lang, timeout=timeout)
     if not ok:
         return False, error, None
-    return _finish_preview_html(deck_path, text)
+    return await asyncio.to_thread(_finish_preview_html, deck_path, text)
 
 
 def _finish_preview_html(deck_path: Path, text: str) -> tuple[bool, str | None, str | None]:

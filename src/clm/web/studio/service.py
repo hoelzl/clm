@@ -441,10 +441,14 @@ class StudioService:
 
     # ------------------------------------------------------- tier-2 render (P4)
 
-    def render_cell(
+    def render_cell_in_process(
         self, deck_id: str, body: str, *, is_j2: bool, lang: str | None = None
     ) -> tuple[bool, str | None, str | None]:
-        """Tier-2 (kernel-free) render of one cell. Returns ``(rendered, error, html)``.
+        """Tier-2 render, IN-PROCESS — tests and non-request callers only.
+
+        The request path is :meth:`render_cell_async` (#698): this variant
+        has no CPU bound, so a route must never reach for it. Returns
+        ``(rendered, error, html)``.
 
         Only ``is_j2`` cells are expanded server-side (through the build's bundled
         macros); a plain cell returns ``html=None`` for the client to render as

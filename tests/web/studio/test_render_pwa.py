@@ -36,7 +36,7 @@ class TestTier2Render:
     def test_service_skips_non_j2(self, service: StudioService, course: Course):
         # Since #697 the third element is the sanitized HTML, so "no render" is
         # `None` — the client keeps the tier-1 markdown it already drew.
-        ok, error, html = service.render_cell(course.deck_id, "# plain", is_j2=False)
+        ok, error, html = service.render_cell_in_process(course.deck_id, "# plain", is_j2=False)
         assert ok is False and html is None and error is None
 
 
@@ -129,3 +129,34 @@ class TestStudioShellSecurityHeaders:
         r = client.get("/studio/sw.js")
         assert r.headers["Service-Worker-Allowed"] == "/"
         assert "content-security-policy" in r.headers
+
+
+@pytest.mark.slow
+class TestRenderEndpointTimeout:
+    """#698 claimed-wired: a timed-out render degrades to tier-1 THROUGH
+    the route — rendered=False, html None, error says timed out, and the
+    request survives (no 500 from the never-raises contract)."""
+
+    @pytest.fixture()
+    def client(self, course: Course) -> TestClient:
+        app = make_app(course.spec_path, course.slides_dir.parent / "jobs.db", TOKEN)
+        return TestClient(app)
+
+    def test_cpu_bomb_times_out_into_tier1(
+        self, client: TestClient, course: Course, monkeypatch: pytest.MonkeyPatch
+    ):
+        from clm.web.studio import render as render_module
+
+        monkeypatch.setattr(render_module, "PREVIEW_TIMEOUT_SECONDS", 3.0)
+        bomb = "{% for a in range(100000) %}{% for b in range(100000) %}{% endfor %}{% endfor %}ok"
+        r = client.post(
+            "/api/studio/deck/render-cell",
+            headers=AUTH,
+            json={"deck_id": course.deck_id, "body": bomb, "is_j2": True, "lang": "de"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["rendered"] is False
+        assert data["html"] is None
+        assert "timed out" in (data["error"] or "")
+        assert data["body"] == bomb  # tier-1 fallback keeps the original

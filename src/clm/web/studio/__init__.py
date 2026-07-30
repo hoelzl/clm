@@ -16,6 +16,15 @@ lightweight vanilla-JS surface; the no-build Preact + CodeMirror PWA is
 deferred to P2+ where in-cell editing ergonomics start to pay off.
 """
 
-from clm.web.studio.service import StudioService
-
 __all__ = ["StudioService"]
+
+
+def __getattr__(name: str):
+    # Lazy: the preview render child (#698) imports this package on every
+    # spawn and must not pay for StudioService's pydantic/service imports
+    # (~262 ms of a ~400 ms cold start, measured in the #698 review).
+    if name == "StudioService":
+        from clm.web.studio.service import StudioService
+
+        return StudioService
+    raise AttributeError(name)
