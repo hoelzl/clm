@@ -3317,3 +3317,21 @@ class TestCachedPartialStarters:
         result_cell, _resources = tep.preprocess_cell(cell, {}, 0)
         assert result_cell is cell
         assert cell.get("outputs", []) == []
+
+    @pytest.mark.asyncio
+    async def test_start_retention_still_respects_language_filtering(self):
+        """The retention overrides only the tag delete set — a DE-only
+        starter must not leak into an EN build's cached artifact."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# Workshop", tags=["slide", "workshop"]),
+                make_cell("code", "# TODO de", tags=["start"], lang="de"),
+                make_cell("code", "# TODO en", tags=["start"], lang="en"),
+            ]
+        )
+        recording = NotebookProcessor(RecordingOutput(format="html", language="en"))
+        payload = make_payload("", kind="speaker", format_="html", language="en")
+        cached_nb = await recording._process_notebook_node(notebook, payload)
+        sources = [c["source"] for c in cached_nb["cells"]]
+        assert "# TODO en" in sources
+        assert "# TODO de" not in sources

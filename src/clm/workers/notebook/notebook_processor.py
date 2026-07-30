@@ -85,6 +85,7 @@ from .utils.jupyter_utils import (
     get_slide_tag,
     get_tags,
     is_answer_cell,
+    is_cell_included_for_language,
     is_code_cell,
     is_markdown_cell,
 )
@@ -1267,7 +1268,15 @@ class NotebookProcessor:
         new_cells = [
             await self._process_cell(cell, index, payload)
             for index, cell in enumerate(source_cells)
-            if self.output_spec.is_cell_included(cell) or (keep_start and "start" in get_tags(cell))
+            if self.output_spec.is_cell_included(cell)
+            or (
+                keep_start
+                and "start" in get_tags(cell)
+                # The retention overrides only the spec's TAG delete set —
+                # the language filter still applies (a DE-only starter must
+                # not leak into an EN build's cached artifact).
+                and is_cell_included_for_language(cell, self.output_spec.language)
+            )
         ]
         # Strip slide_id/for_slide (internal CLM metadata that must never
         # appear in output) and the synthetic _post_workshop tag attached by
