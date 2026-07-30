@@ -28,6 +28,19 @@ from clm.core.course_spec import GitHubSpec, OutputTargetSpec
 _SAFE_TRANSPORT = ["-c", "protocol.ext.allow=never"]
 
 
+def _make_repo_on_branch(path, branch: str) -> None:
+    """A real repo with one commit, parked on ``branch``.
+
+    Host-config-proof: signing off, identity local, setup asserted.
+    """
+    assert run_git(path, "init").returncode == 0
+    assert run_git(path, "config", "user.email", "t@example.com").returncode == 0
+    assert run_git(path, "config", "user.name", "T").returncode == 0
+    assert run_git(path, "config", "commit.gpgsign", "false").returncode == 0
+    assert run_git(path, "commit", "--allow-empty", "-m", "init").returncode == 0
+    assert run_git(path, "checkout", "-b", branch).returncode == 0
+
+
 class TestGitHubSpec:
     """Tests for GitHubSpec class."""
 
@@ -1093,11 +1106,7 @@ class TestDryRunMode:
         """Issue #686: read-only queries execute under dry-run so previews
         resolve the real branch instead of an empty mock."""
         _dry_run_mode.set(False)
-        assert run_git(tmp_path, "init").returncode == 0
-        run_git(tmp_path, "config", "user.email", "t@example.com")
-        run_git(tmp_path, "config", "user.name", "T")
-        run_git(tmp_path, "commit", "--allow-empty", "-m", "init")
-        run_git(tmp_path, "checkout", "-b", "next")
+        _make_repo_on_branch(tmp_path, "next")
         _dry_run_mode.set(True)
         try:
             result = run_git(tmp_path, "rev-parse", "--abbrev-ref", "HEAD")
@@ -1109,11 +1118,7 @@ class TestDryRunMode:
         """The #686 headline symptom: get_current_branch returned '' under
         dry-run, so `push --dry-run` previewed `push -u origin ''`."""
         _dry_run_mode.set(False)
-        assert run_git(tmp_path, "init").returncode == 0
-        run_git(tmp_path, "config", "user.email", "t@example.com")
-        run_git(tmp_path, "config", "user.name", "T")
-        run_git(tmp_path, "commit", "--allow-empty", "-m", "init")
-        run_git(tmp_path, "checkout", "-b", "next")
+        _make_repo_on_branch(tmp_path, "next")
         _dry_run_mode.set(True)
         try:
             assert get_current_branch(tmp_path) == "next"
@@ -1659,3 +1664,38 @@ class TestSyncAmendAndForce:
                 assert "--amend" in result.output
                 assert "--no-edit" in result.output
                 assert "--force-with-lease" in result.output
+
+
+class TestInitDryRunRecovery:
+    """#686 review finding 1: the now-real remote probes route init --dry-run
+    into the crash-recovery branch, which used to run a REAL shutil.move fed
+    stub state — a spurious hard error under the no-changes banner."""
+
+    def test_init_dry_run_previews_recovery_without_mutating(self, tmp_path: Path, capsys):
+        from clm.cli.commands.git import init_repo_from_remote
+
+        # A local bare remote with one commit — remote_exists and
+        # remote_has_commits are both True, no network involved.
+        remote = tmp_path / "remote.git"
+        seed = tmp_path / "seed"
+        seed.mkdir()
+        _make_repo_on_branch(seed, "next")
+        assert run_git_global("init", "--bare", str(remote)).returncode == 0
+        assert run_git(seed, "remote", "add", "origin", str(remote)).returncode == 0
+        assert run_git(seed, "push", "origin", "next").returncode == 0
+
+        out_dir = tmp_path / "output"
+        out_dir.mkdir()
+        (out_dir / "file.txt").write_text("content")
+        repo = OutputRepo(path=out_dir, target_name="public", language="en", remote_url=str(remote))
+
+        _dry_run_mode.set(True)
+        try:
+            ok = init_repo_from_remote(repo, "next")
+        finally:
+            _dry_run_mode.set(False)
+        captured = capsys.readouterr()
+        assert ok is True
+        assert "Would clone the remote and restore .git" in captured.out
+        assert "Error" not in captured.out
+        assert not (out_dir / ".git").exists()  # nothing mutated

@@ -166,19 +166,15 @@ def _format_command(cmd: list[str]) -> str:
 #: Everything else is stubbed with a "[dry-run] Would run" line. ``fetch``
 #: is deliberately NOT read-only: it rewrites remote-tracking refs, so
 #: dry-run previews may compare against slightly stale remote state.
+#: Keep this list to subcommands with actual call sites, and mind arity:
+#: e.g. two-arg ``symbolic-ref`` WRITES a ref — audit before adding.
 _READ_ONLY_GIT_SUBCOMMANDS = frozenset(
     {
         "rev-parse",
         "rev-list",
         "status",
         "diff",
-        "log",
-        "show",
-        "ls-files",
         "ls-remote",
-        "show-ref",
-        "symbolic-ref",
-        "describe",
     }
 )
 
@@ -190,7 +186,21 @@ def _is_read_only_git(args: tuple[str, ...]) -> bool:
     if args[0] in _READ_ONLY_GIT_SUBCOMMANDS:
         return True
     # ``remote`` mutates (add/remove/set-url) except its query forms.
-    return args[0] == "remote" and len(args) >= 2 and args[1] in ("get-url", "show", "-v")
+    return args[0] == "remote" and len(args) >= 2 and args[1] in ("get-url", "-v")
+
+
+def _read_only_dry_run_env() -> dict[str, str]:
+    """Environment for read-only git executed under dry-run.
+
+    A preview must never block on interactive auth: ``ls-remote`` against a
+    private/nonexistent HTTPS remote can pop a Git Credential Manager
+    dialog or a terminal prompt (#686 review). Degrade to "remote not
+    reachable" instead — an acceptable answer for a dry run.
+    """
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    return env
 
 
 def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -216,7 +226,8 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     ]
     logger.debug(f"Running: {_format_command(cmd)}")
 
-    if _dry_run_mode.get() and not _is_read_only_git(args):
+    dry_run = _dry_run_mode.get()
+    if dry_run and not _is_read_only_git(args):
         click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
         return subprocess.CompletedProcess(
             args=cmd,
@@ -230,6 +241,7 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        env=_read_only_dry_run_env() if dry_run else None,
     )
 
 
@@ -241,12 +253,15 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
 
     Returns:
         CompletedProcess with stdout/stderr captured.
-        In dry-run mode, returns a mock result with returncode=0.
+        In dry-run mode, mutating commands return a mock result with
+        returncode=0; read-only commands execute normally (issue #686),
+        prompt-free.
     """
     cmd = ["git", *_transport_safety_config_args(), *_token_auth_config_args(), *args]
     logger.debug(f"Running: {_format_command(cmd)}")
 
-    if _dry_run_mode.get() and not _is_read_only_git(args):
+    dry_run = _dry_run_mode.get()
+    if dry_run and not _is_read_only_git(args):
         click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
         return subprocess.CompletedProcess(
             args=cmd,
@@ -260,6 +275,7 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        env=_read_only_dry_run_env() if dry_run else None,
     )
 
 
@@ -740,7 +756,14 @@ def commit_and_push_repo(
     else:
         # Gate on the index (not the working tree) so a change that touches only
         # the excluded manifest is a clean no-op rather than a failed commit.
-        if has_staged_changes(repo.path):
+        # Under --dry-run staging was stubbed, so gate on the (real)
+        # working-tree status instead (#686).
+        staged = (
+            has_uncommitted_changes(repo.path)
+            if _dry_run_mode.get()
+            else has_staged_changes(repo.path)
+        )
+        if staged:
             assert message is not None
             result = run_git(repo.path, "commit", "-m", message)
             if result.returncode == 0:
@@ -809,7 +832,12 @@ Thumbs.db
 """
     gitignore_path = repo.path / ".gitignore"
     if not gitignore_path.exists():
-        gitignore_path.write_text(gitignore_content)
+        if _dry_run_mode.get():
+            # The one non-git mutation in this flow — the "[DRY RUN MODE]"
+            # banner promised no changes (#686 review: this wrote for real).
+            click.echo(f"  [dry-run] Would create {gitignore_path}")
+        else:
+            gitignore_path.write_text(gitignore_content)
 
     # Initialize repo
     result = run_git(repo.path, "init")
@@ -849,6 +877,14 @@ def init_repo_from_remote(repo: OutputRepo, branch: str) -> bool:
         return False
 
     click.echo(f"  Restoring from remote: {repo.remote_url}")
+
+    if _dry_run_mode.get():
+        # The clone below is stubbed but the shutil.move is real — running
+        # on would feed the move stub state (a spurious hard error) or, if
+        # the temp path ever existed, mutate the output dir under the
+        # dry-run banner (#686 review). Preview and stop.
+        click.echo("  [dry-run] Would clone the remote and restore .git from it")
+        return True
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir) / "clone"
@@ -1202,10 +1238,21 @@ def commit(
         # Check if there is anything *staged* to commit (skip for non-amend).
         # Gate on the index, not the working tree, so a change that touches only
         # the excluded manifest is a clean no-op instead of a failed commit.
-        if not amend and not has_staged_changes(repo.path):
-            click.echo("  Nothing to commit (working tree clean)")
-            click.echo()
-            continue
+        # Under --dry-run the staging above was stubbed, so the index cannot
+        # answer — gate on the (real) working-tree status instead (#686):
+        # "working tree clean" must not print over a dirty tree.
+        if not amend:
+            if _dry_run_mode.get():
+                if has_uncommitted_changes(repo.path):
+                    click.echo("  [dry-run] Would stage and commit the changes above")
+                else:
+                    click.echo("  Nothing to commit (working tree clean)")
+                    click.echo()
+                    continue
+            elif not has_staged_changes(repo.path):
+                click.echo("  Nothing to commit (working tree clean)")
+                click.echo()
+                continue
 
         # Build commit command
         if amend:
