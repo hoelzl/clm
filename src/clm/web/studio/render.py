@@ -40,13 +40,16 @@ routes them differently:
   ``{% set s = "A" * 100000 %}{% set s = s ~ s %}…`` went from ~1.2 GB to
   5.2 MB.
 
-**Still unbounded: CPU.** Nothing limits iteration, so nested ``{% for %}``
-over ``range()`` burns time without allocating, and ``run_in_threadpool``
-gives a client 40 shared threads to occupy. A token holder can still stall
-this process. That is accepted rather than fixed — the token is the trust
-boundary (decision D4) and the same client can already rewrite any deck —
-and doing it properly means rendering under a wall-clock limit in a
-subprocess, which is issue #698.
+**CPU (issue #698).** Nothing in-process limits iteration — nested
+``{% for %}`` over ``range()`` burns hours producing two characters — so
+the request path renders in a **killable subprocess** under a wall-clock
+budget (:func:`render_j2_cell_in_subprocess`, one child per request,
+:data:`PREVIEW_TIMEOUT_SECONDS`), with a POSIX ``RLIMIT_AS`` belt in the
+child. The old thread-occupancy vector is gone with it: the route awaits
+the child on the event loop instead of holding one of the 40 shared
+threadpool tokens. The in-process value caps above stay as the memory
+bound inside the child, and :func:`render_j2_cell` remains the in-process
+core for tests and non-request callers.
 
 **The loader.** The sandbox constrains the *template*, not the
 ``FileSystemLoader`` under it, so ``{% include %}`` still reads files. Jinja
@@ -329,6 +332,77 @@ def _to_preview_html(text: str, comment_token: str) -> str:
     return deprefix("\n".join(kept), comment_token).strip("\n")
 
 
+#: Wall-clock budget for one subprocess preview render (issue #698). A
+#: legitimate preview expands in well under a second; the budget mostly pays
+#: for interpreter start-up on a cold spawn.
+PREVIEW_TIMEOUT_SECONDS = 10.0
+
+
+async def render_j2_cell_in_subprocess(
+    deck_path: Path,
+    body: str,
+    lang: str | None,
+    *,
+    timeout: float = PREVIEW_TIMEOUT_SECONDS,
+) -> tuple[bool, str | None, str]:
+    """:func:`render_j2_cell`, in a killable subprocess (issue #698).
+
+    The in-process value caps bound every way of growing *memory*, but
+    nothing in-process can bound *CPU* — nested ``range()`` loops burn two
+    hours producing two characters. One child process per request (see
+    :mod:`clm.web.studio.render_child`), a wall-clock ``timeout``, and a
+    kill: the failure mode is the preview's ordinary tier-1 degradation.
+    Runs on the event loop — no threadpool token is held while waiting, so
+    slow renders cannot occupy the shared pool either (the second half of
+    #698).
+
+    Same return contract as :func:`render_j2_cell`; never raises.
+    """
+    import asyncio
+    import json as json_module
+    import sys
+
+    request = json_module.dumps({"deck_path": str(deck_path), "body": body, "lang": lang}).encode(
+        "utf-8"
+    )
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "clm.web.studio.render_child",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(request), timeout=timeout)
+        if proc.returncode != 0:
+            return False, f"preview render failed (exit {proc.returncode})", body
+        response = json_module.loads(stdout.decode("utf-8"))
+        ok = bool(response.get("ok"))
+        text = response.get("text")
+        if not isinstance(text, str):
+            return False, "preview render returned no text", body
+        if len(text) > MAX_OUTPUT_CHARS:
+            # Belt: the child enforces this too, but the parent must never
+            # trust a child that was killed mid-write or misbehaved.
+            return False, f"preview output too large ({len(text)} chars)", body
+        error = response.get("error")
+        return ok, error if error is None or isinstance(error, str) else str(error), text
+    except TimeoutError:
+        if proc is not None:
+            proc.kill()
+            # Reap: an unawaited killed child leaks a zombie/handle.
+            await proc.communicate()
+        return False, f"preview timed out after {timeout:g}s", body
+    except Exception as exc:  # noqa: BLE001 - preview must never crash the request
+        logger.debug("Studio subprocess render failed for %s: %s", deck_path, exc)
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.communicate()
+        return False, str(exc), body
+
+
 def render_j2_cell_html(
     deck_path: Path, body: str, lang: str | None
 ) -> tuple[bool, str | None, str | None]:
@@ -342,10 +416,39 @@ def render_j2_cell_html(
 
     Fails closed when the sanitizer is missing: no HTML leaves this function
     unless it went through :func:`sanitize_preview_html`.
+
+    In-process variant — the request path uses
+    :func:`render_j2_cell_html_in_subprocess` (issue #698); this one stays
+    for tests and non-request callers.
     """
     ok, error, text = render_j2_cell(deck_path, body, lang)
     if not ok:
         return False, error, None
+    return _finish_preview_html(deck_path, text)
+
+
+async def render_j2_cell_html_in_subprocess(
+    deck_path: Path,
+    body: str,
+    lang: str | None,
+    *,
+    timeout: float = PREVIEW_TIMEOUT_SECONDS,
+) -> tuple[bool, str | None, str | None]:
+    """:func:`render_j2_cell_html` with the expansion in a killable subprocess.
+
+    The untrusted part — executing the client-supplied Jinja — runs in the
+    child under the wall-clock budget; the deterministic tail (delimiter
+    drop, de-prefix, logo rewrite, sanitize) runs in-process on the child's
+    size-capped output.
+    """
+    ok, error, text = await render_j2_cell_in_subprocess(deck_path, body, lang, timeout=timeout)
+    if not ok:
+        return False, error, None
+    return _finish_preview_html(deck_path, text)
+
+
+def _finish_preview_html(deck_path: Path, text: str) -> tuple[bool, str | None, str | None]:
+    """The deterministic HTML tail shared by both render variants."""
     try:
         from clm.infrastructure.utils.path_utils import path_to_prog_lang
         from clm.workers.notebook.utils.prog_lang_utils import line_comment_for

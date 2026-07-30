@@ -18,7 +18,6 @@ from collections.abc import Callable
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
 from clm.web.studio import sync_runner
@@ -265,14 +264,17 @@ async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellRes
     a missing sanitizer) return ``rendered=False`` with ``html=None`` so the phone
     falls back to tier-1.
 
-    Runs in a worker thread: Jinja rendering is CPU-bound and the body is
-    client-supplied, so doing it inline would let one request hold the event
-    loop and stall every other request plus the disk watcher.
+    The Jinja expansion runs in a **killable subprocess** under a wall-clock
+    budget (issue #698): the body is client-supplied and CPU-unboundable
+    in-process (nested ``range()`` loops), and the old worker-thread route
+    let 40 slow renders occupy the shared threadpool that also serves the
+    ``/studio/`` static shell. A timed-out render degrades to tier-1 like
+    every other preview failure; no threadpool token is held while waiting.
     """
     service = get_service(request)
     try:
-        rendered, error, html = await run_in_threadpool(
-            service.render_cell, req.deck_id, req.body, is_j2=req.is_j2, lang=req.lang
+        rendered, error, html = await service.render_cell_async(
+            req.deck_id, req.body, is_j2=req.is_j2, lang=req.lang
         )
     except InvalidDeckIdError as e:
         raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e
