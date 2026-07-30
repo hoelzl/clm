@@ -138,9 +138,11 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
     # --plantuml-image / --drawio-image, issue #690). Support both a full
     # image name and the bare-tag shorthand, which expands against the
     # service's default repository from DEFAULT_WORKER_IMAGES — the same
-    # source the pool starter and the cache-key image identity resolve
-    # from, so the shorthand can never name a different repo than the
-    # default path would.
+    # source the pool starter resolves from, so the shorthand can never
+    # name a different repo than the default path would. NOTE: the cache
+    # keys do NOT currently see these overrides (issue #744) — a build
+    # against a new image must pass --ignore-cache to re-render cached
+    # results, and a still-live reused worker pool keeps its old image.
     from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
 
     for worker_type in ["notebook", "plantuml", "drawio"]:
@@ -148,7 +150,9 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
         if not image_value:
             continue
         if "/" not in image_value and ":" not in image_value:
-            # Just a tag (like "lite" or "test"): expand per service.
+            # Just a tag (like "lite" or "test"): expand per service. The
+            # rsplit is safe only while DEFAULT_WORKER_IMAGES values are
+            # colon-tagged with slash-free tags (guarded at its definition).
             repo = DEFAULT_WORKER_IMAGES[worker_type].rsplit(":", 1)[0]
             image_value = f"{repo}:{image_value}"
         elif ":" not in image_value:

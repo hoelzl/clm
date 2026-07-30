@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 # the cache-key image identity in ``compute_worker_image_identity``) resolve
 # the SAME effective image as the pool starter — a divergence here would make
 # the cache key describe a different image than the one actually executing.
+# INVARIANT: every value must carry an explicit colon tag with a slash-free
+# tag part — the CLI bare-tag shorthand (issue #690) derives the repository
+# via rsplit(":", 1), which an untagged registry-port value (localhost:5000/x)
+# would silently break.
 DEFAULT_WORKER_IMAGES = {
     "notebook": "docker.io/mhoelzl/clm-notebook-processor:latest",
     "plantuml": "docker.io/mhoelzl/clm-plantuml-converter:latest",

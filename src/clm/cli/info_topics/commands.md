@@ -64,6 +64,13 @@ Key options:
 | `--notebook-image TEXT` | Docker image for notebook workers. Full name, or a bare tag that expands against the service's default repo (`lite` → `docker.io/mhoelzl/clm-notebook-processor:lite`) |
 | `--plantuml-image TEXT` | Docker image for PlantUML workers; same bare-tag shorthand, per service (CLM {version}, #690) |
 | `--drawio-image TEXT` | Docker image for Draw.io workers; same bare-tag shorthand, per service (CLM {version}, #690) |
+
+**Image-override caveats (#744).** The build caches do not yet key on the
+worker image: when testing a rebuilt/pinned image against unchanged sources,
+pass `--ignore-cache` (or `--force-execute` for notebooks) or cached results
+from the previous image are replayed as hits. Worker *reuse* is also
+image-blind — a still-running worker pool from an earlier build keeps its
+old image, so stop lingering workers first when switching images.
 | `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode |
 | `-L, --language [de\|en]` | Generate only one language |
 | `--speaker-only` | Generate only the private (notes-bearing) outputs — both `trainer` and `recording` kinds. Skips public outputs (`code-along`, `completed`, `partial`). |

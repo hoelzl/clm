@@ -2342,14 +2342,16 @@ async def main_build(
     type=str,
     help="Docker image for PlantUML workers. Full image name or just a tag "
     "(expands to docker.io/mhoelzl/clm-plantuml-converter:<tag>). Only used "
-    "with --workers=docker (issue #690).",
+    "with --workers=docker (issue #690). Caches do not key on the image — "
+    "pass --ignore-cache when testing a new image (issue #744).",
 )
 @click.option(
     "--drawio-image",
     type=str,
     help="Docker image for Draw.io workers. Full image name or just a tag "
     "(expands to docker.io/mhoelzl/clm-drawio-converter:<tag>). Only used "
-    "with --workers=docker (issue #690).",
+    "with --workers=docker (issue #690). Caches do not key on the image — "
+    "pass --ignore-cache when testing a new image (issue #744).",
 )
 @click.option(
     "--output-mode",
