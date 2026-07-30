@@ -1672,10 +1672,14 @@ class TestInitDryRunRecovery:
     stub state — a spurious hard error under the no-changes banner."""
 
     def test_init_dry_run_previews_recovery_without_mutating(self, tmp_path: Path, capsys):
-        from clm.cli.commands.git import init_repo_from_remote
+        from clm.cli.commands.git import _init_create_new_repo
 
+        # Explicit: setup must run for real (a leaked dry-run context would
+        # stub the scaffolding and pass vacuously).
+        _dry_run_mode.set(False)
         # A local bare remote with one commit — remote_exists and
-        # remote_has_commits are both True, no network involved.
+        # remote_has_commits are both True, no network involved, so
+        # _init_create_new_repo genuinely routes into recovery mode.
         remote = tmp_path / "remote.git"
         seed = tmp_path / "seed"
         seed.mkdir()
@@ -1691,11 +1695,11 @@ class TestInitDryRunRecovery:
 
         _dry_run_mode.set(True)
         try:
-            ok = init_repo_from_remote(repo, "next")
+            _init_create_new_repo(repo, "next")
         finally:
             _dry_run_mode.set(False)
         captured = capsys.readouterr()
-        assert ok is True
         assert "Would clone the remote and restore .git" in captured.out
         assert "Error" not in captured.out
+        assert "Error" not in captured.err  # the round-1 symptom used err=True
         assert not (out_dir / ".git").exists()  # nothing mutated
