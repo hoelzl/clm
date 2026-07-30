@@ -75,6 +75,8 @@ def _make_config(**overrides) -> BuildConfig:
         "plantuml_workers": None,
         "drawio_workers": None,
         "notebook_image": None,
+        "plantuml_image": None,
+        "drawio_image": None,
     }
     defaults.update(overrides)
     return BuildConfig(**defaults)
@@ -377,6 +379,8 @@ class TestConfigureWorkers:
             drawio_workers=1,
             max_workers=8,
             notebook_image="myimage:tag",
+            plantuml_image="pimage:tag",
+            drawio_image="dimage:tag",
         )
         worker_config = configure_workers(config)
 
@@ -386,6 +390,23 @@ class TestConfigureWorkers:
         assert worker_config.drawio.count == 1
         assert worker_config.max_workers_cap == 8
         assert worker_config.notebook.image == "myimage:tag"
+        assert worker_config.plantuml.image == "pimage:tag"
+        assert worker_config.drawio.image == "dimage:tag"
+
+    def test_bare_tags_expand_per_service(self) -> None:
+        """Issue #690: the bare-tag shorthand expands against each service's
+        default repository, not the notebook one."""
+        config = _make_config(
+            workers="docker",
+            notebook_image="lite",
+            plantuml_image="test",
+            drawio_image="test",
+        )
+        worker_config = configure_workers(config)
+
+        assert worker_config.notebook.image == "docker.io/mhoelzl/clm-notebook-processor:lite"
+        assert worker_config.plantuml.image == "docker.io/mhoelzl/clm-plantuml-converter:test"
+        assert worker_config.drawio.image == "docker.io/mhoelzl/clm-drawio-converter:test"
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +748,8 @@ class TestInitializePathsAndCourse:
             "plantuml_workers": None,
             "drawio_workers": None,
             "notebook_image": None,
+            "plantuml_image": None,
+            "drawio_image": None,
         }
         defaults.update(overrides)
         return BuildConfig(**defaults)

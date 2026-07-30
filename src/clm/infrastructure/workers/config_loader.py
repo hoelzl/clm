@@ -134,17 +134,28 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
             type_config.count = cli_overrides[count_key]
             logger.info(f"Config override: {worker_type}.count = {type_config.count}")
 
-    # Handle notebook image override
-    # Support both full image name and just the tag suffix
-    if cli_overrides.get("notebook_image"):
-        image_value = cli_overrides["notebook_image"]
-        # If it's just a tag (like "lite" or "full"), construct full image name
+    # Handle per-service image overrides (--notebook-image /
+    # --plantuml-image / --drawio-image, issue #690). Support both a full
+    # image name and the bare-tag shorthand, which expands against the
+    # service's default repository from DEFAULT_WORKER_IMAGES — the same
+    # source the pool starter and the cache-key image identity resolve
+    # from, so the shorthand can never name a different repo than the
+    # default path would.
+    from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
+
+    for worker_type in ["notebook", "plantuml", "drawio"]:
+        image_value = cli_overrides.get(f"{worker_type}_image")
+        if not image_value:
+            continue
         if "/" not in image_value and ":" not in image_value:
-            image_value = f"docker.io/mhoelzl/clm-notebook-processor:{image_value}"
+            # Just a tag (like "lite" or "test"): expand per service.
+            repo = DEFAULT_WORKER_IMAGES[worker_type].rsplit(":", 1)[0]
+            image_value = f"{repo}:{image_value}"
         elif ":" not in image_value:
-            # Has namespace but no tag, add :latest
+            # Has a namespace but no tag, add :latest
             image_value = f"{image_value}:latest"
-        config.notebook.image = image_value
-        logger.info(f"CLI override: notebook.image = {config.notebook.image}")
+        type_config = getattr(config, worker_type)
+        type_config.image = image_value
+        logger.info(f"CLI override: {worker_type}.image = {image_value}")
 
     return config

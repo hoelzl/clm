@@ -502,6 +502,8 @@ class TestCourseOutputAttribute:
             plantuml_workers=None,
             drawio_workers=None,
             notebook_image=None,
+            plantuml_image=None,
+            drawio_image=None,
             language=None,
             speaker_only=False,
         )
@@ -548,6 +550,8 @@ class TestOutputFiltering:
             plantuml_workers=None,
             drawio_workers=None,
             notebook_image=None,
+            plantuml_image=None,
+            drawio_image=None,
             language=language,
             speaker_only=speaker_only,
         )

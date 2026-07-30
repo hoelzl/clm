@@ -61,7 +61,9 @@ Key options:
 | `--plantuml-workers N` | Number of PlantUML workers |
 | `--drawio-workers N` | Number of Draw.io workers |
 | `--max-workers N` | Hard cap on effective worker count per type. Applied on top of automatic CPU/RAM-derived caps. Also settable via the `CLM_MAX_WORKERS` environment variable. Use to keep an oversized spec file (e.g. an 18-worker course override) from saturating a small dev laptop. |
-| `--notebook-image TEXT` | Docker image for notebook workers |
+| `--notebook-image TEXT` | Docker image for notebook workers. Full name, or a bare tag that expands against the service's default repo (`lite` → `docker.io/mhoelzl/clm-notebook-processor:lite`) |
+| `--plantuml-image TEXT` | Docker image for PlantUML workers; same bare-tag shorthand, per service (CLM {version}, #690) |
+| `--drawio-image TEXT` | Docker image for Draw.io workers; same bare-tag shorthand, per service (CLM {version}, #690) |
 | `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode |
 | `-L, --language [de\|en]` | Generate only one language |
 | `--speaker-only` | Generate only the private (notes-bearing) outputs — both `trainer` and `recording` kinds. Skips public outputs (`code-along`, `completed`, `partial`). |
