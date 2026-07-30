@@ -200,6 +200,9 @@ def _read_only_dry_run_env() -> dict[str, str]:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GCM_INTERACTIVE"] = "never"
+    # SSH ignores the vars above — batch mode seals the passphrase/host-key
+    # prompt vector for ssh-form remotes too.
+    env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
     return env
 
 
