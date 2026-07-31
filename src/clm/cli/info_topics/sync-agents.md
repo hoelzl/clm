@@ -43,7 +43,7 @@ writes**. The default is "tell me what is necessary", not "do it".
 
 ## Reading the report
 
-`report --json` emits a schema-3 envelope (`"schema": 3, "engine": "v3"`).
+`report --json` emits a schema-4 envelope (`"schema": 4, "engine": "v3"`).
 Branch on the stable booleans rather than scanning the lists:
 
 - `is_clean` — nothing to do; **stop**. One non-item state suppresses it:
@@ -66,6 +66,32 @@ answer — `apply` executes it). Note the `de`/`en` excerpts **include** the
 `# %%` header line; a `body` answer must **not** (see below). A report whose
 items are *all* `verify_cold` also carries a top-level `hint` — that is the
 seeding case; use `record`, not a confirm-all document (see "Cold members").
+
+### The freshness token (`report_id`) — copy it into your answers
+
+Every pair payload carries three identity fields:
+
+- **`report_id`** — a token over the bundle bytes **plus** this deck's ledger
+  section. Put it at the top level of your decision document
+  (`{"schema": 4, "report_id": "…", "decisions": [...]}`). `apply` recomputes
+  it and, on a mismatch, refuses the **whole document**: exit 2, nothing
+  written, and a message naming both values. That is deliberate — if the deck
+  moved since the report, every answer in the document is suspect, not just
+  the one that no longer matches.
+- **`deck_key`** / **`ledger`** — the deck's trust identity. Two CLI spellings
+  (`slides_x.de.py` and its `voiceover_x.de.py` companion) are **one** deck
+  with **one** ledger section; the companion form now says so on stderr. Two
+  passes over "different" paths are two passes over the same deck.
+
+A document with no `report_id` is still accepted, with a warning naming the
+field — schema 3 predates it. That grace ends in a future release; emit the
+token now.
+
+**Your own `apply` invalidates the token** — it records into the ledger, which
+is half of the token's input. That is deliberate: one report, one apply, then
+re-report. If you are applying a report in stages (`--member` at a time), take
+a fresh report between passes rather than reusing the document; the second
+pass is answering a deck that has already moved.
 
 **Mechanical actions** (no decision needed — `apply` executes them):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
@@ -290,25 +316,33 @@ they do not exist):
 
 ```json
 {
-  "schema": 3, "engine": "v3",
+  "schema": 4, "engine": "v3",
   "dry_run": false,
   "error": null,
   "wrote": true, "written": ["…/slides_x.en.py"],
   "counts": {"applied": 4, "recorded": 2, "deferred": 0, "pending": 1,
-             "rejected": 1, "failed": 0, "skipped": 0},
+             "already_applied": 0, "rejected": 1, "failed": 0, "skipped": 0},
   "items": [
     {"key": "id:intro", "action": "translate_edit",
      "status": "applied", "reason": ""},
     {"key": "id:setup", "action": "verify_cold",
      "status": "rejected", "reason": "…why…"}
   ],
+  "exit_code": 1,
+  "deck_key": "slides_x", "ledger": "…/.clm/sync-ledger.json",
   "ledger_recorded": true,
   "verify_violations": []
 }
 ```
 
 **Always check `counts.rejected` (and each rejected item's `reason`) before
-moving on** — rejections are also echoed to stderr. `pending` = framed items
+moving on** — rejections are also echoed to stderr (in `--json` mode they are
+printed *before* the payload, so a merged stream still ends in valid JSON).
+`already_applied` is **not** a rejection: the member frames nothing now, so
+the state your answer asks for already holds — a sibling pass, an earlier
+apply, or the other CLI spelling of this deck got there first. It does not
+block exit 0. Only a handle naming **no member of this deck** is `rejected`
+as stale. `pending` = framed items
 you did not answer (exit 1, not an error). `deferred` = a record-only row
 whose ledger write was deferred because the member still carries an
 unresolved sibling item — nothing was banked; it re-frames on the next
@@ -486,7 +520,7 @@ sync handoff closes through the ordinary loop.
 
 ## Non-shell agents — the MCP tool
 
-`slides_sync_report` (MCP) returns the same schema-3 pair payload as
+`slides_sync_report` (MCP) returns the same schema-4 pair payload as
 `report --json`, including the `answers` vocabulary per framed item.
 Writing decisions currently requires the CLI `apply --decisions`.
 

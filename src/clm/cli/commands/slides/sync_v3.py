@@ -7,7 +7,7 @@ paths (``sync_verify``) is loaded lazily inside the functions that need it.
 
 Verbs (design §8):
 
-* ``report`` — read-only, ledger-trusted; schema-3 envelope with the stable
+* ``report`` — read-only, ledger-trusted; schema-4 envelope with the stable
   ``is_clean`` / ``needs_model`` / ``needs_agent`` booleans; framed items
   carry their decision vocabulary so an agent can answer in one document.
 * ``apply``  — per-item: every mechanical row plus validated decisions; the
@@ -31,13 +31,16 @@ from clm.slides.doc_report import (
     cold_sweep_hint,
     diff_bundle,
     diff_bundle_at_ref,
+    diff_bundle_with_ledger,
     pair_payload,
+    report_id_for,
 )
 from clm.slides.pairing import (
     find_split_slide_files_recursive,
     iter_split_pairs,
 )
 from clm.slides.sync_diff import DeckDiff
+from clm.slides.sync_wire import REQUIRE_REPORT_ID, WIRE_SCHEMA
 
 __all__ = ["run_apply_v3", "run_record_v3", "run_report_v3"]
 
@@ -118,7 +121,7 @@ def run_report_v3(
     this window"), never a trust change: the ledger is neither consulted nor
     written, and nothing else about the verb differs.
     """
-    results: list[tuple[LoadedBundle, DeckDiff, list[str]]] = []
+    results: list[tuple[LoadedBundle, DeckDiff, list[str], doc_ledger.TopicLedger | None]] = []
     errors: list[str] = []
     pairs, solos = _scope_pairs(de_path, en_path)
     _warn_solos(solos)
@@ -128,38 +131,41 @@ def run_report_v3(
         except DocLensError as exc:
             errors.append(str(exc))
             continue
+        ledger: doc_ledger.TopicLedger | None = None
         if since_ref is not None:
             diff, base_refusal = diff_bundle_at_ref(bundle, since_ref)
         else:
-            diff, base_refusal = diff_bundle(bundle), []
-        results.append((bundle, diff, base_refusal))
-    clean = all(diff.is_clean for _, diff, _refusal in results) and not errors
+            (diff, ledger), base_refusal = diff_bundle_with_ledger(bundle), []
+        results.append((bundle, diff, base_refusal, ledger))
+    clean = all(diff.is_clean for _, diff, _refusal, _l in results) and not errors
     if as_json:
         payloads = []
-        for bundle, diff, base_refusal in results:
-            payload = pair_payload(bundle, diff)
+        for bundle, diff, base_refusal, ledger in results:
+            payload = pair_payload(bundle, diff, ledger=ledger)
             if since_ref is not None:
                 payload["baseline"] = f"since:{since_ref}"
                 if base_refusal:
                     payload["base_refusal"] = base_refusal
             payloads.append(payload)
         if not de_path.is_dir() and len(payloads) == 1 and not errors:
+            payloads[0]["exit_code"] = 0 if clean else 1
             _echo_json(payloads[0])
         else:
             _echo_json(
                 {
-                    "schema": 3,
+                    "schema": WIRE_SCHEMA,
                     "engine": "v3",
+                    "exit_code": 0 if clean else 1,
                     "is_clean": clean,
-                    "needs_model": any(d.needs_model for _, d, _r in results),
-                    "needs_agent": any(d.needs_agent for _, d, _r in results) or bool(errors),
+                    "needs_model": any(d.needs_model for _, d, _r, _l in results),
+                    "needs_agent": any(d.needs_agent for _, d, _r, _l in results) or bool(errors),
                     "errors": errors,
                     "skipped_solos": [str(p) for p in solos],
                     "pairs": payloads,
                 }
             )
     else:
-        for bundle, diff, base_refusal in results:
+        for bundle, diff, base_refusal, _ledger in results:
             click.echo(_render_pair(bundle, diff))
             if base_refusal:
                 click.echo(
@@ -208,17 +214,46 @@ def run_apply_v3(
             )
         except OSError as exc:
             raise click.UsageError(f"cannot read the decision document: {exc}") from exc
-        decisions, decision_errors = doc_apply.load_decisions_text(text)
+        document, decision_errors = doc_apply.load_decision_document(text)
+        if not decision_errors:
+            decision_errors = _report_id_errors(bundle, document)
         if decision_errors:
             for error in decision_errors:
                 click.echo(f"decision error: {error}", err=True)
+            if as_json:
+                # M14: the refusal paths must not differ in shape. A parse or
+                # freshness refusal used to exit 2 with an EMPTY stdout while
+                # the apply-refusal path emitted an envelope, so a --json
+                # consumer saw "no output" and could not tell a crash from a
+                # rejection.
+                _echo_json(
+                    {
+                        "schema": WIRE_SCHEMA,
+                        "engine": "v3",
+                        "exit_code": 2,
+                        "error": "; ".join(decision_errors),
+                        "decision_errors": decision_errors,
+                        "wrote": False,
+                        "items": [],
+                    }
+                )
             return 2
+        decisions = document.decisions
 
     diff = diff_bundle(bundle)
     if diff.refusal is not None:
         message = diff.refusal.render()
         if as_json:
-            _echo_json({"schema": 3, "engine": "v3", "error": message, "items": []})
+            _echo_json(
+                {
+                    "schema": WIRE_SCHEMA,
+                    "engine": "v3",
+                    "exit_code": 2,
+                    "error": message,
+                    "wrote": False,
+                    "items": [],
+                }
+            )
         else:
             click.echo(message, err=True)
         return 2
@@ -258,45 +293,99 @@ def run_apply_v3(
         if not verify_violations:
             doc_ledger.save(ledger, ledger_path)
 
+    rejected = [r for r in outcome.results if r.status == "rejected"]
+    exit_code = (
+        2
+        if outcome.error is not None
+        else (0 if outcome.all_applied and not verify_violations else 1)
+    )
     if as_json:
+        # M14/C7: the rejection block goes to stderr BEFORE the payload. It
+        # used to print after, so a consumer merging the two streams got JSON
+        # with prose appended — unparseable exactly when something went wrong.
+        _echo_rejections(rejected)
         payload = outcome.to_payload()
+        payload["exit_code"] = exit_code
+        payload["deck_key"] = doc_ledger.deck_key_for(bundle.de_path)
+        payload["ledger"] = str(ledger_path)
         payload["ledger_recorded"] = outcome.ledger_changed and not verify_violations
         payload["verify_violations"] = verify_violations
         _echo_json(payload)
-    else:
-        for result in outcome.results:
-            click.echo(f"  {result.status:8s} {result.action} {result.key}  {result.reason}")
-        if outcome.error:
-            click.echo(f"ERROR: {outcome.error}", err=True)
-        elif outcome.wrote:
-            names = ", ".join(p.name for p in outcome.written_paths)
-            click.echo(f"wrote {names}" + (" (dry run)" if dry_run else ""))
-        elif dry_run:
-            click.echo("dry run — nothing written")
-        for violation in verify_violations:
-            click.echo(f"verify: {violation}", err=True)
-        if verify_violations:
-            click.echo(
-                "structural verify failed — applied changes were written but NOT "
-                "recorded into the ledger; fix the pair, then `sync record`. If the "
-                "divergence is in a voiceover companion and is intentional, "
-                "`--allow-diverged-companion` records it anyway (logged)",
-                err=True,
-            )
-    rejected = [r for r in outcome.results if r.status == "rejected"]
-    if rejected:
-        # Stderr in both modes: agents parsing --json counts alone provably
-        # committed with rejections unnoticed. Keep it one line per item.
+        return exit_code
+
+    for result in outcome.results:
+        click.echo(f"  {result.status:8s} {result.action} {result.key}  {result.reason}")
+    if outcome.error:
+        click.echo(f"ERROR: {outcome.error}", err=True)
+    elif outcome.wrote:
+        names = ", ".join(p.name for p in outcome.written_paths)
+        click.echo(f"wrote {names}" + (" (dry run)" if dry_run else ""))
+    elif dry_run:
+        click.echo("dry run — nothing written")
+    for violation in verify_violations:
+        click.echo(f"verify: {violation}", err=True)
+    if verify_violations:
         click.echo(
-            f"{len(rejected)} decision(s) rejected — each item's accepted answers "
-            "come from report --json (its `answers` list); see `clm info sync-agents`:",
+            "structural verify failed — applied changes were written but NOT "
+            "recorded into the ledger; fix the pair, then `sync record`. If the "
+            "divergence is in a voiceover companion and is intentional, "
+            "`--allow-diverged-companion` records it anyway (logged)",
             err=True,
         )
-        for result in rejected:
-            click.echo(f"  {result.key} ({result.action}): {result.reason}", err=True)
-    if outcome.error is not None:
-        return 2
-    return 0 if outcome.all_applied and not verify_violations else 1
+    _echo_rejections(rejected)
+    return exit_code
+
+
+def _echo_rejections(rejected: list[doc_apply.ItemResult]) -> None:
+    """The per-item rejection block — stderr in both modes.
+
+    Agents parsing ``--json`` counts alone provably committed with rejections
+    unnoticed, so this is never silent.
+    """
+    if not rejected:
+        return
+    click.echo(
+        f"{len(rejected)} decision(s) rejected — each item's accepted answers "
+        "come from report --json (its `answers` list); see `clm info sync-agents`:",
+        err=True,
+    )
+    for result in rejected:
+        click.echo(f"  {result.key} ({result.action}): {result.reason}", err=True)
+
+
+def _report_id_errors(bundle: LoadedBundle, document: doc_apply.DecisionDocument) -> list[str]:
+    """Refuse a decision document written against a report that has expired.
+
+    Wholesale, before anything is written (Q2): a stale document's *other*
+    answers are as suspect as the one that no longer matches, and the old
+    per-handle rejection let the first apply's writes stand while telling the
+    second one its decisions were stale (#649).
+
+    A document with no token is accepted with a warning — schema 3 predates
+    the field, and the drivers that emit those documents are still in flight.
+    :data:`~clm.slides.sync_wire.REQUIRE_REPORT_ID` flips that in the release
+    that drops schema 3.
+    """
+    if document.report_id is None:
+        message = (
+            "decision document carries no `report_id` — copy it from the report "
+            "envelope so apply can refuse a document answering a report that no "
+            "longer describes this deck"
+        )
+        if REQUIRE_REPORT_ID:
+            return [message]
+        click.echo(f"warning: {message} (accepted for now)", err=True)
+        return []
+    current = report_id_for(bundle)
+    if document.report_id == current:
+        return []
+    return [
+        f"decision document was written against report_id {document.report_id!r}, "
+        f"but this deck is now {current!r} — the bundle or its ledger section "
+        "changed since that report (an edit, a sibling apply, or the companion "
+        "spelling of the same deck). Nothing was written: re-run "
+        "`clm slides sync report DECK --json` and answer the fresh items"
+    ]
 
 
 def _head_commit(path: Path) -> str | None:
@@ -353,7 +442,7 @@ def run_record_v3(
     if as_json:
         _echo_json(
             {
-                "schema": 3,
+                "schema": WIRE_SCHEMA,
                 "engine": "v3",
                 "recorded": sum(r.get("recorded", 0) for r in rows),
                 "unchanged": sum(

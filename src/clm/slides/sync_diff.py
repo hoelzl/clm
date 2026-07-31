@@ -82,6 +82,7 @@ from clm.slides.doc_identity import (
 from clm.slides.doc_identity import (
     pair_signature as _pair_sig,
 )
+from clm.slides.sync_wire import WIRE_SCHEMA
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
 
@@ -351,10 +352,10 @@ class DeckDiff:
         )
 
     def to_payload(self) -> dict:
-        """The self-describing JSON envelope (design §12.5, ``schema: 3``)."""
+        """The self-describing JSON envelope (design §12.5, :data:`WIRE_SCHEMA`)."""
         counts = Counter(i.outcome for i in self.items)
         return {
-            "schema": 3,
+            "schema": WIRE_SCHEMA,
             "engine": "v3",
             "is_clean": self.is_clean,
             "needs_model": self.needs_model,

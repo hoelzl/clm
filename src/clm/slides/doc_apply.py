@@ -44,7 +44,7 @@ from pathlib import Path
 
 from attrs import define, evolve, field, frozen
 
-from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, SideCell
+from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, MemberKey, SideCell
 from clm.slides.doc_identity import (
     content_fingerprint,
     iter_with_groups,
@@ -72,6 +72,7 @@ from clm.slides.sync_diff import (
     DeckDiff,
     DiffItem,
 )
+from clm.slides.sync_wire import ACCEPTED_DECISION_SCHEMAS, WIRE_SCHEMA
 from clm.slides.sync_writeback import set_header_tags, swap_lang
 
 __all__ = [
@@ -81,6 +82,7 @@ __all__ = [
     "apply_deck",
     "decision_vocabulary",
     "item_answers",
+    "load_decision_document",
     "parse_decisions",
 ]
 
@@ -223,11 +225,60 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
 
 def load_decisions_text(text: str) -> tuple[dict[str, Decision], list[str]]:
     """:func:`parse_decisions` over raw JSON text."""
+    document, errors = load_decision_document(text)
+    return document.decisions, errors
+
+
+@frozen
+class DecisionDocument:
+    """A parsed decision document: its answers plus its schema-4 envelope.
+
+    ``report_id`` is the freshness token copied out of the report envelope
+    (:func:`clm.slides.doc_report.report_id_for`). ``None`` means a schema-3
+    document that predates the token — accepted for now, warned about by the
+    caller (:mod:`clm.slides.sync_wire`).
+    """
+
+    decisions: dict[str, Decision] = field(factory=dict)
+    report_id: str | None = None
+    schema: int | None = None
+
+
+def load_decision_document(text: str) -> tuple[DecisionDocument, list[str]]:
+    """Decode a decision document's answers *and* its envelope from JSON text.
+
+    The envelope is validated here rather than at the CLI so every consumer
+    (CLI, MCP, a future driver) refuses the same documents: an unknown schema
+    is an error, not a field to ignore — silently accepting a document written
+    for a contract this engine does not implement is how an answer means one
+    thing to its author and another to the executor.
+    """
     try:
         payload = json.loads(text)
     except ValueError as exc:
-        return {}, [f"decision document is not valid JSON: {exc}"]
-    return parse_decisions(payload)
+        return DecisionDocument(), [f"decision document is not valid JSON: {exc}"]
+    decisions, errors = parse_decisions(payload)
+    report_id: str | None = None
+    schema: int | None = None
+    if isinstance(payload, dict):
+        raw_id = payload.get("report_id")
+        if raw_id is not None and not isinstance(raw_id, str):
+            errors.append("'report_id' must be the string from the report envelope")
+        else:
+            report_id = raw_id
+        raw_schema = payload.get("schema")
+        if raw_schema is not None:
+            if not isinstance(raw_schema, int) or isinstance(raw_schema, bool):
+                errors.append("'schema' must be an integer")
+            elif raw_schema not in ACCEPTED_DECISION_SCHEMAS:
+                accepted = ", ".join(str(s) for s in ACCEPTED_DECISION_SCHEMAS)
+                errors.append(
+                    f"decision document announces schema {raw_schema}; this clm "
+                    f"reads {accepted} (see `clm info sync-agents`)"
+                )
+            else:
+                schema = raw_schema
+    return DecisionDocument(decisions=decisions, report_id=report_id, schema=schema), errors
 
 
 def _validate_body(body: str, comment_token: str) -> str | None:
@@ -348,7 +399,14 @@ class ItemResult:
     #:            the member still carries an unresolved sibling item (#615);
     #:            nothing happened — the row re-frames on the next report
     #: pending  — framed item without a decision (untouched residue)
-    #: rejected — a supplied decision failed validation (nothing changed)
+    #: already_applied — the answered member frames nothing now: the effect
+    #:            this decision asks for already holds (a sibling pass, an
+    #:            earlier apply, or the two CLI spellings of one deck). Not a
+    #:            failure — the schema-4 split of the verdict that used to
+    #:            read "rejected — stale handle" while the write had landed
+    #:            (#649)
+    #: rejected — a supplied decision failed validation, or named a member
+    #:            this deck does not have (nothing changed)
     #: failed   — a mechanical row the executor could not resolve safely
     #: skipped  — excluded by the ``--member`` filter
     status: str
@@ -384,11 +442,16 @@ class ApplyOutcome:
 
     @property
     def all_applied(self) -> bool:
-        return self.error is None and all(r.status in ("applied", "recorded") for r in self.results)
+        # ``already_applied`` is a success: the state the decision asks for
+        # holds. Counting it as residue is what made a re-run of a landed
+        # apply exit 1 while reporting nothing left to do (#649).
+        return self.error is None and all(
+            r.status in ("applied", "recorded", "already_applied") for r in self.results
+        )
 
     def to_payload(self) -> dict:
         return {
-            "schema": 3,
+            "schema": WIRE_SCHEMA,
             "engine": "v3",
             "dry_run": self.dry_run,
             "error": self.error,
@@ -401,6 +464,7 @@ class ApplyOutcome:
                     "recorded",
                     "deferred",
                     "pending",
+                    "already_applied",
                     "rejected",
                     "failed",
                     "skipped",
@@ -1533,6 +1597,39 @@ def _execute_mechanical(ex: _Executor, item: DiffItem) -> None:
         raise _ItemError(f"no executor for mechanical action '{action}'")
 
 
+def _unmatched_decision_result(key: str, deck: BilingualDeck) -> ItemResult:
+    """Classify a decision whose key names no item in the current diff.
+
+    Two very different situations wore one verdict before schema 4. If the
+    member *exists* and simply frames nothing, the answer is redundant, not
+    wrong — the effect it asks for already holds, because a sibling pass, an
+    earlier apply, or the other CLI spelling of this same deck already did it.
+    Reporting that as ``rejected`` is what made #649 read as "rejected" while
+    the write had demonstrably landed. Only a key that names no member of this
+    deck at all is a genuine stale handle.
+    """
+    try:
+        member = deck.member_by_key(MemberKey.parse(key))
+    except ValueError:
+        member = None
+    if member is not None:
+        return ItemResult(
+            key,
+            "?",
+            "already_applied",
+            "the member frames nothing in the current report — the state this "
+            "answer asks for already holds (nothing to do)",
+        )
+    return ItemResult(
+        key,
+        "?",
+        "rejected",
+        "no member with this handle in the deck — check the key against "
+        "`report --json`, and note that a companion path and its deck are one "
+        "deck with one ledger section",
+    )
+
+
 def apply_deck(
     bundle: LoadedBundle,
     deck: BilingualDeck,
@@ -1572,8 +1669,19 @@ def apply_deck(
     for _, item in ordered:
         if only_members is not None and item.key not in only_members:
             unresolved_items.append(item)  # a skipped pool sibling must not be blessed
+            answered = item.key in decisions
+            if answered:
+                # Claim the handle so the unmatched-decision sweep below does
+                # not then classify it: the answer was neither stale nor
+                # already satisfied — the filter simply did not run it.
+                seen_decisions.add(item.key)
             outcome.results.append(
-                ItemResult(item.key, item.action, "skipped", "excluded by --member")
+                ItemResult(
+                    item.key,
+                    item.action,
+                    "skipped",
+                    "excluded by --member" + (" (its answer was not used)" if answered else ""),
+                )
             )
             continue
         decision = decisions.get(item.key)
@@ -1623,11 +1731,7 @@ def apply_deck(
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
     for key in decisions:
         if key not in seen_decisions:
-            outcome.results.append(
-                ItemResult(
-                    key, "?", "rejected", "no such item in the current report (stale handle)"
-                )
-            )
+            outcome.results.append(_unmatched_decision_result(key, deck))
 
     if not landed:
         return outcome

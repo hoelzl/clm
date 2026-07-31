@@ -25,6 +25,7 @@ from clm.mcp.tools import (
     handle_validate_slides,
     handle_validate_spec,
 )
+from clm.slides.sync_wire import WIRE_SCHEMA
 
 
 @pytest.fixture()
@@ -882,7 +883,7 @@ class TestSyncReport:
         de_path, en_path = self._pair(tmp_path)
         self._record(de_path, en_path)
         data = json.loads(await handle_sync_report(str(de_path), tmp_path))
-        assert data["schema"] == 3
+        assert data["schema"] == WIRE_SCHEMA
         assert data["engine"] == "v3"
         assert data["is_clean"] is True
         assert data["needs_model"] is False
@@ -921,7 +922,7 @@ class TestSyncReport:
         self._pair(tmp_path)
         # The bilingual STEM (no .de/.en tag), passed relative — both halves derive.
         data = json.loads(await handle_sync_report("deck.py", tmp_path))
-        assert data["schema"] == 3 and "is_clean" in data
+        assert data["schema"] == WIRE_SCHEMA and "is_clean" in data
 
     async def test_non_split_file_errors(self, tmp_path):
         lone = tmp_path / "bilingual.py"  # no .de/.en tag, no twin on disk

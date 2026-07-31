@@ -9,16 +9,20 @@ onto this module). Read-only: nothing here writes a file or the ledger.
 
 from __future__ import annotations
 
+import hashlib
+
 from clm.slides import doc_apply, doc_ledger
-from clm.slides.doc_lenses import LoadedBundle
+from clm.slides.doc_lenses import LoadedBundle, project
 from clm.slides.sync_diff import DeckDiff, diff_outcome
 
 __all__ = [
     "cold_sweep_hint",
     "diff_bundle",
     "diff_bundle_at_ref",
+    "diff_bundle_with_ledger",
     "item_payloads",
     "pair_payload",
+    "report_id_for",
 ]
 
 
@@ -28,10 +32,21 @@ def diff_bundle(bundle: LoadedBundle) -> DeckDiff:
     A deck with no ledger entry diffs against ``None`` — every member is
     cold (``verify_cold``), never silently trusted (design §5).
     """
+    return diff_bundle_with_ledger(bundle)[0]
+
+
+def diff_bundle_with_ledger(bundle: LoadedBundle) -> tuple[DeckDiff, doc_ledger.TopicLedger]:
+    """:func:`diff_bundle`, handing back the ledger it loaded.
+
+    The report needs the same topic ledger twice — once for the baseline and
+    once for the schema-4 ``report_id`` — and a directory sweep pays that per
+    deck. Threading it through instead of loading it twice is most of the
+    difference between a 37% and an 11% slowdown on a 24-deck module report.
+    """
     ledger = doc_ledger.load(doc_ledger.ledger_path_for(bundle.de_path))
     deck_ledger = ledger.decks.get(doc_ledger.deck_key_for(bundle.de_path))
     base = doc_ledger.baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
-    return diff_outcome(bundle.outcome, base)
+    return diff_outcome(bundle.outcome, base), ledger
 
 
 def diff_bundle_at_ref(bundle: LoadedBundle, ref: str) -> tuple[DeckDiff, list[str]]:
@@ -106,12 +121,80 @@ def cold_sweep_hint(diff: DeckDiff) -> str | None:
     return None
 
 
-def pair_payload(bundle: LoadedBundle, diff: DeckDiff) -> dict:
-    """The full schema-3 report payload for one pair."""
+def report_id_for(bundle: LoadedBundle, ledger: doc_ledger.TopicLedger | None = None) -> str:
+    """The schema-4 freshness token for one pair (:mod:`clm.slides.sync_wire`).
+
+    ``hash(bundle bytes + this deck's ledger section)`` — the two inputs that
+    together decide every verdict in the report. An agent echoes the value in
+    its decision document and ``apply`` refuses the document when the current
+    value differs, so "the report you answered no longer describes this deck"
+    becomes a first-class, self-explaining refusal instead of a set of
+    handle-by-handle rejections whose writes had already landed (#649, Q2).
+
+    Deliberately covers the *whole* bundle, not just the deck halves: a
+    separated voiceover companion is part of the same member table, and the
+    ``voiceover_x`` / ``slides_x`` CLI spellings resolve to one deck, so a
+    companion edit must invalidate the deck's report.
+
+    The bundle half comes from the **projection** of the parsed deck, not from
+    re-reading the files. ``project . parse`` is byte-identity by construction
+    (design §4, property-tested), so the value is the same while a sweep pays
+    no second read per file — and, more importantly, report time and apply
+    time run the *same* function, so the two ends cannot disagree even about a
+    byte the lens would normalize. A bundle that refuses to parse has no
+    projection; there the file bytes are hashed directly.
+    """
+    digest = hashlib.sha256()
+    deck = bundle.outcome.deck
+    for path, lang, part in (
+        (bundle.de_path, "de", "deck"),
+        (bundle.en_path, "en", "deck"),
+        (bundle.de_companion_path, "de", "companion"),
+        (bundle.en_companion_path, "en", "companion"),
+    ):
+        if path is None:
+            digest.update(b"\x00absent\x00")
+            continue
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\x00")
+        text = project(deck, lang, part) if deck is not None else None  # type: ignore[arg-type]
+        if text is not None:
+            digest.update(text.encode("utf-8"))
+        else:
+            try:
+                digest.update(path.read_bytes())
+            except OSError:  # pragma: no cover - the bundle was just read
+                digest.update(b"<unreadable>")
+        digest.update(b"\x00")
+    if ledger is None:
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(bundle.de_path))
+    digest.update(
+        doc_ledger.deck_section_fingerprint(ledger, doc_ledger.deck_key_for(bundle.de_path)).encode(
+            "utf-8"
+        )
+    )
+    return digest.hexdigest()[:16]
+
+
+def pair_payload(
+    bundle: LoadedBundle, diff: DeckDiff, *, ledger: doc_ledger.TopicLedger | None = None
+) -> dict:
+    """The full schema-4 report payload for one pair.
+
+    ``ledger`` is the already-loaded topic ledger when the caller has one
+    (:func:`diff_bundle_with_ledger`): the token needs the same section the
+    baseline came from, and re-loading it per deck is pure waste on a sweep.
+    """
     payload = diff.to_payload()
     payload["items"] = item_payloads(diff)
     payload["de_path"] = str(bundle.de_path)
     payload["en_path"] = str(bundle.en_path)
+    # The deck's trust identity, spelled out: `voiceover_x` and `slides_x` are
+    # two CLI spellings of ONE deck sharing ONE ledger section, which is how
+    # #649's second apply found its decisions already satisfied.
+    payload["deck_key"] = doc_ledger.deck_key_for(bundle.de_path)
+    payload["ledger"] = str(doc_ledger.ledger_path_for(bundle.de_path))
+    payload["report_id"] = report_id_for(bundle, ledger)
     hint = cold_sweep_hint(diff)
     if hint is not None:
         payload["hint"] = hint

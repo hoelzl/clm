@@ -36,6 +36,7 @@ runners).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -55,6 +56,7 @@ __all__ = [
     "TopicLedger",
     "baseline_from_ledger",
     "deck_key_for",
+    "deck_section_fingerprint",
     "ledger_path_for",
     "load",
     "preserve_unchanged_member",
@@ -149,6 +151,25 @@ def deck_key_for(de_path: Path) -> str:
         if stem.endswith(lang_suffix):
             return stem[: -len(lang_suffix)]
     return stem
+
+
+def deck_section_fingerprint(ledger: TopicLedger, deck_key: str) -> str:
+    """A stable digest of one deck's ledger section — the trust half of the
+    schema-4 ``report_id`` (:mod:`clm.slides.sync_wire`).
+
+    Hashes the section's *canonical* JSON, so it is exactly as sensitive as
+    the committed artifact: any recorded fingerprint, order scope, owner ref
+    or provenance stamp that moved changes the digest, and a re-save that
+    changes no content does not. An absent section (never-recorded deck) is
+    its own value — cold is a state a decision can be written against, and a
+    document answering a cold report must not survive the deck being
+    recorded out from under it.
+    """
+    deck = ledger.decks.get(deck_key)
+    if deck is None:
+        return "cold"
+    payload = json.dumps(_deck_to_json(deck), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------

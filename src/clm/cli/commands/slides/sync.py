@@ -140,6 +140,17 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
                 # Issue #501: pointing sync at a companion reconciles its *deck* pair.
                 deck = _deck_for_companion(de_path)
                 if deck is not None:
+                    # Say so (#649 / finding C7): the redirect used to be
+                    # silent, so `voiceover_x` and `slides_x` looked like two
+                    # decks while being one deck with one ledger section —
+                    # two "independent" passes then raced, and the second
+                    # found its decisions already satisfied.
+                    click.echo(
+                        f"note: {de_path.name} is a voiceover companion — reconciling "
+                        f"its deck {deck.name} (the deck halves and their companions "
+                        f"are one member table with one ledger section)",
+                        err=True,
+                    )
                     return _resolve_single_path(deck, None)
                 raise click.UsageError(
                     f"{de_path.name} is a voiceover companion, but its slide deck could "

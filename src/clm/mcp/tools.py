@@ -761,7 +761,7 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
     """Produce the sync report for a split DE/EN deck pair (v3 engine, #520).
 
     Runs the *same* read verb as ``clm slides sync report --json`` and returns the
-    schema-3 member table: per-member items (mechanical vs framed actions, each
+    schema-4 member table: per-member items (mechanical vs framed actions, each
     framed item carrying its decision-answer vocabulary) diffed against the
     committed per-topic ledger — the only trust store. This is the blessed agent
     contract for non-shell agents (the split-pair analogue of the legacy
@@ -774,7 +774,7 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         data_dir: Root data directory (a relative ``file`` resolves against it).
 
     Returns:
-        JSON: the schema-3 pair payload (``de_path`` / ``en_path``, the ``items``
+        JSON: the schema-4 pair payload (``de_path`` / ``en_path``, the ``items``
         rows, and ``is_clean`` / ``needs_model`` / ``needs_agent``), or an
         ``{"error": …}`` object.
     """
