@@ -17,6 +17,15 @@ validators, ledger storage, split/unify lens) and their behavioral oracles.
 **Relation to #448**: this note *finishes* the consistency-ledger direction —
 the ledger becomes the only trust store instead of the fourth.
 
+**Satellite design docs** (forward design that lives outside this note — keep
+this index current; a satellite with no entry here is invisible, the review's
+D2 finding):
+
+| Doc | Scope |
+|---|---|
+| `sync-tag-parity-conflicts.md` | #615 — tags as a pair invariant; the `mirror_tags` / `record_tags` / `conflict_tags` rows |
+| `sync-slide-hood-is-presentation.md` | #653 — slide-hood is a presentation attribute, not an identity regime; id-delimited scopes; ledger schema 3 |
+
 ---
 
 ## 1. Problem and goals
