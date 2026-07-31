@@ -9,6 +9,8 @@ onto this module). Read-only: nothing here writes a file or the ledger.
 
 from __future__ import annotations
 
+import hashlib
+
 from clm.slides import doc_apply, doc_ledger
 from clm.slides.doc_lenses import LoadedBundle
 from clm.slides.sync_diff import DeckDiff, diff_outcome
@@ -19,6 +21,7 @@ __all__ = [
     "diff_bundle_at_ref",
     "item_payloads",
     "pair_payload",
+    "report_id_for",
 ]
 
 
@@ -106,12 +109,59 @@ def cold_sweep_hint(diff: DeckDiff) -> str | None:
     return None
 
 
+def report_id_for(bundle: LoadedBundle) -> str:
+    """The schema-4 freshness token for one pair (:mod:`clm.slides.sync_wire`).
+
+    ``hash(bundle bytes + this deck's ledger section)`` — the two inputs that
+    together decide every verdict in the report. An agent echoes the value in
+    its decision document and ``apply`` refuses the document when the current
+    value differs, so "the report you answered no longer describes this deck"
+    becomes a first-class, self-explaining refusal instead of a set of
+    handle-by-handle rejections whose writes had already landed (#649, Q2).
+
+    Deliberately covers the *whole* bundle, not just the deck halves: a
+    separated voiceover companion is part of the same member table, and the
+    ``voiceover_x`` / ``slides_x`` CLI spellings resolve to one deck, so a
+    companion edit must invalidate the deck's report.
+    """
+    digest = hashlib.sha256()
+    for path in (
+        bundle.de_path,
+        bundle.en_path,
+        bundle.de_companion_path,
+        bundle.en_companion_path,
+    ):
+        if path is None:
+            digest.update(b"\x00absent\x00")
+            continue
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\x00")
+        try:
+            digest.update(path.read_bytes())
+        except OSError:  # pragma: no cover - the bundle was just read
+            digest.update(b"<unreadable>")
+        digest.update(b"\x00")
+    ledger = doc_ledger.load(doc_ledger.ledger_path_for(bundle.de_path))
+    digest.update(
+        doc_ledger.deck_section_fingerprint(ledger, doc_ledger.deck_key_for(bundle.de_path)).encode(
+            "utf-8"
+        )
+    )
+    return digest.hexdigest()[:16]
+
+
 def pair_payload(bundle: LoadedBundle, diff: DeckDiff) -> dict:
-    """The full schema-3 report payload for one pair."""
+    """The full schema-4 report payload for one pair."""
     payload = diff.to_payload()
     payload["items"] = item_payloads(diff)
     payload["de_path"] = str(bundle.de_path)
     payload["en_path"] = str(bundle.en_path)
+    # The deck's trust identity, spelled out: `voiceover_x` and `slides_x` are
+    # two CLI spellings of ONE deck sharing ONE ledger section, which is how
+    # #649's second apply found its decisions already satisfied.
+    payload["deck_key"] = doc_ledger.deck_key_for(bundle.de_path)
+    payload["ledger"] = str(doc_ledger.ledger_path_for(bundle.de_path))
+    payload["report_id"] = report_id_for(bundle)
     hint = cold_sweep_hint(diff)
     if hint is not None:
         payload["hint"] = hint

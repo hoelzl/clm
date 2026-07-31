@@ -14,6 +14,7 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.slides.sync import slides_sync_group
+from clm.slides.sync_wire import WIRE_SCHEMA
 
 
 @pytest.fixture
@@ -50,6 +51,14 @@ def _write_pair(tmp_path: Path) -> tuple[Path, Path]:
     return de, en
 
 
+def _stderr(result) -> str:
+    """The runner's stderr, on Click 8.1 (split streams) and 8.2+ alike."""
+    try:
+        return result.stderr or ""
+    except ValueError:  # streams not separated on this Click
+        return result.output
+
+
 def _json_payload(output: str) -> dict:
     # raw_decode: the runner may append stderr lines (e.g. apply's rejected
     # summary) after the JSON document — parse the object, ignore the rest.
@@ -66,7 +75,7 @@ class TestSyncLoop:
         cold = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert cold.exit_code == 1, cold.output
         payload = _json_payload(cold.output)
-        assert payload["schema"] == 3 and payload["engine"] == "v3"
+        assert payload["schema"] == WIRE_SCHEMA and payload["engine"] == "v3"
         assert payload["is_clean"] is False
         assert payload["needs_agent"] is True
         assert {i["action"] for i in payload["items"]} == {"verify_cold"}
@@ -391,3 +400,175 @@ class TestOrderObservationRender:
         assert result.exit_code == 1
         assert "observation/group_order_divergence" in result.output
         assert "mirror_order" in result.output
+
+
+class TestReportIdentity:
+    """Schema 4's freshness token and deck identity (Q2 / finding C7, #649)."""
+
+    def test_report_payload_carries_the_deck_identity_and_a_token(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, _en = _write_pair(tmp_path)
+        payload = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        assert payload["deck_key"] == "slides_t"
+        assert payload["ledger"].endswith("sync-ledger.json")
+        assert isinstance(payload["report_id"], str) and payload["report_id"]
+        # M14: the envelope says what the process exited with.
+        assert payload["exit_code"] == 1
+
+    def test_token_tracks_the_bundle_and_the_ledger(self, cli_runner: CliRunner, tmp_path: Path):
+        de, en = _write_pair(tmp_path)
+
+        def token() -> str:
+            out = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+            return _json_payload(out)["report_id"]
+
+        cold = token()
+        assert token() == cold  # stable: same bytes, same ledger
+
+        # `record` changes no file, but it changes the trust half.
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        recorded = token()
+        assert recorded != cold
+
+        # An edit to EITHER half changes the bundle half.
+        en.write_text(en.read_text(encoding="utf-8").replace("EN text", "EN edited"), "utf-8")
+        assert token() != recorded
+
+    def test_stale_token_refuses_the_whole_document_and_writes_nothing(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        before = en.read_text(encoding="utf-8")
+
+        # The deck moves on after the report was taken (a sibling pass, an
+        # editor save, the companion spelling of the same deck) — #649.
+        de.write_text(de.read_text(encoding="utf-8").replace("DE neu", "DE neuer"), "utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {
+                    "schema": WIRE_SCHEMA,
+                    "report_id": report["report_id"],
+                    "decisions": [{"key": "id:s0-m", "body": "# EN new"}],
+                }
+            ),
+        )
+        assert result.exit_code == 2
+        assert en.read_text(encoding="utf-8") == before  # nothing written
+        # The refusal is a JSON envelope, not an empty stdout (M14).
+        payload = _json_payload(result.output)
+        assert payload["exit_code"] == 2 and payload["wrote"] is False
+        assert "report_id" in payload["error"]
+
+    def test_matching_token_applies(self, cli_runner: CliRunner, tmp_path: Path):
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {
+                    "schema": WIRE_SCHEMA,
+                    "report_id": report["report_id"],
+                    "decisions": [{"key": "id:s0-m", "body": "# EN new"}],
+                }
+            ),
+        )
+        assert result.exit_code == 0, result.output
+        assert "# EN new" in en.read_text(encoding="utf-8")
+
+    def test_document_without_a_token_is_accepted_with_a_warning(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # Schema 3 predates the field; drivers emitting those documents keep
+        # working for one release, but they are told what to add.
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps({"decisions": [{"key": "id:s0-m", "body": "# EN new"}]}),
+        )
+        assert result.exit_code == 0, result.output
+        assert "# EN new" in en.read_text(encoding="utf-8")
+        assert "report_id" in _stderr(result)
+
+    def test_unknown_document_schema_is_refused(self, cli_runner: CliRunner, tmp_path: Path):
+        de, _en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {"schema": 99, "decisions": [{"key": "id:s0-m", "choice": "confirm"}]}
+            ),
+        )
+        assert result.exit_code == 2
+        assert "schema 99" in _stderr(result) + result.output
+
+
+class TestAlreadyApplied:
+    """A decision whose effect already holds is not a rejection (#649)."""
+
+    def test_answer_for_an_in_sync_member_is_already_applied_and_exits_zero(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        decisions = json.dumps({"decisions": [{"key": "id:s0-m", "body": "# EN new"}]})
+
+        first = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=decisions,
+        )
+        assert first.exit_code == 0, first.output
+        assert "# EN new" in en.read_text(encoding="utf-8")
+
+        # Re-running the SAME document: the member frames nothing now. The
+        # effect the answer asks for holds, so this is success — not
+        # "rejected, stale handle" while the write had demonstrably landed.
+        second = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=decisions,
+        )
+        assert second.exit_code == 0, second.output
+        payload = _json_payload(second.output)
+        assert payload["counts"]["already_applied"] == 1
+        assert payload["counts"]["rejected"] == 0
+        (item,) = [i for i in payload["items"] if i["key"] == "id:s0-m"]
+        assert item["status"] == "already_applied"
+
+    def test_answer_for_an_unknown_member_is_still_rejected(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, _en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps({"decisions": [{"key": "id:no-such-member", "choice": "confirm"}]}),
+        )
+        assert result.exit_code == 1
+        payload = _json_payload(result.output)
+        assert payload["counts"]["rejected"] == 1
+        (item,) = [i for i in payload["items"] if i["key"] == "id:no-such-member"]
+        assert item["status"] == "rejected"
+        assert "no member with this handle" in item["reason"]

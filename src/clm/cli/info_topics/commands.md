@@ -1971,7 +1971,7 @@ the languages, is **refused** with a normalize hint — never silently guessed.
 
 Read-only. Prints one `outcome/action` row per non-in-sync member; exit `0`
 clean / `1` work pending / `2` error. The JSON envelope is self-describing
-(`"schema": 3, "engine": "v3"`) and carries the stable booleans:
+(`"schema": 4, "engine": "v3"`) and carries the stable booleans:
 
 - `is_clean` — nothing to do (also false, with an `observations` entry, when
   the halves' group order visibly diverges — even if no item is framed);
@@ -1979,6 +1979,14 @@ clean / `1` work pending / `2` error. The JSON envelope is self-describing
   `translate_new`) exists;
 - `needs_agent` — judgment beyond translation is required (a conflict, a cold
   member, a normalize refusal).
+
+Schema 4 (CLM {version}) adds the deck's identity and a freshness token to
+every pair payload: `deck_key`, `ledger` (the trust store's path), and
+`report_id` — a hash of the bundle bytes plus this deck's ledger section.
+Echo `report_id` at the top level of the decision document; `apply` refuses
+the whole document with exit 2, writing nothing, when the deck has moved on
+since the report. Documents without the token are still accepted, with a
+warning. See `clm info sync-agents`.
 
 Order divergence frames from the **current** cross-side state whether or not
 the ledger carries recorded order trust (CLM {version}): with trust, a

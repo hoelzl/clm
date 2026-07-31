@@ -408,3 +408,29 @@ class TestLegacyEnvelopeDropsOnSave:
         again = json.loads(path.read_text(encoding="utf-8"))
         assert set(again.keys()) == {"schema", "decks"}
         assert "slides_x" in again["decks"]
+
+
+class TestDeckSectionFingerprint:
+    """The trust half of the schema-4 ``report_id`` (sync_wire / Q2)."""
+
+    def test_absent_section_is_cold_and_recording_changes_it(self):
+        ledger = doc_ledger.TopicLedger()
+        assert doc_ledger.deck_section_fingerprint(ledger, "slides_x") == "cold"
+        doc_ledger.record_deck_snapshot(ledger, "slides_x", _parse(DE0, EN0), provenance="record")
+        recorded = doc_ledger.deck_section_fingerprint(ledger, "slides_x")
+        assert recorded != "cold"
+        # Stable for the same content, and per-deck.
+        assert doc_ledger.deck_section_fingerprint(ledger, "slides_x") == recorded
+        assert doc_ledger.deck_section_fingerprint(ledger, "slides_other") == "cold"
+
+    def test_a_changed_baseline_changes_the_fingerprint(self):
+        ledger = doc_ledger.TopicLedger()
+        doc_ledger.record_deck_snapshot(ledger, "slides_x", _parse(DE0, EN0), provenance="record")
+        before = doc_ledger.deck_section_fingerprint(ledger, "slides_x")
+        doc_ledger.record_deck_snapshot(
+            ledger,
+            "slides_x",
+            _parse(DE0.replace("# DE Text", "# DE anders"), EN0),
+            provenance="record",
+        )
+        assert doc_ledger.deck_section_fingerprint(ledger, "slides_x") != before

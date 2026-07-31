@@ -24,6 +24,7 @@ from clm.slides.sync_diff import (
     diff_deck,
     diff_outcome,
 )
+from clm.slides.sync_wire import WIRE_SCHEMA
 
 # ---------------------------------------------------------------------------
 # Builders (the test_doc_lenses.py conventions)
@@ -717,10 +718,12 @@ class TestPreambles:
 
 
 class TestEnvelope:
-    def test_payload_is_schema_3_with_stable_booleans(self):
+    def test_payload_announces_the_wire_schema_with_stable_booleans(self):
         base = _snapshot(DE0, EN0)
         payload = _diff(base, DE0.replace("# DE Text", "# DE v2"), EN0).to_payload()
-        assert payload["schema"] == 3
+        # One version for the report envelope AND the decision documents it is
+        # answered with — they are one contract (clm.slides.sync_wire).
+        assert payload["schema"] == WIRE_SCHEMA
         assert payload["engine"] == "v3"
         assert payload["is_clean"] is False
         assert payload["needs_model"] is True  # translate_edit is model-frameable
