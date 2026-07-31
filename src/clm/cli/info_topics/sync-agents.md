@@ -61,11 +61,25 @@ Each item row carries `key` (the member handle), `outcome`, `action`,
 current cell bytes for both sides under **`de` and `en`** (those exact key
 names — so you never re-read files to act), and an **`answers` list naming
 exactly the decision shapes `apply --decisions` accepts** for that item.
-`answers` is present on every item; `[]` means mechanical (nothing to
-answer — `apply` executes it). Note the `de`/`en` excerpts **include** the
-`# %%` header line; a `body` answer must **not** (see below). A report whose
-items are *all* `verify_cold` also carries a top-level `hint` — that is the
-seeding case; use `record`, not a confirm-all document (see "Cold members").
+`answers` is present on every item. Branch on **`resolution`**, not on the
+emptiness of that list:
+
+| `resolution` | meaning | what you do |
+|---|---|---|
+| `mechanical` | `apply` executes it; `answers` is `[]` | nothing — review with `git diff` |
+| `decision` | answerable; `answers` names the shapes | put one in the decision document |
+| `manual` | framed but **unanswerable**; `answers` is `[]` | read `detail`, repair the files, re-report |
+
+An empty `answers` used to mean both the first and the third case, and this
+topic documented only the first — its own example filter script therefore
+misclassified every blocked item. `resolution` is the schema-4 discriminator.
+
+The `de`/`en` excerpts are the full cell bytes **including** the `# %%` header
+line; **`de_body`/`en_body`** are the same cells without it — which is exactly
+what a `body` answer must contain, so you can feed an excerpt straight back
+(trailing blank lines are ignored at the write boundary). A report whose items
+are *all* `verify_cold` also carries a top-level `hint` — that is the seeding
+case; use `record`, not a confirm-all document (see "Cold members").
 
 ### The freshness token (`report_id`) — copy it into your answers
 
@@ -107,7 +121,10 @@ sides moved — confirm or supply a body), `conflict_shared` / `remove_vs_edit`
 answer `de` or `en`; mirrors **only the chosen side's tag set** onto the twin,
 bodies untouched — see "Tag parity" below),
 `verify_cold` (confirm the member is in sync — or, on an **id-keyed** member,
-supply a `body` + `side` to overwrite a stale twin in the same pass),
+supply a `body` + `side` to overwrite a stale twin in the same pass; a cold
+member present on **one half only** carries no answers at all — `confirm`
+asserts both halves agree — so it comes back `resolution: manual` with the
+repair in its `detail`),
 `stamp_vs_new` (a new id'd cell appeared while a positional cell of the same
 pool vanished on that side — answer `treat_as_new` when the id'd cell really
 is new; see "Replacing a positional cell" below), `remove_vs_split` (a

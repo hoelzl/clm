@@ -151,17 +151,45 @@ def decision_vocabulary(action: str) -> tuple[str, ...]:
 def item_answers(item: DiffItem) -> tuple[str, ...]:
     """The key-aware answer vocabulary the report advertises for one item.
 
-    Identical to :func:`decision_vocabulary` except for ``verify_cold``: a
-    ``body`` recovery targets a named ``side`` and can only be placed on an
-    **id-keyed** two-sided member. A *positional* cold member has no stable
-    id to address and its ordinal aliases a neighboring slot, so it accepts
-    only ``confirm`` (or: mint a ``slide_id`` and re-report). Advertising
-    ``body`` there would be a lie the executor then rejects.
+    Identical to :func:`decision_vocabulary` except for ``verify_cold``, where
+    two narrowings keep the advertisement honest — the design's standing rule
+    is that advertising an answer the executor then rejects is a defect:
+
+    * A ``body`` recovery targets a named ``side`` and can only be placed on
+      an **id-keyed** two-sided member. A *positional* cold member has no
+      stable id to address and its ordinal aliases a neighboring slot, so it
+      drops ``body`` (mint a ``slide_id`` and re-report instead).
+    * A **one-sided** cold member accepts *nothing*: `confirm` asserts the two
+      halves agree, and the executor unconditionally refuses to confirm a
+      member with only one side. Advertising it sent agents into a rejection
+      that then blocked the whole positional pool (finding M6). The item stays
+      framed, with ``resolution: manual`` and a detail naming the repair.
     """
     answers = decision_vocabulary(item.action)
-    if item.action == "verify_cold" and not item.key.startswith("id:"):
+    if item.action != "verify_cold":
+        return answers
+    if item.member is not None and item.member.is_one_sided:
+        return ()
+    if not item.key.startswith("id:"):
         return tuple(a for a in answers if a != "body")
     return answers
+
+
+def item_resolution(item: DiffItem) -> str:
+    """How this item gets resolved: ``mechanical`` / ``decision`` / ``manual``.
+
+    Schema 4's discriminator for the ``answers: []`` ambiguity (finding M6):
+    the empty list meant "mechanical — apply executes it" on 21 actions and
+    "blocked — go edit the files" on the framed ones, the info topic
+    documented only the first meaning as universal, and its own example
+    filter script misclassified every instance of the second.
+
+    Derived from the sets ``apply_deck`` itself branches on, so the report
+    cannot drift from the executor.
+    """
+    if item.action in _RECORD_ONLY or item.action in MECHANICAL_ACTIONS:
+        return "mechanical"
+    return "decision" if item_answers(item) else "manual"
 
 
 def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:

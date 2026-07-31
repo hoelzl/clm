@@ -522,6 +522,79 @@ class TestReportIdentity:
         assert "schema 99" in _stderr(result) + result.output
 
 
+class TestItemShape:
+    """Schema 4's `resolution` discriminator and body-only excerpts (Q3)."""
+
+    # A DE-only un-id'd code cell: a POSITIONAL one-sided cold member, the one
+    # shape that carries no answer at all (finding M6).
+    DE_EXTRA = DE + '\n# %% tags=["keep"]\ny = 2\n'
+
+    def test_resolution_distinguishes_mechanical_decision_and_manual(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, en = _write_pair(tmp_path)
+        de.write_text(self.DE_EXTRA, encoding="utf-8")
+        payload = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        by_key = {i["key"]: i for i in payload["items"]}
+
+        # An id-keyed cold member is answerable.
+        assert by_key["id:s0"]["resolution"] == "decision"
+        assert by_key["id:s0"]["answers"] == ["confirm", "body"]
+
+        # The DE-only positional cell can be neither confirmed (confirm
+        # asserts both halves agree) nor mirrored (its ordinal aliases a
+        # different twin slot). It used to advertise `confirm` anyway, and the
+        # rejection then blocked its whole pool with no visible cause.
+        one_sided = by_key["pos:s0/code/1"]
+        assert one_sided["answers"] == []
+        assert one_sided["resolution"] == "manual"
+        assert "half ONLY" in one_sided["detail"]
+        assert "slide_id" in one_sided["detail"]  # names the repair
+
+        # `answers: []` on a MECHANICAL row means the opposite — apply runs it.
+        # (Restore the symmetric pair first: `record` refuses a structurally
+        # divergent one, which is the gate doing its job.)
+        de.write_text(DE, encoding="utf-8")
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(DE.replace("x = 1", "x = 42"), encoding="utf-8")
+        mech = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        (row,) = [i for i in mech["items"] if i["action"] == "propagate_shared_edit"]
+        assert row["answers"] == [] and row["resolution"] == "mechanical"
+
+    def test_body_excerpts_are_valid_decision_input(self, cli_runner: CliRunner, tmp_path: Path):
+        # M10: the `de`/`en` excerpts include the `# %%` delimiter that a body
+        # answer must NOT contain, so report output was not decision input.
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        item = next(i for i in report["items"] if i["key"] == "id:s0-m")
+        assert item["de"].startswith("# %%")
+        assert "# %%" not in item["de_body"]
+        assert item["de_body"].strip() == "# DE neu"
+
+        # Feed the excerpt straight back as an answer — no stripping needed.
+        applied = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {
+                    "schema": WIRE_SCHEMA,
+                    "report_id": report["report_id"],
+                    "decisions": [{"key": "id:s0-m", "body": item["de_body"]}],
+                }
+            ),
+        )
+        assert applied.exit_code == 0, applied.output
+        assert "# DE neu" in en.read_text(encoding="utf-8")
+
+
 class TestAlreadyApplied:
     """A decision whose effect already holds is not a rejection (#649)."""
 

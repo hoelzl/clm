@@ -82,17 +82,22 @@ def diff_bundle_at_ref(bundle: LoadedBundle, ref: str) -> tuple[DeckDiff, list[s
 
 
 def item_payloads(diff: DeckDiff) -> list[dict]:
-    """The §6.4 item rows, each item carrying its answer vocabulary.
+    """The §6.4 item rows, each carrying its vocabulary and how it resolves.
 
-    ``answers`` is present on **every** item — ``[]`` on mechanical rows
-    (nothing to answer; ``apply`` executes them) — so consumers can filter
-    with ``item["answers"]`` without guarding a missing key. Agent drivers
-    provably crashed on the key's absence before this was guaranteed.
+    ``answers`` is present on **every** item so consumers can filter with
+    ``item["answers"]`` without guarding a missing key — agent drivers
+    provably crashed on the key's absence before this was guaranteed. But an
+    empty list alone is ambiguous, and that ambiguity is finding M6: on a
+    mechanical row it means "nothing to answer, apply executes it", on a
+    framed row it means "blocked — repair the files yourself". Schema 4 adds
+    ``resolution`` (``mechanical`` / ``decision`` / ``manual``) so the two
+    cases are distinguishable without a hardcoded action list.
     """
     items = []
     for item in diff.items:
         payload = item.payload()
         payload["answers"] = list(doc_apply.item_answers(item))
+        payload["resolution"] = doc_apply.item_resolution(item)
         items.append(payload)
     return items
 
