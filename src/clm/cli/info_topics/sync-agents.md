@@ -87,6 +87,12 @@ A document with no `report_id` is still accepted, with a warning naming the
 field — schema 3 predates it. That grace ends in a future release; emit the
 token now.
 
+**Your own `apply` invalidates the token** — it records into the ledger, which
+is half of the token's input. That is deliberate: one report, one apply, then
+re-report. If you are applying a report in stages (`--member` at a time), take
+a fresh report between passes rather than reusing the document; the second
+pass is answering a deck that has already moved.
+
 **Mechanical actions** (no decision needed — `apply` executes them):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
 `mirror_order`, `mirror_layout`, the `record_*` acknowledgements, and the

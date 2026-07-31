@@ -1669,8 +1669,19 @@ def apply_deck(
     for _, item in ordered:
         if only_members is not None and item.key not in only_members:
             unresolved_items.append(item)  # a skipped pool sibling must not be blessed
+            answered = item.key in decisions
+            if answered:
+                # Claim the handle so the unmatched-decision sweep below does
+                # not then classify it: the answer was neither stale nor
+                # already satisfied — the filter simply did not run it.
+                seen_decisions.add(item.key)
             outcome.results.append(
-                ItemResult(item.key, item.action, "skipped", "excluded by --member")
+                ItemResult(
+                    item.key,
+                    item.action,
+                    "skipped",
+                    "excluded by --member" + (" (its answer was not used)" if answered else ""),
+                )
             )
             continue
         decision = decisions.get(item.key)

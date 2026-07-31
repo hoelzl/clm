@@ -31,6 +31,7 @@ from clm.slides.doc_report import (
     cold_sweep_hint,
     diff_bundle,
     diff_bundle_at_ref,
+    diff_bundle_with_ledger,
     pair_payload,
     report_id_for,
 )
@@ -120,7 +121,7 @@ def run_report_v3(
     this window"), never a trust change: the ledger is neither consulted nor
     written, and nothing else about the verb differs.
     """
-    results: list[tuple[LoadedBundle, DeckDiff, list[str]]] = []
+    results: list[tuple[LoadedBundle, DeckDiff, list[str], doc_ledger.TopicLedger | None]] = []
     errors: list[str] = []
     pairs, solos = _scope_pairs(de_path, en_path)
     _warn_solos(solos)
@@ -130,16 +131,17 @@ def run_report_v3(
         except DocLensError as exc:
             errors.append(str(exc))
             continue
+        ledger: doc_ledger.TopicLedger | None = None
         if since_ref is not None:
             diff, base_refusal = diff_bundle_at_ref(bundle, since_ref)
         else:
-            diff, base_refusal = diff_bundle(bundle), []
-        results.append((bundle, diff, base_refusal))
-    clean = all(diff.is_clean for _, diff, _refusal in results) and not errors
+            (diff, ledger), base_refusal = diff_bundle_with_ledger(bundle), []
+        results.append((bundle, diff, base_refusal, ledger))
+    clean = all(diff.is_clean for _, diff, _refusal, _l in results) and not errors
     if as_json:
         payloads = []
-        for bundle, diff, base_refusal in results:
-            payload = pair_payload(bundle, diff)
+        for bundle, diff, base_refusal, ledger in results:
+            payload = pair_payload(bundle, diff, ledger=ledger)
             if since_ref is not None:
                 payload["baseline"] = f"since:{since_ref}"
                 if base_refusal:
@@ -155,15 +157,15 @@ def run_report_v3(
                     "engine": "v3",
                     "exit_code": 0 if clean else 1,
                     "is_clean": clean,
-                    "needs_model": any(d.needs_model for _, d, _r in results),
-                    "needs_agent": any(d.needs_agent for _, d, _r in results) or bool(errors),
+                    "needs_model": any(d.needs_model for _, d, _r, _l in results),
+                    "needs_agent": any(d.needs_agent for _, d, _r, _l in results) or bool(errors),
                     "errors": errors,
                     "skipped_solos": [str(p) for p in solos],
                     "pairs": payloads,
                 }
             )
     else:
-        for bundle, diff, base_refusal in results:
+        for bundle, diff, base_refusal, _ledger in results:
             click.echo(_render_pair(bundle, diff))
             if base_refusal:
                 click.echo(

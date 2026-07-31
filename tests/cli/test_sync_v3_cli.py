@@ -556,6 +556,27 @@ class TestAlreadyApplied:
         (item,) = [i for i in payload["items"] if i["key"] == "id:s0-m"]
         assert item["status"] == "already_applied"
 
+    def test_answer_for_a_filtered_out_item_reads_as_skipped_not_applied(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # A decision for an item `--member` excluded is neither stale nor
+        # satisfied — the filter did not run it. Classifying it as
+        # `already_applied` would claim an effect that did not happen.
+        de, _en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--member", "id:nothing-here", "--decisions", "-", "--json"],
+            input=json.dumps({"decisions": [{"key": "id:s0-m", "body": "# EN new"}]}),
+        )
+        payload = _json_payload(result.output)
+        assert payload["counts"]["already_applied"] == 0
+        assert payload["counts"]["rejected"] == 0
+        (item,) = [i for i in payload["items"] if i["key"] == "id:s0-m"]
+        assert item["status"] == "skipped"
+        assert "answer was not used" in item["reason"]
+
     def test_answer_for_an_unknown_member_is_still_rejected(
         self, cli_runner: CliRunner, tmp_path: Path
     ):
