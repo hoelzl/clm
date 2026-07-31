@@ -205,6 +205,7 @@ def run_apply_v3(
         raise click.UsageError(str(exc)) from exc
 
     decisions: dict[str, doc_apply.Decision] = {}
+    decision_rows: list[doc_apply.Decision] = []
     if decisions_spec is not None:
         try:
             text = (
@@ -239,6 +240,7 @@ def run_apply_v3(
                 )
             return 2
         decisions = document.decisions
+        decision_rows = document.rows
 
     diff = diff_bundle(bundle)
     if diff.refusal is not None:
@@ -268,6 +270,7 @@ def run_apply_v3(
         ledger,
         doc_ledger.deck_key_for(bundle.de_path),
         decisions=decisions,
+        decision_rows=decision_rows,
         only_members=set(members) if members else None,
         dry_run=dry_run,
         commit=_head_commit(bundle.de_path),
