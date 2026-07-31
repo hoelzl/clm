@@ -1,6 +1,7 @@
 # Slide-hood is presentation, not identity
 
-**Status**: design addendum, awaiting adversarial pass | **Created**: 2026-07-31
+**Status**: thesis SHIPPED (#761); the §3 scope mechanism **withdrawn** on
+measurement — see §13 | **Created**: 2026-07-31 | **Amended**: 2026-07-31
 **Parent**: `docs/claude/design/sync-total-identity-document-model.md` (§3.3, §3.4, §7.4)
 **Supersedes**: Phase 3 of `docs/claude/sync-v3-adversarial-review.md` §8
 **Issues**: #653 (the refusal), #652/#738 (order), #650 (owner rows), #656 (ceremony)
@@ -67,6 +68,12 @@ non-anchor half of the axis is broken, which is exactly the half authors flip
 for layout reasons.
 
 ## 3. The rule: scopes are delimited by id-bearing cells
+
+> **Withdrawn — see §13.** Implementing this rule and measuring it against the
+> corpus showed it makes positional keys *more* fragile overall, not less. The
+> thesis (§1) and the dissolution it implies (§4.1 items 1–3) shipped in #761
+> and stand; what follows in this section is kept as the record of a design
+> that measurement rejected.
 
 **Scope owner.** A deck cell carrying a bare `slide_id`, whether or not it is a
 slide start. Plus the existing synthetic owners: `HEADER_GROUP` (cells before
@@ -359,3 +366,56 @@ apart would mean two migrations.
 Add to the parent design note: a §13 row when the engine change lands, an entry
 in the satellite-doc index pointing here (review finding D2), the §7.4 property
 4 text (§6 above), and the L6 residue in §9.
+
+---
+
+## 13. Amendment (2026-07-31): the scope mechanism is withdrawn
+
+**What shipped.** §1's thesis and §4.1's dissolution: slide-hood is a property
+of the *pair*, a boundary only one half draws opens no group on either side,
+and the state frames a mechanical `mirror_tags` row instead of refusing the
+deck (#761, closing #653). That part is settled and correct — it removes the
+tag from the *identity-regime* decision, which was the P2 violation.
+
+**What is withdrawn.** §3's "positional keys scope to the nearest id-bearing
+cell", and with it §8's schema 2→3 ledger migration.
+
+**Why — the measurement.** A positional key re-keys when a *change point*
+above it inside its slide is added, removed or renamed. The two rules differ
+only in what counts as a change point:
+
+| Rule | Change points | Count (PythonCourses, 730 decks) |
+|---|---|---|
+| anchor-scoped (today) | slide anchors | 9,950 |
+| id-scoped (§3) | anchors **+ every id'd cell** | 13,217 — **1.3× more** |
+
+The corpus has 3,267 id'd non-anchor cells (overwhelmingly localized markdown
+cells, which must carry ids by §3.4). Under §3 each of them becomes a scope
+owner, so *inserting, deleting or renaming any of them* re-keys the un-id'd
+cells below it within its slide — an edit at least as routine as toggling a
+slide tag, and one the current rule handles for free.
+
+So the rule does not remove churn; it **relocates** it, from one frequent
+trigger to a more numerous class of triggers — and charges a 1,792-entry
+ledger migration plus a schema bump for the move. Implementation confirmed the
+shape of it before the numbers did: the change broke 18 tests, and the
+representative one is exactly the trap — a shared code cell under a localized
+note re-keyed `pos:intro/code/0` → `pos:intro-note/code/0`, becoming hostage
+to a cell that has nothing to do with it.
+
+§9.1 already flagged the stamp cascade as "the one place this makes things
+worse". The measurement shows that was the general case, not a corner: every
+id'd cell is a stamp that already happened.
+
+**What this leaves.** After #761 a boundary move still re-keys the un-id'd
+cells in the affected span, so they report `verify_cold` once and re-bank with
+`record`. That is bounded, visible, and loses nothing — noise, not damage.
+
+**The real escalation path is Q1, not this.** Positional keys are fragile
+because they are positional; scoping them differently only chooses which
+neighbours they are hostage to. The way to make them stable is to stop having
+them: a per-deck opt-in "fully id'd" mode (stamp on first sync touch), which
+the review's Q1 already names as the escalation to take *after* measuring what
+the Phase-0 guards left behind. That measurement now exists — this is a data
+point for Q1, and the id-delimited-scope idea should not be re-proposed
+without addressing the change-point count above.
