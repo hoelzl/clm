@@ -427,6 +427,53 @@ class _Parser:
                         f"(deck.{lang} line {cell.line_number})",
                     )
 
+    def _anchor_shapes(self, lang: Lang) -> dict[str, tuple[bool, int]]:
+        """Per id on one deck half: ``(is a slide start, header line)``."""
+        source = self._source(lang, "deck")
+        if source is None:  # pragma: no cover - both halves always exist
+            return {}
+        shapes: dict[str, tuple[bool, int]] = {}
+        for i, cell in enumerate(source.cells):
+            bare = _bare(cell.slide_id)
+            if bare is not None:
+                shapes[bare] = (self._is_anchor(source.raw[i]), cell.line_number)
+        return shapes
+
+    def check_anchor_shape(self) -> None:
+        """Refuse ids whose *slide-hood* differs between the halves (#653).
+
+        Anchor-hood is tag-derived and anchors pair by group rather than by id
+        (:meth:`pair_by_id`), so a one-sided `slide` retag — a routine layout
+        edit — builds **two** members under one key and the deck used to die
+        in :meth:`_check_key_uniqueness` with a `duplicate_id` whose message
+        described a parsing ambiguity and whose hint (`rename-id`, which
+        rewrites *both* halves) could not fix it.
+
+        Naming the cause here instead: the refusal is still whole-deck, but it
+        is enumerated in phase 1 alongside the other keying preconditions, it
+        says which half carries the tag, and its hint is the edit that repairs
+        it. Framing this transition as a mechanical tag row — so it never
+        refuses at all — is the engine change designed in
+        ``docs/claude/design/sync-slide-hood-is-presentation.md``.
+        """
+        de_shapes = self._anchor_shapes("de")
+        en_shapes = self._anchor_shapes("en")
+        for bare in sorted(de_shapes.keys() & en_shapes.keys()):
+            de_anchor, de_line = de_shapes[bare]
+            en_anchor, en_line = en_shapes[bare]
+            if de_anchor == en_anchor:
+                continue
+            anchor_side, plain_side = ("de", "en") if de_anchor else ("en", "de")
+            anchor_line, plain_line = (de_line, en_line) if de_anchor else (en_line, de_line)
+            self.refuse(
+                "anchor_shape_divergence",
+                f'slide_id "{bare}" is a slide start on the {anchor_side} side '
+                f"(deck.{anchor_side} line {anchor_line}) but a continuation cell "
+                f"on the {plain_side} side (deck.{plain_side} line {plain_line}) — "
+                f"the slide/subslide tag differs between the halves",
+                member=MemberKey.for_id(bare),
+            )
+
     # -- phase 2: pairing --------------------------------------------------------
 
     def pair_by_id(self) -> None:
@@ -735,6 +782,7 @@ class _Parser:
 
     def run(self) -> ParseOutcome:
         self.check_keying()
+        self.check_anchor_shape()
         if self.refusals:
             return ParseOutcome(refusal=NormalizeRefusal(reasons=self.refusals))
 

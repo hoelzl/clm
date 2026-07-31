@@ -108,6 +108,26 @@ carries **no** answers: reconcile by editing, minting ids, then re-report),
 and the normalize-refusal deck item (run `clm slides normalize`, then
 re-report).
 
+### Parse refusals: read the code, not the header
+
+A refusal blocks the **whole deck** and frames zero items, so its code is the
+only routing information you get. Only the id-less codes (`idless_anchor`,
+`idless_localized`, `idless_narrative`) are repaired by
+`clm slides normalize --stamp-ids` — and the refusal header names that command
+only when at least one such reason is present. The others carry their own
+`hint:` line:
+
+| Code | What it means | Fix |
+|---|---|---|
+| `duplicate_id` | one `slide_id` names two cells on one side | `clm slides rename-id DECK OLD NEW` |
+| `anchor_shape_divergence` | one id'd cell is a slide start on one half and a continuation cell on the other — the `slide` / `subslide` tag differs between halves | align the tag on the named side, then re-report |
+| `legacy_title_companion` | pre-#242 `slide_id="title"` with no `for_slide` | give the cell `for_slide="title"` and its own `slide_id` |
+
+`anchor_shape_divergence` names both halves and both line numbers. It is the
+one-sided-retag shape of #653; until the engine frames it as a mechanical tag
+row, mirroring the tag by hand is the sanctioned repair — the refusal tells
+you which side carries it.
+
 ## Tag parity (tags are language-independent)
 
 Cell tags mirror across the twins — a tag set is never per-language. The

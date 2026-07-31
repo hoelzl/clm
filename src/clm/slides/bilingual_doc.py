@@ -228,12 +228,20 @@ class Observation:
 class RefusalReason:
     """One reason a bundle failed the §3.4 normalize precondition."""
 
-    # duplicate_id | idless_anchor | idless_localized | idless_narrative
-    # | legacy_title_companion
+    # anchor_shape_divergence | duplicate_id | idless_anchor | idless_localized
+    # | idless_narrative | legacy_title_companion
     code: str
     detail: str
     member: MemberKey | None = None
 
+
+#: The refusal codes ``normalize --stamp-ids`` actually repairs — the ones
+#: that exist because a cell has no id. Every other code needs its own remedy
+#: (:data:`REFUSAL_HINTS`), and telling the author to run `normalize` for one
+#: of those sends them down a dead end (#653).
+NORMALIZE_FIXABLE: frozenset[str] = frozenset(
+    {"idless_anchor", "idless_localized", "idless_narrative"}
+)
 
 #: Remediation hints per refusal code, appended to the rendered refusal.
 #: The header line's remedy (`normalize --stamp-ids`) covers the id-less
@@ -245,21 +253,37 @@ REFUSAL_HINTS: dict[str, str] = {
         "(rewrites both halves and migrates the sync-ledger key; `normalize` "
         "cannot fix duplicates)"
     ),
+    "anchor_shape_divergence": (
+        "align the slide/subslide tag across the halves — add it to the "
+        "continuation side, or remove it from the slide side — so the cell is "
+        "a slide start on both, then re-report (`rename-id` renames both "
+        "halves and `normalize` cannot fix a tag difference)"
+    ),
 }
 
 
 @define
 class NormalizeRefusal:
-    """A framed "run normalize first" refusal for a whole deck (design §3.2).
+    """A framed parse refusal for a whole deck (design §3.2).
 
     Every offending condition is enumerated (never first-error-only), so one
-    normalize pass can fix them all.
+    repair pass can fix them all. The header line names `normalize` only when
+    at least one reason is actually a :data:`NORMALIZE_FIXABLE` id-less shape;
+    a refusal made purely of codes normalize cannot touch (a duplicate id, a
+    one-sided slide tag) says so instead of sending the author to a command
+    that will report nothing to do (#653).
     """
 
     reasons: list[RefusalReason] = field(factory=list)
 
     def render(self) -> str:
-        lines = ["deck is not normalized — run `clm slides normalize --stamp-ids` first:"]
+        head = (
+            "deck is not normalized — run `clm slides normalize --stamp-ids` first:"
+            if any(r.code in NORMALIZE_FIXABLE for r in self.reasons)
+            else "deck cannot be parsed as a split pair — repair the conditions below, "
+            "then re-report:"
+        )
+        lines = [head]
         lines += [f"  - [{r.code}] {r.detail}" for r in self.reasons]
         for code in dict.fromkeys(r.code for r in self.reasons):
             hint = REFUSAL_HINTS.get(code)
