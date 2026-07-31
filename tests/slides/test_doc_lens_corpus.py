@@ -47,6 +47,9 @@ _BUNDLED_CORPUS = Path(__file__).parent.parent / "data" / "doc_corpus"
 _REAL_REFUSAL_CEILING = 70
 _REAL_PARSED_FLOOR = 620
 _EXPECTED_REFUSAL_CODES = {
+    # not a new refusal class: #653 split the anchor↔non-anchor cause out of
+    # duplicate_id (which was already pinned) so the message names the tag.
+    "anchor_shape_divergence",
     "duplicate_id",
     "idless_localized",
     "idless_narrative",

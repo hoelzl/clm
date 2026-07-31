@@ -377,6 +377,57 @@ class TestRefusals:
         assert outcome.refusal is not None
         assert {r.code for r in outcome.refusal.reasons} == {"duplicate_id"}
 
+    def test_one_sided_slide_tag_refuses_with_the_anchor_shape_code(self):
+        # #653: removing tags=["slide"] from an id'd cell on ONE half made the
+        # same id an anchor on one side and a plain member on the other. The
+        # lens built two members under one key and the deck died with
+        # `duplicate_id` ("resolves to 2 distinct members") — a message about
+        # parsing, whose `rename-id` hint renames both halves and so cannot fix
+        # it. The cause is named instead, in phase 1, with both sides located.
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + _localized("a-explain", "de", "Fortsetzung")
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + _slide("a-explain", "en", "Continued")
+        )
+        outcome = parse_bundle(de, en)
+        assert not outcome.ok
+        assert outcome.refusal is not None
+        assert {r.code for r in outcome.refusal.reasons} == {"anchor_shape_divergence"}
+        (reason,) = outcome.refusal.reasons
+        assert reason.member == MemberKey.for_id("a-explain")
+        # both halves located, and which one carries the tag
+        assert "en side" in reason.detail
+        assert "de side" in reason.detail
+        assert "slide start" in reason.detail and "continuation" in reason.detail
+        text = outcome.refusal.render()
+        assert "normalize --stamp-ids" not in text  # it cannot fix a tag shape
+        assert "align the slide/subslide tag" in text
+
+    def test_anchor_shape_divergence_fires_in_both_directions(self):
+        # The retag is symmetric: the tag may go missing on either half.
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + _slide("a-explain", "de", "Fortsetzung")
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + _localized("a-explain", "en", "Continued")
+        )
+        outcome = parse_bundle(de, en)
+        assert outcome.refusal is not None
+        assert {r.code for r in outcome.refusal.reasons} == {"anchor_shape_divergence"}
+
+    def test_slide_to_subslide_retag_does_not_refuse(self):
+        # is_slide_start = slide OR subslide, so this retag keeps anchor-hood:
+        # a tag row, never a refusal. Pins the boundary of the check above.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("a", "de", "A")
+            + '# %% [markdown] lang="de" tags=["subslide"] slide_id="b"\n#\n# # B\n\n'
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A") + _slide("b", "en", "B"))
+        outcome = parse_bundle(de, en)
+        assert outcome.ok, outcome.refusal.render() if outcome.refusal else ""
+
     def test_idless_anchor_refuses(self):
         de = _strip_final_blank(HEADER_DE + '# %% [markdown] lang="de" tags=["slide"]\n# # A\n\n')
         en = _strip_final_blank(HEADER_EN + '# %% [markdown] lang="en" tags=["slide"]\n# # A\n\n')

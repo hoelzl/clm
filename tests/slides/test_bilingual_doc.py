@@ -123,6 +123,24 @@ class TestNormalizeRefusal:
         )
         assert refusal.render().count("clm slides rename-id") == 1
 
+    def test_render_names_normalize_only_when_it_can_fix_a_reason(self):
+        # #653: a refusal made purely of codes normalize cannot touch used to
+        # open with "run `normalize --stamp-ids` first", which reports nothing
+        # to do — the author's first move was wasted on the wrong command.
+        unfixable = NormalizeRefusal(
+            reasons=[RefusalReason(code="anchor_shape_divergence", detail="id x, one side")]
+        )
+        assert "normalize --stamp-ids" not in unfixable.render()
+        assert "repair the conditions below" in unfixable.render()
+
+        mixed = NormalizeRefusal(
+            reasons=[
+                RefusalReason(code="anchor_shape_divergence", detail="id x, one side"),
+                RefusalReason(code="idless_localized", detail="line 7"),
+            ]
+        )
+        assert "normalize --stamp-ids" in mixed.render()
+
     def test_render_no_hint_for_codes_normalize_fixes(self):
         refusal = NormalizeRefusal(
             reasons=[RefusalReason(code="idless_localized", detail="line 7")]
