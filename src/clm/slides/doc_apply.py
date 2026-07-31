@@ -1323,8 +1323,9 @@ def _execute_decision(
     allowed = decision_vocabulary(item.action)
     if not allowed:
         raise _ItemError(
-            f"'{item.action}' has no decision vocabulary in Phase 3 — edit the files, "
-            f"re-run report, then record"
+            f"'{item.action}' takes no answer (resolution: manual) — read the "
+            f"item's detail, repair the files yourself, then re-run report; "
+            f"`sync record` banks the result once the pair is in sync"
         )
     if decision.body is not None:
         if "body" not in allowed:

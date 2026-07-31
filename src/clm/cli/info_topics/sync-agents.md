@@ -354,8 +354,11 @@ clm slides sync apply DECK --decisions decisions.json --json
 clm slides sync apply DECK --decisions - --json < decisions.json
 ```
 
-`--member KEY` restricts a pass to named handles; `--dry-run` validates
-everything and writes nothing. Landed items are recorded into the ledger
+`--member KEY` restricts a pass to named handles; `--dry-run` validates every
+answer and writes nothing. Note what it does **not** cover: a dry run stops
+before the write, so it never runs the structural verify gate that a real pass
+runs afterwards — a document that dry-runs clean can still end in
+`verify_violations` (writes landed, nothing recorded). Landed items are recorded into the ledger
 **on fully resolved members only**, and the recording is **gated on the
 structural verify** — file writes from a pass that ends structurally corrupt
 stay on disk for review, but nothing is recorded as trusted. A landed row on
@@ -479,8 +482,11 @@ case where cold items sit next to real work.
 automatically, so a normal authoring flow starts warm.
 
 **Renaming a `slide_id` is a common way to fall cold — do not do it by hand.**
-The ledger keys trust by `id:<slide_id>`, and the only key migration the engine
-recovers is `pos: → id:` (an id-less cell gaining an id). A hand `id: → id:`
+The ledger keys trust by `id:<slide_id>`. The engine performs exactly two key
+migrations, and neither is ever *inferred*: `pos: → id:` (an id-less cell
+gaining an id, at record time) and `id: → id:` (only through
+`clm slides rename-id`, which also cascades a renamed group anchor into its
+members' `pos:` keys and order scopes). A hand `id: → id:`
 rename therefore reads as a cold add on the new id (and a `record_remove` on the
 old one), so a cell you *renamed and edited* in one go reports `verify_cold` —
 whose `confirm` would bank the existing, now-stale twin. Use
@@ -610,7 +616,9 @@ rejected decisions; the sessions that improvised did not):
   `body`/`keep_twin` — a `confirm` on it is rejected. Branch on each item's
   `answers` list.
 - **Always `--dry-run` first** on a nontrivial decision document; it
-  validates every answer without writing.
+  validates every answer without writing. It does not run the structural
+  verify gate (that happens after the write), so a clean dry run is not a
+  promise that the pass will record.
 - **Many `translate_new` bodies at once** (e.g. a whole deck authored in one
   language): answering each in JSON works but is heavy. The sanctioned bulk
   alternative is `clm slides translate DECK.en.py` to bootstrap the missing
