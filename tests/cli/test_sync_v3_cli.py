@@ -522,6 +522,73 @@ class TestReportIdentity:
         assert "schema 99" in _stderr(result) + result.output
 
 
+class TestAnchorShapeTransition:
+    """#653: a one-sided slide tag frames a tag row instead of refusing."""
+
+    @staticmethod
+    def _deck(lang: str, title: str, explain: str, *, explain_is_slide: bool) -> str:
+        header = HEADER_DE if lang == "de" else HEADER_EN
+        tags = ' tags=["slide"]' if explain_is_slide else ""
+        return (
+            header
+            + f'# %% [markdown] lang="{lang}" tags=["slide"] slide_id="u-curve"\n#\n# # {title}\n\n'
+            + f'# %% [markdown] lang="{lang}"{tags} slide_id="u-curve-explain"\n#\n# {explain}\n\n'
+        )
+
+    def _pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        de = tmp_path / "slides_b.de.py"
+        en = tmp_path / "slides_b.en.py"
+        de.write_text(self._deck("de", "U-Kurve", "Erklaerung", explain_is_slide=True), "utf-8")
+        en.write_text(self._deck("en", "U-curve", "Explanation", explain_is_slide=True), "utf-8")
+        return de, en
+
+    def test_removing_the_slide_tag_on_one_half_frames_a_mechanical_mirror(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, en = self._pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+
+        # The #653 edit: an explain slide becomes a continuation, DE only.
+        de.write_text(self._deck("de", "U-Kurve", "Erklaerung", explain_is_slide=False), "utf-8")
+
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        # It used to be: refusal duplicate_id, zero items, nothing to answer.
+        assert report["refusal"] is None
+        row = next(i for i in report["items"] if i["key"] == "id:u-curve-explain")
+        assert (row["action"], row["direction"]) == ("mirror_tags", "de_to_en")
+        assert row["resolution"] == "mechanical"
+        (obs,) = [o for o in report["observations"] if o["kind"] == "anchor_shape_divergence"]
+        assert obs["member"] == "id:u-curve-explain"
+
+        # …and apply mirrors the shape onto the twin, with no decision needed.
+        applied = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"])
+        assert applied.exit_code in (0, 1), applied.output
+        assert 'tags=["slide"] slide_id="u-curve-explain"' not in en.read_text("utf-8")
+        after = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        assert not [o for o in after["observations"] if o["kind"] == "anchor_shape_divergence"]
+
+    def test_adding_the_slide_tag_on_one_half_mirrors_the_other_way(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de = tmp_path / "slides_b.de.py"
+        en = tmp_path / "slides_b.en.py"
+        de.write_text(self._deck("de", "U-Kurve", "Erklaerung", explain_is_slide=False), "utf-8")
+        en.write_text(self._deck("en", "U-curve", "Explanation", explain_is_slide=False), "utf-8")
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        en.write_text(self._deck("en", "U-curve", "Explanation", explain_is_slide=True), "utf-8")
+
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        assert report["refusal"] is None
+        row = next(i for i in report["items"] if i["key"] == "id:u-curve-explain")
+        assert (row["action"], row["direction"]) == ("mirror_tags", "en_to_de")
+
+
 class TestActionDiscriminator:
     """Schema 4's optional `action` on a decision row (Q3)."""
 

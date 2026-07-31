@@ -377,13 +377,16 @@ class TestRefusals:
         assert outcome.refusal is not None
         assert {r.code for r in outcome.refusal.reasons} == {"duplicate_id"}
 
-    def test_one_sided_slide_tag_refuses_with_the_anchor_shape_code(self):
+    def test_one_sided_slide_tag_dissolves_the_boundary_instead_of_refusing(self):
         # #653: removing tags=["slide"] from an id'd cell on ONE half made the
         # same id an anchor on one side and a plain member on the other. The
         # lens built two members under one key and the deck died with
-        # `duplicate_id` ("resolves to 2 distinct members") — a message about
-        # parsing, whose `rename-id` hint renames both halves and so cannot fix
-        # it. The cause is named instead, in phase 1, with both sides located.
+        # `duplicate_id` ("resolves to 2 distinct members"), framing nothing.
+        #
+        # Slide-hood is presentation, so anchor-hood is a property of the PAIR:
+        # a boundary only one half draws opens no group on either side. The
+        # cell stays an ordinary member, pairs by id, and the halves simply
+        # differ in one tag.
         de = _strip_final_blank(
             HEADER_DE + _slide("a", "de", "A") + _localized("a-explain", "de", "Fortsetzung")
         )
@@ -391,20 +394,26 @@ class TestRefusals:
             HEADER_EN + _slide("a", "en", "A") + _slide("a-explain", "en", "Continued")
         )
         outcome = parse_bundle(de, en)
-        assert not outcome.ok
-        assert outcome.refusal is not None
-        assert {r.code for r in outcome.refusal.reasons} == {"anchor_shape_divergence"}
-        (reason,) = outcome.refusal.reasons
-        assert reason.member == MemberKey.for_id("a-explain")
-        # both halves located, and which one carries the tag
-        assert "en side" in reason.detail
-        assert "de side" in reason.detail
-        assert "slide start" in reason.detail and "continuation" in reason.detail
-        text = outcome.refusal.render()
-        assert "normalize --stamp-ids" not in text  # it cannot fix a tag shape
-        assert "align the slide/subslide tag" in text
+        assert outcome.ok, outcome.refusal.render() if outcome.refusal else ""
+        assert outcome.deck is not None
 
-    def test_anchor_shape_divergence_fires_in_both_directions(self):
+        # ONE member, both sides present — not two members under one key.
+        member = outcome.deck.member_by_key(MemberKey.for_id("a-explain"))
+        assert member is not None
+        assert member.de is not None and member.en is not None
+        assert [m.key for m in outcome.deck.members()].count(MemberKey.for_id("a-explain")) == 1
+
+        # The boundary is dissolved on BOTH halves: no group "a-explain".
+        assert [g.anchor_id for g in outcome.deck.groups] == ["title", "a"]
+
+        # …and the divergence is reported, naming both sides.
+        (obs,) = [o for o in outcome.deck.observations if o.kind == "anchor_shape_divergence"]
+        assert obs.member == MemberKey.for_id("a-explain")
+        assert obs.side == "en"  # the half that carries the tag
+        assert "slide start on the en side" in obs.detail
+        assert "continuation cell on the de side" in obs.detail
+
+    def test_anchor_shape_divergence_dissolves_in_both_directions(self):
         # The retag is symmetric: the tag may go missing on either half.
         de = _strip_final_blank(
             HEADER_DE + _slide("a", "de", "A") + _slide("a-explain", "de", "Fortsetzung")
@@ -413,8 +422,23 @@ class TestRefusals:
             HEADER_EN + _slide("a", "en", "A") + _localized("a-explain", "en", "Continued")
         )
         outcome = parse_bundle(de, en)
-        assert outcome.refusal is not None
-        assert {r.code for r in outcome.refusal.reasons} == {"anchor_shape_divergence"}
+        assert outcome.ok
+        assert outcome.deck is not None
+        (obs,) = [o for o in outcome.deck.observations if o.kind == "anchor_shape_divergence"]
+        assert obs.side == "de"
+        assert [g.anchor_id for g in outcome.deck.groups] == ["title", "a"]
+
+    def test_a_genuinely_one_sided_slide_still_opens_its_group(self):
+        # The demotion keys on DISAGREEMENT, not on one-sidedness: a slide that
+        # exists on one half only is a real new group (its twin is framed), and
+        # dissolving it would re-home its cells into the previous slide.
+        de = _strip_final_blank(HEADER_DE + _slide("a", "de", "A"))
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A") + _slide("b", "en", "B"))
+        outcome = parse_bundle(de, en)
+        assert outcome.ok, outcome.refusal.render() if outcome.refusal else ""
+        assert outcome.deck is not None
+        assert [g.anchor_id for g in outcome.deck.groups] == ["title", "a", "b"]
+        assert not [o for o in outcome.deck.observations if o.kind == "anchor_shape_divergence"]
 
     def test_slide_to_subslide_retag_does_not_refuse(self):
         # is_slide_start = slide OR subslide, so this retag keeps anchor-hood:

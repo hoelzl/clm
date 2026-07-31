@@ -199,7 +199,7 @@ def _bare(slide_id: str | None) -> str | None:
     return strip_preserve_marker(slide_id) or None
 
 
-def _segment_deck(source: _Source) -> _DeckSeg:
+def _segment_deck(source: _Source, demoted: frozenset[str] = frozenset()) -> _DeckSeg:
     """Segment one deck half into header zone / title group / anchored groups.
 
     The header zone is everything before the title macro (the j2 import line
@@ -208,9 +208,23 @@ def _segment_deck(source: _Source) -> _DeckSeg:
     cells before the first slide form the synthetic preface group. Id-less
     anchors are refused before segmentation runs (phase 1), so every real
     group here has a usable id.
+
+    ``demoted`` names ids whose slide-hood the two halves disagree about
+    (#653). They open no group on either side: anchor-hood is a pair
+    property, so a boundary only one half draws is not a boundary. The cell
+    stays an ordinary member of the preceding group and pairs by id like any
+    other — which is what lets the deck parse at all while the halves
+    disagree.
     """
     raw = source.raw
-    first_slide = next((i for i, c in enumerate(raw) if c.metadata.is_slide_start), len(raw))
+    first_slide = next(
+        (
+            i
+            for i, c in enumerate(raw)
+            if c.metadata.is_slide_start and _bare(c.metadata.slide_id) not in demoted
+        ),
+        len(raw),
+    )
     title_idx = next(
         (i for i, c in enumerate(raw[:first_slide]) if is_title_macro_cell(c)),
         None,
@@ -222,7 +236,7 @@ def _segment_deck(source: _Source) -> _DeckSeg:
             current = _GroupSeg(group_id=TITLE_SLIDE_ID, anchor_idx=i)
             seg.groups.append(current)
             continue
-        if cell.metadata.is_slide_start:
+        if cell.metadata.is_slide_start and _bare(cell.metadata.slide_id) not in demoted:
             group_id = _bare(cell.metadata.slide_id) or f"~idless@{cell.line_number}"
             current = _GroupSeg(group_id=group_id, anchor_idx=i)
             seg.groups.append(current)
@@ -332,6 +346,9 @@ class _Parser:
         # DE cell -> EN cell pairing, across parts (one map per bundle).
         self.pairs: dict[_Ref, _Ref] = {}
         self.paired_en: set[_Ref] = set()
+        #: ids whose slide-hood the halves disagree about — they open no
+        #: group and pair by id like ordinary members (#653).
+        self.demoted: frozenset[str] = frozenset()
         # Member-keyed observations are recorded against the Member OBJECT and
         # materialized only after positional ordinals are assigned — otherwise
         # a frozen Observation would carry the pre-ordinal sentinel key and
@@ -439,40 +456,51 @@ class _Parser:
                 shapes[bare] = (self._is_anchor(source.raw[i]), cell.line_number)
         return shapes
 
-    def check_anchor_shape(self) -> None:
-        """Refuse ids whose *slide-hood* differs between the halves (#653).
+    def demote_divergent_anchors(self) -> frozenset[str]:
+        """Ids whose *slide-hood* the halves disagree about (#653).
 
-        Anchor-hood is tag-derived and anchors pair by group rather than by id
-        (:meth:`pair_by_id`), so a one-sided `slide` retag — a routine layout
-        edit — builds **two** members under one key and the deck used to die
-        in :meth:`_check_key_uniqueness` with a `duplicate_id` whose message
-        described a parsing ambiguity and whose hint (`rename-id`, which
-        rewrites *both* halves) could not fix it.
+        Slide-hood is a **presentation** attribute — the `slide` / `subslide`
+        tags select the transition shown when the cell appears, and authors
+        flip them because a rendered slide looks too full. Identity must not
+        depend on it (design P2), so anchor-hood is treated as a property of
+        the PAIR: a boundary only one half draws is not a boundary, and the
+        cell stays an ordinary member of the preceding group on both sides.
 
-        Naming the cause here instead: the refusal is still whole-deck, but it
-        is enumerated in phase 1 alongside the other keying preconditions, it
-        says which half carries the tag, and its hint is the edit that repairs
-        it. Framing this transition as a mechanical tag row — so it never
-        refuses at all — is the engine change designed in
-        ``docs/claude/design/sync-slide-hood-is-presentation.md``.
+        That is what lets the deck parse. Previously the cell was an anchor on
+        one half (excluded from by-id pairing, minted from its group) and a
+        plain member on the other (paired by id), so one key resolved to two
+        members and the whole deck refused with `duplicate_id` — zero items,
+        and a `rename-id` hint that renames both halves and therefore cannot
+        fix it. Now the halves simply differ in one tag, which is the
+        mechanical `mirror_tags` row every other tag difference has always
+        been (#615).
+
+        Design: ``docs/claude/design/sync-slide-hood-is-presentation.md``.
         """
         de_shapes = self._anchor_shapes("de")
         en_shapes = self._anchor_shapes("en")
+        demoted: set[str] = set()
         for bare in sorted(de_shapes.keys() & en_shapes.keys()):
             de_anchor, de_line = de_shapes[bare]
             en_anchor, en_line = en_shapes[bare]
             if de_anchor == en_anchor:
                 continue
-            anchor_side, plain_side = ("de", "en") if de_anchor else ("en", "de")
+            demoted.add(bare)
+            anchor_side: Lang = "de" if de_anchor else "en"
+            plain_side: Lang = "en" if de_anchor else "de"
             anchor_line, plain_line = (de_line, en_line) if de_anchor else (en_line, de_line)
-            self.refuse(
+            self.observe(
                 "anchor_shape_divergence",
-                f'slide_id "{bare}" is a slide start on the {anchor_side} side '
-                f"(deck.{anchor_side} line {anchor_line}) but a continuation cell "
-                f"on the {plain_side} side (deck.{plain_side} line {plain_line}) — "
-                f"the slide/subslide tag differs between the halves",
                 member=MemberKey.for_id(bare),
+                side=anchor_side,
+                detail=(
+                    f'slide_id "{bare}" is a slide start on the {anchor_side} side '
+                    f"(deck.{anchor_side} line {anchor_line}) but a continuation cell "
+                    f"on the {plain_side} side (deck.{plain_side} line {plain_line}) — "
+                    f"answer the tag row to mirror the shape onto the twin"
+                ),
             )
+        return frozenset(demoted)
 
     # -- phase 2: pairing --------------------------------------------------------
 
@@ -483,6 +511,12 @@ class _Parser:
         via group pairing. Pairing across parts and across groups is allowed
         on purpose: a member mid-relayout (inline on one half, companion on
         the other) or mid-move is still *one* member (design §7.3 / P2).
+
+        "Anchor" here means anchor **in the segmentation**, not "carries the
+        tag": an id the halves disagree about opens no group (#653), so it
+        must pair by id like the ordinary member it now is. Keying off the raw
+        tag instead left it excluded on one half and paired on the other —
+        one key, two members, whole-deck refusal.
         """
         by_id: dict[Lang, dict[str, _Ref]] = {"de": {}, "en": {}}
         for lang in LANGS:
@@ -491,9 +525,9 @@ class _Parser:
                 if source is None:
                     continue
                 for i, raw in enumerate(source.raw):
-                    if part == "deck" and self._is_anchor(raw):
-                        continue
                     bare = _bare(source.cells[i].slide_id)
+                    if part == "deck" and self._is_anchor(raw) and bare not in self.demoted:
+                        continue
                     if bare is not None:
                         by_id[lang][bare] = (part, i)
         for bare, de_ref in by_id["de"].items():
@@ -782,12 +816,16 @@ class _Parser:
 
     def run(self) -> ParseOutcome:
         self.check_keying()
-        self.check_anchor_shape()
         if self.refusals:
             return ParseOutcome(refusal=NormalizeRefusal(reasons=self.refusals))
 
-        de_seg = _segment_deck(self.de_deck)
-        en_seg = _segment_deck(self.en_deck)
+        # Slide-hood is a pair property: a boundary only one half draws opens
+        # no group on either side (#653), so the halves' group structures stay
+        # comparable while a retag is half-done.
+        self.demoted = self.demote_divergent_anchors()
+        demoted = self.demoted
+        de_seg = _segment_deck(self.de_deck, demoted)
+        en_seg = _segment_deck(self.en_deck, demoted)
 
         # Phase 2: all pairing, before any member is built.
         self.pair_by_id()
