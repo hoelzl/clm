@@ -81,6 +81,22 @@ what a `body` answer must contain, so you can feed an excerpt straight back
 are *all* `verify_cold` also carries a top-level `hint` — that is the seeding
 case; use `record`, not a confirm-all document (see "Cold members").
 
+### Naming the row you are answering (`action`)
+
+A decision row may carry the item's **`action`**:
+
+```json
+{"key": "id:intro", "action": "translate_edit", "body": "…"}
+```
+
+Normally you can omit it — one member frames one row. Two things it buys:
+
+- **A member that frames two rows** can have both answered in one document;
+  without the discriminator the second row is a `duplicate key` error.
+- **Self-checking answers.** A row naming an action the member does not
+  currently frame is *reported* (`rejected`, with both actions named) instead
+  of silently landing on whatever row the member does frame.
+
 ### The freshness token (`report_id`) — copy it into your answers
 
 Every pair payload carries three identity fields:

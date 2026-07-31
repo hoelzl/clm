@@ -83,6 +83,7 @@ __all__ = [
     "decision_vocabulary",
     "item_answers",
     "load_decision_document",
+    "parse_decision_rows",
     "parse_decisions",
 ]
 
@@ -114,6 +115,13 @@ class Decision:
     choice: str | None = None
     body: str | None = None
     side: str | None = None
+    #: The framed action this answer is FOR. Normally omitted — one member
+    #: frames one row. When a member frames two (the engine suppresses most
+    #: same-key pairs, but not all), naming the action is the only way to
+    #: answer both in one document; and naming it makes any answer
+    #: self-checking, since a row whose action matches no framed row on that
+    #: member is reported instead of silently landing on the other one.
+    action: str | None = None
 
 
 #: Framed actions this executor can resolve from a decision, with the answer
@@ -203,17 +211,32 @@ def item_resolution(item: DiffItem) -> str:
 
 
 def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
+    """Decode a decision document into a handle-keyed map.
+
+    Convenience view over :func:`parse_decision_rows` for the common case of
+    one answer per member; when a document answers two framed rows on one
+    member, this map holds the first and the executor uses the row list.
+    """
+    rows, errors = parse_decision_rows(payload)
+    decisions: dict[str, Decision] = {}
+    for row in rows:
+        decisions.setdefault(row.key, row)
+    return decisions, errors
+
+
+def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
     """Decode a decision document; malformed rows are collected as errors.
 
     Accepts ``{"decisions": [...]}`` or a bare list; each row is
-    ``{"key": "<member handle>", "choice": "..."} | {"key": ..., "body": "..."}``.
+    ``{"key": "<member handle>", "choice": "..."} | {"key": ..., "body": "..."}``,
+    optionally with ``"action"`` naming the framed row it answers.
     """
     errors: list[str] = []
     rows = payload.get("decisions") if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
         # The first schema error an agent ever sees — teach the whole shape at
         # once instead of one field name per round-trip.
-        return {}, [
+        return [], [
             "decision document must be a list or {'decisions': [...]} — e.g. "
             '{"decisions": [{"key": "id:intro", "choice": "confirm"}, '
             '{"key": "id:motivation", "body": "# the translated cell body"}]}; '
@@ -221,7 +244,8 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
             "and a body is the cell text WITHOUT its '# %%' delimiter line — "
             "see `clm info sync-agents`"
         ]
-    decisions: dict[str, Decision] = {}
+    out: list[Decision] = []
+    seen: set[tuple[str, str | None]] = set()
     for i, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get("key"), str):
             errors.append(f"decision #{i}: needs a 'key' string (the member handle)")
@@ -254,11 +278,21 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
         if side is not None and body is None:
             errors.append(f"decision #{i} ({row['key']}): 'side' only accompanies a 'body' answer")
             continue
-        if row["key"] in decisions:
-            errors.append(f"decision #{i} ({row['key']}): duplicate key")
+        action = row.get("action")
+        if action is not None and not isinstance(action, str):
+            errors.append(f"decision #{i} ({row['key']}): 'action' must be a string")
             continue
-        decisions[row["key"]] = Decision(key=row["key"], choice=choice, body=body, side=side)
-    return decisions, errors
+        if (row["key"], action) in seen:
+            errors.append(
+                f"decision #{i} ({row['key']}): duplicate key"
+                + (f" for action '{action}'" if action else "")
+                + " — one answer per framed row; to answer two rows on one "
+                "member, give each row the item's 'action'"
+            )
+            continue
+        seen.add((row["key"], action))
+        out.append(Decision(key=row["key"], choice=choice, body=body, side=side, action=action))
+    return out, errors
 
 
 def load_decisions_text(text: str) -> tuple[dict[str, Decision], list[str]]:
@@ -278,6 +312,9 @@ class DecisionDocument:
     """
 
     decisions: dict[str, Decision] = field(factory=dict)
+    #: Every answer row in document order — the executor's view, which unlike
+    #: ``decisions`` can hold two answers for one member.
+    rows: list[Decision] = field(factory=list)
     report_id: str | None = None
     schema: int | None = None
 
@@ -295,7 +332,10 @@ def load_decision_document(text: str) -> tuple[DecisionDocument, list[str]]:
         payload = json.loads(text)
     except ValueError as exc:
         return DecisionDocument(), [f"decision document is not valid JSON: {exc}"]
-    decisions, errors = parse_decisions(payload)
+    rows, errors = parse_decision_rows(payload)
+    decisions: dict[str, Decision] = {}
+    for row in rows:
+        decisions.setdefault(row.key, row)
     report_id: str | None = None
     schema: int | None = None
     if isinstance(payload, dict):
@@ -316,7 +356,10 @@ def load_decision_document(text: str) -> tuple[DecisionDocument, list[str]]:
                 )
             else:
                 schema = raw_schema
-    return DecisionDocument(decisions=decisions, report_id=report_id, schema=schema), errors
+    return (
+        DecisionDocument(decisions=decisions, rows=rows, report_id=report_id, schema=schema),
+        errors,
+    )
 
 
 def _validate_body(body: str, comment_token: str) -> str | None:
@@ -1689,37 +1732,70 @@ def _execute_mechanical(ex: _Executor, item: DiffItem) -> None:
         raise _ItemError(f"no executor for mechanical action '{action}'")
 
 
-def _unmatched_decision_result(key: str, deck: BilingualDeck) -> ItemResult:
-    """Classify a decision whose key names no item in the current diff.
+def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDiff) -> ItemResult:
+    """Classify a decision row that matched no item in the current diff.
 
-    Two very different situations wore one verdict before schema 4. If the
-    member *exists* and simply frames nothing, the answer is redundant, not
-    wrong — the effect it asks for already holds, because a sibling pass, an
-    earlier apply, or the other CLI spelling of this same deck already did it.
-    Reporting that as ``rejected`` is what made #649 read as "rejected" while
-    the write had demonstrably landed. Only a key that names no member of this
-    deck at all is a genuine stale handle.
+    Three situations wore one verdict before schema 4:
+
+    * the row names an ``action`` the member does not currently frame — the
+      answer is aimed at a row that is not there, which is a mistake worth
+      naming rather than a silent no-op;
+    * the member exists and frames nothing at all: the answer is redundant,
+      not wrong — the effect it asks for already holds, because a sibling
+      pass, an earlier apply, or the other CLI spelling of this deck already
+      did it. Reporting that as ``rejected`` is what made #649 read as
+      "rejected" while the write had demonstrably landed;
+    * the handle names no member of this deck — a genuine stale handle.
     """
+    framed = [i.action for i in diff.items if i.key == row.key]
+    if row.action is not None and framed:
+        return ItemResult(
+            row.key,
+            row.action,
+            "rejected",
+            f"this member frames {', '.join(sorted(set(framed)))}, not "
+            f"'{row.action}' — the answer names a row that is not in the "
+            "current report",
+        )
     try:
-        member = deck.member_by_key(MemberKey.parse(key))
+        member = deck.member_by_key(MemberKey.parse(row.key))
     except ValueError:
         member = None
     if member is not None:
         return ItemResult(
-            key,
-            "?",
+            row.key,
+            row.action or "?",
             "already_applied",
             "the member frames nothing in the current report — the state this "
             "answer asks for already holds (nothing to do)",
         )
     return ItemResult(
-        key,
-        "?",
+        row.key,
+        row.action or "?",
         "rejected",
         "no member with this handle in the deck — check the key against "
         "`report --json`, and note that a companion path and its deck are one "
         "deck with one ledger section",
     )
+
+
+def _match_decision(rows: list[Decision], item: DiffItem, matched: set[int]) -> Decision | None:
+    """The answer for ``item``: exact ``(key, action)`` first, else key-only.
+
+    An action-less row is the ordinary case and answers whichever row the
+    member frames. A row naming an action binds only to that action, so two
+    rows on one member each land where they were aimed — and a row aimed at an
+    action the member does not frame stays unmatched and is reported.
+    """
+    fallback: Decision | None = None
+    for row in rows:
+        if row.key != item.key or id(row) in matched:
+            continue
+        if row.action == item.action:
+            return row
+        if row.action is None and fallback is None:
+            fallback = row
+    return fallback
 
 
 def apply_deck(
@@ -1730,6 +1806,7 @@ def apply_deck(
     deck_key: str,
     *,
     decisions: dict[str, Decision] | None = None,
+    decision_rows: list[Decision] | None = None,
     only_members: set[str] | None = None,
     dry_run: bool = False,
     commit: str | None = None,
@@ -1744,6 +1821,12 @@ def apply_deck(
     the save on a failed verify gate).
     """
     decisions = decisions or {}
+    # One internal representation. ``decisions`` (handle -> answer) is the
+    # convenience form every caller used before schema 4 and cannot hold two
+    # answers for one member; ``decision_rows`` is the full document. Rows win
+    # when both are given.
+    rows = list(decision_rows) if decision_rows is not None else list(decisions.values())
+    matched: set[int] = set()
     outcome = ApplyOutcome(dry_run=dry_run)
     ex = _Executor(bundle=bundle, deck=deck, comment_token=bundle.comment_token)
     originals = ex.emit_all()
@@ -1752,7 +1835,7 @@ def apply_deck(
     # so a lone `confirm` on one pos-keyed cold member would silently bless
     # its still-unverified pool siblings. Require the whole pool's cold items
     # to be confirmed in the same document.
-    incoherent_pools = _incoherent_pool_confirms(diff, decisions)
+    incoherent_pools = _incoherent_pool_confirms(diff, {row.key: row for row in rows})
 
     ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
@@ -1761,7 +1844,7 @@ def apply_deck(
     for _, item in ordered:
         if only_members is not None and item.key not in only_members:
             unresolved_items.append(item)  # a skipped pool sibling must not be blessed
-            answered = item.key in decisions
+            answered = _match_decision(rows, item, matched) is not None
             if answered:
                 # Claim the handle so the unmatched-decision sweep below does
                 # not then classify it: the answer was neither stale nor
@@ -1776,9 +1859,16 @@ def apply_deck(
                 )
             )
             continue
-        decision = decisions.get(item.key)
+        decision = _match_decision(rows, item, matched)
         if decision is not None:
             seen_decisions.add(item.key)
+            if item.action in FRAMED_ACTIONS:
+                # Only a FRAMED row consumes an answer. A member can frame a
+                # mechanical row and a decision row under one handle (a
+                # co-emitted `mirror_tags` beside a `verify_cold`, say); the
+                # mechanical row executes on its own and must leave the answer
+                # for its sibling, or the sibling silently stays pending.
+                matched.add(id(decision))
         try:
             if (
                 decision is not None
@@ -1821,9 +1911,9 @@ def apply_deck(
             status = "rejected" if decision is not None else "failed"
             unresolved_items.append(item)
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
-    for key in decisions:
-        if key not in seen_decisions:
-            outcome.results.append(_unmatched_decision_result(key, deck))
+    for row in rows:
+        if id(row) not in matched and row.key not in seen_decisions:
+            outcome.results.append(_unmatched_decision_result(row, deck, diff))
 
     if not landed:
         return outcome

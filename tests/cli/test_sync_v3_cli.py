@@ -522,6 +522,65 @@ class TestReportIdentity:
         assert "schema 99" in _stderr(result) + result.output
 
 
+class TestActionDiscriminator:
+    """Schema 4's optional `action` on a decision row (Q3)."""
+
+    def test_matching_action_is_accepted(self, cli_runner: CliRunner, tmp_path: Path):
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {"decisions": [{"key": "id:s0-m", "action": "translate_edit", "body": "# EN new"}]}
+            ),
+        )
+        assert result.exit_code == 0, result.output
+        assert "# EN new" in en.read_text(encoding="utf-8")
+
+    def test_answer_aimed_at_an_unframed_action_is_reported_not_silently_used(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # Without the discriminator this row would have landed on whatever the
+        # member happened to frame — an answer aimed at one row silently
+        # executing another.
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        before = en.read_text(encoding="utf-8")
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {"decisions": [{"key": "id:s0-m", "action": "verify_cold", "choice": "confirm"}]}
+            ),
+        )
+        payload = _json_payload(result.output)
+        (row,) = [i for i in payload["items"] if i["status"] == "rejected"]
+        assert row["action"] == "verify_cold"
+        assert "frames translate_edit, not 'verify_cold'" in row["reason"]
+        assert en.read_text(encoding="utf-8") == before
+
+    def test_duplicate_key_needs_distinct_actions(self, cli_runner: CliRunner, tmp_path: Path):
+        de, _en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {
+                    "decisions": [
+                        {"key": "id:s0-m", "choice": "confirm"},
+                        {"key": "id:s0-m", "choice": "confirm"},
+                    ]
+                }
+            ),
+        )
+        assert result.exit_code == 2
+        assert "duplicate key" in _stderr(result) + result.output
+
+
 class TestSanctionedFlows:
     """Q6a: the two flows the doctrine forbade doing by hand, in-engine."""
 
