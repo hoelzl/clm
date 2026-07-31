@@ -522,6 +522,119 @@ class TestReportIdentity:
         assert "schema 99" in _stderr(result) + result.output
 
 
+class TestSanctionedFlows:
+    """Q6a: the two flows the doctrine forbade doing by hand, in-engine."""
+
+    def test_verify_translation_takes_a_body_for_the_named_side(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # Both sides moved off base. `confirm` banks them as they are; a body
+        # says "the named side is the wrong one" and fixes it in the same pass
+        # instead of an out-of-band edit plus a second report (M7). The info
+        # topic promised this answer; the engine used to reject it.
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        en.write_text(en.read_text(encoding="utf-8").replace("EN text", "EN wrong"), "utf-8")
+
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        item = next(i for i in report["items"] if i["key"] == "id:s0-m")
+        assert item["action"] == "verify_translation"
+        assert item["answers"] == ["confirm", "body"]
+
+        applied = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {
+                    "schema": WIRE_SCHEMA,
+                    "report_id": report["report_id"],
+                    "decisions": [{"key": "id:s0-m", "body": "# EN right", "side": "en"}],
+                }
+            ),
+        )
+        assert applied.exit_code == 0, applied.output
+        assert "# EN right" in en.read_text(encoding="utf-8")
+        assert "DE neu" in de.read_text(encoding="utf-8")  # the reviewed side stands
+
+    def test_verify_translation_body_needs_a_side(self, cli_runner: CliRunner, tmp_path: Path):
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        en.write_text(en.read_text(encoding="utf-8").replace("EN text", "EN wrong"), "utf-8")
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps({"decisions": [{"key": "id:s0-m", "body": "# ambiguous"}]}),
+        )
+        payload = _json_payload(result.output)
+        (row,) = [i for i in payload["items"] if i["key"] == "id:s0-m"]
+        assert row["status"] == "rejected"
+        assert "must name the 'side'" in row["reason"]
+
+    def _fork_pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        # A SHARED id'd cell — an id-less fork refuses the whole deck (M5).
+        shared = '# %% [markdown] tags=["keep"] slide_id="shared-note"\n#\n# Shared note\n'
+        de = tmp_path / "slides_f.de.py"
+        en = tmp_path / "slides_f.en.py"
+        de.write_text(
+            HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Titel\n\n'
+            + shared,
+            encoding="utf-8",
+        )
+        en.write_text(
+            HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Title\n\n'
+            + shared,
+            encoding="utf-8",
+        )
+        return de, en
+
+    def test_mark_twin_completes_a_fork_without_a_hand_edit(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # A fork in progress: the DE side gained a lang attribute, the twin has
+        # none. The detail said "mark the twin" while the vocabulary was empty
+        # and the doctrine forbids hand-editing the other language (M11 / F1).
+        de, en = self._fork_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(
+            de.read_text(encoding="utf-8").replace(
+                '# %% [markdown] tags=["keep"]', '# %% [markdown] lang="de" tags=["keep"]'
+            ),
+            encoding="utf-8",
+        )
+
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        item = next(i for i in report["items"] if i["key"] == "id:shared-note")
+        assert item["action"] == "fork_pending_twin"
+        assert item["answers"] == ["mark_twin"]
+        assert item["resolution"] == "decision"  # no longer a dead end
+
+        applied = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps(
+                {
+                    "schema": WIRE_SCHEMA,
+                    "report_id": report["report_id"],
+                    "decisions": [{"key": "id:shared-note", "choice": "mark_twin"}],
+                }
+            ),
+        )
+        assert applied.exit_code == 0, applied.output
+        en_text = en.read_text(encoding="utf-8")
+        assert 'lang="en"' in en_text
+        # ONLY the attribute — the body adaptation is the next pass's
+        # translate_edit, not something mark_twin guesses.
+        assert "Shared note" in en_text
+
+
 class TestItemShape:
     """Schema 4's `resolution` discriminator and body-only excerpts (Q3)."""
 

@@ -115,7 +115,10 @@ fork/unify/id-stamp transitions. Trust them; review with `git diff`.
 **Framed actions** (answer them): `translate_edit` / `translate_new` (produce
 the target-language body — or answer `translate_edit` with `keep_twin` when
 your edit did not change what the twin should say), `verify_translation` (both
-sides moved — confirm or supply a body), `conflict_shared` / `remove_vs_edit`
+sides moved off base — `confirm` banks them as they are, or supply a `body`
+plus the `side` it replaces when your review found one of them wrong; the
+side is required here because *both* moved, so the engine cannot infer which
+one you corrected), `conflict_shared` / `remove_vs_edit`
 / `unify_choose_body` / `order_decision` / `conflict_preamble` (choose a side),
 `conflict_tags` (the twins' tag sets diverged with no attributable direction —
 answer `de` or `en`; mirrors **only the chosen side's tag set** onto the twin,
@@ -148,8 +151,10 @@ follow the rename — narration is never a removal decision when its slide
 still exists, #650), `ambiguous_alignment` (genuinely ambiguous residue
 — rival id stamps, both sides adding different content into one pool;
 carries **no** answers: reconcile by editing, minting ids, then re-report),
-and the normalize-refusal deck item (run `clm slides normalize`, then
-re-report).
+`fork_pending_twin` (a shared cell is becoming a localized pair: one side
+carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
+engine writes the twin's attribute; see "Forking a shared cell" below), and
+the normalize-refusal deck item (run `clm slides normalize`, then re-report).
 
 ### Parse refusals: read the code, not the header
 
@@ -170,6 +175,24 @@ only when at least one such reason is present. The others carry their own
 one-sided-retag shape of #653; until the engine frames it as a mechanical tag
 row, mirroring the tag by hand is the sanctioned repair — the refusal tells
 you which side carries it.
+
+### Forking a shared cell (two passes, both in-engine)
+
+A shared cell becomes a localized pair in **two** steps, and doing both in one
+edit silently drops the member's ledger history (the fork identity-carry needs
+one side still at its recorded baseline):
+
+1. Add `lang="<your side>"` to the cell on the half you are editing. Report
+   frames `fork_pending_twin`; answer **`mark_twin`**. The engine writes the
+   twin's `lang=` attribute — that attribute only. (Marking the twin by hand is
+   what "never hand-edit the other language" forbids, and it used to be the
+   only route.)
+2. Re-report. The pair is now localized and its bodies are identical, so the
+   member frames `translate_edit`; answer it with the adapted body.
+
+Do **not** stamp the id, add `lang=`, and rewrite the body in one pass: the
+differ can no longer prove the two cells are the same member, and the fork
+records as a fresh pair.
 
 ## Tag parity (tags are language-independent)
 

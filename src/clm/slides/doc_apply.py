@@ -122,7 +122,11 @@ class Decision:
 _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "translate_edit": ("body", "keep_twin"),
     "translate_new": ("body",),
-    "verify_translation": ("confirm",),
+    #: ``body`` is symmetric with ``verify_cold``'s #572 recovery: both
+    #: sides moved, the agent read them, and one is wrong — name it with
+    #: ``side`` and supply the correction instead of hand-editing the file
+    #: and then confirming (findings M7 / Q6a; the info topic promised it).
+    "verify_translation": ("confirm", "body"),
     "verify_cold": ("confirm", "body"),
     "conflict_shared": ("de", "en", "body"),
     "pending_divergence": ("de", "en"),
@@ -140,6 +144,12 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     #: silently. The non-remove remedies (retarget for_slide, restore the
     #: slide) stay hand-edits: they need a target no answer shape carries.
     "broken_owner": ("remove",),
+    #: The fork transition's only route used to be the hand edit the doctrine
+    #: forbids: the detail said "mark the twin", the vocabulary was empty, and
+    #: `sync-agents` says never to hand-edit the other language (M11 / F1).
+    #: `mark_twin` writes the twin's `lang=` attribute — nothing else; the
+    #: body adaptation stays the agent's, framed as translate_edit next pass.
+    "fork_pending_twin": ("mark_twin",),
 }
 
 
@@ -1278,10 +1288,11 @@ def _execute_decision(
             raise _ItemError(
                 f"'{item.action}' does not accept a body answer (allowed: {', '.join(allowed)})"
             )
-        if decision.side is not None and item.action != "verify_cold":
+        if decision.side is not None and item.action not in _SIDE_BODY_ACTIONS:
             raise _ItemError(
-                f"'side' is only meaningful on a two-sided verify_cold body answer, "
-                f"not on '{item.action}' (which derives its target side itself)"
+                f"'side' is only meaningful on a two-sided "
+                f"{' / '.join(sorted(_SIDE_BODY_ACTIONS))} body answer, not on "
+                f"'{item.action}' (which derives its target side itself)"
             )
         # A j2-kind member may be a single-line macro cell whose only valid
         # replacement text IS a boundary line — its validation is
@@ -1300,10 +1311,40 @@ def _execute_decision(
     _apply_choice_decision(ex, item, choice)
 
 
+#: Framed actions whose ``body`` answer targets a *named* side. Both are
+#: two-sided review states — the agent read both halves and judged one of them
+#: wrong — so neither can derive its target from the item.
+_SIDE_BODY_ACTIONS = frozenset({"verify_cold", "verify_translation"})
+
+
 def _apply_body_decision(
     ex: _Executor, item: DiffItem, body: str, *, side: str | None = None
 ) -> None:
     member = item.member
+    if item.action == "verify_translation":
+        # Both sides moved off base. `confirm` banks them as-is; a body says
+        # "the named side is the wrong one" and replaces it in the same pass —
+        # the review-after-translate case that otherwise costs an out-of-band
+        # edit plus a second report (M7 / Q6a).
+        if member is None or member.is_one_sided:
+            raise _ItemError("a verify_translation body answer needs a two-sided member")
+        if side is None:
+            raise _ItemError(
+                "a verify_translation body answer must name the 'side' to "
+                "overwrite ('de' or 'en') — both sides moved, so the engine "
+                "cannot tell which one you corrected"
+            )
+        target_side: Lang = side  # type: ignore[assignment]
+        holder = ex._holder(item, target_side)
+        cell = holder.side(target_side) if holder is not None else None
+        if holder is None or cell is None:
+            raise _ItemError(f"the {target_side} side of {item.key} is missing")
+        ex.set_side(
+            holder,
+            target_side,
+            evolve(cell, lines=_replacement_lines(cell, body, ex.comment_token)),
+        )
+        return
     if item.action == "verify_cold":
         # Cold recovery (issue #572): the agent read both bodies, judged the
         # named twin stale, and supplies the corrected text — a one-pass fix
@@ -1431,6 +1472,29 @@ def _reject_divergent_tags(de_cell: SideCell, en_cell: SideCell) -> None:
 
 def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
     action = item.action
+    if choice == "mark_twin":
+        # The fork's structural half, executed instead of hand-edited: give the
+        # unmarked twin its own `lang=` attribute. The BODY adaptation is not
+        # done here — the two cells still say the same thing, so the next
+        # report frames the localized pair's translate_edit and the agent
+        # answers that with the adapted text. Two passes, both in-engine
+        # (the fork two-pass recipe, previously documented nowhere).
+        marked = item.side
+        if marked is None:
+            raise _ItemError("item names no marked side")
+        target: Lang = _other(marked)
+        holder = ex._holder(item, target)
+        cell = holder.side(target) if holder is not None else None
+        if holder is None or cell is None:
+            raise _ItemError(
+                f"the {target} side of {item.key} is missing — a fork marks an "
+                "EXISTING twin; supply the twin first"
+            )
+        if cell.lang_attr is not None:  # pragma: no cover - differ frames only unmarked twins
+            raise _ItemError(f"the {target} side already carries a lang attribute")
+        header = swap_lang(cell.lines[0], target)
+        ex.set_side(holder, target, evolve(cell, lines=(header, *cell.lines[1:])))
+        return
     if choice == "confirm":
         de_holder = ex._holder(item, "de")
         en_holder = ex._holder(item, "en")
