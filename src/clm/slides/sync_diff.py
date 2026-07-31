@@ -86,6 +86,38 @@ from clm.slides.sync_wire import WIRE_SCHEMA
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
 
+
+def _cold_detail(member: Member, base_text: str) -> str:
+    """The ``verify_cold`` detail, spelling out the one unanswerable shape.
+
+    A cold member present on ONE half only carries no answer at all (finding
+    M6): ``confirm`` asserts that the two halves agree and the executor
+    unconditionally refuses a one-sided member. The report advertised
+    ``confirm`` here anyway, and for a positional member the rejection then
+    blocked its whole pool with no visible cause. The advertisement is now
+    empty (:func:`clm.slides.doc_apply.item_answers`), so the detail has to
+    carry the repair.
+    """
+    if not member.is_one_sided:
+        return base_text
+    side = "de" if member.de is not None else "en"
+    if member.key.scheme == "pos":
+        return (
+            f"{base_text}, and this positional cell exists on the {side} half "
+            "ONLY — it cannot be confirmed (confirm asserts both halves agree) "
+            "and cannot be mirrored mechanically (its ordinal aliases a "
+            "different twin slot). Give it a slide_id so the twin can be "
+            "framed, or delete it, then re-report. The other cold members of "
+            "its (group, kind) pool cannot be confirmed until then — "
+            "positional members record per pool"
+        )
+    return (
+        f"{base_text}, and this member exists on the {side} half ONLY — a "
+        "one-sided member cannot be confirmed (confirm asserts both halves "
+        "agree). Supply the twin (or delete this cell) and re-report"
+    )
+
+
 __all__ = [
     "COSMETIC_SIDECELL_FIELDS",
     "COMPARED_MEMBER_FIELDS",
@@ -311,6 +343,11 @@ class DiffItem:
             cell = holder.side(lang) if holder is not None else None
             if cell is not None:
                 entry[lang] = "\n".join(cell.lines)
+                # …and the same cell WITHOUT its `# %%` delimiter line, which
+                # is exactly what a `body` answer must contain (finding M10:
+                # report output was not valid decision input, so every agent
+                # independently rediscovered "strip line 1").
+                entry[f"{lang}_body"] = cell.body
         return entry
 
 
@@ -492,7 +529,7 @@ class _Differ:
                     "unverified",
                     "verify_cold",
                     "none",
-                    "no baseline entry — cold member, needs verification",
+                    _cold_detail(member, "no baseline entry — cold member, needs verification"),
                     group=group,
                     member=member,
                 )
@@ -2819,7 +2856,7 @@ class _Differ:
                     "unverified",
                     "verify_cold",
                     "none",
-                    "no ledger entry — cold member, needs verification",
+                    _cold_detail(member, "no ledger entry — cold member, needs verification"),
                     group=group,
                     member=member,
                 )
