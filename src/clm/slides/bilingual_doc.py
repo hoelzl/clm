@@ -228,8 +228,10 @@ class Observation:
 class RefusalReason:
     """One reason a bundle failed the §3.4 normalize precondition."""
 
-    # anchor_shape_divergence | duplicate_id | idless_anchor | idless_localized
-    # | idless_narrative | legacy_title_companion
+    # duplicate_id | idless_anchor | idless_localized | idless_narrative
+    # | legacy_title_companion
+    # (anchor_shape_divergence was a refusal in 1.23.x; since #653 the halves
+    # disagreeing about slide-hood is an OBSERVATION plus a mechanical tag row)
     code: str
     detail: str
     member: MemberKey | None = None
@@ -252,12 +254,6 @@ REFUSAL_HINTS: dict[str, str] = {
         "rename colliding slide_ids with `clm slides rename-id DECK OLD NEW` "
         "(rewrites both halves and migrates the sync-ledger key; `normalize` "
         "cannot fix duplicates)"
-    ),
-    "anchor_shape_divergence": (
-        "align the slide/subslide tag across the halves — add it to the "
-        "continuation side, or remove it from the slide side — so the cell is "
-        "a slide start on both, then re-report (`rename-id` renames both "
-        "halves and `normalize` cannot fix a tag difference)"
     ),
 }
 

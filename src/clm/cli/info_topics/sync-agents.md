@@ -184,13 +184,14 @@ only when at least one such reason is present. The others carry their own
 | Code | What it means | Fix |
 |---|---|---|
 | `duplicate_id` | one `slide_id` names two cells on one side | `clm slides rename-id DECK OLD NEW` |
-| `anchor_shape_divergence` | one id'd cell is a slide start on one half and a continuation cell on the other — the `slide` / `subslide` tag differs between halves | align the tag on the named side, then re-report |
 | `legacy_title_companion` | pre-#242 `slide_id="title"` with no `for_slide` | give the cell `for_slide="title"` and its own `slide_id` |
 
-`anchor_shape_divergence` names both halves and both line numbers. It is the
-one-sided-retag shape of #653; until the engine frames it as a mechanical tag
-row, mirroring the tag by hand is the sanctioned repair — the refusal tells
-you which side carries it.
+**A one-sided `slide` tag is not a refusal** (CLM {version}, #653). Slide-hood
+is presentation, so anchor-hood is a property of the *pair*: when the halves
+disagree, the boundary opens no group on either side, the cell pairs by id
+like any other, and you get an `anchor_shape_divergence` **observation** plus
+the mechanical `mirror_tags` row that copies the shape onto the twin. Nothing
+to answer — `apply` executes it.
 
 ### Forking a shared cell (two passes, both in-engine)
 
