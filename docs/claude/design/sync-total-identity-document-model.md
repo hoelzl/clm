@@ -2,7 +2,8 @@
 
 **Status**: Design agreed with the maintainer — §12 decisions settled 2026-07-02;
 phases 0–4 shipped (v3 is the only engine since 1.20.0); amended 2026-07-10
-with the post-cutover refinements (§13)
+with the post-cutover refinements (§13), and 2026-08-01 with `record_neutral`
+(§6.2.1) — agreed, not yet implemented
 **Author**: Claude (Fable 5), with the maintainer
 **Date**: 2026-07-01 (decisions recorded 2026-07-02)
 **Issue**: [#520](https://github.com/hoelzl/clm/issues/520) (umbrella)
@@ -272,6 +273,16 @@ entry := {
   empty target — minting a `slide_id` routes it through the id-keyed add path.
   Where §5's cold rule and §6.2's add row overlap ("one-sided and
   un-ledgered"), sidedness decides: two-sided → cold, one-sided → add.
+  *Refinement (#764, 2026-08-01):* cold means *the relationship between the
+  halves is unknown*. For a **language-neutral** member that relationship is
+  not unknown — it is observable. A two-sided un-ledgered member whose two
+  sides agree on every field the differ compares, whose recorded langness is
+  `shared`, and whose kind carries no natural-language content (`code` / `j2`)
+  is resolved by the mechanical `record_neutral` row (§6.2) instead of framed
+  as a question. Trust banked this way takes provenance `structural` — the
+  #448 rung, now an actual provenance value: the engine observed the halves
+  agree, no judge attested anything. **Prose is deliberately excluded**, see
+  §6.2's predicate and §9's residue entry.
 - **Stale = fingerprint mismatch**, which is fail-safe: it produces a re-check
   item, never silent trust. `hash_version` migrates entries lazily (re-verify
   on version bump), the #458 lesson encoded.
@@ -351,17 +362,97 @@ comparison.
 | Outcome | Meaning | Handling |
 |---|---|---|
 | `in-sync` | fingerprints match recorded | nothing |
-| `mechanical` | one side moved off base, resolution is deterministic | apply does it: shared verbatim copy, tag mirror, id-stamp twin, order mirror, companion-layout mirror, remove mirror |
+| `mechanical` | resolution is deterministic — normally because one side moved off base, but also where the halves' agreement is directly observable (§6.2.1) | apply does it: shared verbatim copy, tag mirror, id-stamp twin, order mirror, companion-layout mirror, remove mirror, owner record/retarget, `record_neutral` |
 | `edit` | one side moved off base, other side needs judgment (localized twin) | framed task: translate/adapt, with both bodies + base attached; answers: twin `body`, or `keep_twin` when the twin is still a faithful rendering — a pure ledger record (#566) |
 | `add` / `remove` | member present/absent vs base on one side | verbatim (shared) or framed translate (localized) / mirrored remove; removals of verified content always surfaced, never silent |
 | `conflict` | both sides moved off base and differ | framed decision (de-wins / en-wins / merged body / "it's a fork" §7), full excerpts by construction |
 | `transition` | class change (§7): fork, unify, id-stamp, relayout | mechanical when complete, framed when transitional |
-| `unverified` | no ledger entry (cold), **two-sided** (§5 — a one-sided un-ledgered member frames as `add`) | framed verification task; answers: `confirm` (banks both sides as-is, §9), plus `body`+`side` naming the stale twin on an id-keyed member (#572) |
+| `unverified` | no ledger entry (cold), **two-sided** (§5 — a one-sided un-ledgered member frames as `add`), and **not language-neutral-decidable** (§6.2.1) | framed verification task; answers: `confirm` (banks both sides as-is, §9), plus `body`+`side` naming the stale twin on an id-keyed member (#572) |
 | `order` | group-level member-sequence divergence | sequence diff over MemberKeys; mechanical when one side moved off recorded order, decision when both — or when no recorded order covers the divergence (the §5.1 pair-parity check, #654) |
 
 Direction is decided **per member** by which side's fingerprint moved off base
 — no deck-level direction inference, no mtime tiebreaks, no "established
 direction" threading between passes.
+
+### 6.2.1 `record_neutral`: the engine does not ask what it can observe
+
+*(#764, 2026-08-01. Amends the `unverified` and `mechanical` rows above and
+§5's cold rule.)*
+
+**The rule.** A cold member is framed as a question only when the relationship
+between its halves is genuinely unknown. It is resolved by the mechanical
+`record_neutral` row — which writes **no file bytes**, only the ledger entry,
+like `record_order` and `record_owner` — when all of the following hold:
+
+1. it has **no ledger entry** (this is the branch being replaced);
+2. it is **two-sided** (both `de` and `en` present);
+3. its recorded langness is **`shared`** — the author declared the cell
+   language-neutral;
+4. its kind is **`code` or `j2`** — kinds that carry no natural-language
+   content; and
+5. **every per-side field the differ compares is equal across the halves** —
+   body, tags, layout, ownership. Not a hand-enumerated list: the predicate is
+   defined over the same generic record-diff §6.3 already runs, so a field
+   added later tightens it automatically (P6).
+
+Trust banked this way carries provenance `structural`. Any member failing any
+clause keeps today's `verify_cold` framing unchanged. The existing suppression
+doctrine is untouched: a member carrying any framed row is not a
+`record_neutral` candidate, because clause 5 cannot hold.
+
+**Why this is not the "auto-confirm" mistake.** The rejected proposal (Q6b, an
+`apply --mechanical` that auto-answers `translate_edit → keep_twin`) banks the
+claim *"my edit did not change what the twin should say"* — a semantic claim
+about two **different** texts that the tool cannot verify, and banking it
+unverified is precisely the silent-divergence class this programme exists to
+remove. `record_neutral` banks a different claim: *"these two halves are the
+same bytes"*, which the engine directly observed.
+
+The governing principle is the same one, and it is the general answer to Q6b:
+**auto-resolve only what the engine can observe, never what it must assume.**
+Applied to a cold member that yields clause 3–5 above; applied to an *edited*
+member it yields a different but equally observable test — the source-side
+change is normalizer-equivalent, so the twin is provably unaffected. Both are
+mechanical rows under §6.2, so an `apply --mechanical` flag would be a caller
+of existing rows rather than a new contract with its own auto-answer policy.
+Q6b needs no separate mechanism; it needs this principle applied twice.
+
+**Why prose is excluded (clause 4 is load-bearing).** For `markdown`, `shared`
++ byte-identical has two readings the engine cannot tell apart: a genuinely
+language-neutral cell (a fenced code block, a shell snippet, an `<img>` tag),
+or German prose duplicated verbatim onto the EN side and mis-declared shared.
+Auto-blessing the second would bank an untranslated cell as in-sync — the
+exact failure being designed out. `wrong_language_cell` does not catch it
+either: a shared cell carries no `lang=` attribute to contradict. Code and j2
+carry no natural language, so clause 3's declaration is self-evident rather
+than trusted, and the reading is unambiguous.
+
+**Measured** (`scripts/measure_positional_composition.py`, PythonCourses, 730
+decks, 0 refusals, 2026-08-01). A fully cold corpus emits 28,791 verification
+questions:
+
+| class | count | share |
+|---|---:|---:|
+| localized — real question | 15,439 | 53.6% |
+| **shared + identical, `code` — `record_neutral`** | **13,043** | **45.3%** |
+| **shared + identical, `j2` — `record_neutral`** | **17** | **0.1%** |
+| shared + identical, `markdown` — excluded by clause 4 | 282 | 1.0% |
+| one-sided / shared-but-diverged — real questions | 10 | 0.0% |
+
+So the rule removes **45.4%** of cold-start verification volume and leaves 282
+prose questions standing as the deliberate price.
+
+**Why this also closes the positional-churn question.** Positional identity is
+**92.5% shared `code` cells** (10,922 of 11,806; the rest is 729 one-per-deck
+localized `j2` headers, 133 shared markdown, 5 localized code). Only 133
+markdown cells in the whole corpus are positionally keyed — prose is already
+essentially 100% id'd, so id *assignment* was never the problem. The members
+whose keys churn when a pool re-numbers are therefore overwhelmingly the same
+class this rule decides, which means a re-keyed pool **self-clears** at the
+next `record` instead of generating work. That is what makes the residue the
+#653 withdrawal left ("a boundary move re-keys the span once, those members
+report `verify_cold`") close to free, and it is why the review's Q1 escalation
+is withdrawn rather than deferred — see §13.
 
 ### 6.3 Where the current engine's channels go
 
@@ -581,7 +672,18 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
   judgment that both sides are faithful is the agent's. `rename-id` (§7.3)
   removes the most common way a warm member fell cold; a known-stale twin on
   a cold id-keyed member is recovered in one pass with the `body`+`side`
-  answer (#572).
+  answer (#572). `record_neutral` (§6.2.1) removes the 45% of cold questions
+  where no freshness judgment is needed, but it deliberately does not reach
+  the ones where it is.
+- **Shared byte-identical *prose* stays a cold question** (§6.2.1 clause 4,
+  #764): 282 members corpus-wide. The engine cannot distinguish a genuinely
+  language-neutral markdown cell from German prose duplicated onto the EN
+  side and mis-declared `shared`, and `wrong_language_cell` cannot see it
+  either (a shared cell has no `lang=` to contradict). This is a chosen price,
+  not an oversight — auto-resolving it would trade a real silent-divergence
+  risk for 1.0% of cold volume. A validator rule that flags natural-language
+  content in a cell declared `shared` would shrink it; that is separate work
+  and belongs to `validate`, not the differ.
 - **A scope with fewer than two two-sided id'd members is
   order-untrackable** (#654 residue, review M4): one handle has no relative
   order, so a lone id'd cell among positional siblings can sit at different
@@ -740,3 +842,5 @@ row here (or an edit to the section it refines) has skipped the checklist.
 | #656 / Q3 — **wire schema 4, part 2: the item and answer shape**. Items carry `resolution` (`mechanical` / `decision` / `manual`), derived from the sets `apply_deck` itself branches on, so `answers: []` stops meaning two opposite things (M6); items carry `de_body`/`en_body`, the cell bytes without the `# %%` delimiter, so report output is valid decision input (M10). Decision rows may name the `action` they answer: two framed rows on one member can both be answered, and an answer aimed at an unframed row is reported instead of silently executing another. A cold member present on ONE half only no longer advertises `confirm` (the executor always refused it, and for a positional member the rejection then blocked its whole pool) — it is answerless, `manual`, with the repair in its detail. | §6.4 (item rows), §8 (decision document) | contract revision — additive fields, schema 3 documents still accepted |
 | #656 / Q6a — **the two hand-edit flows sanctioned**. `verify_translation` accepts `body` + `side` (symmetric with `verify_cold`'s #572 recovery; the info topic had documented it for longer than the engine accepted it — M7). `fork_pending_twin` gains `mark_twin`, which writes the twin's `lang=` attribute and nothing else: the body adaptation is the next pass's `translate_edit`, because a one-pass stamp+lang+rewrite defeats the fork identity-carry and records as a fresh pair (F3). The two-pass fork recipe is documented in `clm info sync-agents`; it existed nowhere. Doc drift fixed alongside: `--dry-run` does not run the verify gate, and `pos:→id:` is not the only key migration. | §7.2 (fork transition), §8 (new answers) | P8(c) extensions: new answers in existing framed kinds |
 | #653 — **anchor-hood is a pair property** (the first half of `sync-slide-hood-is-presentation.md`): the `slide`/`subslide` tags select a display transition, so they may not select an identity regime (P2). When the halves disagree about an id'd cell's slide-hood, the boundary opens no group on EITHER side — the cell stays an ordinary member and pairs by id, which is what lets the deck parse while a retag is half-done. The state reports an `anchor_shape_divergence` observation plus the mechanical `mirror_tags` row that copies the shape onto the twin; it used to refuse the whole deck with `duplicate_id` and frame nothing. The 1.23.x `anchor_shape_divergence` REFUSAL code is retired. Residue: positional keys inside the affected span are still anchor-scoped, so they re-key and go cold — id-delimited scopes plus a ledger migration are the design's second half. | §3.3 (anchor-hood), §7.4 (the role axis is closed by removal, not enumeration) | defect fix + model correction (adversarial-review G2/M2) |
+| #764 — **`record_neutral`: the engine does not ask what it can observe** (§6.2.1, new). A cold two-sided member that is `shared`, of kind `code`/`j2`, and whose halves agree on every field the generic record-diff compares, is resolved by a new mechanical row that writes only the ledger entry (provenance `structural` — the #448 rung becomes an actual provenance value), instead of being framed `verify_cold`. Measured on PythonCourses (730 decks): **45.4% of the 28,791 cold-start verification questions are this class** — both halves are the same bytes, so there is no translation divergence to verify and the question is ceremony. **Prose is excluded by construction** (clause 4): for `markdown`, `shared` + byte-identical cannot be told apart from German prose duplicated onto the EN side and mis-declared shared, so 282 members stay real questions — the chosen price. This also settles the positional-churn question: positional identity is 92.5% shared `code` cells, so a re-keyed pool now self-clears at the next `record` rather than generating work, which is what makes the #653 withdrawal's residue cheap. `scripts/measure_positional_composition.py` re-runs the measurement. | §5 (cold rule), §6.2 (`unverified` + `mechanical` rows), §6.2.1 (new), §9 (two residue entries) | P8(b)/(c) extension — a new mechanical row in an existing outcome, no new axis; supersedes review Q1 (withdrawn, see below) and subsumes Q6b |
+| Q1 — **per-deck fully-id'd opt-in mode: WITHDRAWN** (2026-08-01), not deferred. It was proposed on the reading that "82.4% of positional members sit in an ambiguous pool". The arithmetic was right and the metric was wrong: *membership in a pool > 1* scores a slide with two code steps identically to a 170-cell anchor-less deck. The honest metric is **blast radius** (`n*(n-1)/2` per pool — inserting or deleting one member re-keys about half its siblings): pools of size 1–3 hold 53.1% of positional members and carry **4.6%** of the churn, while pools of 10+ hold 17.8% and carry **84.6%**, concentrated so hard that the top 5 decks account for 48.9% and the top 20 for 76.8%. Those decks are not decks — `slides_np_computation_old` (the 170-cell pool) has **exactly one anchor**, the title slide, and the seven largest pools are all 1-anchor files; restricted to live decks with ≥6 anchors the worst pool in the corpus is 35. So the fragility is a property of a few dozen notebook-shaped files in the slides tree, addressable by adding anchors, and not a property of the keying rule. With `record_neutral` removing the cold cost of re-keying the class that actually churns, the escalation has no remaining trigger. | §9 (the positional-ambiguity residue entry stands as written — one framed decision, resolvable by minting an id) | escalation withdrawn on measurement; re-open only if a framed dead end recurs in the field |
