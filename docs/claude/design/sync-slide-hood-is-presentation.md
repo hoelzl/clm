@@ -419,3 +419,57 @@ the review's Q1 already names as the escalation to take *after* measuring what
 the Phase-0 guards left behind. That measurement now exists — this is a data
 point for Q1, and the id-delimited-scope idea should not be re-proposed
 without addressing the change-point count above.
+
+---
+
+## 14. Amendment (2026-08-01): Q1 is withdrawn, and the residue is cheap
+
+§13 closed by naming Q1 — a per-deck opt-in "fully id'd" mode — as the real
+escalation path for positional fragility, and by pointing at the residue #761
+left: a boundary move re-keys the un-id'd cells in its span, which then report
+`verify_cold` once. Both of those have now been measured
+(`scripts/measure_positional_composition.py`, PythonCourses, 730 decks, 0
+refusals). Both conclusions change.
+
+**Q1 rested on the wrong metric.** The escalation was argued from "82.4% of
+positional members sit in a pool with siblings". That number is correct and
+close to meaningless: *membership in a pool > 1* scores a slide with two code
+steps exactly like the 170-cell pool that headlined the argument. The metric
+that reflects cost is **blast radius** — inserting or deleting one member of a
+pool of size `n` re-keys about half its siblings, so the pool costs
+`n*(n-1)/2`:
+
+| pool size | % of positional members | % of churn |
+|---|---:|---:|
+| 1 (behaves like an id) | 17.6% | 0.0% |
+| 2–3 (a slide's code steps) | 35.5% | 4.6% |
+| 4–9 | 29.1% | 10.8% |
+| 10+ | 17.8% | **84.6%** |
+
+Churn is not diffuse, it is concentrated: the top 5 decks carry 48.9% of it and
+the top 20 carry 76.8%. And those files are not decks. The 170-cell pool is
+`slides_np_computation_old.de.py`, which has **exactly one anchor** — the title
+slide, with every code cell in the file beneath it. The seven largest pools are
+all 1-anchor files and four of the top ten churn carriers are legacy `*_old*`;
+restricted to live decks with ≥6 anchors, the worst pool in the corpus is 35.
+These are notebooks living in the slides tree. The remedy is anchors (or moving
+them out), not a second identity regime for all 730 decks.
+
+**The residue is cheaper than stated, because of what positional members are.**
+Positional identity is **92.5% shared `code` cells**; the remainder is 729
+one-per-deck localized `j2` headers, 133 shared markdown cells and 5 localized
+code cells. Only 133 markdown cells corpus-wide are positionally keyed — prose
+is already essentially 100% id'd, which also disposes of the hypothesis that
+this is an id-*assignment* problem. Under `record_neutral` (main note §6.2.1,
+agreed the same day) a cold two-sided `shared` `code`/`j2` member whose halves
+agree on every compared field is banked mechanically instead of framed. So the
+members a re-keyed pool sends cold are, overwhelmingly, exactly the class that
+now **self-clears** at the next `record`. The §13 residue costs a ledger write,
+not a question.
+
+**Status.** Q1 withdrawn, not deferred — there is no remaining trigger to wait
+for. Re-open only if a framed dead end actually recurs in the field, and argue
+it from blast radius rather than pool membership. The §9 residue entry in the
+main note stands unchanged: shared-member reorder plus a one-sided edit within
+one group is still the one place positional identity is ambiguous, ceiling one
+framed decision, permanently resolvable by minting an id.
