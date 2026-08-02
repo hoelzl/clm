@@ -251,6 +251,33 @@ class TestUnreadableDiskIsFailSafe:
 
         assert set(doc_ledger.load(path).decks) == {"slides_a", "slides_b"}
 
+    def test_an_unreadable_file_warns_instead_of_clobbering_silently(
+        self, tmp_path: Path, monkeypatch, caplog
+    ):
+        """Skipping the merge means this write clobbers — the M8 shape itself.
+
+        It stays best-effort (a ledger write must not fail a verb) but must never
+        be silent: this repo has a documented history of Windows AV/indexer read
+        races on exactly this kind of file.
+        """
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ledger = doc_ledger.load(path)
+        _record(ledger, "slides_a", _deck("a", de_text="NEU"), commit="c2")
+
+        real = Path.read_bytes
+
+        def boom(self: Path) -> bytes:
+            if self == path:
+                raise OSError(22, "Invalid argument")
+            return real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", boom)
+        with caplog.at_level(logging.WARNING, logger="clm.slides.doc_ledger"):
+            doc_ledger.save(ledger, path)
+
+        assert [r for r in caplog.records if "could not be re-read before saving" in r.message]
+
 
 class TestRepeatedSaves:
     """``save`` must leave the file matching the ledger, however many times it runs."""
@@ -269,6 +296,39 @@ class TestRepeatedSaves:
         _record(ledger, "slides_a", _deck("a"), commit="c2")
         assert doc_ledger.save(ledger, path) is True, "the revert was reported as a no-op"
         assert _body(path, "slides_a", "id:a-m") != edited, "the revert never reached disk"
+
+    def test_a_second_save_does_not_revert_a_sibling_we_never_touched(self, tmp_path: Path, caplog):
+        """The half of the refresh that matters, and the one that is easy to get wrong.
+
+        After a save, the base for "did this run change it?" must be what **this
+        ledger** holds — not what was merged. For a section we did not touch, the
+        merged copy is the *sibling's* newer one; using that as our base makes our
+        stale copy read as a change on the next save, writes it back over the
+        sibling, and does not even warn (disk would equal the base). M8, one save
+        later.
+        """
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ours = doc_ledger.load(path)
+
+        sibling = doc_ledger.load(path)
+        _record(sibling, "slides_a", _deck("a", de_text="SIBLING"), commit="c2")
+        doc_ledger.save(sibling, path)
+        a_from_sibling = _body(path, "slides_a", "id:a-m")
+
+        # We only ever touch slides_b — twice.
+        _record(ours, "slides_b", _deck("b", de_text="OURS 1"), commit="c3")
+        doc_ledger.save(ours, path)
+        _record(ours, "slides_b", _deck("b", de_text="OURS 2"), commit="c4")
+        with caplog.at_level(logging.WARNING, logger="clm.slides.doc_ledger"):
+            doc_ledger.save(ours, path)
+
+        assert _body(path, "slides_a", "id:a-m") == a_from_sibling, (
+            "the second save reverted a sibling's section we never touched"
+        )
+        assert not [r for r in caplog.records if "another writer" in r.message], (
+            "and it would have done so silently"
+        )
 
     def test_a_second_save_does_not_warn_about_our_own_first_write(self, tmp_path: Path, caplog):
         """A false concurrency warning tells operators to re-plan their parallelism."""
@@ -435,6 +495,83 @@ class TestTypedProvenanceReachesTheLedger:
         self._run(de, "--provenance", "semantic:gpt-4")
         self._run(de)
         assert self._provenances(de) == {"semantic:gpt-4"}
+
+    def test_a_typed_record_reaches_the_partial_member_path(self, tmp_path: Path):
+        """``--member`` takes a different branch of ``record_deck_snapshot``.
+
+        The whole-deck tests above exercise only the full-sweep branch, so the
+        upsert branch could silently drop the flag and stay green.
+        """
+        de = self._write_pair(tmp_path)
+        self._run(de, "--provenance", "semantic:gpt-4")
+        self._run(de, "--member", "id:t-m", "--provenance", "record")
+
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(de))
+        members = ledger.decks["slides_t"].members
+        assert members["id:t-m"].provenance == "record"
+        # ...and only the named member was reset.
+        assert members["id:t"].provenance == "semantic:gpt-4"
+
+    def test_a_typed_record_reaches_the_pool_rerecord_path(self, tmp_path: Path):
+        """A ``pos:`` member re-records its whole pool through ``rerecord_pool``.
+
+        Third distinct branch, third chance to drop the flag.
+        """
+        folder = tmp_path / "pool"
+        folder.mkdir()
+        de = folder / "slides_t.de.py"
+        en = folder / "slides_t.en.py"
+        de.write_text(
+            _build(HEADER_DE, _slide("t", "de", "Titel"), '# %% tags=["keep"]\nx = 1\n\n'),
+            encoding="utf-8",
+        )
+        en.write_text(
+            _build(HEADER_EN, _slide("t", "en", "Title"), '# %% tags=["keep"]\nx = 1\n\n'),
+            encoding="utf-8",
+        )
+        self._run(de, "--provenance", "semantic:gpt-4")
+
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(de))
+        pos_key = next(k for k in ledger.decks["slides_t"].members if k.startswith("pos:"))
+        self._run(de, "--member", pos_key, "--provenance", "record")
+
+        after = doc_ledger.load(doc_ledger.ledger_path_for(de)).decks["slides_t"].members
+        assert after[pos_key].provenance == "record"
+
+
+class TestApplyStampsAutomatically:
+    """The apply landing path relies on ``preserve_unchanged_member``'s default.
+
+    It is the only caller that does, so flipping that default is otherwise
+    invisible. And it *should* stay automatic: an executor that re-upserts a
+    member whose baseline it merely observed (a `record_order` sweep, say) must
+    not claim it established the trust — that would let a later "distrust
+    everything from `apply`" sweep discard a human's `semantic:` attestation
+    nothing had disturbed. A member whose content actually moved records fresh
+    regardless, because the entry differs.
+    """
+
+    def test_an_automatic_upsert_of_an_unchanged_member_keeps_the_old_stamp(self):
+        prev = doc_ledger.LedgerMember(
+            entry=doc_ledger.baseline_from_deck(_deck("a")).members["id:a-m"],
+            provenance="semantic:gpt-4",
+            confirmed_commit="c1",
+        )
+        same = doc_ledger.LedgerMember(entry=prev.entry, provenance="apply", confirmed_commit="c2")
+        assert doc_ledger.preserve_unchanged_member(prev, same) is prev
+
+    def test_a_changed_member_records_fresh_even_automatically(self):
+        prev = doc_ledger.LedgerMember(
+            entry=doc_ledger.baseline_from_deck(_deck("a")).members["id:a-m"],
+            provenance="semantic:gpt-4",
+            confirmed_commit="c1",
+        )
+        moved = doc_ledger.LedgerMember(
+            entry=doc_ledger.baseline_from_deck(_deck("a", de_text="NEU")).members["id:a-m"],
+            provenance="apply",
+            confirmed_commit="c2",
+        )
+        assert doc_ledger.preserve_unchanged_member(prev, moved) is moved
 
 
 class TestAtomicWriteAlreadyUsesUniqueTempNames:

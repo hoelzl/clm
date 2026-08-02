@@ -92,10 +92,13 @@ class LedgerMember:
     is free-form; what the engine writes today is ``record`` (the ``sync
     record`` default), ``agent`` / ``semantic:<model>`` (asked for through
     ``--provenance``), ``apply`` (the executor), and ``harvest:<fingerprint>``
-    (``clm harvest``) — there is no ``accept`` stamp, despite the verb. Whether
-    a stamp *overwrites* an existing one is decided by the caller's intent,
-    never by the value: see :func:`preserve_unchanged_member`. ``state`` is
-    always ``verified`` today (an unverified member is simply absent).
+    (``clm harvest``) — there is no ``accept`` stamp, despite the verb. On the
+    **sync verbs**, whether a stamp overwrites an existing one is decided by the
+    caller's intent and never by the value (:func:`preserve_unchanged_member`);
+    harvest builds its entries directly and always overwrites, which is
+    harmless because a harvest write is always a real content change.
+    ``state`` is always ``verified`` today (an unverified member is simply
+    absent).
     """
 
     entry: MemberBaseline
@@ -514,16 +517,25 @@ def save(ledger: TopicLedger, path: Path) -> bool:
         prune_dangling_refs(deck_ledger, deck_key)
 
     payload = _to_json(merged).encode("utf-8")
-    if current == payload:
-        return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(path, payload)
-    # What we just wrote is the new baseline for "did this run change it?". Without
-    # this, a second save on the same ledger compares against the ORIGINAL load: a
-    # section edited and then reverted reads as untouched, the revert is dropped in
-    # favour of this run's own earlier write, and the caller is told nothing changed.
-    ledger.load_snapshot = _section_json(merged)
-    return True
+    wrote = current != payload
+    if wrote:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(path, payload)
+
+    # The file now matches ``merged``, so re-base "did this run change it?" — a
+    # second save must compare against what is on disk now, not against the
+    # original load. Without this, a section edited and then reverted reads as
+    # untouched, the revert is dropped in favour of this run's own earlier write,
+    # and the caller is told nothing changed.
+    #
+    # The base is ``ledger``, NOT ``merged``. For a section this run did not
+    # change, ``merged`` holds the *disk* copy — a sibling's newer work — while
+    # ``ledger`` still holds ours. Basing on ``merged`` would make our stale copy
+    # read as a change on the next save and write it back over the sibling, and
+    # the both-changed warning would not fire (disk would equal the base). That is
+    # M8 again, one save later.
+    ledger.load_snapshot = _section_json(ledger)
+    return wrote
 
 
 # ---------------------------------------------------------------------------

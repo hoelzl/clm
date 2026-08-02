@@ -556,7 +556,9 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the record result as JSON.")
+@click.pass_context
 def sync_record_cmd(
+    ctx: click.Context,
     de_path: Path,
     en_path: Path | None,
     members: tuple[str, ...],
@@ -589,8 +591,15 @@ def sync_record_cmd(
     # 'semantic:<model>' stamp. The ledger keeps an unchanged member's existing
     # provenance unless the incoming one is deliberate (M13), so without this
     # the reset would be swallowed while the verb reported it as recorded.
-    ctx = click.get_current_context()
-    provenance_explicit = ctx.get_parameter_source("provenance") not in (
+    #
+    # COMMANDLINE / ENVIRONMENT / PROMPT all mean "the user asked" and are
+    # therefore deliberate. DEFAULT_MAP is a judgment call — a default map is
+    # usually the user's own config, which argues for deliberate — resolved
+    # conservatively (fail toward less churn, matching the option's own
+    # default). CLM sets no default_map and no auto_envvar_prefix today, so
+    # nothing can exercise that branch either way.
+    source = ctx.get_parameter_source("provenance")
+    provenance_explicit = source is not None and source not in (
         ParameterSource.DEFAULT,
         ParameterSource.DEFAULT_MAP,
     )
