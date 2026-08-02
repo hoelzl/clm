@@ -91,10 +91,13 @@ def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
             f"  {item.outcome}/{item.action} {item.key} ({item.direction}) {item.detail}{suffix}"
         )
     for obs in diff.observations:
-        # The one observation kind that suppresses is_clean (issue #654):
-        # without a line here, an observation-only unclean report reads
-        # "0 item(s)" with no visible cause.
-        if obs.kind == "group_order_divergence":
+        # Two kinds are worth a line in the human report, for opposite reasons:
+        # ``group_order_divergence`` suppresses is_clean (issue #654), so without
+        # a line an observation-only unclean report reads "0 item(s)" with no
+        # visible cause; ``uniform_drift_side`` collapses a wall of per-item
+        # translate_edit rows into the one reading that answers them together
+        # (Q5) — printing it after the items is deliberate, it is a summary.
+        if obs.kind in ("group_order_divergence", "uniform_drift_side"):
             lines.append(f"  observation/{obs.kind}: {obs.detail}")
     hint = cold_sweep_hint(diff)
     if hint is not None:

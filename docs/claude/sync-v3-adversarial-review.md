@@ -426,6 +426,24 @@ either a `drift: source|twin|both` field per item plus a report-level hint
 ("all drift is twin-side — `sync record` banks a hand-reviewed twin"), or a
 distinct cheap `confirm_twin` framing. The information is already computed.
 
+> **Status (2026-08-02): DONE, via the report-level route.** The differ emits a
+> deck-level `uniform_drift_side` observation when *every* `translate_edit`
+> drifts on the same side, naming the side, `keep_twin`, and the opposite
+> reading; `verify_translation` rows are counted in the detail so the summary
+> cannot be over-read into a blanket answer. The per-item `detail` also names
+> `keep_twin`, the human report prints the observation after the items, and
+> `clm info sync-agents` promotes the check out of the bulk-translate bullet
+> into "Reading the report".
+>
+> **The `drift: source|twin|both` field was deliberately not built.** Framing
+> it revealed that `side` and `direction` already ship on every item, so the
+> field would add no *information* — it would add an *inference*, requiring the
+> engine to name one half authoritative. The engine is symmetric: it knows
+> which side moved, never which is the source of truth. Asserting that is the
+> guess this programme exists to remove, so the observation reports the side
+> and spells out both readings instead. Additive: no `WIRE_SCHEMA` change, no
+> new framed action, no classification change.
+
 **Q6 — Sanction the two flows the doctrine pretends don't exist.** (a)
 Hand-edits: four flows *require* them today (fork twin-marking, order
 repair, tag-shape refusal recovery, verify_translation-with-stale-twin).

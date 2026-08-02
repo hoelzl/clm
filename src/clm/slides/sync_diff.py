@@ -580,8 +580,69 @@ class _Differ:
         return DeckDiff(
             items=self.items,
             in_sync_count=self.in_sync,
-            observations=list(self.current.observations) + split_observations,
+            observations=(
+                list(self.current.observations)
+                + split_observations
+                + self._uniform_drift_observation()
+            ),
         )
+
+    def _uniform_drift_observation(self) -> list[Observation]:
+        """Say once, per deck, when every ``translate_edit`` drifts on the SAME side (Q5).
+
+        The information is already per item (``side`` / ``direction``), so this adds
+        no knowledge — it adds *aggregation*, which is what the review-after-translate
+        flow actually lacked. That flow regenerates or hand-reviews one half, then
+        reports; every drifted member frames ``translate_edit`` pointing at the twin
+        ("the en variant was edited — adapt the twin"), and an agent reading item by
+        item sees thirty independent requests to go edit the *other* language. The
+        one thing that collapses them — "these all moved on one side, so if that side
+        is the one you just reviewed, ``keep_twin`` banks it" — is a property of the
+        *set*, invisible from any single row. The field report cost ~30 pointless
+        decision items to exactly this blindness.
+
+        Deliberately **not** a ``drift: source|twin`` field. The engine is symmetric:
+        it knows which side moved, never which side is authoritative. Naming one
+        "source" would assert something it cannot observe, so the observation reports
+        the side and lets the agent — who knows what it just edited — draw the
+        conclusion. Both readings are spelled out in the detail so neither is the
+        silent default.
+
+        Requires two or more rows: a single ``translate_edit`` is not ceremony, and
+        its own ``side`` already says everything this would.
+        """
+        edits = [i for i in self.items if i.action == "translate_edit" and i.side is not None]
+        if len(edits) < 2:
+            return []
+        sides = {i.side for i in edits}
+        if len(sides) != 1:
+            return []
+        side = edits[0].side
+        assert side is not None
+        twin: Lang = "en" if side == "de" else "de"
+        # Rows where BOTH halves moved are a different question (`verify_translation`);
+        # count them so the observation cannot be read as "the whole deck is one-sided".
+        both_sided = sum(1 for i in self.items if i.action == "verify_translation")
+        tail = (
+            f" ({both_sided} further member(s) moved on both sides — those are "
+            f"separate verify_translation rows)"
+            if both_sided
+            else ""
+        )
+        return [
+            Observation(
+                kind="uniform_drift_side",
+                side=side,
+                detail=(
+                    f"all {len(edits)} translate_edit items drift on the {side} side "
+                    f"only{tail}. If you edited or reviewed {side} and the {twin} half "
+                    f"is still a faithful rendering, answer them `keep_twin` to bank "
+                    f"the new baseline without re-supplying bodies. If {side} is your "
+                    f"source of truth and {twin} must follow, supply adapted {twin} "
+                    f"bodies."
+                ),
+            )
+        ]
 
     def _reframe_group_split_removals(self) -> list[Observation]:
         """Issue #610/#630: never *mechanically* mirror a suspected group split.
@@ -1829,7 +1890,8 @@ class _Differ:
             "edit",
             "translate_edit",
             "de_to_en" if moved_de else "en_to_de",
-            f"the {moved_side} variant was edited — translate/adapt the twin",
+            f"the {moved_side} variant was edited — translate/adapt the twin, "
+            f"or answer `keep_twin` if the twin already renders it faithfully",
             group=group,
             side=moved_side,
             member=member,
@@ -2803,7 +2865,8 @@ class _Differ:
             "edit",
             "translate_edit",
             "de_to_en" if moved == ["de"] else "en_to_de",
-            f"the {moved[0]} header variant was edited — adapt the twin",
+            f"the {moved[0]} header variant was edited — adapt the twin, "
+            f"or answer `keep_twin` if the twin already renders it faithfully",
             group=group,
             side=moved[0],  # type: ignore[arg-type]
             member=member,

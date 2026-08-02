@@ -56,6 +56,26 @@ Branch on the stable booleans rather than scanning the lists:
 - `needs_agent` — judgment beyond translation (conflicts, cold members, a
   normalize refusal).
 
+**Before answering a wall of `translate_edit` rows, check `observations` for
+`uniform_drift_side`.** It fires when *every* `translate_edit` in the deck
+drifted on the **same** language half, and it is the single most useful thing
+in a review-after-translate report: each row individually says "the en variant
+was edited — adapt the twin", which reads as N separate requests to go rewrite
+the German, when the one answer that resolves all of them is usually
+`keep_twin`. The engine cannot make that call for you — it sees which side
+*moved*, never which side is *authoritative* — so the observation names the
+side and both readings:
+
+- you edited or reviewed that side and the twin still renders it faithfully →
+  answer every row `keep_twin`; it records the new baseline without re-supplying
+  a single body;
+- that side is your source of truth and the twin must follow → supply adapted
+  bodies for the twin.
+
+Members that moved on **both** sides are not in that set — they frame
+`verify_translation`, and the observation says how many there are so you do not
+sweep them up in a blanket `keep_twin`.
+
 Each item row carries `key` (the member handle), `outcome`, `action`,
 `direction` (`de_to_en` / `en_to_de` / `both` / `none`), `detail`, the full
 current cell bytes for both sides under **`de` and `en`** (those exact key
