@@ -90,9 +90,15 @@ _SIDES: tuple[Lang, Lang] = ("de", "en")
 #: The ``record_neutral`` detail. Says what was *observed*, not what is assumed:
 #: an agent reading a ledger diff has to be able to tell this row apart from a
 #: confirmation somebody actually made.
+#:
+#: It deliberately does **not** claim "no translation divergence is possible".
+#: That is false for a measurable minority: 0.6% of the corpus's neutral members
+#: carry German in a comment or a string literal (``# Das ist ein Kommentar.``),
+#: sitting untranslated in the English deck. The engine compared the halves; it
+#: did not read them.
 _NEUTRAL_DETAIL = (
-    "language-neutral and byte-identical on both halves — recorded without "
-    "asking (no translation divergence is possible)"
+    "declared language-neutral and byte-identical on both halves — recorded "
+    "without asking (the halves were compared, not read)"
 )
 
 
@@ -453,13 +459,25 @@ COMPARED_SIDECELL_FIELDS = frozenset(
 )
 COSMETIC_SIDECELL_FIELDS = frozenset({"index", "line_number"})
 
-#: Kinds carrying no natural-language content, so a ``shared`` declaration on
-#: them is verifiable by inspection rather than trusted (§6.2.1 clause 4).
+#: Kinds whose ``shared`` declaration is *usually* checkable rather than trusted
+#: (§6.2.1 clause 4).
+#:
 #: **Do not add ``markdown``**: there, ``shared`` + byte-identical cannot be
 #: told apart from German prose duplicated onto the EN side and mis-declared
 #: neutral, and auto-blessing that banks an untranslated cell as in-sync. The
 #: exclusion is the maintainer's explicit decision and costs 282 corpus
 #: members that stay real questions.
+#:
+#: **This is a base-rate trade, not a categorical guarantee.** §6.2.1 justified
+#: the boundary as "code and j2 carry no natural language". Measured, that is
+#: false for **~0.6% of neutral members** — 83 of 13,049, across 41 of 730 decks
+#: — which carry German in comments or string literals (``# Das ist ein
+#: Kommentar.``) and are therefore untranslated cells sitting in the English
+#: deck. The kind does not change what the engine can *see*; it only changes how
+#: often prose turns up. What makes this boundary defensible is the base rate
+#: (0.6% vs an assumed ~100% for markdown), not the categorical claim. A
+#: ``validate`` rule for natural-language content in a ``shared`` cell is the
+#: detector it would need to be categorical.
 NEUTRAL_KINDS = frozenset({"code", "j2"})
 
 

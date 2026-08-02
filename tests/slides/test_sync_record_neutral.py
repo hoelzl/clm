@@ -9,7 +9,9 @@ PythonCourses corpus: **45.4% of the 28,791 cold-start items** are that class.
 
 The predicate is four clauses (§6.2.1 numbers them 2–5; clause 1, "no ledger
 entry", is the branch being replaced). Each is pinned here as *independently
-necessary*: drop any one and a member that must stay cold becomes decidable.
+necessary* where it is: clauses 3, 4 and 5 each reject a member the others
+accept. Clause 2 is defence in depth — clause 5 already fails when a side is
+absent — and is kept because it states the intent at the point of the risk.
 Clause 4 is the load-bearing one — `markdown` is excluded because `shared` +
 byte-identical cannot be told apart from German prose duplicated onto the EN
 side, and auto-blessing that banks an untranslated cell as in-sync.
@@ -20,9 +22,12 @@ or overwrite an attestation a human made.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from clm.slides import doc_apply, sync_diff
+from clm.slides import doc_ledger as doc_ledger_module
 from clm.slides.bilingual_doc import BilingualDeck
 from clm.slides.doc_lenses import parse_bundle
 from clm.slides.sync_diff import (
@@ -87,19 +92,27 @@ class TestEveryClauseIsNecessary:
         diff = _cold_diff(NEUTRAL_CODE, "")
         assert _action_for(diff, "pos:s0/") == "verify_cold"
 
-    def test_clause_3_localized_stays_cold(self):
-        """A `lang=` attribute is the author declaring the halves are NOT the same.
+    def test_clause_3_a_localized_cell_copied_verbatim_into_the_twin_stays_cold(self):
+        """The shape clause 3 is *alone* in rejecting — and the worst false positive.
 
-        Byte-identical halves do not override that: the declaration is what the
-        engine keys on, and two identical localized halves mean the translation
-        has not been done, which is precisely a question.
+        Both halves carry ``lang="de"`` and identical bytes: a German cell sitting
+        untranslated in the English deck. Clause 5 holds (the halves really are
+        the same bytes) and clause 4 holds (it is code), so if clause 3 were
+        dropped the engine would bank an untranslated cell as verified.
+
+        An earlier version of this test used ``lang="de"`` / ``lang="en"``, which
+        made the halves differ — so clause 5 rejected them and the test passed
+        with clause 3 deleted. The cell needs a slide_id either way: the lens
+        refuses an id-LESS localized cell outright (``idless_localized``).
         """
-        # The cell needs a slide_id: the lens refuses an id-LESS localized cell
-        # outright (`idless_localized`), so there would be no member to classify.
-        de = '# %% lang="de" tags=["keep"] slide_id="c1"\nx = 1\n\n'
-        en = '# %% lang="en" tags=["keep"] slide_id="c1"\nx = 1\n\n'
-        diff = _cold_diff(de, en)
-        assert _action_for(diff, "id:c1") == "verify_cold"
+        cell = '# %% lang="de" tags=["keep"] slide_id="c1"\n# Berechne die Summe\nx = 1 + 1\n\n'
+        member = next(m for m in _deck(cell, cell).members() if m.key.render() == "id:c1")
+        assert member.langness == "localized"
+        assert member.kind in NEUTRAL_KINDS, "clause 4 must not be what rejects this"
+        assert sync_diff._halves_observably_identical(member), "clause 5 must hold"
+        assert not is_neutral_pair(member), "only clause 3 stands between this and a bank"
+
+        assert _action_for(_cold_diff(cell, cell), "id:c1") == "verify_cold"
 
     def test_clause_4_markdown_stays_cold_even_when_identical(self):
         """The prose exclusion — the maintainer's explicit decision.
@@ -189,6 +202,38 @@ class TestWhatItRecords:
         stamps = {lm.provenance for k, lm in deck_ledger.members.items() if k.startswith("pos:s0/")}
         assert stamps == {"structural"}
 
+    def test_every_member_of_a_multi_member_pool_keeps_its_stamp(self, tmp_path):
+        """A `pos:` record re-records its WHOLE pool, so per-item stamping is unsafe.
+
+        With N neutral members in one pool, each item's `rerecord_pool` reset the
+        stamp the previous one had just written: 65% of positional neutral
+        members corpus-wide ended up with the pass provenance and a re-created
+        dangling owner. Every fixture used a single-member pool, so it shipped
+        green. Stamping happens once, after every record has landed.
+        """
+        cells = "".join(f'# %% tags=["keep"]\n{n} = 1\n\n' for n in "xyz")
+        _b, _a, deck_ledger, _de, _r = self._apply(tmp_path, cells, cells)
+        assert deck_ledger is not None
+        pool = {k: lm for k, lm in deck_ledger.members.items() if k.startswith("pos:s0/")}
+        assert len(pool) == 3, pool
+        assert {lm.provenance for lm in pool.values()} == {"structural"}
+        assert {lm.entry.owner for lm in pool.values()} == {None}
+
+    def test_a_cold_apply_logs_no_dangling_reference_warning(self, tmp_path, caplog):
+        """What the owner-drop actually exists for, asserted directly.
+
+        The previous test read the ledger back from *disk*, where
+        `prune_dangling_refs` had already degraded any dangling owner — so it
+        passed with the owner-drop deleted. The point of dropping at write time
+        is that #718's corruption detector must not fire on every cold apply.
+        """
+        cells = "".join(f'# %% tags=["keep"]\n{n} = 1\n\n' for n in "xyz")
+        with caplog.at_level(logging.WARNING, logger="clm.slides.doc_ledger"):
+            self._apply(tmp_path, cells, cells)
+        assert not [r for r in caplog.records if "dangling reference" in r.message], [
+            r.message for r in caplog.records
+        ]
+
     def test_it_records_no_owner_it_cannot_back(self, tmp_path):
         """The anchor is still cold on a cold deck, so its id would dangle (#718).
 
@@ -213,6 +258,88 @@ class TestWhatItRecords:
         members = ledger.decks["slides_t"].members
         pos = next(k for k in members if k.startswith("pos:s0/"))
         assert members[pos].entry.owner == "id:s0"
+
+
+class TestEveryEmissionSiteFires:
+    """Three code paths classify a member with no base entry. All three branch.
+
+    Site 1 is `base is None` (snapshot-cold), site 3 is `_classify_pool_news`
+    (positional, ledger mode) — both are exercised throughout this file. Site 2,
+    the **id-keyed** ledger-mode path, had no coverage at all: disabling it
+    passed the entire 9,399-test suite, while the corpus says ~16% of neutral
+    members are `id:`-keyed.
+    """
+
+    def test_an_id_keyed_member_added_to_a_recorded_deck(self, tmp_path):
+        from click.testing import CliRunner
+
+        from clm.cli.commands.slides.sync import slides_sync_group
+        from clm.slides import doc_ledger
+
+        de = tmp_path / "slides_t.de.py"
+        en = tmp_path / "slides_t.en.py"
+        de.write_text(_build(HEADER_DE, _slide("s0", "de", "Titel")), encoding="utf-8")
+        en.write_text(_build(HEADER_EN, _slide("s0", "en", "Title")), encoding="utf-8")
+        try:
+            runner = CliRunner(mix_stderr=False)
+        except TypeError:  # Click 8.2+
+            runner = CliRunner()
+        assert runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+
+        # An id'd, two-sided, byte-identical shared code cell — added on BOTH
+        # halves of an already-recorded deck, so it reaches the id-keyed branch.
+        idd = '# %% tags=["keep"] slide_id="c1"\nx = 1\n\n'
+        de.write_text(_build(HEADER_DE, _slide("s0", "de", "Titel"), idd), encoding="utf-8")
+        en.write_text(_build(HEADER_EN, _slide("s0", "en", "Title"), idd), encoding="utf-8")
+
+        diff = diff_outcome(
+            parse_bundle(de.read_text(encoding="utf-8"), en.read_text(encoding="utf-8")),
+            doc_ledger.baseline_from_ledger(
+                doc_ledger.load(doc_ledger.ledger_path_for(de)).decks["slides_t"]
+            ),
+        )
+        assert _action_for(diff, "id:c1") == "record_neutral"
+
+
+class TestFrozenPoolsAreHonoured:
+    """#600/#630: a pool holding an unresolved conflict must not be re-recorded.
+
+    `record_neutral` re-records its whole pool, so it inherits that hazard: the
+    two-sided base entry is the only record the gone side ever existed, and a
+    wholesale re-record from present state would erase it — silently downgrading
+    a pending removal conflict to mechanical duplication on the next report.
+
+    The guard was correct as written but unpinned: deleting it passed the whole
+    suite. Exercised directly, since building a real frozen pool alongside a
+    neutral member takes a five-step fixture that would obscure what is asserted.
+    """
+
+    def test_a_frozen_pool_records_nothing(self):
+        from clm.slides.doc_ledger import DeckLedger, record_deck_snapshot
+
+        deck = _deck(NEUTRAL_CODE, NEUTRAL_CODE)
+        item = next(
+            i for i in _cold_diff(NEUTRAL_CODE, NEUTRAL_CODE).items if i.action == "record_neutral"
+        )
+        pool = doc_apply._pool_scope(item)
+        assert pool is not None, item.key
+
+        fresh_ledger = doc_ledger_module.TopicLedger()
+        record_deck_snapshot(fresh_ledger, "d", deck, provenance="apply")
+        fresh = fresh_ledger.decks["d"]
+
+        target = DeckLedger()
+        assert (
+            doc_apply._record_item(target, fresh, item, provenance="apply", frozen_pools={pool})
+            == set()
+        )
+        assert target.members == {}, "a frozen pool must not be recorded"
+
+        target2 = DeckLedger()
+        assert doc_apply._record_item(
+            target2, fresh, item, provenance="apply", frozen_pools=set()
+        ) == {pool}
+        assert target2.members, "control: an unfrozen pool records"
 
 
 class TestItStaysInsideTheContract:

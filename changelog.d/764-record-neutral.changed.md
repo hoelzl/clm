@@ -16,6 +16,13 @@
   English side look the same to the tool, and auto-blessing the second would bank
   an untranslated cell as in-sync. Those stay `verify_cold` for a human to judge.
 
+  That boundary is a **base-rate trade, not a guarantee**: about 0.6% of the
+  members this now records (83 of 13,049 on the reference corpus, across 41 of
+  730 decks) carry German inside a comment or string literal, so they are
+  untranslated cells in the English deck too. Code cells are auto-recorded
+  because prose is *rare* there, not because it is impossible — the tool
+  compares the two halves, it does not read them.
+
   Nothing that was previously mechanical becomes a question, and nothing that
   required judgement is now decided for you — a member failing any part of the
   test keeps exactly its old framing.

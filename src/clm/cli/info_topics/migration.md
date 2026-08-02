@@ -235,8 +235,10 @@ ignored.
 
 **One-time seeding.** The committed per-topic ledger
 (`<topic>/.clm/sync-ledger.json`) is the only trust store: a deck with no
-ledger entries reports every member **cold** (framed `verify_cold`, exit 1)
-instead of silently trusting a git baseline. Seed each course repo once from
+ledger entries reports every member it cannot settle by direct comparison as
+**cold** (framed `verify_cold`, exit 1) instead of silently trusting a git
+baseline. Members that are language-neutral `code`/`j2` with byte-identical
+halves are recorded mechanically instead of asked about (`record_neutral`). Seed each course repo once from
 a verified state:
 
 ```bash

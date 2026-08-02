@@ -1159,31 +1159,6 @@ def _record_item(
         # co-emission rule suppressed — those never reach unresolved_items,
         # so the unresolved-key guard in apply_deck cannot see them.
         return set()
-    if action == "record_neutral":
-        # §6.2.1 (#764). The pass provenance says who ran the verb; this row was
-        # not established by them — the engine observed that the two halves are
-        # the same bytes. Stamping the pass provenance would let a later
-        # "distrust everything from <source>" sweep discard, or keep, this trust
-        # on the strength of an attribution nobody made. `structural` is that
-        # attribution, and it is written directly rather than being registered
-        # anywhere: `preserve_unchanged_member` decides overwriting from the
-        # caller's declared intent, and an undeclared stamp is automatic, which
-        # is exactly right — a structural observation must never overwrite a
-        # human's `agent` / `semantic:<model>` attestation on unchanged content.
-        pool = _pool_scope(item)
-        if pool is not None:
-            # A `pos:` record must re-record its WHOLE pool, never a single
-            # entry: positional ordinals renumber together, so patching one slot
-            # leaves its siblings' ordinals aliasing different cells and the
-            # member re-frames forever. Same rule the other record rows follow.
-            if pool in frozen_pools:
-                return set()
-            rerecord_pool(target, fresh, *pool)
-            _stamp_structural(target, key)
-            return {pool}
-        _upsert(target, fresh, key, "structural")
-        _stamp_structural(target, key)
-        return set()
     if action in ("record_key_migration",):
         if item.base is not None:
             target.members.pop(item.base.key, None)
@@ -1253,31 +1228,45 @@ def _record_item(
     return set()
 
 
-def _stamp_structural(target: DeckLedger, key: str) -> None:
-    """Mark one landed entry as engine-observed, and drop what it cannot back.
+def _stamp_structural(target: DeckLedger, keys: set[str]) -> None:
+    """Mark the engine-observed entries, and drop ownership they cannot back.
 
-    Two corrections to whatever the surrounding record path wrote (#764):
+    Two corrections to whatever the record paths wrote for a ``record_neutral``
+    row (#764), applied **once, after every landed item has been recorded**.
 
-    **Provenance.** A pool re-record stamps every slot with the *pass*
-    provenance — who ran the verb. This row was not established by them; the
-    engine observed that the two halves are the same bytes. Leaving the pass
-    provenance would let a later "distrust everything from <source>" sweep keep
-    or discard this trust on an attribution nobody made.
+    Doing it per item was wrong and measurably so: a ``pos:`` record re-records
+    its whole pool, so in a pool holding N neutral members each item's
+    ``rerecord_pool`` reset the stamp the previous one had just written — 65% of
+    positional neutral members ended up carrying the pass provenance and a
+    re-created dangling owner. A landing ``record_order`` on the same pool did
+    the same. Stamping after the loop is immune to both, because nothing
+    re-records afterwards.
 
-    **Ownership.** The row fires on a cold deck, where the member's anchor is
+    **Provenance.** The pass provenance says who ran the verb. This row was not
+    established by them; the engine observed that the two halves are the same
+    bytes. Leaving the pass provenance would let a later "distrust everything
+    from <source>" sweep keep or discard this trust on an attribution nobody
+    made.
+
+    **Ownership.** The row fires on cold decks, where the member's anchor is
     normally still cold, so the entry would name an owner the store has no entry
     for. :func:`~clm.slides.doc_ledger.save` prunes exactly that and warns that
     nothing should create it (#718) — creating it on every cold apply would turn
     a corruption detector into noise. The ownership claim is not what this row
     observed anyway, so drop it and let ownership record when the anchor lands.
+
+    A key absent from ``target`` is skipped: the pool it belonged to may have
+    been frozen (#600/#630), dropped as unresolved, or renumbered by a landed
+    removal in the same pass.
     """
-    landed = target.members.get(key)
-    if landed is None:
-        return
-    entry = landed.entry
-    if entry.owner is not None and entry.owner not in target.members:
-        entry = evolve(entry, owner=None)
-    target.members[key] = evolve(landed, entry=entry, provenance="structural")
+    for key in keys:
+        landed = target.members.get(key)
+        if landed is None:
+            continue
+        entry = landed.entry
+        if entry.owner is not None and entry.owner not in target.members:
+            entry = evolve(entry, owner=None)
+        target.members[key] = evolve(landed, entry=entry, provenance="structural")
 
 
 def _upsert(target: DeckLedger, fresh: DeckLedger, key: str, provenance: str) -> None:
@@ -2017,6 +2006,8 @@ def apply_deck(
     priority = {"record_group_rename": 0, "record_key_migration": 1}
     frozen_pools = _frozen_pools(unresolved_items)
     rerecorded_pools: set[tuple[str, str]] = set()
+    #: `record_neutral` keys to re-stamp once every record has landed (#764).
+    structural_keys: set[str] = set()
     # Never bless a member with unresolved rows (#615 F2, fixes S3): a
     # landed row on a member whose framed sibling row is still pending /
     # rejected / failed must not record the member's fresh snapshot — that
@@ -2067,6 +2058,10 @@ def apply_deck(
         rerecorded_pools |= _record_item(
             target, fresh, item, provenance=provenance, frozen_pools=frozen_pools
         )
+        if item.action == "record_neutral":
+            structural_keys.add(item.key)
+    # After every record, so no later pool re-record can reset these (#764).
+    _stamp_structural(target, structural_keys)
     # Never bless the unresolved: a wholesale pool re-record must not trust
     # siblings whose framed items were left pending/rejected/failed — nor
     # the slot of an answered conflict_tags (which re-frames next pass).

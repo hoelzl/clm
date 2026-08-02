@@ -1935,12 +1935,14 @@ trust store: no watermark cache, no git-HEAD baseline. Each member is keyed by
 a stable handle (`id:<slide-id>` for id'd cells, `pos:<group>/<kind>/<n>` for
 id-less shared cells), invariant under the class transitions
 (neutral↔localized, id-less→id'd, inline↔companion) — those are diff rows, not
-identity changes. A member with **no ledger entry is cold** (`verify_cold`) —
-framed for confirmation, never silently trusted. Ledger files are committed
-with the course content; merge conflicts in them are true positives.
+identity changes. A member with **no ledger entry is cold** — framed
+`verify_cold` for confirmation, never silently trusted. The one exception is
+the member whose halves the engine can compare *directly* (`record_neutral`,
+below): there the relationship is observed, not assumed. Ledger files are
+committed with the course content; merge conflicts in them are true positives.
 
-**Seeding.** A fresh checkout or a never-recorded deck reports everything
-cold. Seed trust once from a verified state: `clm slides sync record DIR`
+**Seeding.** A fresh checkout or a never-recorded deck reports every member it
+cannot settle by direct comparison as cold. Seed trust once from a verified state: `clm slides sync record DIR`
 (gated per pair on the structural verify). `clm slides split` and
 `clm slides translate` record freshly-created pairs automatically.
 
@@ -2039,8 +2041,10 @@ which re-frame on the next report once the tags are reconciled),
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
 (`de` / `en`) so an agent can answer without re-reading files. A report whose
-items are all `verify_cold` (a never-recorded deck) carries a top-level
-`hint` pointing at `sync record`, the wholesale seeding verb.
+**questions** are all `verify_cold` (a never-recorded deck) carries a
+top-level `hint` pointing at `sync record`, the wholesale seeding verb. The
+mechanical `record_neutral` rows beside them do not suppress it — branch on
+`resolution`, not on every item being `verify_cold`.
 
 `--since DATE|REF` — the **forensic view**: diff against the bundle at a git
 ref instead of the ledger ("what changed in this window?"). A ref is used
