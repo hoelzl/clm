@@ -2138,15 +2138,32 @@ divergence is a deliberate pending state, not to make a message go away.
 `clm slides sync apply` takes the same flag for its post-write ledger save.
 
 **Re-recording is git-idempotent (CLM {version}).** A member whose recorded
-state (fingerprints, provenance, trust state, hash version) is unchanged keeps
-its existing `confirmed_commit`, and a ledger whose canonical serialization is
-byte-identical is not rewritten at all — so a repo-wide
-`clm slides sync record DIR` over clean pairs leaves `git status` clean instead
-of bumping every committed ledger to the current HEAD. `confirmed_commit`
-therefore means "the commit at which this state was last *actually*
-established". The `--json` envelope reports the per-pair `ledger_changed`
-boolean and a top-level `unchanged` pair count; the text output appends
-`(unchanged)` for a write-free pair.
+state (fingerprints, trust state, hash version) is unchanged keeps its existing
+`confirmed_commit`, and a ledger whose canonical serialization is byte-identical
+is not rewritten at all — so a repo-wide `clm slides sync record DIR` over clean
+pairs leaves `git status` clean instead of bumping every committed ledger to the
+current HEAD. A provenance stamp a verb applies on its own — `record` by default, `apply`
+from the executor — does not count as a change either, so the normal report →
+apply → record loop no longer rewrites every touched member on every pass. A
+`--provenance` you actually **type** always records fresh, including
+`--provenance record` used deliberately to reset a stale `semantic:<model>`
+attribution, and a later automatic pass does not demote it. The `--json` envelope reports the per-pair
+`ledger_changed` boolean and a top-level `unchanged` pair count; the text output
+appends `(unchanged)` for a write-free pair.
+
+`confirmed_commit` is the repo `HEAD` at the time the entry was last written
+with a real change. It does **not** contain the recorded state — `record` runs
+*before* you commit — and it is provenance for humans reading a ledger diff, not
+an input to any verdict.
+
+**Concurrent runs on sibling decks are safe (CLM {version}).** A topic ledger is
+one file holding independent per-deck sections, and every verb reads the whole
+file and writes it back. Saves now merge: sections another run changed while
+this one was working are preserved, and only the sections this run actually
+modified are overwritten. Two `sync apply` runs on different decks of the same
+topic no longer silently revert each other. Concurrent runs on the *same* deck
+still cannot be ordered without a lock — the later writer wins and logs a
+warning — so parallelize by deck, not within one.
 
 ### `clm slides translate`
 

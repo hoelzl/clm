@@ -480,6 +480,43 @@ merge-on-save or locking, UUID temp names, provenance-insensitive
 `preserve_unchanged_member`, and either fix `confirmed_commit`'s definition
 ("HEAD at record time; state not yet committed") or drop the field.
 
+> **Status (2026-08-02): DONE.** Per-topic granularity kept, as recommended.
+>
+> **M8 fixed by merge-on-save.** `save` three-way merges against disk:
+> `TopicLedger.load_snapshot` records each section as it was read, so "did this
+> run change it?" is a comparison rather than bookkeeping every verb would have
+> to remember. Ours wins where we changed a section, disk wins where we did not
+> (the case that was being lost), and a section changed on both sides takes the
+> later writer *with a warning*. Merging is deliberately **not** locking: it
+> shrinks the lost-update window from the whole verb to the re-read→`os.replace`
+> gap, and it is portable, which file locking on Windows is not. Same-deck
+> concurrency remains last-writer-wins and now says so.
+>
+> **M13 fixed.** A provenance stamp a verb applies on its own no longer counts
+> as a change, killing the ping-pong; an automatic pass also stops demoting a
+> deliberate `agent` / `semantic:<model>` entry. Intent is threaded from the CLI
+> rather than inferred from the string: a review round rejected an enumeration of
+> "automatic" values, because `record` is both `--provenance`'s default *and* a
+> value a human types to reset a stale semantic attribution — the enumeration
+> swallowed that reset while still reporting the member as recorded.
+>
+> **UUID temp names were already there** (`atomic_write_bytes`); the item was
+> stale. Now asserted by test rather than assumed.
+>
+> **`confirmed_commit`: definition fixed, field kept.** Investigating it
+> inverted the question. The writer *already* stamps `git rev-parse HEAD` at
+> record time, so this Q's proposed meaning was never a reinterpretation — the
+> **docs** were wrong, describing behaviour the code never had. No schema bump,
+> no `hash_version` bump, no migration. Two caveats the one-line definition
+> misses, both now documented: a no-op re-record leaves the stamp alone (#555 —
+> without this the correction reads as a bug and "fixing" it would make a
+> repo-wide `record` dirty every ledger), and nothing reads the field for a
+> verdict. Dropping it was cheap too, but #555 had already removed the churn
+> that motivated dropping. One consequence worth recording: the `git cat-file`
+> re-derivation sketched in `sync-consistency-ledger.md` §11.3 cannot be built
+> on this field — it needs a commit that *contains* the state, which this is
+> explicitly not.
+
 ---
 
 ## 8. Remediation program

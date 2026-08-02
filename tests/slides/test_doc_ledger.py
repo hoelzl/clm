@@ -226,15 +226,40 @@ class TestIdempotentRerecord:
         assert members["id:s0-m"].confirmed_commit == "c2"
         assert members["id:s0"].confirmed_commit == "c1"
 
-    def test_provenance_change_is_a_real_change_and_records_fresh(self):
+    def test_a_declared_provenance_change_records_fresh(self):
+        """A provenance the caller declares deliberate is a real change (M13).
+
+        Contract narrowed from "any provenance change records fresh": the verbs
+        stamp a provenance on *every* write and alternate `record`/`apply`, so
+        comparing the stamp unconditionally rewrote unchanged members on every
+        pass. The caller now says whether the stamp was asked for — the CLI
+        derives it from whether `--provenance` was typed — because the value
+        cannot reveal it (`record` is both the default and a hand-typed reset).
+        """
+        ledger = doc_ledger.TopicLedger()
+        self._record(ledger, DE0, EN0, commit="c1")
+        doc_ledger.record_deck_snapshot(
+            ledger,
+            "slides_x",
+            _parse(DE0, EN0),
+            provenance="agent",
+            commit="c2",
+            deliberate_provenance=True,
+        )
+        members = ledger.decks["slides_x"].members
+        assert all(lm.provenance == "agent" for lm in members.values())
+        assert {lm.confirmed_commit for lm in members.values()} == {"c2"}
+
+    def test_an_undeclared_provenance_change_preserves_the_entry(self):
+        """The other side: an automatic re-stamp of an unchanged member is not a change."""
         ledger = doc_ledger.TopicLedger()
         self._record(ledger, DE0, EN0, commit="c1")
         doc_ledger.record_deck_snapshot(
             ledger, "slides_x", _parse(DE0, EN0), provenance="agent", commit="c2"
         )
         members = ledger.decks["slides_x"].members
-        assert all(lm.provenance == "agent" for lm in members.values())
-        assert {lm.confirmed_commit for lm in members.values()} == {"c2"}
+        assert all(lm.provenance == "record" for lm in members.values())
+        assert {lm.confirmed_commit for lm in members.values()} == {"c1"}
 
     def test_partial_rerecord_of_an_unchanged_member_preserves_its_entry(self):
         ledger = doc_ledger.TopicLedger()
