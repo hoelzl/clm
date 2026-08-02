@@ -1,7 +1,12 @@
 # Sync v3 Adversarial Review — Design and Implementation (2026-07-29)
 
-**Status**: review complete; no code changed. Findings verified against the
-tree at `d861088a` (post-1.23.1).
+**Status**: review complete. Findings were verified against the tree at
+`d861088a` (post-1.23.1) and **line citations have since drifted**.
+**Remediation is well advanced** — Phases 0–3 are done, Phase 4 partly, and
+all seven §7 questions are resolved (three of them *against* the
+recommendation written here). **This document is now a record, not a plan.**
+Read a §7 entry's outcome banner before acting on its recommendation, and take
+build order from `docs/claude/handovers/sync-v3-q-register-handover.md`.
 **Author**: Claude (Fable 5), commissioned by the maintainer.
 **Method**: five parallel adversarial code reviews (differ/order model,
 apply/ledger/handles, lens/pairing/refusals, verify–validate coherence,
@@ -359,7 +364,29 @@ be the policy loop over the verbs (§8); v3 shipped without any successor.
 These are the places where this review questions the design itself, not the
 implementation. Each has a recommendation, but all are judgment calls.
 
-**Q1 — Should positional identity be shrunk rather than guarded?** Every
+> **All seven are now resolved (2026-08-02), and three were resolved
+> *against* the recommendation written here.** Every entry below therefore
+> opens with its outcome; the 2026-07-29 recommendation follows underneath,
+> marked, for the record only. **Do not action a recommendation without
+> reading the outcome above it** — in particular Q1's escalation path, Q5's
+> `drift:` field and Q6(b)'s auto-answer sweep were all considered and
+> rejected, and building any of them would undo a decision, not implement one.
+> Build order for what remains:
+> `docs/claude/handovers/sync-v3-q-register-handover.md`.
+
+**Q1 — Should positional identity be shrunk rather than guarded?**
+
+> ⛔ **WITHDRAWN on measurement (2026-08-01). Do not pursue the per-deck
+> "fully id'd" escalation path below.** It was proposed on the reading that
+> 82.4% of positional members sit in an ambiguous pool. The arithmetic was
+> right and the *metric* was wrong: "membership in a pool > 1" scores a slide
+> with two code steps the same as a 170-cell anchor-less deck. On blast radius
+> (`n(n-1)/2` per pool) the fragility is a property of a few dozen
+> notebook-shaped files, not of the keying rule, and `record_neutral` removes
+> the cold cost of the class that actually churns. Full reasoning: §13's "Q1"
+> row and `sync-slide-hood-is-presentation.md` §14.
+
+*Original recommendation (2026-07-29), for the record:* Every
 silent-loss finding (C1, C2, closed #644/#610/#646, M4, M5) lives in un-id'd
 cells. §3.4 deliberately left ~13k shared cells unstamped to avoid churn;
 the price is a permanent ambiguity class plus lens-level guessing.
@@ -370,7 +397,14 @@ what's left. If pool ambiguities keep generating framed dead ends, a
 per-deck opt-in "fully id'd" mode (stamp on first sync touch) is the
 escalation path — monotone under P3, reviewable per deck, no big-bang churn.
 
-**Q2 — Should decisions bind to a report snapshot?** Today's contract
+**Q2 — Should decisions bind to a report snapshot?**
+
+> ✅ **DONE as recommended** — wire schema 4, PR #754. `report_id`,
+> `already_applied`, `deck_key`/`ledger` in every payload. Landmine:
+> `REQUIRE_REPORT_ID` is still `False`; the maintainer's decision is to flip it
+> and drop schema 3 in the release *after* the one shipping schema 4.
+
+*Original recommendation (2026-07-29), for the record:* Today's contract
 ("apply revalidates against a recomputed diff") is defensible in isolation
 but produces #649's verdict/effect contradiction the moment deck aliasing or
 sibling passes exist. *Recommendation*: yes — `report_id = hash(bundle bytes
@@ -379,7 +413,13 @@ mismatch (exit 2, nothing written), plus classifying already-satisfied keys
 as `already_applied` rather than `rejected`. Both are additive and make
 every stale-handle situation self-explanatory.
 
-**Q3 — Is the decision-document schema due a v2?** Accumulated warts: no
+**Q3 — Is the decision-document schema due a v2?**
+
+> ✅ **DONE as recommended** — one deliberate schema-4 revision, PRs #755–#759
+> (`resolution`, `action`, body/delimiter symmetry, `mark_twin`). Schema 3
+> documents are still accepted for one release.
+
+*Original recommendation (2026-07-29), for the record:* Accumulated warts: no
 `action` field (two framed rows on one key cannot both be answered — the
 #615 doc calls this out and sequences around it), no `resolution`
 discriminator (M6), `body` excludes the delimiter the report includes (M10),
@@ -388,7 +428,17 @@ no `mark_twin` (M11). *Recommendation*: one deliberate schema revision
 accepted — rather than four incremental band-aids. This is P8(c) territory
 and low-risk; the cost is mostly doc and MCP updates.
 
-**Q4 — One pair-health oracle or three?** *Recommendation*: containment
+**Q4 — One pair-health oracle or three?**
+
+> ◐ **Containment half DONE (PR #766); delegation half OPEN.** Two corrections
+> to the text below before you act on it. (1) "id-sequence order parity joins
+> `structural_violations`" **already landed in #719** — it is not outstanding.
+> (2) Containment was never violated: it held on all 730 corpus pairs and was
+> simply untested, and the gate is in fact *stricter* than validate. Detail in
+> the status note after this entry; build notes for the delegation half in the
+> handover.
+
+*Original recommendation (2026-07-29), for the record:* containment
 now, delegation later. Immediately: the gate's error set must contain
 validate's split-pair errors, and id-sequence order parity joins
 `structural_violations` (error at the gate — an order-diverged pair must
@@ -418,7 +468,16 @@ split-pair family becomes an adapter over `parse_bundle` +
 > positional-artifact diagnostics it would kill are still live.
 
 **Q5 — Should the report distinguish twin-side drift from source-side
-drift?** The ledger has per-side fingerprints; the engine already knows the
+drift?**
+
+> ⛔ **DONE (PR #767), but NOT as recommended — do not build the
+> `drift: source|twin|both` field.** Framing it showed the field adds no
+> *information*: `side` and `direction` already ship on every item. It adds an
+> *inference* — the engine would have to name one half authoritative, which it
+> cannot observe. What shipped instead is a deck-level `uniform_drift_side`
+> observation. Detail in the status note after this entry.
+
+*Original recommendation (2026-07-29), for the record:* The ledger has per-side fingerprints; the engine already knows the
 difference; the report frames both as `translate_edit` and lets the agent
 discover `keep_twin`/`record` from external docs. The review-after-translate
 field report cost ~30 pointless decision items. *Recommendation*: yes —
@@ -457,7 +516,34 @@ distinct cheap `confirm_twin` framing. The information is already computed.
 > collapse no meaningful ceremony and land one-sided roughly half the time by
 > chance, and the motivating field report was ~30 rows.
 
-**Q6 — Sanction the two flows the doctrine pretends don't exist.** (a)
+**Q6 — Sanction the two flows the doctrine pretends don't exist.**
+
+> ◐ **(a) DONE. (b) SUPERSEDED — do not implement the auto-answer sweep
+> described below.**
+>
+> **(a)** All four hand-edit flows have in-engine answers now: fork
+> twin-marking (`mark_twin`, #656), order repair (first-class order items,
+> #654), anchor-shape framing (#653), and `verify_translation` with a stale
+> twin (`body`+`side`, #656).
+>
+> **(b)** The recommendation below — `apply --mechanical` auto-answering
+> `translate_edit → keep_twin` — was **rejected** by design note §6.2.1. It
+> banks the claim *"my edit did not change what the twin should say"*, a
+> semantic claim about two **different** texts that the tool cannot verify;
+> banking it unverified is the silent-divergence class this programme exists to
+> remove. `keep_twin` also **banks the pair permanently** (PR #767 documented
+> this): the member reports in sync from then on, so an unfaithful twin waved
+> through by a sweep is never raised again.
+>
+> The governing rule is §6.2.1's: **auto-resolve only what the engine can
+> observe, never what it must assume.** On a cold member that yields
+> `record_neutral` (#764); on an *edited* member it yields a different
+> observable test — the source-side change is normalizer-equivalent, so the
+> twin is provably unaffected. Both are ordinary mechanical rows, so any
+> `--mechanical` flag is a *caller of existing rows*, never a new auto-answer
+> policy. Build notes in the handover.
+
+*Original recommendation (2026-07-29), for the record:* (a)
 Hand-edits: four flows *require* them today (fork twin-marking, order
 repair, tag-shape refusal recovery, verify_translation-with-stale-twin).
 Either give each an in-engine answer (`mark_twin`; first-class order items;
@@ -472,7 +558,17 @@ promised, with the safety property field-proven by the downstream sweep
 driver. *Recommendation*: adopt both; they remove the two largest ceremony
 classes without weakening the trust model.
 
-**Q7 — Per-topic ledger files: keep, but harden.** The granularity itself
+**Q7 — Per-topic ledger files: keep, but harden.**
+
+> ✅ **DONE (PR #768)**, with three corrections to the text below. (1) "UUID
+> temp names" **already existed** in `atomic_write_bytes`. (2)
+> `confirmed_commit`'s proposed definition is *incomplete* as written — taken
+> literally it makes #555's no-op preservation read as a bug, and "fixing" that
+> would make a repo-wide `record` dirty every ledger in the repo. (3) There was
+> nothing to reinterpret: the writer already stamped HEAD-at-record-time, so
+> only the **docs** were wrong. Detail in the status note after this entry.
+
+*Original recommendation (2026-07-29), for the record:* The granularity itself
 was not implicated in any field failure (#649's "shared ledger" hypothesis
 was wrong). What is implicated: whole-file load-mutate-save concurrency
 (M8) and review noise (M13). *Recommendation*: keep per-topic; add
@@ -592,12 +688,25 @@ about advisory residue; verify-CLI/gate severity alignment (M12);
 provenance-insensitive preservation + `confirmed_commit` fix-or-drop (M13);
 ledger merge-on-save + UUID temps (M8); reproduce and fix #650 (M15).
 
+> **Partly done (2026-08-02).** M13 + M8 + `confirmed_commit` landed in PR
+> #768 (UUID temps already existed); #650/M15 landed separately. **Still
+> open**: Q4's delegation half, advisory-residue honesty, and all three parts
+> of M12 — PR #766 aligned the *order-parity* severity only, which is adjacent
+> to M12's second part, not the same thing.
+
 **Phase 5 — ceremony and scale.** `apply --mechanical` (Q6b); twin-drift
 hint or `confirm_twin` (Q5); slide-scoped item grouping in the report (P6);
 partial-body answers or an engine-side draft mechanism (P5) — the largest
 open UX question, fine to defer behind everything above; corpus-gate split
 per #682 with the Phase-0 probe fixtures folded into the bundled corpus
 (D7).
+
+> **Read §7 Q5 and Q6 before starting either of the first two items.** Q5
+> shipped as a `uniform_drift_side` observation and the `drift:` field named
+> here was rejected; the `apply --mechanical` policy named here was superseded
+> by design note §6.2.1. Building either as written would undo a decision. P6,
+> P5 and D7 stand as written. Build order:
+> `docs/claude/handovers/sync-v3-q-register-handover.md`.
 
 ---
 
