@@ -432,8 +432,8 @@ distinct cheap `confirm_twin` framing. The information is already computed.
 > reading; `verify_translation` rows are counted in the detail so the summary
 > cannot be over-read into a blanket answer. The per-item `detail` also names
 > `keep_twin`, the human report prints the observation after the items, and
-> `clm info sync-agents` promotes the check out of the bulk-translate bullet
-> into "Reading the report".
+> "Reading the report" in `clm info sync-agents` gains the check (an addition —
+> the pre-existing bulk-translate bullet is untouched and never carried it).
 >
 > **The `drift: source|twin|both` field was deliberately not built.** Framing
 > it revealed that `side` and `direction` already ship on every item, so the

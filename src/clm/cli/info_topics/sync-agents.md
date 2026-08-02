@@ -58,11 +58,11 @@ Branch on the stable booleans rather than scanning the lists:
 
 **Before answering a wall of `translate_edit` rows, check `observations` for
 `uniform_drift_side`.** It fires when three or more `translate_edit` rows exist
-and *every* one drifted on the **same** language half. Read by row, each says
-"the en variant was edited — adapt the twin", which looks like N separate
-requests to go rewrite the German; the observation is the one line that tells
-you they are N views of a single event. Branch on it in code — it carries `kind`
-and `side`, so you do not have to parse the prose.
+and *every* one drifted on the **same** language half. Each row names its own
+side and offers `keep_twin`, but says nothing about the others, so a report full
+of them still reads as N separate members to work through; the observation is
+the one line telling you they are N views of a single event. Branch on it in
+code — it carries `kind` and `side`, so you need not parse any prose.
 
 **It does not tell you what to answer**, and it is not a default. The engine
 sees which side *moved*, never which side is *authoritative*, so both readings

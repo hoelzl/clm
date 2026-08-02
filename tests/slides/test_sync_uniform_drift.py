@@ -1,11 +1,10 @@
 """The ``uniform_drift_side`` observation — Q5's report-level hint.
 
 The review-after-translate flow regenerates or hand-reviews one language half,
-then reports. Every drifted member frames ``translate_edit`` pointing at the
-*twin* ("the en variant was edited — adapt the twin"), so an agent reading item
-by item sees N independent requests to go edit the other language — when what it
-actually wants is to bank the half it just reviewed. The field report cost ~30
-pointless decision items to exactly that.
+then reports. Every drifted member frames ``translate_edit``; each row names its
+own side but says nothing about the others, so an agent works through N members
+one at a time when a single ``keep_twin`` sweep resolves them. The field report
+cost ~30 pointless decision items to exactly that.
 
 The fix is aggregation, not new information: ``side`` and ``direction`` are
 already on every item, but "these all moved on the *same* side" is a property of
@@ -266,13 +265,23 @@ class TestItStaysQuiet:
             if i.action == "translate_edit"
         ]
         assert len(differ.items) == 4
+        rows = differ.items
         control = differ._uniform_drift_observation()
         assert len(control) == 1 and "all 4 translate_edit items" in control[0].detail
 
-        differ.items = [*differ.items[:-1], attrs.evolve(differ.items[-1], side=None)]
+        differ.items = [*rows[:-1], attrs.evolve(rows[-1], side=None)]
         assert differ._uniform_drift_observation() == [], (
             "an unattributable row must suppress the summary, never be filtered out of the count"
         )
+
+        # The shape the guard is ALONE in catching. A mixed set is also rejected by
+        # the `sides` check (None joins the set, so len != 1) — but an all-None set
+        # gives sides == {None}, which passes it, and then either trips
+        # `assert side is not None` or, with asserts stripped, publishes "drift on
+        # the None side". Unreachable from today's emitters; the guard is what makes
+        # the unreachable case a suppression rather than a crash.
+        differ.items = [attrs.evolve(i, side=None) for i in rows]
+        assert differ._uniform_drift_observation() == []
 
 
 class TestItChangesNoVerdict:

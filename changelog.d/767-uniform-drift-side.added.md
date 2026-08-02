@@ -1,9 +1,9 @@
 - **`clm slides sync report`** now emits a deck-level `uniform_drift_side`
   observation when three or more `translate_edit` items exist and *every* one
   drifted on the same language half — the shape a review-after-translate pass
-  leaves. Read row by row, each says "the en variant was edited — adapt the
-  twin", so a report full of them looks like N separate requests to rewrite the
-  other language; the observation is the one line saying they are N views of a
+  leaves. Each row names its own side, but says nothing about the
+  others, so a report full of them still reads as N separate members to work
+  through; the observation is the one line saying they are N views of a
   single event. It carries `side`, so a driver can branch on it without parsing
   prose, and it reports rather than recommends: the engine sees which side
   *moved*, never which side is *authoritative*, so both readings (bank the

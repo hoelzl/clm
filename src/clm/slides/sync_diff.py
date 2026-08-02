@@ -629,12 +629,16 @@ class _Differ:
         # A row without a ``side`` cannot be attributed. It must SUPPRESS the summary,
         # never be filtered out of it: filtering would leave "all N translate_edit
         # items" naming fewer rows than the agent is looking at, and a false summary is
-        # worse than none — this observation's whole thesis. Strictly this is
-        # belt-and-braces (``None`` also lands in ``sides`` below, so the mixed-side
-        # check rejects it), but the redundancy is deliberate: it states the intent at
-        # the point of the risk, so a later simplification of the ``sides`` comparison
-        # cannot quietly turn suppression into filtering. Both emit sites pass a
-        # concrete side today.
+        # worse than none — this observation's whole thesis.
+        #
+        # This is NOT redundant with the ``sides`` check below. A *mixed* set (some
+        # rows attributed, one not) does fail that check, because ``None`` lands in
+        # the set. But an ALL-``None`` set gives ``sides == {None}``, which passes it
+        # — and then reaches ``assert side is not None``, i.e. a crash out of
+        # ``diff_outcome``, or under ``-O`` exactly the false summary this guard
+        # exists to prevent ("drift on the None side"). Both emitters pass a concrete
+        # side today, so neither shape is reachable; the guard is what keeps the
+        # unreachable case a suppression rather than a failure.
         if any(i.side is None for i in edits):
             return []
         sides = {i.side for i in edits}
