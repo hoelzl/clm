@@ -30,6 +30,7 @@ from pathlib import Path
 
 import click
 from attrs import define
+from click.core import ParameterSource
 
 from clm.slides.pairing import (
     derive_split_pair_from_stem,
@@ -583,6 +584,17 @@ def sync_record_cmd(
     """
     from clm.cli.commands.slides.sync_v3 import run_record_v3
 
+    # Whether the user *typed* --provenance, which the value cannot reveal:
+    # 'record' is both the default and a legitimate hand-typed reset of a stale
+    # 'semantic:<model>' stamp. The ledger keeps an unchanged member's existing
+    # provenance unless the incoming one is deliberate (M13), so without this
+    # the reset would be swallowed while the verb reported it as recorded.
+    ctx = click.get_current_context()
+    provenance_explicit = ctx.get_parameter_source("provenance") not in (
+        ParameterSource.DEFAULT,
+        ParameterSource.DEFAULT_MAP,
+    )
+
     de_path, en_path = _resolve_verb_scope(de_path, en_path)
     sys.exit(
         run_record_v3(
@@ -592,6 +604,7 @@ def sync_record_cmd(
             provenance=provenance,
             as_json=as_json,
             allow_diverged_companion=allow_diverged_companion,
+            provenance_explicit=provenance_explicit,
         )
     )
 

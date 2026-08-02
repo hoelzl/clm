@@ -12,13 +12,12 @@
   rewrites every touched member on every pass. Re-recording compared the
   `provenance` stamp, and the verbs alternate between `record` and `apply`, so
   members whose content had not changed churned anyway — 883-line ledger diffs
-  for 60 changed cells, enough noise to make the store unreviewable. Switching
-  between the automatic provenances (`record`, `apply`, `structural`) is no
-  longer a change. An explicit `--provenance agent` or `semantic:<model>` still
-  records fresh, and is no longer demoted by a later automatic pass.
+  for 60 changed cells, enough noise to make the store unreviewable. A verb's
+  own stamp no longer counts as a change; a `--provenance` you actually type
+  always does, including `--provenance record` used to reset a stale
+  `semantic:<model>` attribution.
 - **Docs**: `confirmed_commit` is now described as what it has always been — the
   repo `HEAD` when the entry was last written with a real change. It does *not*
-  contain the recorded state (`record` runs before you commit), a no-op
-  re-record leaves it alone, and nothing reads it for a verdict. The previous
-  wording ("the commit at which this state was last actually established")
-  described behaviour the code never had.
+  contain the recorded state (`record` runs before you commit), and a no-op
+  re-record leaves it alone. The previous wording ("the commit at which this
+  state was last actually established") described behaviour the code never had.

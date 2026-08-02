@@ -87,11 +87,15 @@ class LedgerMember:
 
     ``entry`` is the exact :class:`~clm.slides.doc_identity.MemberBaseline` the
     differ compares against — fingerprints per side, tags, owner-free
-    signatures. ``provenance`` records *who* asserted the verification
-    (``apply`` / ``accept`` / ``record`` / ``agent`` / ``semantic:<model>``),
-    kept so a later run can selectively distrust a source without nuking the
-    ledger. ``state`` is always ``verified`` today (an unverified member is
-    simply absent).
+    signatures. ``provenance`` records *who* asserted the verification, kept so
+    a later run can selectively distrust a source without nuking the ledger. It
+    is free-form; what the engine writes today is ``record`` (the ``sync
+    record`` default), ``agent`` / ``semantic:<model>`` (asked for through
+    ``--provenance``), ``apply`` (the executor), and ``harvest:<fingerprint>``
+    (``clm harvest``) — there is no ``accept`` stamp, despite the verb. Whether
+    a stamp *overwrites* an existing one is decided by the caller's intent,
+    never by the value: see :func:`preserve_unchanged_member`. ``state`` is
+    always ``verified`` today (an unverified member is simply absent).
     """
 
     entry: MemberBaseline
@@ -112,9 +116,13 @@ class LedgerMember:
     #:    (:func:`preserve_unchanged_member`, issue #555), so it can name a commit
     #:    well in the past. That is deliberate: bumping it would make a repo-wide
     #:    ``record`` sweep dirty every ledger in the repo.
-    #: 3. Nothing reads it. It is provenance for a human reading a ledger diff,
-    #:    never an input to a verdict — so a stale or surprising value is a
-    #:    cosmetic problem, not a trust problem.
+    #: 3. No verdict reads it — it is provenance for a human reading a ledger
+    #:    diff, so a stale value is cosmetic, not a trust problem. It is *not*
+    #:    unread, though: :func:`deck_section_fingerprint` digests the whole
+    #:    canonical section, so a changed stamp changes the schema-4
+    #:    ``report_id`` and invalidates decision documents written against the
+    #:    old report. That is a second reason point 2 matters — churning this
+    #:    field would churn report freshness with it.
     confirmed_commit: str | None = None
 
 
@@ -425,6 +433,20 @@ def _merge_with_disk(ledger: TopicLedger, on_disk: TopicLedger) -> TopicLedger:
     (load → parse → diff → apply → save, seconds) to the gap between this re-read
     and ``os.replace`` (sub-millisecond), and it is portable, which file locking on
     Windows is not. The residual window is documented rather than papered over.
+
+    Two consequences worth knowing:
+
+    * A **corrupt, truncated, or newer-schema** file parses to an *empty* ledger
+      (:func:`_from_bytes` is fail-safe by design). The ``key in on_disk.decks``
+      clause is what stops "we did not change it, so keep disk" from meaning
+      "keep nothing" there — without it, a run that modified nothing would wipe
+      every section it held. That is why it is tested directly.
+    * Whole-**section** deletion is not expressible: ``merged`` starts from the
+      disk sections and the loop only visits sections we hold, so dropping a key
+      from ``ledger.decks`` before saving leaves it on disk. No caller does this
+      (a removed deck's section is simply stale, and a stale section is
+      fail-safe — its members mismatch and re-check). Member removal *within* a
+      section works normally, because a full record replaces the section.
     """
     base = ledger.load_snapshot
     ours = _section_json(ledger)
@@ -464,25 +486,43 @@ def save(ledger: TopicLedger, path: Path) -> bool:
 
     # Re-read as late as possible: everything between the verb's load and this
     # point is time in which a sibling run may have committed its own section.
-    try:
-        current = path.read_bytes() if path.is_file() else None
-    except OSError:
-        current = None  # unreadable existing file: fall through to the atomic write
+    current: bytes | None = None
+    if path.is_file():
+        try:
+            current = path.read_bytes()
+        except OSError as exc:
+            # The merge is skipped, so this write clobbers whatever is there —
+            # the exact M8 shape this function exists to prevent. It stays
+            # best-effort (a ledger write must not fail a verb) but never silent:
+            # this repo has a documented history of Windows AV/indexer read races.
+            logging.getLogger(__name__).warning(
+                "sync ledger %s could not be re-read before saving (%s); writing "
+                "without merging — a concurrent run's changes to this file may be lost",
+                path,
+                exc,
+            )
     if current is not None:
-        ledger = _merge_with_disk(ledger, _from_bytes(current))
+        merged = _merge_with_disk(ledger, _from_bytes(current))
+    else:
+        merged = ledger
 
     # After the merge, so #718's healing covers every section we are about to
     # write — including one carried over from disk — rather than only the
     # sections this run happened to load. Pruning is idempotent and
     # behavior-neutral, so healing a sibling's section cannot corrupt it.
-    for deck_key, deck_ledger in ledger.decks.items():
+    for deck_key, deck_ledger in merged.decks.items():
         prune_dangling_refs(deck_ledger, deck_key)
 
-    payload = _to_json(ledger).encode("utf-8")
+    payload = _to_json(merged).encode("utf-8")
     if current == payload:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(path, payload)
+    # What we just wrote is the new baseline for "did this run change it?". Without
+    # this, a second save on the same ledger compares against the ORIGINAL load: a
+    # section edited and then reverted reads as untouched, the revert is dropped in
+    # favour of this run's own earlier write, and the caller is told nothing changed.
+    ledger.load_snapshot = _section_json(merged)
     return True
 
 
@@ -541,15 +581,12 @@ def snapshot_deck(
     )
 
 
-#: Provenance values a verb stamps *automatically*, with no user intent behind the
-#: choice: ``record`` is ``--provenance``'s default, ``apply`` and ``structural``
-#: are what the executor and the §6.2.1 mechanical row write. Swapping between
-#: them says nothing about trust, so it must not rewrite an entry (M13). An
-#: ``agent`` / ``semantic:<model>`` stamp is *asked for* and does.
-_AUTOMATIC_PROVENANCE = frozenset({"record", "apply", "structural"})
-
-
-def preserve_unchanged_member(prev: LedgerMember | None, new: LedgerMember) -> LedgerMember:
+def preserve_unchanged_member(
+    prev: LedgerMember | None,
+    new: LedgerMember,
+    *,
+    deliberate_provenance: bool = False,
+) -> LedgerMember:
     """Keep ``prev`` when re-recording it would change nothing that means anything.
 
     Two fields are excluded from "would change":
@@ -557,32 +594,37 @@ def preserve_unchanged_member(prev: LedgerMember | None, new: LedgerMember) -> L
     ``confirmed_commit`` — an entry whose recorded state is otherwise identical
     keeps its original stamp, so a repo-wide ``record`` sweep of clean pairs
     rewrites nothing (issue #555). See :class:`LedgerMember` for what the field
-    means; the short version is that it is provenance, not a verdict input.
+    means.
 
-    ``provenance``, when both sides are :data:`_AUTOMATIC_PROVENANCE` — ``record``
-    and ``apply`` alternate across the normal verb loop, so comparing them made
-    every touched member rewrite on every pass even when nothing about the member
-    had changed. That is the churn half of M13: 883-line ledger diffs for 60
-    changed cells, which is enough noise to make the trust store unreviewable, and
-    it bought nothing — the ledger's ``provenance`` is serialized and carried
-    forward but is never read for a verdict.
+    ``provenance``, unless ``deliberate_provenance`` — the verbs stamp a
+    provenance on every write (``record`` from the CLI default, ``apply`` from
+    the executor, ``harvest:<fp>`` from harvest), and the normal loop alternates
+    them, so comparing the stamp made every touched member rewrite on every pass
+    with nothing about it changed. That is M13: 883-line ledger diffs for 60
+    changed cells, enough noise to make the trust store unreviewable.
 
-    A *deliberate* stamp still lands: ``--provenance agent`` or
-    ``semantic:<model>`` differs from an automatic one, so it records fresh. The
-    reverse also holds, and is the other half of the ping-pong — a later automatic
-    ``apply`` no longer silently demotes an ``agent`` entry to ``apply``, because
-    with the content identical there is nothing to re-establish and the more
-    informative label is the one worth keeping.
+    **Intent comes from the caller, never from the string.** An earlier draft
+    enumerated "automatic" provenance values, which was wrong twice over: it
+    asserted a value the engine does not yet write, and — because ``record`` is
+    both ``--provenance``'s default *and* a value a human can type — it silently
+    swallowed a deliberate re-verification. ``clm slides sync record`` on a
+    member stamped ``semantic:<model>`` reported ``recorded`` while discarding
+    the reset, defeating the field's stated purpose (distrusting one source
+    later). The verb knows whether the user asked; the ledger cannot infer it.
+
+    So: an automatic stamp never overwrites what is already recorded, in either
+    direction — a later ``apply`` does not demote an ``agent`` entry, because
+    with the content identical there is nothing to re-establish. A deliberate
+    stamp always records fresh, including ``--provenance record`` typed by hand
+    to reset a stale semantic attribution.
 
     Any real field change — content fingerprints, trust state, a hash-version
-    bump — still records fresh.
+    bump — still records fresh regardless.
     """
     if prev is None:
         return new
     candidate = evolve(new, confirmed_commit=prev.confirmed_commit)
-    # Keyed on the INCOMING stamp, not on both: an automatic write never has an
-    # opinion worth overwriting a deliberate one with, whichever way round they sit.
-    if new.provenance in _AUTOMATIC_PROVENANCE:
+    if not deliberate_provenance:
         candidate = evolve(candidate, provenance=prev.provenance)
     return prev if candidate == prev else new
 
@@ -595,6 +637,7 @@ def record_deck_snapshot(
     provenance: str,
     commit: str | None = None,
     member_keys: set[str] | None = None,
+    deliberate_provenance: bool = False,
 ) -> tuple[int, dict[str, str]]:
     """Record ``deck``'s current state into ``ledger`` (in memory).
 
@@ -620,7 +663,9 @@ def record_deck_snapshot(
     if member_keys is None:
         if old is not None:
             fresh.members = {
-                key: preserve_unchanged_member(old.members.get(key), lm)
+                key: preserve_unchanged_member(
+                    old.members.get(key), lm, deliberate_provenance=deliberate_provenance
+                )
                 for key, lm in fresh.members.items()
             }
         ledger.decks[deck_key] = fresh
@@ -630,7 +675,9 @@ def record_deck_snapshot(
     for key in sorted(member_keys):
         if key.startswith("pos:"):
             group, kind, _ordinal = key.split(":", 1)[1].rsplit("/", 2)
-            recorded += rerecord_pool(target, fresh, group, kind)
+            recorded += rerecord_pool(
+                target, fresh, group, kind, deliberate_provenance=deliberate_provenance
+            )
             continue
         lm = fresh.members.get(key)
         if lm is None:
@@ -638,7 +685,9 @@ def record_deck_snapshot(
         for old_key, new_key in migrations.items():
             if new_key == key:
                 target.members.pop(old_key, None)
-        target.members[key] = preserve_unchanged_member(target.members.get(key), lm)
+        target.members[key] = preserve_unchanged_member(
+            target.members.get(key), lm, deliberate_provenance=deliberate_provenance
+        )
         recorded += 1
     ledger.decks[deck_key] = target
     return recorded, {k: v for k, v in migrations.items() if v in member_keys}
@@ -689,7 +738,14 @@ def _detect_key_migrations(old: DeckLedger, fresh: DeckLedger) -> dict[str, str]
 # ---------------------------------------------------------------------------
 
 
-def rerecord_pool(target: DeckLedger, fresh: DeckLedger, group: str, kind: str) -> int:
+def rerecord_pool(
+    target: DeckLedger,
+    fresh: DeckLedger,
+    group: str,
+    kind: str,
+    *,
+    deliberate_provenance: bool = False,
+) -> int:
     """Replace every ``pos:<group>/<kind>/*`` entry with the fresh pool state."""
     prefix = f"pos:{group}/{kind}/"
     old_pool = {
@@ -698,7 +754,9 @@ def rerecord_pool(target: DeckLedger, fresh: DeckLedger, group: str, kind: str) 
     copied = 0
     for key, lm in fresh.members.items():
         if key.startswith(prefix):
-            target.members[key] = preserve_unchanged_member(old_pool.get(key), lm)
+            target.members[key] = preserve_unchanged_member(
+                old_pool.get(key), lm, deliberate_provenance=deliberate_provenance
+            )
             copied += 1
     return copied
 

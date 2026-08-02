@@ -492,10 +492,13 @@ merge-on-save or locking, UUID temp names, provenance-insensitive
 > gap, and it is portable, which file locking on Windows is not. Same-deck
 > concurrency remains last-writer-wins and now says so.
 >
-> **M13 fixed.** The automatic provenances (`record`, `apply`, `structural`) no
-> longer count as a change for preservation, killing the ping-pong. Keying the
-> rule on the *incoming* stamp also stops a later automatic pass demoting a
-> deliberate `agent` / `semantic:<model>` entry — the other half of the churn.
+> **M13 fixed.** A provenance stamp a verb applies on its own no longer counts
+> as a change, killing the ping-pong; an automatic pass also stops demoting a
+> deliberate `agent` / `semantic:<model>` entry. Intent is threaded from the CLI
+> rather than inferred from the string: a review round rejected an enumeration of
+> "automatic" values, because `record` is both `--provenance`'s default *and* a
+> value a human types to reset a stale semantic attribution — the enumeration
+> swallowed that reset while still reporting the member as recorded.
 >
 > **UUID temp names were already there** (`atomic_write_bytes`); the item was
 > stale. Now asserted by test rather than assumed.

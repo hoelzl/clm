@@ -64,8 +64,16 @@ def _record(
     *,
     provenance: str = "record",
     commit: str | None = None,
+    deliberate: bool = False,
 ) -> None:
-    doc_ledger.record_deck_snapshot(ledger, deck_key, deck, provenance=provenance, commit=commit)
+    doc_ledger.record_deck_snapshot(
+        ledger,
+        deck_key,
+        deck,
+        provenance=provenance,
+        commit=commit,
+        deliberate_provenance=deliberate,
+    )
 
 
 def _seed(path: Path) -> None:
@@ -194,6 +202,89 @@ class TestConcurrentSiblingDecks:
         assert "id:a-m" not in doc_ledger.load(path).decks["slides_a"].members
 
 
+class TestUnreadableDiskIsFailSafe:
+    """The merge's most load-bearing clause: an unparseable file must not empty the store.
+
+    ``_from_bytes`` degrades anything it cannot read to an *empty* ledger, so the
+    "we did not change this section, keep disk" branch is guarded by
+    ``key in on_disk.decks``. Without that guard a run which modified **nothing**
+    would write an empty ledger over a healthy one — silent total loss of the
+    trust store, from a no-op.
+    """
+
+    def test_a_corrupt_file_does_not_wipe_sections_we_hold(self, tmp_path: Path):
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ledger = doc_ledger.load(path)
+        assert set(ledger.decks) == {"slides_a", "slides_b"}
+
+        path.write_text("{ this is not json", encoding="utf-8")
+        doc_ledger.save(ledger, path)
+
+        assert set(doc_ledger.load(path).decks) == {"slides_a", "slides_b"}
+
+    def test_a_truncated_file_does_not_wipe_sections_we_hold(self, tmp_path: Path):
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ledger = doc_ledger.load(path)
+
+        path.write_bytes(path.read_bytes()[: len(path.read_bytes()) // 2])
+        doc_ledger.save(ledger, path)
+
+        assert set(doc_ledger.load(path).decks) == {"slides_a", "slides_b"}
+
+    def test_a_newer_schema_on_disk_does_not_wipe_sections_we_hold(self, tmp_path: Path):
+        """The realistic trigger: an older clm in a worktree beside a newer one.
+
+        A future ``SCHEMA_VERSION`` reads as unknown, so ``_from_bytes`` returns
+        empty — exactly the shape that turns a merge into a wipe.
+        """
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ledger = doc_ledger.load(path)
+
+        path.write_text(
+            json.dumps({"schema": doc_ledger.SCHEMA_VERSION + 99, "decks": {}}),
+            encoding="utf-8",
+        )
+        doc_ledger.save(ledger, path)
+
+        assert set(doc_ledger.load(path).decks) == {"slides_a", "slides_b"}
+
+
+class TestRepeatedSaves:
+    """``save`` must leave the file matching the ledger, however many times it runs."""
+
+    def test_a_revert_saved_after_an_edit_actually_lands(self, tmp_path: Path):
+        """Without refreshing the load snapshot, the second save adopts our own
+        earlier write and reports ``False`` while the file keeps the stale value."""
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ledger = doc_ledger.load(path)
+
+        _record(ledger, "slides_a", _deck("a", de_text="EDITED"), commit="c1")
+        assert doc_ledger.save(ledger, path) is True
+        edited = _body(path, "slides_a", "id:a-m")
+
+        _record(ledger, "slides_a", _deck("a"), commit="c2")
+        assert doc_ledger.save(ledger, path) is True, "the revert was reported as a no-op"
+        assert _body(path, "slides_a", "id:a-m") != edited, "the revert never reached disk"
+
+    def test_a_second_save_does_not_warn_about_our_own_first_write(self, tmp_path: Path, caplog):
+        """A false concurrency warning tells operators to re-plan their parallelism."""
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        _seed(path)
+        ledger = doc_ledger.load(path)
+
+        _record(ledger, "slides_a", _deck("a", de_text="ONE"), commit="c1")
+        doc_ledger.save(ledger, path)
+        _record(ledger, "slides_a", _deck("a", de_text="TWO"), commit="c2")
+        with caplog.at_level(logging.WARNING, logger="clm.slides.doc_ledger"):
+            doc_ledger.save(ledger, path)
+
+        assert not [r for r in caplog.records if "another writer" in r.message]
+
+
 class TestProvenanceChurn:
     """M13: swapping between automatic provenances says nothing and must not rewrite."""
 
@@ -221,18 +312,25 @@ class TestProvenanceChurn:
         _record(reloaded, "slides_a", _deck("a"), provenance="apply", commit="c2")
         assert doc_ledger.save(reloaded, path) is False, "an apply pass rewrote an unchanged deck"
 
-    def test_structural_is_automatic_too(self):
-        """`record_neutral`'s provenance (#764) is mechanical, not a trust assertion."""
-        ledger = doc_ledger.TopicLedger()
-        _record(ledger, "slides_a", _deck("a"), provenance="record", commit="c1")
-        _record(ledger, "slides_a", _deck("a"), provenance="structural", commit="c2")
-        assert {lm.provenance for lm in ledger.decks["slides_a"].members.values()} == {"record"}
+    def test_any_undeclared_stamp_is_automatic_whatever_the_string(self):
+        """Intent comes from the caller, never from the value.
+
+        An earlier draft enumerated "automatic" provenance strings. That was wrong
+        twice: it named a value the engine does not write, and it could not tell a
+        defaulted ``record`` from a typed one. Nothing about the string decides.
+        """
+        for stamp in ("apply", "harvest:abc123", "some-future-verb"):
+            ledger = doc_ledger.TopicLedger()
+            _record(ledger, "slides_a", _deck("a"), provenance="record", commit="c1")
+            _record(ledger, "slides_a", _deck("a"), provenance=stamp, commit="c2")
+            members = ledger.decks["slides_a"].members
+            assert {lm.provenance for lm in members.values()} == {"record"}, stamp
 
     def test_an_explicit_agent_stamp_still_records_fresh(self):
         """`--provenance agent` is asked for, so it must land."""
         ledger = doc_ledger.TopicLedger()
         _record(ledger, "slides_a", _deck("a"), provenance="record", commit="c1")
-        _record(ledger, "slides_a", _deck("a"), provenance="agent", commit="c2")
+        _record(ledger, "slides_a", _deck("a"), provenance="agent", commit="c2", deliberate=True)
         members = ledger.decks["slides_a"].members
         assert {lm.provenance for lm in members.values()} == {"agent"}
         assert {lm.confirmed_commit for lm in members.values()} == {"c2"}
@@ -240,7 +338,9 @@ class TestProvenanceChurn:
     def test_a_semantic_stamp_records_fresh(self):
         ledger = doc_ledger.TopicLedger()
         _record(ledger, "slides_a", _deck("a"), provenance="record", commit="c1")
-        _record(ledger, "slides_a", _deck("a"), provenance="semantic:gpt", commit="c2")
+        _record(
+            ledger, "slides_a", _deck("a"), provenance="semantic:gpt", commit="c2", deliberate=True
+        )
         assert {lm.provenance for lm in ledger.decks["slides_a"].members.values()} == {
             "semantic:gpt"
         }
@@ -253,7 +353,7 @@ class TestProvenanceChurn:
         the *incoming* stamp rather than on both is what makes this hold.
         """
         ledger = doc_ledger.TopicLedger()
-        _record(ledger, "slides_a", _deck("a"), provenance="agent", commit="c1")
+        _record(ledger, "slides_a", _deck("a"), provenance="agent", commit="c1", deliberate=True)
         _record(ledger, "slides_a", _deck("a"), provenance="apply", commit="c2")
         members = ledger.decks["slides_a"].members
         assert {lm.provenance for lm in members.values()} == {"agent"}
@@ -278,6 +378,65 @@ class TestProvenanceChurn:
         assert members["id:a"].confirmed_commit == "c1"
 
 
+class TestTypedProvenanceReachesTheLedger:
+    """``--provenance record`` typed by hand must reset a stale semantic stamp.
+
+    The trap the string-enumeration design walked into: ``record`` is both the
+    option's default *and* a value a human types to re-verify a member whose
+    ``semantic:<model>`` attribution they no longer trust. Preserving on the value
+    swallowed the reset while the verb still reported the member as recorded —
+    defeating the stated purpose of the field (``LedgerMember``: "kept so a later
+    run can selectively distrust a source"). Intent has to come from the CLI.
+    """
+
+    def _write_pair(self, folder: Path) -> Path:
+        de = folder / "slides_t.de.py"
+        en = folder / "slides_t.en.py"
+        de.write_text(
+            _build(HEADER_DE, _slide("t", "de", "Titel"), _localized("t-m", "de", "DE Text")),
+            encoding="utf-8",
+        )
+        en.write_text(
+            _build(HEADER_EN, _slide("t", "en", "Title"), _localized("t-m", "en", "EN text")),
+            encoding="utf-8",
+        )
+        return de
+
+    def _provenances(self, de: Path) -> set[str]:
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(de))
+        return {lm.provenance for lm in ledger.decks["slides_t"].members.values()}
+
+    def _run(self, de: Path, *args: str) -> None:
+        from click.testing import CliRunner
+
+        from clm.cli.commands.slides.sync import slides_sync_group
+
+        try:
+            runner = CliRunner(mix_stderr=False)
+        except TypeError:  # Click 8.2+ dropped the parameter
+            runner = CliRunner()
+        result = runner.invoke(slides_sync_group, ["record", str(de), *args])
+        assert result.exit_code == 0, result.output
+
+    def test_a_typed_record_resets_a_semantic_stamp(self, tmp_path: Path):
+        de = self._write_pair(tmp_path)
+        self._run(de, "--provenance", "semantic:gpt-4")
+        assert self._provenances(de) == {"semantic:gpt-4"}
+
+        self._run(de, "--provenance", "record")
+        assert self._provenances(de) == {"record"}, (
+            "a hand-typed --provenance record was swallowed, so the human's "
+            "re-verification never reached the ledger"
+        )
+
+    def test_the_default_does_not_reset_a_semantic_stamp(self, tmp_path: Path):
+        """The other side of the same coin — this is what kills M13's churn."""
+        de = self._write_pair(tmp_path)
+        self._run(de, "--provenance", "semantic:gpt-4")
+        self._run(de)
+        assert self._provenances(de) == {"semantic:gpt-4"}
+
+
 class TestAtomicWriteAlreadyUsesUniqueTempNames:
     """Q7 asked for UUID temp names; they were already there. Check, don't assume."""
 
@@ -300,6 +459,26 @@ class TestAtomicWriteAlreadyUsesUniqueTempNames:
         assert len(temps) == 2
         assert temps[0] != temps[1], "a fixed temp name collides between concurrent writers"
         assert all(n.startswith("ledger.json.") for n in temps)
+
+
+def test_load_snapshot_does_not_affect_ledger_equality(tmp_path: Path):
+    """``load_snapshot`` is bookkeeping about the read, not part of the recorded state.
+
+    Two ledgers holding the same decks are the same ledger however each was
+    obtained — otherwise every existing ``==`` comparison would start depending on
+    whether an object came off disk.
+    """
+    path = tmp_path / ".clm" / "sync-ledger.json"
+    _seed(path)
+    from_disk = doc_ledger.load(path)
+
+    rebuilt = doc_ledger.TopicLedger()
+    _record(rebuilt, "slides_a", _deck("a"), commit="c0")
+    _record(rebuilt, "slides_b", _deck("b"), commit="c0")
+
+    assert from_disk.load_snapshot and not rebuilt.load_snapshot
+    assert from_disk == rebuilt
+    assert "load_snapshot" not in repr(from_disk)
 
 
 def test_the_ledger_on_disk_stays_canonical_json(tmp_path: Path):

@@ -418,10 +418,18 @@ def run_record_v3(
     provenance: str,
     as_json: bool,
     allow_diverged_companion: bool = False,
+    provenance_explicit: bool = False,
 ) -> int:
     """The v3 trust verb: bless/accept collapsed, gated on structural verify.
 
     Exit 0 all recorded / 1 some pairs refused / 2 error.
+
+    ``provenance_explicit`` says the user actually typed ``--provenance``. It
+    cannot be inferred from the value: ``record`` is both the option's default
+    and a value a human types to reset a stale ``semantic:<model>``
+    attribution, and the ledger preserves an unchanged member's existing stamp
+    unless the new one is deliberate (M13). Without this the reset was silently
+    swallowed while the verb still reported the member as recorded.
     """
     if provenance not in ("record", "agent") and not provenance.startswith("semantic:"):
         raise click.UsageError("--provenance must be 'record', 'agent', or 'semantic:<model>'")
@@ -437,6 +445,7 @@ def run_record_v3(
             members=members,
             provenance=provenance,
             allow_diverged_companion=allow_diverged_companion,
+            provenance_explicit=provenance_explicit,
         )
         rows.append(row)
         if row.get("error"):
@@ -471,6 +480,7 @@ def _record_one(
     members: tuple[str, ...],
     provenance: str,
     allow_diverged_companion: bool = False,
+    provenance_explicit: bool = False,
 ) -> dict:
     try:
         bundle = _load(de_path, en_path)
@@ -512,6 +522,7 @@ def _record_one(
         provenance=provenance,
         commit=_head_commit(bundle.de_path),
         member_keys=set(members) if members else None,
+        deliberate_provenance=provenance_explicit,
     )
     changed = doc_ledger.save(ledger, ledger_path)
     row["recorded"] = recorded

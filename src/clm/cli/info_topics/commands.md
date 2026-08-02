@@ -2142,11 +2142,12 @@ state (fingerprints, trust state, hash version) is unchanged keeps its existing
 `confirmed_commit`, and a ledger whose canonical serialization is byte-identical
 is not rewritten at all — so a repo-wide `clm slides sync record DIR` over clean
 pairs leaves `git status` clean instead of bumping every committed ledger to the
-current HEAD. Switching between the *automatic* provenances (`record`, `apply`,
-`structural`) does not count as a change either, so the normal report → apply →
-record loop no longer rewrites every touched member on every pass; an explicit
-`--provenance agent` or `semantic:<model>` still records fresh, and is not
-demoted by a later automatic pass. The `--json` envelope reports the per-pair
+current HEAD. A provenance stamp a verb applies on its own — `record` by default, `apply`
+from the executor — does not count as a change either, so the normal report →
+apply → record loop no longer rewrites every touched member on every pass. A
+`--provenance` you actually **type** always records fresh, including
+`--provenance record` used deliberately to reset a stale `semantic:<model>`
+attribution, and a later automatic pass does not demote it. The `--json` envelope reports the per-pair
 `ledger_changed` boolean and a top-level `unchanged` pair count; the text output
 appends `(unchanged)` for a write-free pair.
 
