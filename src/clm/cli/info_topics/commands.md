@@ -1969,9 +1969,10 @@ the languages, is **refused** with a normalize hint — never silently guessed.
 
 #### `clm slides sync report` (the default verb)
 
-Read-only. Prints one `outcome/action` row per non-in-sync member; exit `0`
-clean / `1` work pending / `2` error. The JSON envelope is self-describing
-(`"schema": 4, "engine": "v3"`) and carries the stable booleans:
+Read-only. Prints one `outcome/action` row per non-in-sync member, then any
+deck-level `observations` worth surfacing; exit `0` clean / `1` work pending /
+`2` error. The JSON envelope is self-describing (`"schema": 4, "engine": "v3"`)
+and carries the stable booleans:
 
 - `is_clean` — nothing to do (also false, with an `observations` entry, when
   the halves' group order visibly diverges — even if no item is framed);
@@ -1979,6 +1980,14 @@ clean / `1` work pending / `2` error. The JSON envelope is self-describing
   `translate_new`) exists;
 - `needs_agent` — judgment beyond translation is required (a conflict, a cold
   member, a normalize refusal).
+
+Two `observations` kinds are also printed in the text report:
+`group_order_divergence` (the one that suppresses `is_clean`) and
+`uniform_drift_side` — emitted when three or more `translate_edit` rows exist
+and all of them drifted on the *same* language half, the shape a
+review-after-translate pass leaves. It carries `side` so you can branch on it
+without parsing prose, and it reports rather than recommends: the engine sees
+which side moved, never which side is authoritative. See `clm info sync-agents`.
 
 Schema 4 (CLM {version}) adds the deck's identity and a freshness token to
 every pair payload: `deck_key`, `ledger` (the trust store's path), and

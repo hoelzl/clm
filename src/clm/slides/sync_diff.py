@@ -219,6 +219,13 @@ _SPLIT_SIMILARITY_MIN_CHARS = 10
 _SPLIT_SIMILARITY_MAX_CHARS = 2000
 _SPLIT_SIMILARITY_BUDGET = 2000
 
+#: Q5: how many same-side ``translate_edit`` rows before the deck-level
+#: ``uniform_drift_side`` summary is worth printing. A judgment, not a
+#: measurement — see :meth:`_Differ._uniform_drift_observation`. Two rows
+#: collapse almost no ceremony and land one-sided about half the time by
+#: chance; the field report that motivated the observation was ~30 rows.
+_UNIFORM_DRIFT_MIN = 3
+
 
 class _BodySimilarity:
     """Memoized, budgeted near-match check for the #630 F3 scan.
@@ -608,11 +615,27 @@ class _Differ:
         conclusion. Both readings are spelled out in the detail so neither is the
         silent default.
 
-        Requires two or more rows: a single ``translate_edit`` is not ceremony, and
-        its own ``side`` already says everything this would.
+        Requires :data:`_UNIFORM_DRIFT_MIN` rows. The threshold is a judgment, not a
+        measurement: the observation's value is the ceremony it collapses, which is
+        negligible at two rows, while the chance that two rows land one-sided by
+        coincidence rather than because a half was reviewed wholesale is roughly even.
+        Firing on coincidence is not harmful — the detail is conditional on what the
+        author actually did, and the engine cannot know that — but advice that fires
+        on noise gets ignored, so the floor is set where the aggregation starts to pay.
         """
-        edits = [i for i in self.items if i.action == "translate_edit" and i.side is not None]
-        if len(edits) < 2:
+        edits = [i for i in self.items if i.action == "translate_edit"]
+        if len(edits) < _UNIFORM_DRIFT_MIN:
+            return []
+        # A row without a ``side`` cannot be attributed. It must SUPPRESS the summary,
+        # never be filtered out of it: filtering would leave "all N translate_edit
+        # items" naming fewer rows than the agent is looking at, and a false summary is
+        # worse than none — this observation's whole thesis. Strictly this is
+        # belt-and-braces (``None`` also lands in ``sides`` below, so the mixed-side
+        # check rejects it), but the redundancy is deliberate: it states the intent at
+        # the point of the risk, so a later simplification of the ``sides`` comparison
+        # cannot quietly turn suppression into filtering. Both emit sites pass a
+        # concrete side today.
+        if any(i.side is None for i in edits):
             return []
         sides = {i.side for i in edits}
         if len(sides) != 1:
@@ -620,13 +643,16 @@ class _Differ:
         side = edits[0].side
         assert side is not None
         twin: Lang = "en" if side == "de" else "de"
-        # Rows where BOTH halves moved are a different question (`verify_translation`);
-        # count them so the observation cannot be read as "the whole deck is one-sided".
-        both_sided = sum(1 for i in self.items if i.action == "verify_translation")
+        # ``verify_translation`` rows are NOT part of the uniform-drift set and do not
+        # accept ``keep_twin``. Deliberately not glossed as "moved on both sides": one
+        # of the three emit sites fires when a side that had no recorded fingerprint
+        # *landed*, where the other half never moved at all. What is true of all three
+        # is that the pair needs two-sided verification.
+        two_sided = sum(1 for i in self.items if i.action == "verify_translation")
         tail = (
-            f" ({both_sided} further member(s) moved on both sides — those are "
-            f"separate verify_translation rows)"
-            if both_sided
+            f" ({two_sided} further member(s) need two-sided verification — separate "
+            f"verify_translation rows, which do not take `keep_twin`)"
+            if two_sided
             else ""
         )
         return [
@@ -636,10 +662,11 @@ class _Differ:
                 detail=(
                     f"all {len(edits)} translate_edit items drift on the {side} side "
                     f"only{tail}. If you edited or reviewed {side} and the {twin} half "
-                    f"is still a faithful rendering, answer them `keep_twin` to bank "
-                    f"the new baseline without re-supplying bodies. If {side} is your "
-                    f"source of truth and {twin} must follow, supply adapted {twin} "
-                    f"bodies."
+                    f"is still a faithful rendering, answer those rows `keep_twin` to "
+                    f"bank the new baseline without re-supplying bodies. If {side} is "
+                    f"your source of truth and {twin} must follow, supply adapted "
+                    f"{twin} bodies. The engine cannot tell these apart — it sees "
+                    f"which side moved, never which side is authoritative."
                 ),
             )
         ]

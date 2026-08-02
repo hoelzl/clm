@@ -57,24 +57,30 @@ Branch on the stable booleans rather than scanning the lists:
   normalize refusal).
 
 **Before answering a wall of `translate_edit` rows, check `observations` for
-`uniform_drift_side`.** It fires when *every* `translate_edit` in the deck
-drifted on the **same** language half, and it is the single most useful thing
-in a review-after-translate report: each row individually says "the en variant
-was edited — adapt the twin", which reads as N separate requests to go rewrite
-the German, when the one answer that resolves all of them is usually
-`keep_twin`. The engine cannot make that call for you — it sees which side
-*moved*, never which side is *authoritative* — so the observation names the
-side and both readings:
+`uniform_drift_side`.** It fires when three or more `translate_edit` rows exist
+and *every* one drifted on the **same** language half. Read by row, each says
+"the en variant was edited — adapt the twin", which looks like N separate
+requests to go rewrite the German; the observation is the one line that tells
+you they are N views of a single event. Branch on it in code — it carries `kind`
+and `side`, so you do not have to parse the prose.
+
+**It does not tell you what to answer**, and it is not a default. The engine
+sees which side *moved*, never which side is *authoritative*, so both readings
+stay open and only you know which applies:
 
 - you edited or reviewed that side and the twin still renders it faithfully →
-  answer every row `keep_twin`; it records the new baseline without re-supplying
-  a single body;
+  answer those `translate_edit` rows `keep_twin`; it records the new baseline
+  without re-supplying a body. Note this **banks** the pair: the member reports
+  in sync from then on, so an unfaithful twin waved through here is not raised
+  again;
 - that side is your source of truth and the twin must follow → supply adapted
   bodies for the twin.
 
-Members that moved on **both** sides are not in that set — they frame
-`verify_translation`, and the observation says how many there are so you do not
-sweep them up in a blanket `keep_twin`.
+`keep_twin` is in the `translate_edit` vocabulary **only** — `verify_cold`,
+`verify_translation`, `conflict_*` and `order_decision` all reject it. Members
+needing two-sided verification frame `verify_translation` and are counted
+separately in the observation's detail, precisely so a blanket sweep does not
+pick them up.
 
 Each item row carries `key` (the member handle), `outcome`, `action`,
 `direction` (`de_to_en` / `en_to_de` / `both` / `none`), `detail`, the full
