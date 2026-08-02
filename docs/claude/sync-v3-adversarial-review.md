@@ -426,6 +426,37 @@ either a `drift: source|twin|both` field per item plus a report-level hint
 ("all drift is twin-side — `sync record` banks a hand-reviewed twin"), or a
 distinct cheap `confirm_twin` framing. The information is already computed.
 
+> **Status (2026-08-02): DONE, via the report-level route.** The differ emits a
+> deck-level `uniform_drift_side` observation when *every* `translate_edit`
+> drifts on the same side, naming the side, `keep_twin`, and the opposite
+> reading; `verify_translation` rows are counted in the detail so the summary
+> cannot be over-read into a blanket answer. The per-item `detail` also names
+> `keep_twin`, the human report prints the observation after the items, and
+> "Reading the report" in `clm info sync-agents` gains the check (an addition —
+> the pre-existing bulk-translate bullet is untouched and never carried it).
+>
+> **The `drift: source|twin|both` field was deliberately not built.** Framing
+> it revealed that `side` and `direction` already ship on every item, so the
+> field would add no *information* — it would add an *inference*, requiring the
+> engine to name one half authoritative. The engine is symmetric: it knows
+> which side moved, never which is the source of truth. Asserting that is the
+> guess this programme exists to remove, so the observation reports the side
+> and spells out both readings instead. Additive: no `WIRE_SCHEMA` change, no
+> new framed action, no classification change.
+>
+> **Nor the `confirm_twin` framing** (this Q's second proposed route). The
+> objection to answering with prose — that the remedy for "agents skim per-item
+> detail" cannot be more per-item detail — has force, but the observation is not
+> prose: it carries `kind` and `side`, so a driver branches on it without
+> reading a word. A new framed action would additionally need the source/twin
+> notion to know *when* to emit it, putting it behind the same wall as the
+> field. If the observation proves too easy to skip in the field, `confirm_twin`
+> remains available as a P8(c) extension.
+>
+> Threshold: three or more rows. A judgment, not a measurement — two rows
+> collapse no meaningful ceremony and land one-sided roughly half the time by
+> chance, and the motivating field report was ~30 rows.
+
 **Q6 — Sanction the two flows the doctrine pretends don't exist.** (a)
 Hand-edits: four flows *require* them today (fork twin-marking, order
 repair, tag-shape refusal recovery, verify_translation-with-stale-twin).

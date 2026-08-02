@@ -211,6 +211,10 @@ class SlideGroup:
 #   owner_mismatch         paired companion sides name different owners
 #   group_order_divergence paired groups appear in different order per side
 #   unexpected_companion_cell  non-narrative cell in a companion file
+#   uniform_drift_side     every translate_edit row drifts on the same side, so
+#                          one `keep_twin` reading may answer them all (Q5);
+#                          emitted by the DIFFER, not the lens — informational,
+#                          it never affects `is_clean`
 ObservationKind = str
 
 

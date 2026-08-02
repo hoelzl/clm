@@ -219,6 +219,13 @@ _SPLIT_SIMILARITY_MIN_CHARS = 10
 _SPLIT_SIMILARITY_MAX_CHARS = 2000
 _SPLIT_SIMILARITY_BUDGET = 2000
 
+#: Q5: how many same-side ``translate_edit`` rows before the deck-level
+#: ``uniform_drift_side`` summary is worth printing. A judgment, not a
+#: measurement — see :meth:`_Differ._uniform_drift_observation`. Two rows
+#: collapse almost no ceremony and land one-sided about half the time by
+#: chance; the field report that motivated the observation was ~30 rows.
+_UNIFORM_DRIFT_MIN = 3
+
 
 class _BodySimilarity:
     """Memoized, budgeted near-match check for the #630 F3 scan.
@@ -580,8 +587,93 @@ class _Differ:
         return DeckDiff(
             items=self.items,
             in_sync_count=self.in_sync,
-            observations=list(self.current.observations) + split_observations,
+            observations=(
+                list(self.current.observations)
+                + split_observations
+                + self._uniform_drift_observation()
+            ),
         )
+
+    def _uniform_drift_observation(self) -> list[Observation]:
+        """Say once, per deck, when every ``translate_edit`` drifts on the SAME side (Q5).
+
+        The information is already per item (``side`` / ``direction``), so this adds
+        no knowledge — it adds *aggregation*, which is what the review-after-translate
+        flow actually lacked. That flow regenerates or hand-reviews one half, then
+        reports; every drifted member frames ``translate_edit`` pointing at the twin
+        ("the en variant was edited — adapt the twin"), and an agent reading item by
+        item sees thirty independent requests to go edit the *other* language. The
+        one thing that collapses them — "these all moved on one side, so if that side
+        is the one you just reviewed, ``keep_twin`` banks it" — is a property of the
+        *set*, invisible from any single row. The field report cost ~30 pointless
+        decision items to exactly this blindness.
+
+        Deliberately **not** a ``drift: source|twin`` field. The engine is symmetric:
+        it knows which side moved, never which side is authoritative. Naming one
+        "source" would assert something it cannot observe, so the observation reports
+        the side and lets the agent — who knows what it just edited — draw the
+        conclusion. Both readings are spelled out in the detail so neither is the
+        silent default.
+
+        Requires :data:`_UNIFORM_DRIFT_MIN` rows. The threshold is a judgment, not a
+        measurement: the observation's value is the ceremony it collapses, which is
+        negligible at two rows, while the chance that two rows land one-sided by
+        coincidence rather than because a half was reviewed wholesale is roughly even.
+        Firing on coincidence is not harmful — the detail is conditional on what the
+        author actually did, and the engine cannot know that — but advice that fires
+        on noise gets ignored, so the floor is set where the aggregation starts to pay.
+        """
+        edits = [i for i in self.items if i.action == "translate_edit"]
+        if len(edits) < _UNIFORM_DRIFT_MIN:
+            return []
+        # A row without a ``side`` cannot be attributed. It must SUPPRESS the summary,
+        # never be filtered out of it: filtering would leave "all N translate_edit
+        # items" naming fewer rows than the agent is looking at, and a false summary is
+        # worse than none — this observation's whole thesis.
+        #
+        # This is NOT redundant with the ``sides`` check below. A *mixed* set (some
+        # rows attributed, one not) does fail that check, because ``None`` lands in
+        # the set. But an ALL-``None`` set gives ``sides == {None}``, which passes it
+        # — and then reaches ``assert side is not None``, i.e. a crash out of
+        # ``diff_outcome``, or under ``-O`` exactly the false summary this guard
+        # exists to prevent ("drift on the None side"). Both emitters pass a concrete
+        # side today, so neither shape is reachable; the guard is what keeps the
+        # unreachable case a suppression rather than a failure.
+        if any(i.side is None for i in edits):
+            return []
+        sides = {i.side for i in edits}
+        if len(sides) != 1:
+            return []
+        side = edits[0].side
+        assert side is not None
+        twin: Lang = "en" if side == "de" else "de"
+        # ``verify_translation`` rows are NOT part of the uniform-drift set and do not
+        # accept ``keep_twin``. Deliberately not glossed as "moved on both sides": one
+        # of the three emit sites fires when a side that had no recorded fingerprint
+        # *landed*, where the other half never moved at all. What is true of all three
+        # is that the pair needs two-sided verification.
+        two_sided = sum(1 for i in self.items if i.action == "verify_translation")
+        tail = (
+            f" ({two_sided} further member(s) need two-sided verification — separate "
+            f"verify_translation rows, which do not take `keep_twin`)"
+            if two_sided
+            else ""
+        )
+        return [
+            Observation(
+                kind="uniform_drift_side",
+                side=side,
+                detail=(
+                    f"all {len(edits)} translate_edit items drift on the {side} side "
+                    f"only{tail}. If you edited or reviewed {side} and the {twin} half "
+                    f"is still a faithful rendering, answer those rows `keep_twin` to "
+                    f"bank the new baseline without re-supplying bodies. If {side} is "
+                    f"your source of truth and {twin} must follow, supply adapted "
+                    f"{twin} bodies. The engine cannot tell these apart — it sees "
+                    f"which side moved, never which side is authoritative."
+                ),
+            )
+        ]
 
     def _reframe_group_split_removals(self) -> list[Observation]:
         """Issue #610/#630: never *mechanically* mirror a suspected group split.
@@ -1829,7 +1921,8 @@ class _Differ:
             "edit",
             "translate_edit",
             "de_to_en" if moved_de else "en_to_de",
-            f"the {moved_side} variant was edited — translate/adapt the twin",
+            f"the {moved_side} variant was edited — translate/adapt the twin, "
+            f"or answer `keep_twin` if the twin already renders it faithfully",
             group=group,
             side=moved_side,
             member=member,
@@ -2803,7 +2896,8 @@ class _Differ:
             "edit",
             "translate_edit",
             "de_to_en" if moved == ["de"] else "en_to_de",
-            f"the {moved[0]} header variant was edited — adapt the twin",
+            f"the {moved[0]} header variant was edited — adapt the twin, "
+            f"or answer `keep_twin` if the twin already renders it faithfully",
             group=group,
             side=moved[0],  # type: ignore[arg-type]
             member=member,

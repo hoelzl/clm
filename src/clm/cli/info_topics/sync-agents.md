@@ -56,6 +56,32 @@ Branch on the stable booleans rather than scanning the lists:
 - `needs_agent` — judgment beyond translation (conflicts, cold members, a
   normalize refusal).
 
+**Before answering a wall of `translate_edit` rows, check `observations` for
+`uniform_drift_side`.** It fires when three or more `translate_edit` rows exist
+and *every* one drifted on the **same** language half. Each row names its own
+side and offers `keep_twin`, but says nothing about the others, so a report full
+of them still reads as N separate members to work through; the observation is
+the one line telling you they are N views of a single event. Branch on it in
+code — it carries `kind` and `side`, so you need not parse any prose.
+
+**It does not tell you what to answer**, and it is not a default. The engine
+sees which side *moved*, never which side is *authoritative*, so both readings
+stay open and only you know which applies:
+
+- you edited or reviewed that side and the twin still renders it faithfully →
+  answer those `translate_edit` rows `keep_twin`; it records the new baseline
+  without re-supplying a body. Note this **banks** the pair: the member reports
+  in sync from then on, so an unfaithful twin waved through here is not raised
+  again;
+- that side is your source of truth and the twin must follow → supply adapted
+  bodies for the twin.
+
+`keep_twin` is in the `translate_edit` vocabulary **only** — `verify_cold`,
+`verify_translation`, `conflict_*` and `order_decision` all reject it. Members
+needing two-sided verification frame `verify_translation` and are counted
+separately in the observation's detail, precisely so a blanket sweep does not
+pick them up.
+
 Each item row carries `key` (the member handle), `outcome`, `action`,
 `direction` (`de_to_en` / `en_to_de` / `both` / `none`), `detail`, the full
 current cell bytes for both sides under **`de` and `en`** (those exact key
