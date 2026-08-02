@@ -688,6 +688,7 @@ _RECORD_ONLY = frozenset(
         "record_order",
         "record_group_rename",
         "record_preamble",
+        "record_neutral",
     }
 )
 
@@ -1158,6 +1159,31 @@ def _record_item(
         # co-emission rule suppressed — those never reach unresolved_items,
         # so the unresolved-key guard in apply_deck cannot see them.
         return set()
+    if action == "record_neutral":
+        # §6.2.1 (#764). The pass provenance says who ran the verb; this row was
+        # not established by them — the engine observed that the two halves are
+        # the same bytes. Stamping the pass provenance would let a later
+        # "distrust everything from <source>" sweep discard, or keep, this trust
+        # on the strength of an attribution nobody made. `structural` is that
+        # attribution, and it is written directly rather than being registered
+        # anywhere: `preserve_unchanged_member` decides overwriting from the
+        # caller's declared intent, and an undeclared stamp is automatic, which
+        # is exactly right — a structural observation must never overwrite a
+        # human's `agent` / `semantic:<model>` attestation on unchanged content.
+        pool = _pool_scope(item)
+        if pool is not None:
+            # A `pos:` record must re-record its WHOLE pool, never a single
+            # entry: positional ordinals renumber together, so patching one slot
+            # leaves its siblings' ordinals aliasing different cells and the
+            # member re-frames forever. Same rule the other record rows follow.
+            if pool in frozen_pools:
+                return set()
+            rerecord_pool(target, fresh, *pool)
+            _stamp_structural(target, key)
+            return {pool}
+        _upsert(target, fresh, key, "structural")
+        _stamp_structural(target, key)
+        return set()
     if action in ("record_key_migration",):
         if item.base is not None:
             target.members.pop(item.base.key, None)
@@ -1225,6 +1251,33 @@ def _record_item(
         return {pool}
     _upsert(target, fresh, key, provenance)
     return set()
+
+
+def _stamp_structural(target: DeckLedger, key: str) -> None:
+    """Mark one landed entry as engine-observed, and drop what it cannot back.
+
+    Two corrections to whatever the surrounding record path wrote (#764):
+
+    **Provenance.** A pool re-record stamps every slot with the *pass*
+    provenance — who ran the verb. This row was not established by them; the
+    engine observed that the two halves are the same bytes. Leaving the pass
+    provenance would let a later "distrust everything from <source>" sweep keep
+    or discard this trust on an attribution nobody made.
+
+    **Ownership.** The row fires on a cold deck, where the member's anchor is
+    normally still cold, so the entry would name an owner the store has no entry
+    for. :func:`~clm.slides.doc_ledger.save` prunes exactly that and warns that
+    nothing should create it (#718) — creating it on every cold apply would turn
+    a corruption detector into noise. The ownership claim is not what this row
+    observed anyway, so drop it and let ownership record when the anchor lands.
+    """
+    landed = target.members.get(key)
+    if landed is None:
+        return
+    entry = landed.entry
+    if entry.owner is not None and entry.owner not in target.members:
+        entry = evolve(entry, owner=None)
+    target.members[key] = evolve(landed, entry=entry, provenance="structural")
 
 
 def _upsert(target: DeckLedger, fresh: DeckLedger, key: str, provenance: str) -> None:

@@ -170,12 +170,20 @@ class TestMechanicalRows:
         assert deck.de_path.read_text(encoding="utf-8") == before
         deck.assert_converged()
 
-    def test_two_sided_brand_new_member_is_cold_in_ledger_mode(self, tmp_path: Path):
+    def test_two_sided_brand_new_prose_member_is_cold_in_ledger_mode(self, tmp_path: Path):
         # Design §5: a TWO-sided member with no ledger entry is UNVERIFIED, never
         # a mechanical copy — both sides are present, so the agent confirms (or
         # records) it explicitly rather than the engine trusting it silently.
+        #
+        # §6.2.1 (#764) carves out exactly one exception, and this fixture is
+        # deliberately outside it: the new member is `markdown`, where `shared` +
+        # byte-identical cannot be told apart from German prose duplicated onto
+        # the EN side. `test_two_sided_brand_new_code_member_records_itself`
+        # below is the same shape with a `code` cell, and takes the other branch.
         deck = _deck(tmp_path)
-        new = _shared_code("z", 9)  # new, between x and y — added on BOTH sides
+        # `[markdown]` is load-bearing: a bare `# %%` cell is CODE, which takes
+        # the §6.2.1 branch and would make this test assert the opposite thing.
+        new = "# %% [markdown]\n#\n# Ein neutraler Absatz.\n\n"  # BOTH sides, x→y
         deck.write_de(
             HEADER_DE,
             _slide("s0", "de", "Titel"),
@@ -197,6 +205,45 @@ class TestMechanicalRows:
         outcome = deck.apply()
         assert not outcome.wrote
         assert outcome.count("pending") == 1
+
+    def test_two_sided_brand_new_code_member_records_itself(self, tmp_path: Path):
+        """The §6.2.1 branch: same shape, `code` instead of prose.
+
+        Both halves are the same bytes and the kind carries no natural language,
+        so there is no translation divergence to verify. It resolves mechanically
+        and writes **no file bytes** — the deck must come out byte-identical.
+        """
+        deck = _deck(tmp_path)
+        new = _shared_code("z", 9)
+        for write, lang, text in (
+            (deck.write_de, "de", "DE Text"),
+            (deck.write_en, "en", "EN text"),
+        ):
+            header = HEADER_DE if lang == "de" else HEADER_EN
+            title = "Titel" if lang == "de" else "Title"
+            write(
+                header,
+                _slide("s0", lang, title),
+                _shared_code("x"),
+                new,
+                _shared_code("y", 2),
+                _localized("s0-m", lang, text),
+            )
+        before = (
+            deck.de_path.read_text(encoding="utf-8"),
+            deck.en_path.read_text(encoding="utf-8"),
+        )
+        _, diff = deck.diff()
+        assert [i.action for i in diff.items] == ["record_neutral"]
+        assert doc_apply.item_answers(diff.items[0]) == ()
+
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        assert (
+            deck.de_path.read_text(encoding="utf-8"),
+            deck.en_path.read_text(encoding="utf-8"),
+        ) == before, "a ledger-only row must not touch the files"
+        deck.assert_converged()
 
     def test_one_sided_new_idd_shared_cell_grows_the_twin_in_ledger_mode(self, tmp_path: Path):
         # issue #566: a ONE-sided new *id-keyed* shared cell in a ledgered deck
@@ -669,11 +716,15 @@ class TestColdBodyRecovery:
         deck.assert_converged()
 
     def test_body_on_a_positional_cold_member_is_rejected(self, tmp_path: Path):
-        # A new un-id'd shared code cell inserted among existing cells falls
-        # cold positionally (its ordinal aliases a neighbor); it has no
-        # addressable id, so a body is refused (mint a slide_id instead).
+        # A new un-id'd cell inserted among existing cells falls cold
+        # positionally (its ordinal aliases a neighbor); it has no addressable
+        # id, so a body is refused (mint a slide_id instead).
+        #
+        # The cell is `markdown`, not code: since #764 a shared *code* cell whose
+        # halves are byte-identical resolves as `record_neutral` and never
+        # becomes a cold item at all, so it could not exercise this rejection.
         deck = _deck(tmp_path)
-        new = _shared_code("z", 9)  # new, between x and y — added on BOTH sides
+        new = "# %% [markdown]\n#\n# Ein neutraler Absatz.\n\n"  # BOTH sides, x→y
         deck.write_de(
             HEADER_DE,
             _slide("s0", "de", "Titel"),
@@ -695,7 +746,7 @@ class TestColdBodyRecovery:
         assert cold, [(i.key, i.action) for i in diff.items]
         item = cold[0]
         assert doc_apply.item_answers(item) == ("confirm",)
-        outcome = deck.apply(_decision(item.key, body="z = 9", side="de"))
+        outcome = deck.apply(_decision(item.key, body="#\n# Anderer Absatz.", side="de"))
         result = next(r for r in outcome.results if r.key == item.key)
         assert result.status == "rejected"
         assert "positional" in result.reason
@@ -1193,10 +1244,16 @@ class TestGroupSplitGuard:
         _, diff = deck.diff()
         actions = {(i.key, i.action) for i in diff.items}
         assert not any(a in ("mirror_remove", "remove_vs_split") for _, a in actions), actions
-        cold = [i.key for i in diff.items if i.action == "verify_cold"]
-        assert sorted(cold) == ["pos:s1/code/0", "pos:s1/code/1", "pos:s1/code/2"]
-        confirms = {key: doc_apply.Decision(key=key, choice="confirm") for key in cold}
-        outcome = deck.apply(confirms)
+        # Since #764 the re-grouped pool is shared code with byte-identical
+        # halves, so it records mechanically rather than asking (§6.2.1). What
+        # this test guards is unchanged: nothing is framed for removal, the deck
+        # converges, and every cell survives.
+        regrouped = sorted(i.key for i in diff.items if i.action == "record_neutral")
+        assert regrouped == ["pos:s1/code/0", "pos:s1/code/1", "pos:s1/code/2"]
+        assert not [i for i in diff.items if doc_apply.item_answers(i)], (
+            "no question left to answer"
+        )
+        outcome = deck.apply()
         assert outcome.all_applied, outcome.to_payload()
         deck.assert_converged()
         for name in ("x = 1", "y = 2", "z = 3"):
@@ -1556,10 +1613,16 @@ class TestGroupSplitInterleave:
         _, diff = deck.diff()
         actions = {(i.key, i.action) for i in diff.items}
         assert not any(a in ("mirror_remove", "remove_vs_split") for _, a in actions), actions
-        cold = [i.key for i in diff.items if i.action == "verify_cold"]
-        assert sorted(cold) == ["pos:m1/code/0", "pos:m2/code/0"]
-        confirms = {key: doc_apply.Decision(key=key, choice="confirm") for key in cold}
-        outcome = deck.apply(confirms)
+        # The re-grouped cells are shared code with byte-identical halves, so
+        # since #764 they resolve mechanically (§6.2.1) instead of asking. The
+        # property under test is unchanged: no removal is framed, and the deck
+        # converges in the next pass with the DE cells in the EN order.
+        regrouped = sorted(i.key for i in diff.items if i.action == "record_neutral")
+        assert regrouped == ["pos:m1/code/0", "pos:m2/code/0"]
+        assert not [i for i in diff.items if doc_apply.item_answers(i)], (
+            "no question left to answer"
+        )
+        outcome = deck.apply()
         assert outcome.all_applied, outcome.to_payload()
         deck.assert_converged()
 

@@ -1981,6 +1981,17 @@ and carries the stable booleans:
 - `needs_agent` — judgment beyond translation is required (a conflict, a cold
   member, a normalize refusal).
 
+**A never-recorded deck no longer asks about everything (CLM {version}).**
+Members the engine can settle by direct comparison — no ledger entry, both
+halves present, declared language-neutral, of kind `code` or `j2`, and agreeing
+on every field the differ compares — resolve as the mechanical `record_neutral`
+row instead of a `verify_cold` question. It writes **no file bytes**, only the
+ledger entry, stamped with provenance `structural`. On the reference corpus that
+is ~45% of a cold deck's items. Prose (`markdown`) is excluded even when the two
+halves are byte-identical, because a genuinely neutral cell and German prose
+copied onto the EN side are indistinguishable to the tool; those stay questions.
+The all-cold seeding hint still applies to what remains.
+
 Two `observations` kinds are also printed in the text report:
 `group_order_divergence` (the one that suppresses `is_clean`) and
 `uniform_drift_side` — emitted when three or more `translate_edit` rows exist

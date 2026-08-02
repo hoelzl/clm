@@ -154,6 +154,16 @@ pass is answering a deck that has already moved.
 `mirror_order`, `mirror_layout`, the `record_*` acknowledgements, and the
 fork/unify/id-stamp transitions. Trust them; review with `git diff`.
 
+`record_neutral` is the one you will see most on a **never-recorded deck**, and
+it writes no file bytes at all — only the ledger entry. It fires for a member
+with no ledger entry whose two halves the engine can compare *directly*: both
+sides present, declared language-neutral (no `lang=`), of kind `code` or `j2`,
+and agreeing on every field the differ compares. There is no translation
+divergence to verify there, so it is recorded instead of asked about — roughly
+**45% of a cold deck's items**. Prose (`markdown`) is deliberately excluded even
+when byte-identical: the engine cannot tell a genuinely neutral cell from German
+prose duplicated onto the EN side, so those stay `verify_cold` for you to judge.
+
 **Framed actions** (answer them): `translate_edit` / `translate_new` (produce
 the target-language body — or answer `translate_edit` with `keep_twin` when
 your edit did not change what the twin should say), `verify_translation` (both
