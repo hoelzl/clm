@@ -398,6 +398,25 @@ split-pair family becomes an adapter over `parse_bundle` +
 `structural_violations`, killing the positional-artifact diagnostics
 (#654's phantom tag mismatches) by construction.
 
+> **Status (2026-08-02): the containment half is DONE; delegation stays open.**
+> Order parity landed with #719. Containment is now a pinned property
+> (`tests/slides/test_gate_validate_containment.py`) rather than a hope: a
+> validate *error* implies a non-empty gate, over twelve corruption shapes,
+> with each shape's validate severity **declared** so a check downgraded to
+> `warning` cannot silently shrink the claim. Measured over the 730-pair
+> corpus: **0 gaps** — containment already held, it was simply untested, and
+> the gate is in fact strictly stronger (it sees shared-companion body drift
+> validate misses entirely). One real defect surfaced and was fixed: the
+> whole-deck gate returned its promoted `order-parity` violation still
+> labelled `severity="warning"`, so any caller re-filtering the gate's own
+> output on `severity == "error"` would silently reopen #652.
+>
+> What remains is the *structural* half — validate's split-pair family
+> becoming an adapter over `parse_bundle` + `structural_violations`. The
+> containment test makes that refactor safe to attempt (it pins the relation
+> the refactor must preserve) but does not perform it, and the
+> positional-artifact diagnostics it would kill are still live.
+
 **Q5 — Should the report distinguish twin-side drift from source-side
 drift?** The ledger has per-side fingerprints; the engine already knows the
 difference; the report frames both as `translate_edit` and lets the agent

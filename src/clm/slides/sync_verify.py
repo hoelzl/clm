@@ -80,7 +80,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from clm.notebooks.slide_parser import comment_token_for_path
@@ -110,7 +110,9 @@ class VerifyViolation:
     #   not an edit that corrupted the pair)
     # warning kinds: "tag-parity" | "order-parity" | "dropped-id" | "companion-refusal"
     #   ("order-parity" is promoted to BLOCKING by the whole-deck
-    #   :func:`structural_gate` — see #719; the CLI ``verify`` keeps it a warning)
+    #   :func:`structural_gate` — see #719 — which **relabels** it ``error`` on the
+    #   way out, since everything that gate returns is blocking; the CLI ``verify``
+    #   reads :func:`verify_pair` and keeps it a warning)
     kind: str
     message: str
     slide_id: str | None = None
@@ -414,7 +416,16 @@ def structural_gate(
         # (per-slide) gate keeps the existing doctrine: a whole-pair order
         # divergence must not block recording the one slide an agent just
         # reconciled.
-        errors.extend(v for v in all_violations if v.kind == "order-parity")
+        #
+        # Promotion **relabels** the severity rather than passing the warning
+        # through: everything this function returns is blocking, so a caller
+        # that reasonably re-filters the result on ``severity == "error"``
+        # would otherwise drop the promoted violation and silently reopen the
+        # #652 hole. The CLI's warning severity is unaffected — ``verify``
+        # reads :func:`verify_pair`, never this function.
+        errors.extend(
+            replace(v, severity="error") for v in all_violations if v.kind == "order-parity"
+        )
         return errors
     return [v for v in errors if _scoped_to(v, slide_id, role)]
 
