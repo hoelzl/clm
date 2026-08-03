@@ -1490,6 +1490,9 @@ class TestSplitTagParity:
         )
         warnings = self._tag_warnings(validate_directory(topic, checks=["pairing"]))
         assert len(warnings) == 1, [w.message for w in warnings]
+        # The prefix is part of the adapter's contract: it marks the finding as a
+        # cross-file pair finding, distinguishing it from same-file tag findings.
+        assert warnings[0].message.startswith("split pair:"), warnings[0].message
         de_lines = (topic / "slides_rag.de.py").read_text(encoding="utf-8").splitlines()
         header = de_lines[warnings[0].line - 1]
         assert header.startswith("# %%"), f"line {warnings[0].line} is {header!r}"

@@ -41,6 +41,7 @@ from clm.slides.slug import (
     strip_preserve_marker,
 )
 from clm.slides.split import _is_shared
+from clm.slides.sync_verify import tag_parity_violations
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
 
@@ -1399,16 +1400,15 @@ def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
     Only *this* check is delegated. The sibling split-pair checks compare
     **sets** (``slide_id`` parity, companion ``for_slide`` parity) or a
     length-guarded shared-cell stream, so they cannot produce the artefact this
-    fixes — and delegating them was tried and reverted, because the engine's id
+    fixes. Delegating the id-parity and shared-cell checks was tried and
+    reverted (the companion check was never attempted): the engine's id
     comparison is deliberately *broader* than validate's in two ways that are
-    correct for a trust gate and wrong for an authoring linter: it is sensitive
+    correct for a trust gate and wrong for an authoring linter — it is sensitive
     to the ``!`` preserve marker (a legal cross-half difference, stripped
     everywhere else in this module), and it compares every id'd cell rather than
-    slide-start cells only — which flags the one-sided narrative member that
+    slide-start cells only, which flags the one-sided narrative member that
     ``clm harvest`` deliberately produces as a *pending* state.
     """
-    from clm.slides.sync_verify import tag_parity_violations
-
     de_text = de_path.read_text(encoding="utf-8")
     en_text = en_path.read_text(encoding="utf-8")
     return [

@@ -442,7 +442,9 @@ and low-risk; the cost is mostly doc and MCP updates.
 > review names, and the only one measured to manufacture phantoms (25 → 20 on
 > the corpus; one deck contributed 6, of which 5 were artefacts).
 >
-> Delegating the other three was tried and reverted in review. The engine's id
+> Delegating the id-parity and shared-cell checks was tried and reverted in
+> review; the companion `for_slide` check was never delegated (it compares
+> sets, so the artefact cannot occur there). The engine's id
 > comparison is deliberately **broader** than validate's, in two ways that are
 > right for a trust gate and wrong for an authoring linter: it is sensitive to
 > the `!` preserve marker (a legal cross-half difference), and it compares every
