@@ -518,8 +518,8 @@ distinct cheap `confirm_twin` framing. The information is already computed.
 
 **Q6 — Sanction the two flows the doctrine pretends don't exist.**
 
-> ◐ **(a) DONE. (b) SUPERSEDED — do not implement the auto-answer sweep
-> described below.**
+> ✅ **(a) DONE. (b) CLOSED — superseded by design §6.2.1, then measured out.
+> Do not implement the auto-answer sweep described below.**
 >
 > **(a)** All four hand-edit flows have in-engine answers now: fork
 > twin-marking (`mark_twin`, #656), order repair (first-class order items,
@@ -537,11 +537,40 @@ distinct cheap `confirm_twin` framing. The information is already computed.
 >
 > The governing rule is §6.2.1's: **auto-resolve only what the engine can
 > observe, never what it must assume.** On a cold member that yields
-> `record_neutral` (#764); on an *edited* member it yields a different
-> observable test — the source-side change is normalizer-equivalent, so the
-> twin is provably unaffected. Both are ordinary mechanical rows, so any
-> `--mechanical` flag is a *caller of existing rows*, never a new auto-answer
-> policy. Build notes in the handover.
+> `record_neutral` (#764). On an *edited* member it would yield a
+> normalizer-equivalence test — the source-side change is cosmetic, so the twin
+> is provably unaffected.
+>
+> **(b) is now CLOSED — measured out (2026-08-03).** `scripts/measure_sync_ceremony.py`
+> replays real commits and classifies every changed cell by the row it frames.
+> Over 200 commits of the reference course repo:
+>
+> | | rows | share of framed |
+> |---|---:|---:|
+> | `verify_translation` (both halves moved) | **1053** | **68.4%** |
+> | `translate_edit` (one half moved) | 487 | 31.6% |
+> | shared member moved — *already mechanical* | 346 | — |
+>
+> **The normalizer-equivalence row would remove 1 of 487 rows — 0.2%.** The
+> mechanism is real (v3 fingerprints are raw bytes, so unlike v1/v2 a re-wrap
+> does read as drift, #429) but the population is not: authors do not re-wrap
+> one half without touching content. A first count said 5.1%; it was wrong,
+> because cosmetic edits land overwhelmingly on *shared* cells
+> (`propagate_shared_edit`) or identically on both halves
+> (`record_symmetric_edit`) — neither is ceremony.
+>
+> **`uniform_drift_side` (#767) already covers the shape (b) was aimed at.** Of
+> the 57 (commit, deck) pairs framing ≥3 one-sided edits — the "N rows, one
+> decision" ceremony — **55 have every edit on one side**, exactly what that
+> observation fires on. Median one-sided edits per deck is **1**.
+>
+> **And the class (b) would have swept hardest is the one that most needs a
+> human.** `verify_translation` is 68% of framed rows, up to 32 in a single
+> deck, and fires precisely when *both halves moved apart* — the one shape where
+> the engine has positively observed a divergence it cannot resolve.
+> Auto-`confirm`ing it banks 1053 unread divergences. That volume is the real
+> open ceremony question and needs a different answer (better framing or
+> batching, not auto-answering); it is tracked separately.
 
 *Original recommendation (2026-07-29), for the record:* (a)
 Hand-edits: four flows *require* them today (fork twin-marking, order
@@ -701,12 +730,13 @@ open UX question, fine to defer behind everything above; corpus-gate split
 per #682 with the Phase-0 probe fixtures folded into the bundled corpus
 (D7).
 
-> **Read §7 Q5 and Q6 before starting either of the first two items.** Q5
-> shipped as a `uniform_drift_side` observation and the `drift:` field named
-> here was rejected; the `apply --mechanical` policy named here was superseded
-> by design note §6.2.1. Building either as written would undo a decision. P6,
-> P5 and D7 stand as written. Build order:
-> `docs/claude/handovers/sync-v3-q-register-handover.md`.
+> **Both of the first two items are CLOSED (2026-08-03); do not build them.**
+> Q5 shipped as a `uniform_drift_side` observation — the `drift:` field named
+> here was rejected. `apply --mechanical` (Q6b) was superseded by design
+> §6.2.1 and then **measured out**: the remaining normalizer-equivalence row
+> would remove 0.2% of `translate_edit` rows
+> (`scripts/measure_sync_ceremony.py`). P6, P5 and D7 stand as written. Build
+> order: `docs/claude/handovers/sync-v3-q-register-handover.md`.
 
 ---
 
