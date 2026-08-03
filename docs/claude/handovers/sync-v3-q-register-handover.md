@@ -98,31 +98,37 @@ the one shape where the engine has *observed* a divergence it cannot resolve.
 Q6b proposed auto-`confirm`ing it; that would bank 1053 unread divergences. The
 volume is real ceremony and needs a different answer. Tracked as **#773**.
 
-## 3. Q4 delegation half — **DONE** (PR #775)
+## 3. Q4 delegation half — **DONE, narrowed** (PR #775)
 
-Shipped 2026-08-03. The three checks that paired the halves *positionally*
-(shared-cell byte parity, tag parity, slide_id set/order parity) collapsed into
-`_check_split_pair_structure`, an adapter over `structural_violations`. The
-containment property from #766 is now true largely by construction.
+Shipped 2026-08-03. Only the **tag-parity** check delegates, to
+`tag_parity_violations`. Measured: 25 findings become 20 on the 730-deck corpus;
+one deck contributed 6, of which 5 were phantom (the #654 claim, verified).
 
-Measured on the 730-deck corpus: **25 tag warnings became 20** — one deck
-contributed 6, of which 5 were phantom (the #654 claim, verified) and 1 real.
-No new errors, no new categories.
+**The scope was cut from three checks to one during review, and that is the
+lesson worth carrying.** Delegating the other two was tried and reverted:
 
-Decisions worth keeping:
+- **`_check_split_slide_id_parity`** — the engine's id comparison is
+  deliberately *broader* than validate's. It is sensitive to the `!` preserve
+  marker (a legal cross-half difference this module strips everywhere else), and
+  it compares **every id'd cell** rather than slide-start cells only, which flags
+  the one-sided narrative member `clm harvest` produces *by design* as a pending
+  state. Both fire on a `--fail-on warning` pre-commit gate — i.e. they would
+  block the commit `harvest` just told the author to make.
+- **`_check_shared_cell_parity`** — `unify_texts` stops at the first error, so N
+  diverging shared cells collapse to 1 finding; a count mismatch renders as
+  "content diverges" naming two byte-identical cells; and preamble divergence
+  escalates from silent to **error**.
 
-- **Severity is validate's policy, not the engine's.** Inheriting the gate's
-  severities would escalate warnings into commit-blocking errors in every
-  downstream course repo. `_ENGINE_VIOLATION_POLICY` maps them explicitly.
-- **`duplicate-id` is dropped**, because `_check_slide_ids` already reports it
-  per half — otherwise every duplicate doubles.
-- **The companion `for_slide` check was deliberately NOT delegated.** It
-  compares *sets*, so it structurally cannot manufacture a positional artefact —
-  the defect being fixed does not exist there. Delegating it would need the
-  companion projection, which turns a one-sided companion from a validate
-  warning into an engine `id-asymmetry` **error**, and replaces a specific
-  message with a generic one. That is the boundary: **delegate what pairs
-  positionally; keep what compares sets.**
+The rule: **delegate what pairs positionally, keep what compares sets.** The
+broader framing "one oracle for one question" was wrong — the gate and validate
+ask *different* questions (may this enter the trust store? vs is this deck
+well-authored?), which is why #766's containment property still has to be tested
+rather than being true by construction.
+
+**Repo-wide finding, unrelated to this change:** `tests/build/` is **never
+collected by a bare `pytest`** — pytest's default `norecursedirs` includes
+`build`, and CLM does not override it. The pre-push hook and all four CI jobs run
+bare `pytest`, so that directory's tests have not run in CI. Filed as **#776**.
 
 ## 4. Adjacent open work (not in scope above, but in the same phases)
 

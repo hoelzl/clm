@@ -1,22 +1,17 @@
-- **`clm validate`**: the split-pair structural checks — shared-cell byte
-  parity, cross-side tag parity, and `slide_id` set/order parity — are now
-  computed by the **sync engine's** structural oracle, the same one
-  `clm slides sync verify` and the sync write gate use. The two can no longer
-  disagree about whether a pair is sound.
+- **`clm validate`**: the split pair's **tag-set parity** check is now computed
+  by the sync engine's oracle — the same one `clm slides sync verify` runs —
+  instead of `validate`'s own pairing code.
 
-  The visible improvement is that **phantom findings are gone**. The replaced
-  checks paired the two halves *positionally*, so a single one-sided insert
-  offset every later cell and each offset pair was reported as a tag mismatch.
-  On the reference corpus 25 tag warnings become 20 — one deck contributed 6, of
-  which 5 were artefacts pointing at lines where nothing was wrong. The id-order
-  check also stops flagging a legitimately one-sided mid-transition id as an
-  order divergence.
+  The visible improvement is that **phantom findings are gone**. The old check
+  paired the two halves *positionally*, so a single one-sided insert offset every
+  later cell and each offset pair was reported as a tag mismatch, pointing at
+  lines where nothing was wrong. The engine pairs id'd cells by
+  `(slide_id, role)` and only falls back to positional matching *within* one
+  slide, so an offset cannot cascade. On the reference corpus 25 tag warnings
+  become 20 — one deck contributed 6, of which 5 were artefacts.
 
-  Messages are re-worded (the engine names both tag sets rather than the
-  one-sided delta, and enumerates one finding per offending id instead of one
-  listing the whole set). **Severities are unchanged** — `validate` keeps its own
-  policy, so nothing that was a warning became a commit-blocking error.
+  The message now names both tag sets rather than the one-sided delta. Severity
+  is unchanged, and the finding still points at the offending DE cell.
 
-  The companion `for_slide` parity check is deliberately not delegated: it
-  compares *sets*, so it cannot produce a positional artefact, and delegating it
-  would turn a one-sided companion from a warning into an error.
+  The other three pair checks are unchanged: they compare *sets*, or a
+  length-guarded shared-cell stream, so they cannot produce this artefact.

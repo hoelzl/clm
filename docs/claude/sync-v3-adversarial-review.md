@@ -437,14 +437,26 @@ and low-risk; the cost is mostly doc and MCP updates.
 > pairs and was simply untested, and the gate is in fact *stricter* than
 > validate.
 >
-> The delegation half landed as recommended, with one deliberate exception: the
-> companion `for_slide` check is **not** delegated, because it compares *sets*
-> and so cannot manufacture the positional artefact this refactor exists to
-> remove — while delegating it would need the companion projection, escalating a
-> one-sided companion from a validate warning to an engine error. The boundary
-> is *delegate what pairs positionally, keep what compares sets*. Measured
-> benefit on the 730-deck corpus: 25 tag warnings become 20, one deck
-> contributing 6 of which **5 were phantom** — the #654 claim, verified.
+> The delegation half landed **narrower than recommended**, and the narrowing is
+> the interesting part. Only the *tag-parity* check delegates — the one the
+> review names, and the only one measured to manufacture phantoms (25 → 20 on
+> the corpus; one deck contributed 6, of which 5 were artefacts).
+>
+> Delegating the other three was tried and reverted in review. The engine's id
+> comparison is deliberately **broader** than validate's, in two ways that are
+> right for a trust gate and wrong for an authoring linter: it is sensitive to
+> the `!` preserve marker (a legal cross-half difference), and it compares every
+> id'd cell rather than slide-start cells only — which flags the one-sided
+> narrative member `clm harvest` produces *by design*. Both would fire on a
+> `--fail-on warning` pre-commit gate in every downstream course repo.
+> Delegating shared-cell parity additionally collapses N diverging cells into
+> one finding (`unify_texts` stops at the first) and escalates preamble
+> divergence from silent to **error**.
+>
+> The rule that survives: **delegate what pairs positionally, keep what compares
+> sets.** "One oracle" was the wrong goal; "one oracle per question, and the two
+> questions are not the same" is the right one — which is why #766's containment
+> property still has to be tested rather than being true by construction.
 
 *Original recommendation (2026-07-29), for the record:* containment
 now, delegation later. Immediately: the gate's error set must contain

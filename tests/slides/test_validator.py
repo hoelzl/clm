@@ -1098,14 +1098,10 @@ class TestSplitSlideIdParity:
 
     @staticmethod
     def _id_findings(result):
-        # Since the Q4 delegation the wording comes from the sync engine, which
-        # enumerates one finding per offending id ("no twin in EN") instead of
-        # one listing the whole set. Order divergence still says "order diverges".
         return [
             f
             for f in result.findings
-            if f.severity == "warning"
-            and ("no twin in" in f.message or "order diverges" in f.message)
+            if f.severity == "warning" and "slide_id" in f.message and "diverge" in f.message
         ]
 
     def _pair(self, parent, de_body: str, en_body: str):
@@ -1155,7 +1151,7 @@ class TestSplitSlideIdParity:
         result = validate_directory(topic, checks=["pairing"])
         findings = self._id_findings(result)
         assert len(findings) == 1
-        assert "no twin in EN" in findings[0].message
+        assert "sets diverge" in findings[0].message
         assert "extra" in findings[0].message
 
     def test_order_mismatch_is_flagged(self, tmp_path):
@@ -1181,7 +1177,7 @@ class TestSplitSlideIdParity:
         result = validate_directory(topic, checks=["pairing"])
         findings = self._id_findings(result)
         assert len(findings) == 1
-        assert "order diverges" in findings[0].message  # engine wording, unchanged
+        assert "order diverges" in findings[0].message
 
     def test_set_mismatch_reported_once_in_directory_run(self, tmp_path):
         # The per-file pass runs with cross_file_parity=False, so a directory
@@ -1462,6 +1458,43 @@ class TestSplitTagParity:
             f for f in result.findings if f.severity == "warning" and "mismatched tags" in f.message
         ]
 
+    def test_the_finding_points_at_the_offending_de_cell(self, tmp_path):
+        """The line must survive the Q4 delegation, or the finding stops being clickable.
+
+        ``VerifyViolation`` carries no line by default — it was given an optional
+        one precisely so this per-cell finding keeps naming the DE cell it is
+        about. Without it every tag warning would collapse to line 1 while its
+        message still quoted the real location.
+        """
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_rag.de.py",
+            """            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% lang="de" tags=["keep"]
+            antwort = invoke("Frage")
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_rag.en.py",
+            """            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% lang="en"
+            answer = invoke("question")
+            """,
+        )
+        warnings = self._tag_warnings(validate_directory(topic, checks=["pairing"]))
+        assert len(warnings) == 1, [w.message for w in warnings]
+        de_lines = (topic / "slides_rag.de.py").read_text(encoding="utf-8").splitlines()
+        header = de_lines[warnings[0].line - 1]
+        assert header.startswith("# %%"), f"line {warnings[0].line} is {header!r}"
+        assert "keep" in header
+
     def test_mismatched_localized_code_tag_warns(self, tmp_path):
         # The exact #198 case: a localized (lang) code cell with no slide_id whose
         # `keep` tag was added on one half only. _check_shared_cell_parity never
@@ -1493,7 +1526,9 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        # The engine names both tag sets instead of the one-sided delta.
+        # Since the Q4 delegation the engine names both tag sets rather than the
+        # one-sided delta — same information, and it pairs by (slide_id, role)
+        # instead of positionally, which is what kills the phantom findings.
         assert "mismatched tags" in warnings[0].message
         assert "'keep'" in warnings[0].message
 
@@ -1519,7 +1554,9 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        # The engine names both tag sets instead of the one-sided delta.
+        # Since the Q4 delegation the engine names both tag sets rather than the
+        # one-sided delta — same information, and it pairs by (slide_id, role)
+        # instead of positionally, which is what kills the phantom findings.
         assert "mismatched tags" in warnings[0].message
         assert "'keep'" in warnings[0].message
 
@@ -1603,7 +1640,9 @@ class TestSplitTagParity:
         result = validate_file(tmp_path / "slides_a.de.py", checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        # The engine names both tag sets instead of the one-sided delta.
+        # Since the Q4 delegation the engine names both tag sets rather than the
+        # one-sided delta — same information, and it pairs by (slide_id, role)
+        # instead of positionally, which is what kills the phantom findings.
         assert "mismatched tags" in warnings[0].message
         assert "'keep'" in warnings[0].message
         # Symmetric: validating the EN half catches it too.

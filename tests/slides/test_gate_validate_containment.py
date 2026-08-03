@@ -43,8 +43,10 @@ import pytest
 from clm.slides.sync_verify import VerifyViolation, gate_projected_pair, structural_gate
 from clm.slides.validator import (
     Finding,
+    _check_shared_cell_parity,
     _check_split_companion_for_slide_parity,
-    _check_split_pair_structure,
+    _check_split_slide_id_parity,
+    _check_split_tag_parity,
 )
 
 HEADER_DE = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Titel\") }}\n\n"
@@ -87,22 +89,17 @@ def _deck(
 
 
 def _validate_split_family(de: Path, en: Path) -> list[Finding]:
-    """Exactly the cross-file checks ``clm validate`` runs on a split pair.
+    """Exactly the four cross-file checks ``clm validate`` runs on a split pair.
 
-    Kept as an explicit list rather than driven off ``validate_file`` so the
-    containment claim names the functions it covers: if a new split-pair check is
+    Kept as an explicit list rather than driven off ``validate_slide_file`` so the
+    containment claim names the functions it covers: if a fifth split-pair check is
     added, this test does not silently keep passing while ignoring it — the
     companion :func:`test_the_split_pair_family_is_fully_enumerated` fails instead.
-
-    Since the Q4 delegation this is *two* functions, not four: the three that
-    paired positionally collapsed into ``_check_split_pair_structure``, an adapter
-    over the same ``structural_violations`` the gate uses. That makes half of this
-    module's property true by construction — which is the point of the refactor,
-    and exactly why the other half (severity policy, the deliberate exemptions)
-    still has to be tested.
     """
     return [
-        *_check_split_pair_structure(de, en),
+        *_check_shared_cell_parity(de, en),
+        *_check_split_tag_parity(de, en),
+        *_check_split_slide_id_parity(de, en),
         *_check_split_companion_for_slide_parity(de, en),
     ]
 
@@ -409,7 +406,9 @@ class TestPromotedViolationsAreLabelledBlocking:
 
 #: The split-pair family this module claims to cover.
 SPLIT_PAIR_CHECKS = {
-    "_check_split_pair_structure",
+    "_check_shared_cell_parity",
+    "_check_split_tag_parity",
+    "_check_split_slide_id_parity",
     "_check_split_companion_for_slide_parity",
 }
 
@@ -424,53 +423,16 @@ def test_the_split_pair_family_is_fully_enumerated() -> None:
     """
     from clm.slides import validator
 
-    defined = {name for name in dir(validator) if name.startswith("_check_split_")}
+    defined = {
+        name
+        for name in dir(validator)
+        if name.startswith("_check_split_") or name == "_check_shared_cell_parity"
+    }
     assert defined == SPLIT_PAIR_CHECKS, (
         f"unaccounted split-pair check(s): {sorted(defined - SPLIT_PAIR_CHECKS)} — add "
         f"them to `_validate_split_family` and to CORRUPTIONS so the containment "
         f"property covers them"
     )
-
-
-def test_every_engine_violation_kind_is_mapped() -> None:
-    """The adapter must have an opinion about every kind the engine can emit.
-
-    ``_check_split_pair_structure`` falls back to a generic warning for an
-    unmapped kind rather than dropping it — silence is how the two oracles drift
-    apart again — but the fallback is a safety net, not a plan. If the engine
-    grows a kind, someone has to decide validate's severity and suggestion for
-    it, and this is what tells them.
-    """
-    from clm.slides import validator
-
-    # Every kind `structural_violations` can produce, per `VerifyViolation`'s
-    # documented vocabulary. `companion-refusal` is gate-only.
-    emitted = {"unify", "id-asymmetry", "duplicate-id", "order-parity", "tag-parity"}
-    accounted = set(validator._ENGINE_VIOLATION_POLICY) | validator._ENGINE_VIOLATIONS_NOT_REPORTED
-    assert emitted <= accounted, (
-        f"unmapped engine violation kind(s): {sorted(emitted - accounted)} — decide "
-        f"validate's severity, or list them in _ENGINE_VIOLATIONS_NOT_REPORTED"
-    )
-
-
-def test_duplicate_ids_are_not_reported_twice(tmp_path: Path) -> None:
-    """`_check_slide_ids` already reports duplicates; the adapter must not echo them.
-
-    Without the drop, every duplicated id would be reported once per half by the
-    id checks and again by the delegated engine check.
-    """
-    from clm.slides.validator import validate_file
-
-    folder = tmp_path / "dup"
-    folder.mkdir()
-    _write_pair(
-        folder,
-        HEADER_DE + _slide("intro", "de", "A") + _shared_code() + _slide("intro", "de", "B"),
-        HEADER_EN + _slide("intro", "en", "A") + _shared_code() + _slide("intro", "en", "B"),
-    )
-    result = validate_file(folder / "slides_t.de.py", checks=["pairing", "slide_ids"])
-    dup = [f for f in result.findings if "appears 2 times" in f.message]
-    assert not dup, [f.message for f in dup]
 
 
 @pytest.mark.parametrize("entry", ["validate_file", "validate_files", "validate_course"])
