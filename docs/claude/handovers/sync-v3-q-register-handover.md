@@ -1,6 +1,7 @@
 # Sync v3 Q-Register — Handover
 
-**Created**: 2026-08-02 | **Status**: Q1–Q5, Q6a, Q7 closed; three items remain
+**Created**: 2026-08-02 | **Updated**: 2026-08-03 | **Status**: Q1–Q7 all closed;
+**one build item remains** (Q4's delegation half)
 | **Source review**: `docs/claude/sync-v3-adversarial-review.md` (2026-07-29)
 
 The seven maintainer questions in **§7** of the sync-v3 adversarial review are
@@ -39,136 +40,64 @@ against any slides root. Use them.
 
 ---
 
-## 1. `record_neutral` — issue #764 *(do this first)*
+## 1. `record_neutral` (#764) — **DONE** (PR #771)
 
-**Why first.** The design is complete and merged (note §6.2.1, PR #765); the
-issue carries a scope checklist; the measurement is committed and re-runnable;
-nothing else depends on it and it depends on nothing. It is also the largest
-single payoff in the register: **45.4% of the 28,791 cold-start verification
-questions** on the PythonCourses corpus are this class.
+Shipped 2026-08-03. 45.4% of cold-start items (13,059 of 28,791) now resolve
+mechanically. Landmines for anyone touching it:
 
-**What it is.** A cold member is framed as a question only when the relationship
-between its halves is genuinely unknown. A new **mechanical** row,
-`record_neutral`, resolves it instead — writing **no file bytes, only the ledger
-entry**, like the existing `record_order` / `record_owner` rows — when all five
-clauses of §6.2.1 hold: no ledger entry; two-sided; langness `shared`; kind
-`code` or `j2`; and every per-side field the differ compares is equal across the
-halves.
+- **A `pos:` record must re-record its whole pool.** Ordinals renumber together,
+  so patching one slot never converges. The first draft did that.
+- **Therefore the `structural` stamp is applied ONCE, after the whole landing
+  loop.** Per-item stamping was clobbered by the next sibling's `rerecord_pool`
+  — measured at 65% of positional neutral members. Every test fixture used a
+  single-member pool, so it shipped green through one review round.
+- **The entry's owner is dropped when the anchor is still cold**, or #718's
+  dangling-reference detector fires on every cold apply and stops meaning
+  anything.
+- **Clause 4's premise is false and was shipped knowingly.** "Code carries no
+  natural language" is wrong for ~0.9% of shared code cells (120 cells, 43
+  decks) that carry German in comments or string literals. The maintainer
+  shipped on the base rate (vs ~100% for markdown); the docs now say "compared,
+  not read" rather than claiming a guarantee. The detector that would make the
+  boundary categorical is **#772**.
 
-**Clause 5 is defined over the generic record-diff (§6.3), not a hand-written
-field list.** That is deliberate (P6): a field added to the comparison later
-tightens the predicate automatically. Do not re-enumerate the fields.
+## 2. Q6b mechanical sweeps — **CLOSED, measured out** (2026-08-03)
 
-**Clause 4 is load-bearing and was the maintainer's explicit decision.** For
-`markdown`, `shared` + byte-identical has two readings the engine cannot
-distinguish — a genuinely neutral cell (fenced code, a shell snippet, an
-`<img>`), or German prose duplicated onto the EN side and mis-declared shared.
-Auto-blessing the second banks an untranslated cell as in-sync. `wrong_language_cell`
-cannot catch it either: a shared cell carries no `lang=` to contradict. The
-price is 282 corpus members that stay real questions. **Do not widen clause 4
-to `markdown` without a new maintainer decision.**
+Do not build this. `scripts/measure_sync_ceremony.py` replays real commits and
+classifies every changed cell by the row it frames. Over 200 commits of the
+reference course repo:
 
-### The one thing that changed under it since the design landed
+| | rows | share of framed |
+|---|---:|---:|
+| `verify_translation` (both halves moved) | **1053** | **68.4%** |
+| `translate_edit` (one half moved) | 487 | 31.6% |
+| shared member moved — *already mechanical* | 346 | — |
 
-The design says trust banked this way carries provenance `structural`. PR #768
-(Q7) **removed the string-enumeration approach to provenance entirely** — there
-is no `_AUTOMATIC_PROVENANCE` set any more. `preserve_unchanged_member` now
-takes `deliberate_provenance`, defaulting to `False`, and intent is threaded
-from the caller.
+**The normalizer-equivalence row — Q6b's whole remaining substance after design
+§6.2.1 rejected the auto-answer sweep — would remove 1 of 487 rows (0.2%).** The
+mechanism is real (v3 fingerprints are raw bytes, so unlike v1/v2 a soft re-wrap
+does read as drift, #429) but the population is not.
 
-That is *good news* for this item: writing `provenance="structural"` needs no
-registration anywhere. It will be treated as automatic by default, which is
-correct — a structural observation must not overwrite a human's `agent` or
-`semantic:<model>` attestation on a member whose content is unchanged. **Do not
-add `structural` to any list.** If you find yourself wanting to, re-read
-`preserve_unchanged_member`'s docstring; that mistake is recorded there.
+Two things worth carrying forward:
 
-### Where the code goes
+- **Beware the naive count.** A first pass said 5.1%. It counted all changed
+  cells; cosmetic edits land overwhelmingly on *shared* cells
+  (`propagate_shared_edit`) or identically on both halves
+  (`record_symmetric_edit`), neither of which is ceremony. Filtering to the only
+  shape a normalizer row could help collapses it 25x.
+- **`uniform_drift_side` (#767) already covers the shape.** Of the 57
+  (commit, deck) pairs framing ≥3 one-sided edits, **55 have every edit on one
+  side**. Median one-sided edits per deck is 1.
 
-`_diff_unmatched_current` in `src/clm/slides/sync_diff.py` is the branch being
-replaced — it currently gates the cold decision on *sidedness*, never on
-*langness*:
+**What the measurement surfaced instead**: `verify_translation` is 68% of framed
+rows, up to 32 in one deck — and it fires exactly when both halves moved apart,
+the one shape where the engine has *observed* a divergence it cannot resolve.
+Q6b proposed auto-`confirm`ing it; that would bank 1053 unread divergences. The
+volume is real ceremony and needs a different answer. Tracked as **#773**.
 
-```python
-if not self.base.complete and not member.is_one_sided:
-    self.emit(handle, "unverified", "verify_cold", "none", ...)
-```
+## 3. Q4 delegation half — validate as an adapter — **THE ONLY BUILD ITEM LEFT**
 
-The executor side needs a ledger-only write; `record_order` / `record_owner` are
-the shape to copy in `doc_apply.py`.
-
-### Acceptance
-
-- `python scripts/measure_positional_composition.py <slides-root>` section 3
-  should show the decidable class resolving, and the residual cold count
-  dropping by ~45%.
-- The suppression doctrine must be untouched: a member carrying any framed row
-  is not a candidate, because clause 5 cannot hold. Pin that.
-- Info topics: `sync-agents.md` (the agent sees a new mechanical action) and
-  `commands.md`. Per the CLAUDE.md rule these are version-accurate and
-  downstream course-repo agents read them.
-- §13 amendments row.
-
----
-
-## 2. Q6b — mechanical sweeps *(second; the principle is shared with #1)*
-
-**Why second.** The design note's §6.2.1 already contains the answer, and it is
-freshest immediately after building #764. **Q6b as the review states it was
-superseded by that design** — read §6.2.1's "Why this is not the auto-confirm
-mistake" before you read the review's Q6b, or you will build the rejected thing.
-
-### What the review proposed, and why it is wrong
-
-> `apply --mechanical` (auto-answer exactly `translate_edit→keep_twin`,
-> `verify_translation→confirm`, hard-fail on anything else, never default-on)
-
-Auto-answering `translate_edit → keep_twin` banks the claim *"my edit did not
-change what the twin should say"* — a **semantic** claim about two *different*
-texts that the tool cannot verify. Banking it unverified is exactly the
-silent-divergence class the programme exists to remove.
-
-This is not theoretical. PR #767 established (and `clm info sync-agents` now
-documents) that **`keep_twin` banks the pair**: the member reports in sync from
-then on, so an unfaithful twin waved through is never raised again. A sweep that
-applies it across a deck permanently blesses every twin it touches.
-
-### What to build instead
-
-The governing principle from §6.2.1: **auto-resolve only what the engine can
-observe, never what it must assume.**
-
-Applied to a *cold* member that yields `record_neutral` (item 1). Applied to an
-*edited* member it yields a different but equally observable test: **the
-source-side change is normalizer-equivalent, so the twin is provably
-unaffected**. A whitespace-only or normalizer-canonical edit to one half cannot
-change what the other half should say — and that is checkable, not assumable.
-
-Both are **mechanical rows under §6.2**. So `apply --mechanical` becomes *a
-caller of existing mechanical rows*, not a new contract with its own auto-answer
-policy. That is the whole difference: no new trust semantics, no new vocabulary,
-nothing to get wrong at the contract layer.
-
-### Sequencing note
-
-`uniform_drift_side` (PR #767) is the report-level signal that tells an agent
-when a bulk `keep_twin` is *appropriate* — it fires when every `translate_edit`
-drifted on one side, the review-after-translate shape. That is the honest
-version of the ceremony fix: **surface the pattern, let the human who knows
-which half they reviewed decide**. Check whether that already removes enough
-ceremony before building an auto-answer at all. If it does, Q6b may reduce to
-the normalizer-equivalence row and no flag.
-
-**Q6a is DONE** — all four hand-edit flows have in-engine answers now: fork
-twin-marking (`mark_twin`, #656), order repair (first-class order items, #654),
-anchor-shape framing (#653), and `verify_translation` with a stale twin
-(`body`+`side`, #656). No issue exists for Q6b; open one.
-
----
-
-## 3. Q4 delegation half — validate as an adapter *(third; largest blast radius)*
-
-**Why last.** It is the biggest refactor of the three, and it touches
+**Why it was scheduled last.** It is the biggest refactor of the three, and it touches
 `clm validate`, which runs on the **pre-commit gate in course repositories**. A
 regression here blocks every commit in every downstream repo, not just CLM's.
 Do it when the two cheaper items are behind you.
