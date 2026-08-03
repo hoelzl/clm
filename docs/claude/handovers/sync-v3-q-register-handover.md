@@ -1,12 +1,15 @@
 # Sync v3 Q-Register — Handover
 
-**Created**: 2026-08-02 | **Updated**: 2026-08-03 | **Status**: Q1–Q7 all closed;
-**one build item remains** (Q4's delegation half)
+**Created**: 2026-08-02 | **Updated**: 2026-08-03 | **Status**: Q1–Q7 all closed,
+**all build items done**. What remains is §4's adjacent work (M12, P5/P6, #682)
+and the two issues this arc spun out: **#772** (validate rule for untranslated
+text) and **#773** (`verify_translation` volume)
 | **Source review**: `docs/claude/sync-v3-adversarial-review.md` (2026-07-29)
 
 The seven maintainer questions in **§7** of the sync-v3 adversarial review are
-now all answered. This document covers only what is **left to build**, in the
-order that is cheapest to build it. Findings, evidence and reproduction details
+all answered and every build item is now shipped. This document is kept as the
+record of *what was decided and why* — §0's lessons and each item's landmines
+are the parts still worth reading before touching this code. Findings, evidence and reproduction details
 stay in the review; the design of record is
 `docs/claude/design/sync-total-identity-document-model.md` (the note), whose
 **§13 amendments table** carries one row per landed change and must gain one for
@@ -95,59 +98,37 @@ the one shape where the engine has *observed* a divergence it cannot resolve.
 Q6b proposed auto-`confirm`ing it; that would bank 1053 unread divergences. The
 volume is real ceremony and needs a different answer. Tracked as **#773**.
 
-## 3. Q4 delegation half — validate as an adapter — **THE ONLY BUILD ITEM LEFT**
+## 3. Q4 delegation half — **DONE, narrowed** (PR #775)
 
-**Why it was scheduled last.** It is the biggest refactor of the three, and it touches
-`clm validate`, which runs on the **pre-commit gate in course repositories**. A
-regression here blocks every commit in every downstream repo, not just CLM's.
-Do it when the two cheaper items are behind you.
+Shipped 2026-08-03. Only the **tag-parity** check delegates, to
+`tag_parity_violations`. Measured: 25 findings become 20 on the 730-deck corpus;
+one deck contributed 6, of which 5 were phantom (the #654 claim, verified).
 
-**Why it is now safe to attempt.** PR #766 pinned the relation the refactor must
-preserve: `tests/slides/test_gate_validate_containment.py` states as a property
-that *a `clm validate` split-pair **error** implies a non-empty
-`gate_projected_pair`*, over twelve corruption shapes, with each shape's validate
-severity **declared** rather than discovered. Run it continuously during the
-refactor; it is the specification.
+**The scope was cut from three checks to one during review, and that is the
+lesson worth carrying.** Delegating the other two was tried and reverted:
 
-**The goal.** Validate's split-pair family — `_check_shared_cell_parity`,
-`_check_split_tag_parity`, `_check_split_slide_id_parity`,
-`_check_split_companion_for_slide_parity` — becomes an adapter over
-`parse_bundle` + `structural_violations`. This kills the positional-artifact
-diagnostics (#654's phantom tag mismatches) **by construction** rather than by
-another special case.
+- **`_check_split_slide_id_parity`** — the engine's id comparison is
+  deliberately *broader* than validate's. It is sensitive to the `!` preserve
+  marker (a legal cross-half difference this module strips everywhere else), and
+  it compares **every id'd cell** rather than slide-start cells only, which flags
+  the one-sided narrative member `clm harvest` produces *by design* as a pending
+  state. Both fire on a `--fail-on warning` pre-commit gate — i.e. they would
+  block the commit `harvest` just told the author to make.
+- **`_check_shared_cell_parity`** — `unify_texts` stops at the first error, so N
+  diverging shared cells collapse to 1 finding; a count mismatch renders as
+  "content diverges" naming two byte-identical cells; and preamble divergence
+  escalates from silent to **error**.
 
-### The migration hazard, with a number
+The rule: **delegate what pairs positionally, keep what compares sets.** The
+broader framing "one oracle for one question" was wrong — the gate and validate
+ask *different* questions (may this enter the trust store? vs is this deck
+well-authored?), which is why #766's containment property still has to be tested
+rather than being true by construction.
 
-The gate is currently **strictly stronger** than validate. Measured across 730
-corpus pairs during #766:
-
-| | count |
-|---|---|
-| validate split-pair *errors* | **0** |
-| pairs the gate blocks where validate has no error | **1** (`slides_lucky7`, order-parity) |
-| containment gaps | **0** |
-
-So a naive delegation makes validate newly report on **one** corpus pair. That
-is small, but it is not zero, and the gate sees things validate structurally
-cannot — notably **shared-companion body drift**, because
-`_check_split_companion_for_slide_parity` compares which *slides* the companions
-narrate and never the narration bytes.
-
-Before landing: re-run the sweep, decide per newly-surfaced class whether it is
-`error` or `warning` at the validate surface, and remember validate's severity
-convention differs from the gate's on purpose — validate must not hard-fail CI
-on pre-existing committed divergences (the tag-parity precedent). The
-containment test's `VALIDATE_SEVERITY` map is where those decisions get written
-down.
-
-**Do not** simply raise validate to the gate's severities. `TestDeliberateNonContainment`
-pins the exemption that must survive: tag parity is warning-only on *both* sides
-by design, because an error there would make the write gate refuse a pair the
-apply pass is mid-reconcile on.
-
-No issue exists; open one.
-
----
+**Repo-wide finding, unrelated to this change:** `tests/build/` is **never
+collected by a bare `pytest`** — pytest's default `norecursedirs` includes
+`build`, and CLM does not override it. The pre-push hook and all four CI jobs run
+bare `pytest`, so that directory's tests have not run in CI. Filed as **#776**.
 
 ## 4. Adjacent open work (not in scope above, but in the same phases)
 

@@ -124,6 +124,12 @@ class VerifyViolation:
     # the CLI ``verify`` output (the JSON/human serializers enumerate fields
     # explicitly), so adding it does not change that surface.
     role: str | None = None
+    # 1-based line of the offending DE cell, when the check knows it precisely.
+    # ``clm validate`` delegates its split-pair structure checks here (Q4) and
+    # anchors its findings on this; without it a per-cell finding would collapse
+    # to "line 1" and stop being clickable. Same additive rule as ``role``: the
+    # CLI serializers enumerate fields explicitly, so this is not a wire change.
+    line: int | None = None
 
 
 @dataclass
@@ -357,6 +363,7 @@ def _tag_mismatch(
             ),
             slide_id=slide_id,
             role=role,
+            line=de_cell.line_number,
         )
     ]
 

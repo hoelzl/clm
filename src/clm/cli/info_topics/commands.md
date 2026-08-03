@@ -1389,6 +1389,26 @@ expected — use a non-quick single-file, directory, or course validate to
 check pair parity. Bilingual decks (no `.de` / `.en` suffix) are
 unaffected — the full pairing check still runs.
 
+Since CLM {version} the **tag-set parity** check is computed by the sync
+engine's oracle rather than by `validate`'s own pairing code — the same
+computation `clm slides sync verify` runs. It no longer pairs the halves
+*positionally*: one inserted cell used to offset every later cell and report
+each offset pair as a tag mismatch, pointing at lines where nothing was wrong.
+The engine pairs id'd cells by `(slide_id, role)` and falls back to positional
+matching only *within* one slide, so an offset cannot cascade. On the reference
+corpus 25 tag warnings become 20 — one deck contributed 6, of which **5 were
+artefacts and 1 was real**. The wording now names both tag sets rather than the
+one-sided delta; the severity is unchanged.
+
+The other three pair checks are **deliberately not** delegated. They compare
+*sets* (`slide_id` parity, companion `for_slide` parity) or a length-guarded
+shared-cell stream, so they cannot produce that artefact — and the engine's id
+comparison is intentionally *broader* than `validate`'s in two ways that suit a
+trust gate but not an authoring linter: it is sensitive to the `!` preserve
+marker (a legal difference between halves), and it compares every id'd cell
+rather than slide-start cells only, which would flag the one-sided narration
+`clm harvest` deliberately leaves behind.
+
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code
 cells empty for live code-alongs; if the workshop scope is missing, the

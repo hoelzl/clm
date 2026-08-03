@@ -430,13 +430,35 @@ and low-risk; the cost is mostly doc and MCP updates.
 
 **Q4 — One pair-health oracle or three?**
 
-> ◐ **Containment half DONE (PR #766); delegation half OPEN.** Two corrections
-> to the text below before you act on it. (1) "id-sequence order parity joins
-> `structural_violations`" **already landed in #719** — it is not outstanding.
-> (2) Containment was never violated: it held on all 730 corpus pairs and was
-> simply untested, and the gate is in fact *stricter* than validate. Detail in
-> the status note after this entry; build notes for the delegation half in the
-> handover.
+> ✅ **DONE — containment (PR #766), delegation (PR #775).** Two corrections to
+> the text below before you read it. (1) "id-sequence order parity joins
+> `structural_violations`" **already landed in #719** — it was never
+> outstanding. (2) Containment was never violated: it held on all 730 corpus
+> pairs and was simply untested, and the gate is in fact *stricter* than
+> validate.
+>
+> The delegation half landed **narrower than recommended**, and the narrowing is
+> the interesting part. Only the *tag-parity* check delegates — the one the
+> review names, and the only one measured to manufacture phantoms (25 → 20 on
+> the corpus; one deck contributed 6, of which 5 were artefacts).
+>
+> Delegating the id-parity and shared-cell checks was tried and reverted in
+> review; the companion `for_slide` check was never delegated (it compares
+> sets, so the artefact cannot occur there). The engine's id
+> comparison is deliberately **broader** than validate's, in two ways that are
+> right for a trust gate and wrong for an authoring linter: it is sensitive to
+> the `!` preserve marker (a legal cross-half difference), and it compares every
+> id'd cell rather than slide-start cells only — which flags the one-sided
+> narrative member `clm harvest` produces *by design*. Both would fire on a
+> `--fail-on warning` pre-commit gate in every downstream course repo.
+> Delegating shared-cell parity additionally collapses N diverging cells into
+> one finding (`unify_texts` stops at the first) and escalates preamble
+> divergence from silent to **error**.
+>
+> The rule that survives: **delegate what pairs positionally, keep what compares
+> sets.** "One oracle" was the wrong goal; "one oracle per question, and the two
+> questions are not the same" is the right one — which is why #766's containment
+> property still has to be tested rather than being true by construction.
 
 *Original recommendation (2026-07-29), for the record:* containment
 now, delegation later. Immediately: the gate's error set must contain

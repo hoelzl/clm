@@ -1458,6 +1458,46 @@ class TestSplitTagParity:
             f for f in result.findings if f.severity == "warning" and "mismatched tags" in f.message
         ]
 
+    def test_the_finding_points_at_the_offending_de_cell(self, tmp_path):
+        """The line must survive the Q4 delegation, or the finding stops being clickable.
+
+        ``VerifyViolation`` carries no line by default — it was given an optional
+        one precisely so this per-cell finding keeps naming the DE cell it is
+        about. Without it every tag warning would collapse to line 1 while its
+        message still quoted the real location.
+        """
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_rag.de.py",
+            """            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% lang="de" tags=["keep"]
+            antwort = invoke("Frage")
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_rag.en.py",
+            """            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% lang="en"
+            answer = invoke("question")
+            """,
+        )
+        warnings = self._tag_warnings(validate_directory(topic, checks=["pairing"]))
+        assert len(warnings) == 1, [w.message for w in warnings]
+        # The prefix is part of the adapter's contract: it marks the finding as a
+        # cross-file pair finding, distinguishing it from same-file tag findings.
+        assert warnings[0].message.startswith("split pair:"), warnings[0].message
+        de_lines = (topic / "slides_rag.de.py").read_text(encoding="utf-8").splitlines()
+        header = de_lines[warnings[0].line - 1]
+        assert header.startswith("# %%"), f"line {warnings[0].line} is {header!r}"
+        assert "keep" in header
+
     def test_mismatched_localized_code_tag_warns(self, tmp_path):
         # The exact #198 case: a localized (lang) code cell with no slide_id whose
         # `keep` tag was added on one half only. _check_shared_cell_parity never
@@ -1489,7 +1529,11 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        assert "only on DE: ['keep']" in warnings[0].message
+        # Since the Q4 delegation the engine names both tag sets rather than the
+        # one-sided delta — same information, and it pairs by (slide_id, role)
+        # instead of positionally, which is what kills the phantom findings.
+        assert "mismatched tags" in warnings[0].message
+        assert "'keep'" in warnings[0].message
 
     def test_mismatched_markdown_tag_warns(self, tmp_path):
         topic = tmp_path / "topic"
@@ -1513,7 +1557,11 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        assert "only on DE: ['keep']" in warnings[0].message
+        # Since the Q4 delegation the engine names both tag sets rather than the
+        # one-sided delta — same information, and it pairs by (slide_id, role)
+        # instead of positionally, which is what kills the phantom findings.
+        assert "mismatched tags" in warnings[0].message
+        assert "'keep'" in warnings[0].message
 
     def test_matched_tags_clean(self, tmp_path):
         topic = tmp_path / "topic"
@@ -1595,7 +1643,11 @@ class TestSplitTagParity:
         result = validate_file(tmp_path / "slides_a.de.py", checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        assert "only on DE: ['keep']" in warnings[0].message
+        # Since the Q4 delegation the engine names both tag sets rather than the
+        # one-sided delta — same information, and it pairs by (slide_id, role)
+        # instead of positionally, which is what kills the phantom findings.
+        assert "mismatched tags" in warnings[0].message
+        assert "'keep'" in warnings[0].message
         # Symmetric: validating the EN half catches it too.
         result_en = validate_file(tmp_path / "slides_a.en.py", checks=["pairing"])
         assert len(self._tag_warnings(result_en)) == 1

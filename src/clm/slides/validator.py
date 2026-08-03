@@ -41,6 +41,7 @@ from clm.slides.slug import (
     strip_preserve_marker,
 )
 from clm.slides.split import _is_shared
+from clm.slides.sync_verify import tag_parity_violations
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
 
@@ -1372,66 +1373,61 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
 
 
 def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
-    """Flag any tag-set asymmetry between the cross-language twins of a split pair.
+    """Cross-side tag-set parity — delegated to the sync engine's oracle (Q4).
 
-    A split deck's two halves carry the same cells in the same order — shared
-    (no-``lang``) cells byte-identical, localized cells as language twins. Tags
-    are language-independent, so each cell and its twin must carry the same tag
-    set. A one-sided tag edit (e.g. adding ``keep`` to one half) is invisible to
-    the content *and* to :func:`_check_shared_cell_parity` (which compares only
-    shared cells, so it never sees a localized cell's tags). This check pairs the
-    halves' non-j2 cells positionally and warns on any tag-set mismatch — covering
-    localized markdown *and* id-less localized code (the cell the #198 report hit).
+    Tags are language-independent, so a cell and its cross-language twin must
+    carry the same tag *set*. The question is what "its twin" means, and that is
+    the whole reason this check is delegated: the hand-written version paired the
+    halves **positionally** over the non-j2 cell streams, so a single one-sided
+    insert offset every later cell and each offset pair was reported as a tag
+    mismatch — findings pointing at lines where nothing is wrong (issue #654).
 
-    When the two non-j2 streams differ in length — a structural edit mid-flight,
-    or an add/remove not yet synced — it stays silent rather than mis-pair across
-    the offset; the count itself is a separate concern surfaced by the shared-cell
-    parity check. Issue #198: ``clm slides sync`` mirrors a *recent* one-sided tag
-    edit automatically; this check is the safety net for a committed asymmetry sync
-    can no longer attribute to one side.
+    :func:`~clm.slides.sync_verify.tag_parity_violations` — the same computation
+    ``clm slides sync verify`` runs — pairs id'd cells by ``(slide_id, role)``
+    and falls back to positional matching only *within* one slide, so an offset
+    cannot cascade. Measured over the 730-deck reference corpus: **25 findings
+    become 20**; one deck contributed 6, of which 5 were artefacts and 1 was
+    real.
+
+    **Severity is validate's policy, not the engine's.** Both call this a
+    warning today, but that is a coincidence of two independent decisions, not a
+    shared one: the engine keeps tag parity out of ``structural_gate``'s error
+    set so the write gate cannot refuse a pair the apply pass is mid-reconcile
+    on, while validate must not hard-fail CI on already-committed asymmetry.
+    Mapping it here rather than reading ``violation.severity`` keeps the two
+    decisions independent.
+
+    Only *this* check is delegated. The sibling split-pair checks compare
+    **sets** (``slide_id`` parity, companion ``for_slide`` parity) or a
+    length-guarded shared-cell stream, so they cannot produce the artefact this
+    fixes. Delegating the id-parity and shared-cell checks was tried and
+    reverted (the companion check was never attempted): the engine's id
+    comparison is deliberately *broader* than validate's in two ways that are
+    correct for a trust gate and wrong for an authoring linter — it is sensitive
+    to the ``!`` preserve marker (a legal cross-half difference, stripped
+    everywhere else in this module), and it compares every id'd cell rather than
+    slide-start cells only, which flags the one-sided narrative member that
+    ``clm harvest`` deliberately produces as a *pending* state.
     """
-    findings: list[Finding] = []
-    de_token = comment_token_for_path(de_path)
-    en_token = comment_token_for_path(en_path)
-    _, de_cells = split_raw_cells(de_path.read_text(encoding="utf-8"), de_token)
-    _, en_cells = split_raw_cells(en_path.read_text(encoding="utf-8"), en_token)
-    de_nonj2 = [c for c in de_cells if not c.metadata.is_j2]
-    en_nonj2 = [c for c in en_cells if not c.metadata.is_j2]
-    if len(de_nonj2) != len(en_nonj2):
-        return findings  # structural mismatch — not a tag-parity question
-
-    for i, (de_cell, en_cell) in enumerate(zip(de_nonj2, en_nonj2, strict=True)):
-        de_tags = set(de_cell.metadata.tags)
-        en_tags = set(en_cell.metadata.tags)
-        if de_tags == en_tags:
-            continue
-        only_de = sorted(de_tags - en_tags)
-        only_en = sorted(en_tags - de_tags)
-        detail = ""
-        if only_de:
-            detail += f"; only on DE: {only_de}"
-        if only_en:
-            detail += f"; only on EN: {only_en}"
-        findings.append(
-            Finding(
-                severity="warning",
-                category="pairing",
-                file=str(de_path),
-                line=de_cell.line_number,
-                message=(
-                    f"split pair cell {i + 1} has mismatched tags between "
-                    f"'.de.py' (line {de_cell.line_number}, {sorted(de_tags)}) and "
-                    f"'.en.py' (line {en_cell.line_number} in {en_path.name}, "
-                    f"{sorted(en_tags)}){detail}"
-                ),
-                suggestion=(
-                    "Tags are language-independent and must match across the DE/EN "
-                    "twins. Run `clm slides sync` to mirror a recent one-sided tag "
-                    "edit, or align the tags manually."
-                ),
-            )
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    return [
+        Finding(
+            severity="warning",
+            category="pairing",
+            file=str(de_path),
+            # The engine reports the DE cell's own line for a tag mismatch, so
+            # the finding stays clickable.
+            line=violation.line or 1,
+            message=f"split pair: {violation.message}",
+            suggestion=(
+                "Tags are language-independent and must match across the DE/EN "
+                "twins. Run `clm slides sync` to mirror a recent one-sided tag "
+                "edit, or align the tags manually."
+            ),
         )
-    return findings
+        for violation in tag_parity_violations(de_text, en_text, comment_token_for_path(de_path))
+    ]
 
 
 def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
