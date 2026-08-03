@@ -105,8 +105,17 @@ class TestNoFalsePositives:
         assert _untranslated_findings(de, en) == []
 
     def test_single_function_word_hit_does_not_fire(self, tmp_path: Path) -> None:
-        # "mit" (as in MIT) is one hit; the threshold demands two.
-        de, en = _write_pair(tmp_path, "# %%\n# mit license header follows\nx = 1\n")
+        # "der" is a real list word; one distinct hit stays below the threshold.
+        de, en = _write_pair(tmp_path, "# %%\n# released under der agreement\nx = 1\n")
+        assert _untranslated_findings(de, en) == []
+
+    def test_one_word_repeated_does_not_fire(self, tmp_path: Path) -> None:
+        # Distinct counting: "von Neumann ... von Neumann" repeats a single
+        # list word in English CS prose and must never fire.
+        de, en = _write_pair(
+            tmp_path,
+            "# %%\n# the von Neumann model is a von Neumann machine design\nx = 1\n",
+        )
         assert _untranslated_findings(de, en) == []
 
     def test_german_identifiers_alone_are_clean(self, tmp_path: Path) -> None:
@@ -200,6 +209,63 @@ class TestWiring:
 
 
 # ---------------------------------------------------------------------------
+# //-token decks (C-family): the line-scanner extraction path
+# ---------------------------------------------------------------------------
+
+
+def _write_cpp_pair(tmp_path: Path, shared_cell: str) -> tuple[Path, Path]:
+    de = tmp_path / "slides_demo.de.cpp"
+    en = tmp_path / "slides_demo.en.cpp"
+    de.write_text(
+        '// %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+        "// ## Einführung\n\n" + shared_cell,
+        encoding="utf-8",
+    )
+    en.write_text(
+        '// %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+        "// ## Introduction\n\n" + shared_cell,
+        encoding="utf-8",
+    )
+    return de, en
+
+
+class TestCppLineScanner:
+    def test_german_comment_is_flagged(self, tmp_path: Path) -> None:
+        de, en = _write_cpp_pair(tmp_path, "// %%\n// Das ist ein Kommentar.\nint x = 1;\n")
+        assert len(_untranslated_findings(de, en)) == 1
+
+    def test_german_string_is_flagged(self, tmp_path: Path) -> None:
+        de, en = _write_cpp_pair(tmp_path, '// %%\nstd::cout << "Der Wert von x ist" << x;\n')
+        assert len(_untranslated_findings(de, en)) == 1
+
+    def test_english_only_is_clean(self, tmp_path: Path) -> None:
+        de, en = _write_cpp_pair(tmp_path, '// %%\nstd::cout << "the value" << x; // print it\n')
+        assert _untranslated_findings(de, en) == []
+
+    def test_digit_separator_does_not_swallow_the_line(self, tmp_path: Path) -> None:
+        # A lone C++14 digit separator (odd apostrophe count) must not open a
+        # phantom char literal that swallows the German comment after it.
+        de, en = _write_cpp_pair(tmp_path, "// %%\nint x = 1'000; // Der Wert und die Summe\n")
+        assert len(_untranslated_findings(de, en)) == 1
+
+    def test_comment_token_inside_string_does_not_start_comment(self, tmp_path: Path) -> None:
+        # The "//" inside the URL is string content; the German comment after
+        # the string must still be found.
+        de, en = _write_cpp_pair(
+            tmp_path, '// %%\nauto url = "https://example.org"; // Das ist ein Link\n'
+        )
+        assert len(_untranslated_findings(de, en)) == 1
+
+    def test_quote_char_literal_does_not_open_phantom_string(self, tmp_path: Path) -> None:
+        # '"' is a char literal; treating its double quote as a string opener
+        # would swallow the rest of the line including the German comment.
+        de, en = _write_cpp_pair(
+            tmp_path, "// %%\nif (c == '\"') count++; // Anführungszeichen zählen\n"
+        )
+        assert len(_untranslated_findings(de, en)) == 1
+
+
+# ---------------------------------------------------------------------------
 # Detector unit cases
 # ---------------------------------------------------------------------------
 
@@ -210,6 +276,10 @@ class TestLooksGerman:
 
     def test_one_function_word_does_not(self) -> None:
         assert not _looks_german("released under der agreement")
+
+    def test_one_word_repeated_does_not(self) -> None:
+        # Distinct counting, not total: a repeated single list word is one hit.
+        assert not _looks_german("von Neumann and von Karman and von Mises")
 
     def test_umlaut_fires(self) -> None:
         assert _looks_german("Größe")

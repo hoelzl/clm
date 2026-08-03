@@ -1381,12 +1381,13 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
 # across the halves, the hatch can never be applied to one side only.
 _UNTRANSLATED_ALLOW_TAG = "allow-untranslated"
 
-# German function words for the shared-cell text scan (#772). Deliberately a
-# CONSERVATIVE subset of ``content_lang._DE_WORDS``: this scan is one-sided
-# (there is no competing EN signal to balance against, unlike
-# ``content_lang.detect``), so every entry that is also an English word or a
-# plausible English identifier reference — "die", "man", "so", "war", "es",
-# "als", "bei", "wie", "um", "zu", "mit", "auf", "wir", "sie" — is excluded.
+# German function words for the shared-cell text scan (#772). Deliberately
+# CONSERVATIVE, drawn from ``content_lang._DE_WORDS`` (plus the inflected
+# article "eines"): this scan is one-sided (there is no competing EN signal
+# to balance against, unlike ``content_lang.detect``), so every entry that
+# is also an English word or a plausible English identifier reference —
+# "die", "man", "so", "war", "es", "als", "bei", "wie", "um", "zu", "mit",
+# "auf", "wir", "sie" — is excluded.
 # Precision over recall: a missed German cell is an acceptable false negative
 # for an advisory warning; a flagged English cell erodes trust in the check.
 _UNTRANSLATED_DE_WORDS = frozenset(
@@ -1430,9 +1431,12 @@ _UNTRANSLATED_DE_WORDS = frozenset(
 # ``content_lang._UMLAUT_RE``).
 _UNTRANSLATED_UMLAUT_RE = re.compile(r"[äöüÄÖÜß]")
 _UNTRANSLATED_WORD_RE = re.compile(r"[a-zA-ZäöüÄÖÜß]+")
-# Minimum function-word hits (total, not distinct) before umlaut-free text
-# counts as German — a single hit ("MIT license" lowercasing to "mit" would
-# have been one, "den" as the English noun is one) must never fire alone.
+# Minimum DISTINCT function-word hits before umlaut-free text counts as
+# German — one list word must never fire alone, however often it repeats:
+# "der" quoted in an English sentence is one hit, and "the von Neumann
+# model ... a von Neumann machine" repeats "von" without being German.
+# Corpus-checked both ways: distinct counting loses none of the real
+# umlaut-free German hits (each carries >=2 distinct list words).
 _UNTRANSLATED_MIN_DE_HITS = 2
 
 
@@ -1457,38 +1461,73 @@ def _python_comments_and_strings(source: str) -> str:
     return " ".join(parts)
 
 
+# A C-family char literal is at most a few chars (``'a'``, ``'\n'``,
+# ``'\x41'``, ``'ä'``). A ``'`` with no closing quote inside this window
+# is NOT a literal opener — e.g. the C++14 digit separator in ``1'000``,
+# which as an unbounded opener would swallow the rest of the line (comment
+# and strings included) into a phantom literal.
+_CHAR_LITERAL_MAX_SPAN = 8
+
+
 def _line_scan_comments_and_strings(source: str, comment_token: str) -> str:
     """Line-based comment/string extraction for non-``#``-token languages.
 
-    A deliberately simple single-line scanner: tracks quote state so a
+    A deliberately simple single-line scanner: tracks ``"`` string state so a
     ``comment_token`` inside a string literal does not start a comment, and
-    collects completed single-line string literals. Multi-line strings and
-    block comments are out of scope — advisory heuristic, not a parser.
+    collects completed single-line string literals. ``'`` is treated as a
+    *char* literal: consumed (never collected — a single char carries no
+    prose) only when it closes within :data:`_CHAR_LITERAL_MAX_SPAN` chars,
+    so ``'"'`` cannot open a phantom string and a C++14 digit separator
+    (``1'000``) cannot swallow the line. Multi-line strings and block
+    comments are out of scope — advisory heuristic, not a parser.
     """
     parts: list[str] = []
     for line in source.splitlines():
-        quote: str | None = None
+        in_string = False
         literal: list[str] = []
         i = 0
         while i < len(line):
             ch = line[i]
-            if quote is not None:
+            if in_string:
                 if ch == "\\":
                     i += 2
                     continue
-                if ch == quote:
+                if ch == '"':
                     parts.append("".join(literal))
                     literal = []
-                    quote = None
+                    in_string = False
                 else:
                     literal.append(ch)
             elif line.startswith(comment_token, i):
                 parts.append(line[i + len(comment_token) :])
                 break
-            elif ch in "\"'":
-                quote = ch
+            elif ch == '"':
+                in_string = True
+            elif ch == "'":
+                close = _char_literal_close(line, i)
+                if close is not None:
+                    i = close  # skip the whole literal (contents stay unscanned)
             i += 1
     return " ".join(parts)
+
+
+def _char_literal_close(line: str, open_index: int) -> int | None:
+    """Index of the ``'`` closing a short char literal, or ``None``.
+
+    ``None`` means the ``'`` at ``open_index`` is not a literal opener (no
+    close within the window) and must be treated as plain code.
+    """
+    j = open_index + 1
+    limit = min(len(line), open_index + _CHAR_LITERAL_MAX_SPAN)
+    while j < limit:
+        ch = line[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "'":
+            return j
+        j += 1
+    return None
 
 
 def _looks_german(text: str) -> bool:
@@ -1500,9 +1539,8 @@ def _looks_german(text: str) -> bool:
     """
     if _UNTRANSLATED_UMLAUT_RE.search(text):
         return True
-    words = [w.lower() for w in _UNTRANSLATED_WORD_RE.findall(text)]
-    hits = sum(1 for w in words if w in _UNTRANSLATED_DE_WORDS)
-    return hits >= _UNTRANSLATED_MIN_DE_HITS
+    words = {w.lower() for w in _UNTRANSLATED_WORD_RE.findall(text)}
+    return len(words & _UNTRANSLATED_DE_WORDS) >= _UNTRANSLATED_MIN_DE_HITS
 
 
 def _check_split_untranslated_text(de_path: Path, en_path: Path) -> list[Finding]:
@@ -2442,11 +2480,12 @@ def validate_file(
             findings.extend(_check_workshop_tag_symmetry(cells, file_str))
         # When validating a split half standalone and its twin exists on disk,
         # run the full cross-file pair suite against the twin: shared-cell byte
-        # parity and tag-set parity (the directory/course pair checks), plus
-        # the #162 detectives — slide_id parity (the join key) and companion
-        # for_slide parity. A directory/course run handles all four once at
-        # that scope instead (cross_file_parity=False) so the findings are not
-        # duplicated per file.
+        # parity, the shared-cell German-text check (#772), and tag-set parity
+        # (the directory/course pair checks), plus the #162 detectives —
+        # slide_id parity (the join key) and companion for_slide parity. A
+        # directory/course run handles all five once at that scope instead
+        # (cross_file_parity=False) so the findings are not duplicated per
+        # file.
         if cross_file_parity and is_split:
             pair = split_twin_pair(path)
             if pair is not None:

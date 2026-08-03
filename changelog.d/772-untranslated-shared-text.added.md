@@ -6,7 +6,7 @@
   end). The new cross-file `pairing` check scans comments and string literals
   only (identifiers/keywords are English by construction; corpus measurement:
   German in 0.92% of shared code cells vs 7.5% English — an 8× asymmetry), and
-  warns once per split pair on the `.de.py` side. Intentional German — the
+  warns once per offending cell, always on the `.de.py` side. Intentional German — the
   DE↔EN dictionary example — opts out per cell via the new validate-only
   `allow-untranslated` tag; because shared cells are byte-identical across the
   halves, the hatch can never be applied one-sidedly. English text is
