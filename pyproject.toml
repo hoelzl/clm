@@ -238,6 +238,11 @@ include = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+# Pytest's DEFAULT norecursedirs contains ``build``, which silently shadowed
+# the real test package ``tests/build/`` — nothing in it was ever collected by
+# a bare ``pytest`` (issue #776). This is the default list minus ``build``.
+# If you add a test directory, make sure its name is not on this list.
+norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
