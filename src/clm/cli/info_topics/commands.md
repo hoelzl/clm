@@ -1935,12 +1935,14 @@ trust store: no watermark cache, no git-HEAD baseline. Each member is keyed by
 a stable handle (`id:<slide-id>` for id'd cells, `pos:<group>/<kind>/<n>` for
 id-less shared cells), invariant under the class transitions
 (neutral↔localized, id-less→id'd, inline↔companion) — those are diff rows, not
-identity changes. A member with **no ledger entry is cold** (`verify_cold`) —
-framed for confirmation, never silently trusted. Ledger files are committed
-with the course content; merge conflicts in them are true positives.
+identity changes. A member with **no ledger entry is cold** — framed
+`verify_cold` for confirmation, never silently trusted. The one exception is
+the member whose halves the engine can compare *directly* (`record_neutral`,
+below): there the relationship is observed, not assumed. Ledger files are
+committed with the course content; merge conflicts in them are true positives.
 
-**Seeding.** A fresh checkout or a never-recorded deck reports everything
-cold. Seed trust once from a verified state: `clm slides sync record DIR`
+**Seeding.** A fresh checkout or a never-recorded deck reports every member it
+cannot settle by direct comparison as cold. Seed trust once from a verified state: `clm slides sync record DIR`
 (gated per pair on the structural verify). `clm slides split` and
 `clm slides translate` record freshly-created pairs automatically.
 
@@ -1980,6 +1982,17 @@ and carries the stable booleans:
   `translate_new`) exists;
 - `needs_agent` — judgment beyond translation is required (a conflict, a cold
   member, a normalize refusal).
+
+**A never-recorded deck no longer asks about everything (CLM {version}).**
+Members the engine can settle by direct comparison — no ledger entry, both
+halves present, declared language-neutral, of kind `code` or `j2`, and agreeing
+on every field the differ compares — resolve as the mechanical `record_neutral`
+row instead of a `verify_cold` question. It writes **no file bytes**, only the
+ledger entry, stamped with provenance `structural`. On the reference corpus that
+is ~45% of a cold deck's items. Prose (`markdown`) is excluded even when the two
+halves are byte-identical, because a genuinely neutral cell and German prose
+copied onto the EN side are indistinguishable to the tool; those stay questions.
+The all-cold seeding hint still applies to what remains.
 
 Two `observations` kinds are also printed in the text report:
 `group_order_divergence` (the one that suppresses `is_clean`) and
@@ -2028,8 +2041,10 @@ which re-frame on the next report once the tags are reconciled),
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
 (`de` / `en`) so an agent can answer without re-reading files. A report whose
-items are all `verify_cold` (a never-recorded deck) carries a top-level
-`hint` pointing at `sync record`, the wholesale seeding verb.
+**questions** are all `verify_cold` (a never-recorded deck) carries a
+top-level `hint` pointing at `sync record`, the wholesale seeding verb. The
+mechanical `record_neutral` rows beside them do not suppress it — branch on
+`resolution`, not on every item being `verify_cold`.
 
 `--since DATE|REF` — the **forensic view**: diff against the bundle at a git
 ref instead of the ledger ("what changed in this window?"). A ref is used

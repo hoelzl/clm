@@ -114,8 +114,16 @@ def cold_sweep_hint(diff: DeckDiff) -> str | None:
     companions too, so a divergence hidden in the narration refuses the
     record rather than being swept up by it — but the gate is structural, and
     only the reader can judge whether the two halves *say the same thing*.
+
+    "Whole report" means every **question**. Since #764 a cold deck also emits
+    mechanical ``record_neutral`` rows for the members the engine could settle
+    by observation, and those change nothing about the advice — the remaining
+    items are still an all-cold seeding case, and ``record`` is still the
+    efficient answer. Keying the test on *all* items would have silently
+    withdrawn the hint from exactly the freshly-authored decks it exists for.
     """
-    if diff.items and all(item.action == "verify_cold" for item in diff.items):
+    questions = [item for item in diff.items if item.action != "record_neutral"]
+    if questions and all(item.action == "verify_cold" for item in questions):
         return (
             "every member is cold (no ledger entry) — for a freshly authored or "
             "never-recorded deck, review both halves (`record` asserts they are in "

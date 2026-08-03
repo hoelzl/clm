@@ -87,6 +87,21 @@ from clm.slides.sync_wire import WIRE_SCHEMA
 _SIDES: tuple[Lang, Lang] = ("de", "en")
 
 
+#: The ``record_neutral`` detail. Says what was *observed*, not what is assumed:
+#: an agent reading a ledger diff has to be able to tell this row apart from a
+#: confirmation somebody actually made.
+#:
+#: It deliberately does **not** claim "no translation divergence is possible".
+#: That is false for a measurable minority: 0.6% of the corpus's neutral members
+#: carry German in a comment or a string literal (``# Das ist ein Kommentar.``),
+#: sitting untranslated in the English deck. The engine compared the halves; it
+#: did not read them.
+_NEUTRAL_DETAIL = (
+    "declared language-neutral and byte-identical on both halves — recorded "
+    "without asking (the halves were compared, not read)"
+)
+
+
 def _cold_detail(member: Member, base_text: str) -> str:
     """The ``verify_cold`` detail, spelling out the one unanswerable shape.
 
@@ -177,6 +192,7 @@ MECHANICAL_ACTIONS = frozenset(
         "record_group_rename",  # anchor id renamed, anchor content matched
         "propagate_preamble",  # file preamble moved on one side
         "record_preamble",  # file preambles moved identically
+        "record_neutral",  # §6.2.1 cold + observably language-neutral (#764)
     }
 )
 
@@ -443,6 +459,59 @@ COMPARED_SIDECELL_FIELDS = frozenset(
 )
 COSMETIC_SIDECELL_FIELDS = frozenset({"index", "line_number"})
 
+#: Kinds whose ``shared`` declaration is *usually* checkable rather than trusted
+#: (§6.2.1 clause 4).
+#:
+#: **Do not add ``markdown``**: there, ``shared`` + byte-identical cannot be
+#: told apart from German prose duplicated onto the EN side and mis-declared
+#: neutral, and auto-blessing that banks an untranslated cell as in-sync. The
+#: exclusion is the maintainer's explicit decision and costs 282 corpus
+#: members that stay real questions.
+#:
+#: **This is a base-rate trade, not a categorical guarantee.** §6.2.1 justified
+#: the boundary as "code and j2 carry no natural language". Measured, that is
+#: false for **~0.6% of neutral members** — 83 of 13,049, across 41 of 730 decks
+#: — which carry German in comments or string literals (``# Das ist ein
+#: Kommentar.``) and are therefore untranslated cells sitting in the English
+#: deck. The kind does not change what the engine can *see*; it only changes how
+#: often prose turns up. What makes this boundary defensible is the base rate
+#: (0.6% vs an assumed ~100% for markdown), not the categorical claim. A
+#: ``validate`` rule for natural-language content in a ``shared`` cell is the
+#: detector it would need to be categorical.
+NEUTRAL_KINDS = frozenset({"code", "j2"})
+
+
+def _halves_observably_identical(member: Member) -> bool:
+    """Do the two halves agree on **every per-side field the differ compares**?
+
+    §6.2.1 clause 5, and deliberately generic: it walks
+    :data:`COMPARED_SIDECELL_FIELDS` rather than naming fields, so a field
+    added to the comparison later tightens this predicate automatically (P6)
+    instead of silently widening what gets auto-recorded. The member-level
+    fields (``layout``, ``owner``, ``langness``, ``kind``, ``role``) are single
+    values shared by both halves, so they cannot disagree across sides — they
+    are covered by the clauses around this one, not by it.
+    """
+    de, en = member.de, member.en
+    if de is None or en is None:
+        return False
+    return all(getattr(de, field_) == getattr(en, field_) for field_ in COMPARED_SIDECELL_FIELDS)
+
+
+def is_neutral_pair(member: Member) -> bool:
+    """§6.2.1: a cold member the engine can resolve by observation, not by asking.
+
+    Clauses 2–5 (clause 1, "no ledger entry", is the call site's branch). All
+    four must hold; each is independently necessary, and the regression suite
+    pins that by dropping one at a time.
+    """
+    return (
+        not member.is_one_sided  # 2 — both halves present to compare
+        and member.langness == "shared"  # 3 — the author declared it neutral
+        and member.kind in NEUTRAL_KINDS  # 4 — and the kind makes that checkable
+        and _halves_observably_identical(member)  # 5 — the halves actually agree
+    )
+
 
 # ---------------------------------------------------------------------------
 # The differ
@@ -531,6 +600,17 @@ class _Differ:
     def run(self) -> DeckDiff:
         if self.base is None:
             for member, group in _iter_with_groups(self.current):
+                if is_neutral_pair(member):
+                    self.emit(
+                        member.key.render(),
+                        "mechanical",
+                        "record_neutral",
+                        "none",
+                        _NEUTRAL_DETAIL,
+                        group=group,
+                        member=member,
+                    )
+                    continue
                 self.emit(
                     member.key.render(),
                     "unverified",
@@ -1054,6 +1134,17 @@ class _Differ:
             # branches below even in ledger mode — verify_cold offers only
             # `confirm`, which apply rejects for a one-sided member, leaving no
             # decision-document path to resolve it (issue #566).
+            if is_neutral_pair(member):
+                self.emit(
+                    handle,
+                    "mechanical",
+                    "record_neutral",
+                    "none",
+                    _NEUTRAL_DETAIL,
+                    group=group,
+                    member=member,
+                )
+                return
             self.emit(
                 handle,
                 "unverified",
@@ -2945,6 +3036,20 @@ class _Differ:
             # grows the twin). Framing it cold keeps apply from emitting an
             # unappliable mechanical row.
             for member in {id(m): m for m in matched_pairs + de_solo + en_solo}.values():
+                if is_neutral_pair(member):
+                    # §6.2.1 (#764): the overwhelming majority of positional
+                    # members are shared code cells, so this is where most of
+                    # the cold-start ceremony actually lives.
+                    self.emit(
+                        member.key.render(),
+                        "mechanical",
+                        "record_neutral",
+                        "none",
+                        _NEUTRAL_DETAIL,
+                        group=group,
+                        member=member,
+                    )
+                    continue
                 self.emit(
                     member.key.render(),
                     "unverified",

@@ -103,9 +103,11 @@ misclassified every blocked item. `resolution` is the schema-4 discriminator.
 The `de`/`en` excerpts are the full cell bytes **including** the `# %%` header
 line; **`de_body`/`en_body`** are the same cells without it — which is exactly
 what a `body` answer must contain, so you can feed an excerpt straight back
-(trailing blank lines are ignored at the write boundary). A report whose items
-are *all* `verify_cold` also carries a top-level `hint` — that is the seeding
-case; use `record`, not a confirm-all document (see "Cold members").
+(trailing blank lines are ignored at the write boundary). A report whose
+**questions** are all `verify_cold` also carries a top-level `hint` — that is
+the seeding case; use `record`, not a confirm-all document (see "Cold
+members"). Mechanical `record_neutral` rows sit beside them and do not suppress
+it, so test the items that have `answers`, not every item.
 
 ### Naming the row you are answering (`action`)
 
@@ -153,6 +155,16 @@ pass is answering a deck that has already moved.
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
 `mirror_order`, `mirror_layout`, the `record_*` acknowledgements, and the
 fork/unify/id-stamp transitions. Trust them; review with `git diff`.
+
+`record_neutral` is the one you will see most on a **never-recorded deck**, and
+it writes no file bytes at all — only the ledger entry. It fires for a member
+with no ledger entry whose two halves the engine can compare *directly*: both
+sides present, declared language-neutral (no `lang=`), of kind `code` or `j2`,
+and agreeing on every field the differ compares. There is no translation
+divergence to verify there, so it is recorded instead of asked about — roughly
+**45% of a cold deck's items**. Prose (`markdown`) is deliberately excluded even
+when byte-identical: the engine cannot tell a genuinely neutral cell from German
+prose duplicated onto the EN side, so those stay `verify_cold` for you to judge.
 
 **Framed actions** (answer them): `translate_edit` / `translate_new` (produce
 the target-language body — or answer `translate_edit` with `keep_twin` when
@@ -455,7 +467,14 @@ whole-pass abort: all other items still land. The remedy is the same as for
 A brand-new checkout, a never-synced deck, or a deck whose ledger entries
 predate a fingerprint-function bump reports **two-sided** members (both halves
 present) as `verify_cold` — the engine will not silently trust a pair it has
-never recorded. Two ways to converge:
+never recorded.
+
+The exception is the member it does not have to trust: two-sided, declared
+language-neutral, of kind `code` or `j2`, and the same bytes on both halves.
+That is `record_neutral` — mechanical, answerless, and roughly **45% of a cold
+deck**. It writes no file bytes, only the ledger entry. Prose stays a question
+even when byte-identical, because a neutral cell and untranslated German look
+the same to the tool. Two ways to converge on what remains:
 
 - **Per item**: answer `{"key": …, "choice": "confirm"}` in a decision
   document after you have checked the pair is genuinely in sync. `confirm`
@@ -499,8 +518,10 @@ harvest write lands narration on one language side, and recording that one-sided
 member is what frames the twin as `translate_new` — see `clm info
 harvest-agents`.)
 
-**Rule of thumb: when a report is *all* `verify_cold` (the report says so in
-a `hint`), use `record`, not a confirm-all decision document.** They assert
+**Rule of thumb: when every question in a report is `verify_cold` (the report
+says so in a `hint`), use `record`, not a confirm-all decision document.**
+Mechanical rows alongside them do not change that — `apply` executes those and
+`record` supersedes them. They assert
 the same trust; `record` is one command instead of a scripted
 report→build-JSON→apply pipeline. Reserve per-item `confirm` for the mixed
 case where cold items sit next to real work.

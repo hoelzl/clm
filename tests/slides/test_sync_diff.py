@@ -114,12 +114,23 @@ class TestNoopAndCold:
         second = _diff(base, de, EN0)
         assert [(i.key, i.action) for i in first.items] == [(i.key, i.action) for i in second.items]
 
-    def test_no_baseline_means_every_member_is_cold(self):
+    def test_no_baseline_means_every_member_is_cold_or_observably_neutral(self):
+        """No baseline: every member is accounted for, none is silently trusted.
+
+        Since #764 the snapshot-cold path splits the same way the ledger-cold one
+        does — a `shared` code/j2 member whose halves are byte-identical resolves
+        as `record_neutral` (§6.2.1) instead of asking a question with one
+        possible answer. Everything else is still `verify_cold`.
+        """
         deck = _parse(DE0, EN0)
         diff = diff_deck(deck, None)
         assert diff.items
-        assert {i.outcome for i in diff.items} == {"unverified"}
-        assert {i.action for i in diff.items} == {"verify_cold"}
+        # Every member is framed — nothing falls through to "in sync".
+        assert len(diff.items) == len(list(deck.members()))
+        assert {i.outcome for i in diff.items} == {"unverified", "mechanical"}
+        assert {i.action for i in diff.items} == {"verify_cold", "record_neutral"}
+        neutral = {i.key for i in diff.items if i.action == "record_neutral"}
+        assert neutral == {"pos:s0/code/0", "pos:s0/code/1"}
 
     def test_incomplete_baseline_reports_unknown_member_as_cold_not_add(self):
         base = _snapshot(DE0, EN0)
@@ -1105,18 +1116,30 @@ class TestAdversarialReviewRegressions:
         assert "record_owner" in actions
         assert len(diff.items) >= 2  # the anchor drift is not swallowed
 
-    def test_ledger_mode_pool_members_are_cold_not_added(self):
-        """MAJOR: with complete=False a pos member without an entry is COLD
-        (framed verification), never a mechanical add/copy."""
+    def test_ledger_mode_pool_members_are_never_a_mechanical_add(self):
+        """MAJOR: with complete=False a pos member without an entry is never an add.
+
+        The guard is about *adds*: a mechanical `record_symmetric_add` /
+        `copy_new_shared` would treat an un-ledgered member as new and mirror it,
+        which for a positional member the ordinals alias. Since #764 a two-sided
+        `shared` code/j2 member resolves as `record_neutral` instead of asking —
+        also mechanical, but ledger-only, so no cell is mirrored and no file byte
+        is written. Everything else stays `verify_cold`.
+        """
         base = _snapshot(DE0, EN0)
-        removed = [k for k in base.members if k.startswith("pos:")]
-        for key in removed:
+        for key in [k for k in base.members if k.startswith("pos:")]:
             del base.members[key]
         base.complete = False
         diff = _diff(base, DE0, EN0)
         assert diff.items
-        assert {i.action for i in diff.items} == {"verify_cold"}
-        assert {i.outcome for i in diff.items} == {"unverified"}
+        assert {i.action for i in diff.items} <= {"verify_cold", "record_neutral"}
+        assert not {i.action for i in diff.items} & {"record_symmetric_add", "copy_new_shared"}
+        # The shared code cells are the neutral class; the j2 header and the
+        # localized/markdown members are not.
+        by_action = {
+            i.action: [j.key for j in diff.items if j.action == i.action] for i in diff.items
+        }
+        assert sorted(by_action.get("record_neutral", [])) == ["pos:s0/code/0", "pos:s0/code/1"]
 
     def test_ledger_mode_one_sided_localized_add_is_translate_new_not_cold(self):
         """issue #566: a NEW one-sided localized cell in a ledgered deck must be

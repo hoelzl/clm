@@ -898,10 +898,16 @@ class TestSyncReport:
         data = json.loads(await handle_sync_report(str(de_path), tmp_path))
         assert data["is_clean"] is False
         assert data["needs_agent"] is True
-        assert {i["action"] for i in data["items"]} == {"verify_cold"}
+        # Members whose halves the engine can compare directly resolve
+        # mechanically (§6.2.1 / #764); everything else is a framed question.
+        assert {i["action"] for i in data["items"]} == {"verify_cold", "record_neutral"}
         # id-keyed cold members also advertise `body` (inline stale-twin recovery,
-        # issue #572); positional ones stay confirm-only (no addressable id).
+        # issue #572); positional ones stay confirm-only (no addressable id); a
+        # mechanical row advertises nothing at all.
         for i in data["items"]:
+            if i["action"] == "record_neutral":
+                assert i["answers"] == [] and i["resolution"] == "mechanical", i
+                continue
             expected = ["confirm", "body"] if i["key"].startswith("id:") else ["confirm"]
             assert i["answers"] == expected, i
 

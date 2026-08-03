@@ -688,6 +688,7 @@ _RECORD_ONLY = frozenset(
         "record_order",
         "record_group_rename",
         "record_preamble",
+        "record_neutral",
     }
 )
 
@@ -1225,6 +1226,47 @@ def _record_item(
         return {pool}
     _upsert(target, fresh, key, provenance)
     return set()
+
+
+def _stamp_structural(target: DeckLedger, keys: set[str]) -> None:
+    """Mark the engine-observed entries, and drop ownership they cannot back.
+
+    Two corrections to whatever the record paths wrote for a ``record_neutral``
+    row (#764), applied **once, after every landed item has been recorded**.
+
+    Doing it per item was wrong and measurably so: a ``pos:`` record re-records
+    its whole pool, so in a pool holding N neutral members each item's
+    ``rerecord_pool`` reset the stamp the previous one had just written — 65% of
+    positional neutral members ended up carrying the pass provenance and a
+    re-created dangling owner. A landing ``record_order`` on the same pool did
+    the same. Stamping after the loop is immune to both, because nothing
+    re-records afterwards.
+
+    **Provenance.** The pass provenance says who ran the verb. This row was not
+    established by them; the engine observed that the two halves are the same
+    bytes. Leaving the pass provenance would let a later "distrust everything
+    from <source>" sweep keep or discard this trust on an attribution nobody
+    made.
+
+    **Ownership.** The row fires on cold decks, where the member's anchor is
+    normally still cold, so the entry would name an owner the store has no entry
+    for. :func:`~clm.slides.doc_ledger.save` prunes exactly that and warns that
+    nothing should create it (#718) — creating it on every cold apply would turn
+    a corruption detector into noise. The ownership claim is not what this row
+    observed anyway, so drop it and let ownership record when the anchor lands.
+
+    A key absent from ``target`` is skipped: the pool it belonged to may have
+    been frozen (#600/#630), dropped as unresolved, or renumbered by a landed
+    removal in the same pass.
+    """
+    for key in keys:
+        landed = target.members.get(key)
+        if landed is None:
+            continue
+        entry = landed.entry
+        if entry.owner is not None and entry.owner not in target.members:
+            entry = evolve(entry, owner=None)
+        target.members[key] = evolve(landed, entry=entry, provenance="structural")
 
 
 def _upsert(target: DeckLedger, fresh: DeckLedger, key: str, provenance: str) -> None:
@@ -1964,6 +2006,8 @@ def apply_deck(
     priority = {"record_group_rename": 0, "record_key_migration": 1}
     frozen_pools = _frozen_pools(unresolved_items)
     rerecorded_pools: set[tuple[str, str]] = set()
+    #: `record_neutral` keys to re-stamp once every record has landed (#764).
+    structural_keys: set[str] = set()
     # Never bless a member with unresolved rows (#615 F2, fixes S3): a
     # landed row on a member whose framed sibling row is still pending /
     # rejected / failed must not record the member's fresh snapshot — that
@@ -2014,6 +2058,10 @@ def apply_deck(
         rerecorded_pools |= _record_item(
             target, fresh, item, provenance=provenance, frozen_pools=frozen_pools
         )
+        if item.action == "record_neutral":
+            structural_keys.add(item.key)
+    # After every record, so no later pool re-record can reset these (#764).
+    _stamp_structural(target, structural_keys)
     # Never bless the unresolved: a wholesale pool re-record must not trust
     # siblings whose framed items were left pending/rejected/failed — nor
     # the slot of an answered conflict_tags (which re-frames next pass).
