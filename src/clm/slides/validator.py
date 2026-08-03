@@ -40,7 +40,6 @@ from clm.slides.slug import (
     is_valid_slug,
     strip_preserve_marker,
 )
-from clm.slides.split import _is_shared
 from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
 
@@ -710,7 +709,7 @@ def _check_pairing(cells: list[Cell], file_path: str, *, is_split: bool = False)
     are skipped: a split file legitimately carries cells of only one
     language, and running them would fire a false count mismatch on every
     converted deck (issue #160). Cross-file shared-cell parity between the
-    two halves is validated separately by :func:`_check_shared_cell_parity`.
+    two halves is validated separately by :func:`_check_split_pair_structure`.
 
     The per-file ``slide_id`` integrity checks (presence, slug format,
     uniqueness, narrative adjacency) always run — they apply equally to a
@@ -1290,233 +1289,121 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     return findings
 
 
-def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
-    """Verify shared cells are byte-identical between a split slide pair.
+#: How an engine violation surfaces at the ``validate`` boundary (Q4).
+#:
+#: Severity is **validate's policy, not the engine's**. The two oracles judge the
+#: same invariants but answer different questions: the engine's ``structural_gate``
+#: decides whether a pair may enter the trust store (so an asymmetric id is fatal
+#: there), while validate must not hard-fail CI on divergence that is already
+#: committed — the tag-parity precedent. Delegating the *computation* while
+#: keeping validate's severity contract is the whole point; inheriting the
+#: engine's severities would silently escalate a warning to a commit-blocking
+#: error in every downstream course repo.
+_ENGINE_VIOLATION_POLICY: dict[str, tuple[str, str]] = {
+    "unify": (
+        "error",
+        "Shared (no-lang) cells must be byte-identical and the two halves must "
+        "align cell-for-cell. Propagate the edit with `clm slides sync report` + "
+        "`sync apply` (mechanical for shared cells, no model); fall back to "
+        "`clm slides unify` + `clm slides split` only if the pair no longer "
+        "aligns at all.",
+    ),
+    "id-asymmetry": (
+        "warning",
+        "The .de.py / .en.py halves must carry the same slide_id set — it is the "
+        "cross-language join key for voiceover for_slide, `clm slides unify`, and "
+        "extract/inline. Route structural changes through `clm slides sync` "
+        "(which mints/migrates ids onto both halves); avoid per-file "
+        "`clm slides assign-ids` on a split half.",
+    ),
+    "order-parity": (
+        "warning",
+        "The slide_id sequence must match across the DE/EN halves. Run "
+        "`clm slides sync` to mirror the reordering onto both.",
+    ),
+    "tag-parity": (
+        "warning",
+        "Tags are language-independent and must match across the DE/EN twins. "
+        "Run `clm slides sync` to mirror a recent one-sided tag edit, or align "
+        "the tags manually.",
+    ),
+}
 
-    A split slide file (``.de.py`` / ``.en.py``) carries its tagged
-    language-specific cells plus the *shared* (no-``lang``) cells copied
-    verbatim from the bilingual source. The build pipeline routes each
-    file to its own per-language pipeline (Phase 6, §2.6), so any drift
-    between the two shared-cell streams produces silently divergent
-    DE and EN output — exactly what the split format is meant to prevent.
+#: Engine violations validate deliberately drops rather than reports.
+#:
+#: ``duplicate-id`` — :func:`_check_slide_ids` already reports a duplicated id
+#: per half, with the cell's own line number; reporting it again here would
+#: double every occurrence.
+#: ``dropped-id`` — the engine's git-baseline check; validate has no git view and
+#: :func:`structural_violations` does not emit it anyway.
+_ENGINE_VIOLATIONS_NOT_REPORTED = frozenset({"duplicate-id", "dropped-id", "companion-refusal"})
 
-    Reuses :func:`clm.slides.split._is_shared` to classify cells (so the
-    rule stays aligned with Phase 5's split semantics) and compares the
-    raw cell bytes via :class:`~clm.slides.raw_cells.RawCell`. The check
-    is positional within the shared-cell stream: shared cell *i* in the
-    DE file must be byte-identical to shared cell *i* in the EN file.
-    Length mismatches surface as a single finding on the DE side so the
-    error message can name the bilingual companion path cleanly.
+
+def _check_split_pair_structure(de_path: Path, en_path: Path) -> list[Finding]:
+    """The split pair's structural invariants — delegated to the sync engine (Q4).
+
+    Replaces three hand-written checks (shared-cell byte parity, cross-side tag
+    parity, slide_id set/order parity) with an adapter over
+    :func:`~clm.slides.sync_verify.structural_violations`, the oracle the sync
+    write gate already uses. Two oracles for one question was the setup for
+    "validate calls a pair corrupt, the gate banks it as verified"; the relation
+    between them is pinned as a property in
+    ``tests/slides/test_gate_validate_containment.py``, and delegating makes the
+    two agree by construction rather than by that test's vigilance.
+
+    **The concrete win is that the phantom findings disappear.** The replaced
+    checks paired the halves *positionally* (``zip(de_nonj2, en_nonj2)``), so a
+    single one-sided insert offsets every later cell and each offset pair is
+    reported as a tag mismatch. The engine pairs id'd cells by
+    ``(slide_id, role)`` and falls back to per-slide positional matching only
+    within a slide, so an offset cannot cascade. Measured over the 730-deck
+    reference corpus: 25 tag-parity findings become 20 — one deck accounted for
+    6, of which **5 were phantom and 1 was real** (issue #654).
+
+    It also removes a false-positive class in the id-order check: the replaced
+    check compared the raw id sequences, so a legitimately one-sided
+    mid-transition id read as an order divergence. The engine compares only the
+    keys *common to both halves*.
+
+    :func:`_check_split_companion_for_slide_parity` is deliberately **not**
+    delegated. It compares ``for_slide`` **sets**, which is order-insensitive and
+    therefore structurally incapable of manufacturing a phantom — the defect
+    being fixed here does not exist there. Delegating it would mean projecting
+    the companions, which turns a one-sided companion from a validate *warning*
+    into an engine *id-asymmetry error*, and would replace its specific message
+    ("these companions narrate different slides") with a generic one.
     """
-    findings: list[Finding] = []
-    de_file = str(de_path)
+    from clm.slides.sync_verify import structural_violations
 
     de_text = de_path.read_text(encoding="utf-8")
     en_text = en_path.read_text(encoding="utf-8")
-    _, de_cells = split_raw_cells(de_text, comment_token_for_path(de_path))
-    _, en_cells = split_raw_cells(en_text, comment_token_for_path(en_path))
+    violations = structural_violations(de_text, en_text, comment_token_for_path(de_path))
 
-    de_shared = [c for c in de_cells if _is_shared(c)]
-    en_shared = [c for c in en_cells if _is_shared(c)]
-
-    if len(de_shared) != len(en_shared):
-        findings.append(
-            Finding(
-                severity="error",
-                category="pairing",
-                file=de_file,
-                line=de_shared[0].line_number if de_shared else 1,
-                message=(
-                    f"split pair shared-cell count mismatch: "
-                    f"DE has {len(de_shared)} shared cells, "
-                    f"EN ({en_path.name}) has {len(en_shared)}"
-                ),
-                suggestion=(
-                    "Shared (no-lang) cells must appear in the same order "
-                    "in both '.de.py' and '.en.py'. Run `clm slides sync "
-                    "report` to see the divergence per member and `sync "
-                    "apply` to reconcile; regenerate via `clm slides unify` "
-                    "+ `clm slides split` only if the pair no longer aligns."
-                ),
-            )
-        )
-        return findings
-
-    for i, (de_cell, en_cell) in enumerate(zip(de_shared, en_shared, strict=True)):
-        if de_cell.lines == en_cell.lines:
-            continue
-        findings.append(
-            Finding(
-                severity="error",
-                category="pairing",
-                file=de_file,
-                line=de_cell.line_number,
-                message=(
-                    f"split pair shared cell {i + 1} diverges between "
-                    f"'.de.py' (line {de_cell.line_number}) and "
-                    f"'.en.py' (line {en_cell.line_number} in "
-                    f"{en_path.name})"
-                ),
-                suggestion=(
-                    "Shared cells must be byte-identical between the DE "
-                    "and EN companions. Propagate the edit with "
-                    "`clm slides sync report` + `sync apply` (mechanical "
-                    "for shared cells, no model); fall back to "
-                    "`clm slides unify` + `clm slides split` only if the "
-                    "pair no longer aligns at all."
-                ),
-            )
-        )
-
-    return findings
-
-
-def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
-    """Flag any tag-set asymmetry between the cross-language twins of a split pair.
-
-    A split deck's two halves carry the same cells in the same order — shared
-    (no-``lang``) cells byte-identical, localized cells as language twins. Tags
-    are language-independent, so each cell and its twin must carry the same tag
-    set. A one-sided tag edit (e.g. adding ``keep`` to one half) is invisible to
-    the content *and* to :func:`_check_shared_cell_parity` (which compares only
-    shared cells, so it never sees a localized cell's tags). This check pairs the
-    halves' non-j2 cells positionally and warns on any tag-set mismatch — covering
-    localized markdown *and* id-less localized code (the cell the #198 report hit).
-
-    When the two non-j2 streams differ in length — a structural edit mid-flight,
-    or an add/remove not yet synced — it stays silent rather than mis-pair across
-    the offset; the count itself is a separate concern surfaced by the shared-cell
-    parity check. Issue #198: ``clm slides sync`` mirrors a *recent* one-sided tag
-    edit automatically; this check is the safety net for a committed asymmetry sync
-    can no longer attribute to one side.
-    """
     findings: list[Finding] = []
-    de_token = comment_token_for_path(de_path)
-    en_token = comment_token_for_path(en_path)
-    _, de_cells = split_raw_cells(de_path.read_text(encoding="utf-8"), de_token)
-    _, en_cells = split_raw_cells(en_path.read_text(encoding="utf-8"), en_token)
-    de_nonj2 = [c for c in de_cells if not c.metadata.is_j2]
-    en_nonj2 = [c for c in en_cells if not c.metadata.is_j2]
-    if len(de_nonj2) != len(en_nonj2):
-        return findings  # structural mismatch — not a tag-parity question
-
-    for i, (de_cell, en_cell) in enumerate(zip(de_nonj2, en_nonj2, strict=True)):
-        de_tags = set(de_cell.metadata.tags)
-        en_tags = set(en_cell.metadata.tags)
-        if de_tags == en_tags:
+    for violation in violations:
+        if violation.kind in _ENGINE_VIOLATIONS_NOT_REPORTED:
             continue
-        only_de = sorted(de_tags - en_tags)
-        only_en = sorted(en_tags - de_tags)
-        detail = ""
-        if only_de:
-            detail += f"; only on DE: {only_de}"
-        if only_en:
-            detail += f"; only on EN: {only_en}"
+        policy = _ENGINE_VIOLATION_POLICY.get(violation.kind)
+        if policy is None:
+            # A kind the engine grew and this adapter has not been taught. Report
+            # it rather than dropping it: an unmapped violation is a real finding
+            # nobody has triaged, and silence here is how the two oracles drift
+            # apart again. `test_every_engine_violation_kind_is_mapped` fails first.
+            policy = ("warning", "Reported by the sync engine's structural check.")
+        severity, suggestion = policy
         findings.append(
             Finding(
-                severity="warning",
+                severity=severity,
                 category="pairing",
                 file=str(de_path),
-                line=de_cell.line_number,
-                message=(
-                    f"split pair cell {i + 1} has mismatched tags between "
-                    f"'.de.py' (line {de_cell.line_number}, {sorted(de_tags)}) and "
-                    f"'.en.py' (line {en_cell.line_number} in {en_path.name}, "
-                    f"{sorted(en_tags)}){detail}"
-                ),
-                suggestion=(
-                    "Tags are language-independent and must match across the DE/EN "
-                    "twins. Run `clm slides sync` to mirror a recent one-sided tag "
-                    "edit, or align the tags manually."
-                ),
+                # The engine supplies a line only where it knows one precisely
+                # (per-cell checks); whole-pair findings name their lines inside
+                # the message instead.
+                line=violation.line or 1,
+                message=f"split pair: {violation.message}",
+                suggestion=suggestion,
             )
         )
-    return findings
-
-
-def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
-    """Verify the ``.de.py`` / ``.en.py`` halves carry the same slide_id sequence.
-
-    ``slide_id`` is the cross-language join key (issue #162): voiceover
-    ``for_slide`` resolution, ``clm slides unify`` (which requires
-    ``de_id == en_id``), and ``extract`` / ``inline`` all rely on the two halves
-    agreeing on the **set and order** of slide ids. A born-split deck, a per-file
-    ``clm slides assign-ids`` on one half, or a hand-edited id silently diverges
-    them. This is the **detective** that makes that loud — the core check of the
-    #162 pre-commit gate.
-
-    Compares the bare (preserve-marker-stripped) slide_ids of slide-start cells
-    in source order. Findings are ``warning`` severity, consistent with the rest
-    of the slide_id family (the gate runs with ``--fail-on warning``); they may
-    become ``error`` in CLM 1.8 alongside the other slide_id checks.
-    """
-    findings: list[Finding] = []
-    de_file = str(de_path)
-
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
-
-    def _ids(cells: list[Cell]) -> list[str]:
-        return [
-            strip_preserve_marker(c.metadata.slide_id)
-            for c in cells
-            if c.metadata.is_slide_start and c.metadata.slide_id
-        ]
-
-    de_ids = _ids(de_cells)
-    en_ids = _ids(en_cells)
-    anchor_line = next(
-        (c.line_number for c in de_cells if c.metadata.is_slide_start and c.metadata.slide_id),
-        1,
-    )
-    de_set, en_set = set(de_ids), set(en_ids)
-
-    if de_set != en_set:
-        only_de = sorted(de_set - en_set)
-        only_en = sorted(en_set - de_set)
-        detail = ""
-        if only_de:
-            detail += f"; only on DE: {only_de}"
-        if only_en:
-            detail += f"; only on EN: {only_en}"
-        findings.append(
-            Finding(
-                severity="warning",
-                category="pairing",
-                file=de_file,
-                line=anchor_line,
-                message=(
-                    f"split pair slide_id sets diverge between '.de.py' and "
-                    f"'.en.py' ({en_path.name}){detail}"
-                ),
-                suggestion=(
-                    "The .de.py / .en.py halves must carry the same slide_id set — "
-                    "it is the cross-language join key for voiceover for_slide, "
-                    "`clm slides unify`, and extract/inline. Route structural "
-                    "changes through `clm slides sync` (which mints/migrates ids "
-                    "onto both halves); avoid per-file `clm slides assign-ids` on a "
-                    "split half."
-                ),
-            )
-        )
-    elif de_ids != en_ids:
-        findings.append(
-            Finding(
-                severity="warning",
-                category="pairing",
-                file=de_file,
-                line=anchor_line,
-                message=(
-                    f"split pair slide_id order diverges: DE order {de_ids} != EN "
-                    f"order {en_ids} ({en_path.name})"
-                ),
-                suggestion=(
-                    "The slide_id sequence must match across the DE/EN halves. Run "
-                    "`clm slides sync` to mirror the reordering onto both."
-                ),
-            )
-        )
-
     return findings
 
 
@@ -1531,7 +1418,7 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     ships with missing narration and nothing says so. This is the
     **both-language voiceover compatibility check** — the companion arm of the
     #162 detective and part of the pre-commit gate (design §9/§10). It is the
-    natural extension of :func:`_check_split_slide_id_parity`: the slide_id
+    natural extension of :func:`_check_split_pair_structure`'s id parity: the slide_id
     parity guards the join key on the deck; this guards the same key on the
     companions that reference it.
 
@@ -2254,9 +2141,7 @@ def validate_file(
         if cross_file_parity and is_split:
             pair = split_twin_pair(path)
             if pair is not None:
-                findings.extend(_check_shared_cell_parity(*pair))
-                findings.extend(_check_split_tag_parity(*pair))
-                findings.extend(_check_split_slide_id_parity(*pair))
+                findings.extend(_check_split_pair_structure(*pair))
                 findings.extend(_check_split_companion_for_slide_parity(*pair))
     if "code_export" in check_set and path.suffix == ".cpp":
         # Structural invariants of the compilable C++ project export (#331).
@@ -2411,9 +2296,7 @@ def validate_files(
     check_set = set(checks) if checks else set(DEFAULT_CHECKS)
     if "pairing" in check_set:
         for de_path, en_path in _slide_files_to_split_pairs(slide_files):
-            all_findings.extend(_check_shared_cell_parity(de_path, en_path))
-            all_findings.extend(_check_split_tag_parity(de_path, en_path))
-            all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
+            all_findings.extend(_check_split_pair_structure(de_path, en_path))
             all_findings.extend(_check_split_companion_for_slide_parity(de_path, en_path))
 
     return ValidationResult(
@@ -2476,9 +2359,7 @@ def validate_course(
             # cells. Scoped per-topic so different topics don't share state.
             if "pairing" in check_set:
                 for de_path, en_path in _slide_files_to_split_pairs(slide_files):
-                    all_findings.extend(_check_shared_cell_parity(de_path, en_path))
-                    all_findings.extend(_check_split_tag_parity(de_path, en_path))
-                    all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
+                    all_findings.extend(_check_split_pair_structure(de_path, en_path))
                     all_findings.extend(_check_split_companion_for_slide_parity(de_path, en_path))
 
     return ValidationResult(

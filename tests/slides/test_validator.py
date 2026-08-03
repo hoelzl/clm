@@ -1098,10 +1098,14 @@ class TestSplitSlideIdParity:
 
     @staticmethod
     def _id_findings(result):
+        # Since the Q4 delegation the wording comes from the sync engine, which
+        # enumerates one finding per offending id ("no twin in EN") instead of
+        # one listing the whole set. Order divergence still says "order diverges".
         return [
             f
             for f in result.findings
-            if f.severity == "warning" and "slide_id" in f.message and "diverge" in f.message
+            if f.severity == "warning"
+            and ("no twin in" in f.message or "order diverges" in f.message)
         ]
 
     def _pair(self, parent, de_body: str, en_body: str):
@@ -1151,7 +1155,7 @@ class TestSplitSlideIdParity:
         result = validate_directory(topic, checks=["pairing"])
         findings = self._id_findings(result)
         assert len(findings) == 1
-        assert "sets diverge" in findings[0].message
+        assert "no twin in EN" in findings[0].message
         assert "extra" in findings[0].message
 
     def test_order_mismatch_is_flagged(self, tmp_path):
@@ -1177,7 +1181,7 @@ class TestSplitSlideIdParity:
         result = validate_directory(topic, checks=["pairing"])
         findings = self._id_findings(result)
         assert len(findings) == 1
-        assert "order diverges" in findings[0].message
+        assert "order diverges" in findings[0].message  # engine wording, unchanged
 
     def test_set_mismatch_reported_once_in_directory_run(self, tmp_path):
         # The per-file pass runs with cross_file_parity=False, so a directory
@@ -1489,7 +1493,9 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        assert "only on DE: ['keep']" in warnings[0].message
+        # The engine names both tag sets instead of the one-sided delta.
+        assert "mismatched tags" in warnings[0].message
+        assert "'keep'" in warnings[0].message
 
     def test_mismatched_markdown_tag_warns(self, tmp_path):
         topic = tmp_path / "topic"
@@ -1513,7 +1519,9 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        assert "only on DE: ['keep']" in warnings[0].message
+        # The engine names both tag sets instead of the one-sided delta.
+        assert "mismatched tags" in warnings[0].message
+        assert "'keep'" in warnings[0].message
 
     def test_matched_tags_clean(self, tmp_path):
         topic = tmp_path / "topic"
@@ -1595,7 +1603,9 @@ class TestSplitTagParity:
         result = validate_file(tmp_path / "slides_a.de.py", checks=["pairing"])
         warnings = self._tag_warnings(result)
         assert len(warnings) == 1
-        assert "only on DE: ['keep']" in warnings[0].message
+        # The engine names both tag sets instead of the one-sided delta.
+        assert "mismatched tags" in warnings[0].message
+        assert "'keep'" in warnings[0].message
         # Symmetric: validating the EN half catches it too.
         result_en = validate_file(tmp_path / "slides_a.en.py", checks=["pairing"])
         assert len(self._tag_warnings(result_en)) == 1

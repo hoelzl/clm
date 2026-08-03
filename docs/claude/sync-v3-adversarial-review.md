@@ -430,13 +430,21 @@ and low-risk; the cost is mostly doc and MCP updates.
 
 **Q4 — One pair-health oracle or three?**
 
-> ◐ **Containment half DONE (PR #766); delegation half OPEN.** Two corrections
-> to the text below before you act on it. (1) "id-sequence order parity joins
-> `structural_violations`" **already landed in #719** — it is not outstanding.
-> (2) Containment was never violated: it held on all 730 corpus pairs and was
-> simply untested, and the gate is in fact *stricter* than validate. Detail in
-> the status note after this entry; build notes for the delegation half in the
-> handover.
+> ✅ **DONE — containment (PR #766), delegation (PR #775).** Two corrections to
+> the text below before you read it. (1) "id-sequence order parity joins
+> `structural_violations`" **already landed in #719** — it was never
+> outstanding. (2) Containment was never violated: it held on all 730 corpus
+> pairs and was simply untested, and the gate is in fact *stricter* than
+> validate.
+>
+> The delegation half landed as recommended, with one deliberate exception: the
+> companion `for_slide` check is **not** delegated, because it compares *sets*
+> and so cannot manufacture the positional artefact this refactor exists to
+> remove — while delegating it would need the companion projection, escalating a
+> one-sided companion from a validate warning to an engine error. The boundary
+> is *delegate what pairs positionally, keep what compares sets*. Measured
+> benefit on the 730-deck corpus: 25 tag warnings become 20, one deck
+> contributing 6 of which **5 were phantom** — the #654 claim, verified.
 
 *Original recommendation (2026-07-29), for the record:* containment
 now, delegation later. Immediately: the gate's error set must contain

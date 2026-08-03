@@ -1389,6 +1389,19 @@ expected — use a non-quick single-file, directory, or course validate to
 check pair parity. Bilingual decks (no `.de` / `.en` suffix) are
 unaffected — the full pairing check still runs.
 
+Since CLM {version} the first three of those are computed by the **sync
+engine's** structural oracle rather than by `validate`'s own pairing code — the
+same check `clm slides sync verify` and the sync write gate run, so the two
+cannot disagree about a pair. The practical difference is that they no longer
+pair the halves *positionally*: one inserted cell used to offset every later
+cell and report each offset pair as a tag mismatch. Findings are therefore
+fewer and more accurate (on the reference corpus 25 tag warnings became 20 —
+one deck contributed 6, of which **5 were artefacts and 1 was real**), and the
+wording now names both tag sets rather than the one-sided delta. **Severities
+are unchanged**: `validate` keeps its own policy, so nothing that was a warning
+became a commit-blocking error. The companion `for_slide` check is deliberately
+*not* delegated — it compares *sets*, so it cannot produce that artefact.
+
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code
 cells empty for live code-alongs; if the workshop scope is missing, the
