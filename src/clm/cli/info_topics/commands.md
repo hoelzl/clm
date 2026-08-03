@@ -1367,6 +1367,7 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | split pair voiceover companions narrate different slides (`for_slide` set differs) | `warning` | **Cross-file** (issue #162, the both-language voiceover compatibility check): a narration cell's `for_slide` is the `slide_id` of the slide it covers, so the `.de` / `.en` companions (`voiceover_X.de.py` / `voiceover_X.en.py`) must narrate the same set of slides — otherwise one language ships with missing voiceover. A one-sided companion (one language has voiceover, the other none) is flagged too. Runs on a directory/course validate, and on a single-file validate when the twin exists on disk. |
 | voiceover companion `for_slide` matches no `slide_id` in its own deck | `error` | (since CLM {version}) The build's voiceover merge **silently drops** such narration from the output — usually because a `slide_id` was renamed or its slide moved to another deck. This is the static, pre-build equivalent of the build's dropped-companion error; it reuses the build matcher (so `for_slide="title"` and `vo_anchor` placement are not false positives) and a voiceover-less deck (no companion) stays silent. Fix by re-aligning the `for_slide`, or move the narration into the companion of the deck that now owns the slide. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
+| shared (no-`lang`) **code** cell of a split pair contains German text in a comment or string | `warning` | **Cross-file** (since CLM {version}, issue #772): shared cells are emitted verbatim into *both* language outputs, so German comments/strings leak into the English deck — and once `sync record` banks the cell as `shared`, a later one-sided fix frames a mechanical byte copy that would overwrite the German half. Scans comments and string literals only (identifiers/keywords are English by construction); German signal = umlaut/eszett or ≥2 German function words. Intentional German (a DE↔EN dictionary example) opts out per cell with the `allow-untranslated` tag. English text in shared cells is *not* flagged. Reported once per pair, on the `.de.py` side. |
 
 Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
 count parity, per-pair tag/type consistency, and DE/EN adjacency) are
@@ -1375,9 +1376,10 @@ split half legitimately carries cells of only one language, so these
 checks would otherwise report a false `DE/EN cell count mismatch` on every
 converted deck (issue #160). The per-file `slide_id` integrity checks (and
 the `format` / `tags` groups) still run on split files unchanged. The
-cross-file pair checks — **shared-cell byte parity**, **tag-set parity**,
-the **`slide_id` parity** detective (issue #162), and the companion
-**`for_slide` parity** check (the both-language voiceover compatibility
+cross-file pair checks — **shared-cell byte parity**, the **shared-cell
+German-text** check (issue #772), **tag-set parity**, the **`slide_id`
+parity** detective (issue #162), and the companion **`for_slide` parity**
+check (the both-language voiceover compatibility
 check) — run when validating a directory or course spec, and since CLM
 {version} the **full suite also runs on a single-file validate** when the
 twin exists on disk (previously only the two #162 detectives did), so a

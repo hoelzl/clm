@@ -9,7 +9,9 @@ for the caller to evaluate.
 
 from __future__ import annotations
 
+import io
 import re
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1372,6 +1374,204 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
     return findings
 
 
+# Per-cell escape hatch for _check_split_untranslated_text (#772): a shared
+# code cell tagged ``allow-untranslated`` declares its German text intentional
+# (the DE<->EN dictionary example being the canonical case). Because the tag
+# lives in the cell's header line and shared cells must be byte-identical
+# across the halves, the hatch can never be applied to one side only.
+_UNTRANSLATED_ALLOW_TAG = "allow-untranslated"
+
+# German function words for the shared-cell text scan (#772). Deliberately a
+# CONSERVATIVE subset of ``content_lang._DE_WORDS``: this scan is one-sided
+# (there is no competing EN signal to balance against, unlike
+# ``content_lang.detect``), so every entry that is also an English word or a
+# plausible English identifier reference — "die", "man", "so", "war", "es",
+# "als", "bei", "wie", "um", "zu", "mit", "auf", "wir", "sie" — is excluded.
+# Precision over recall: a missed German cell is an acceptable false negative
+# for an advisory warning; a flagged English cell erodes trust in the check.
+_UNTRANSLATED_DE_WORDS = frozenset(
+    {
+        "der",
+        "das",
+        "und",
+        "ist",
+        "sind",
+        "nicht",
+        "ein",
+        "eine",
+        "einen",
+        "einem",
+        "einer",
+        "eines",
+        "von",
+        "im",
+        "den",
+        "dem",
+        "des",
+        "sich",
+        "auch",
+        "oder",
+        "aber",
+        "wird",
+        "werden",
+        "kann",
+        "durch",
+        "dass",
+        "wenn",
+        "noch",
+        "nur",
+        "hier",
+        "diese",
+        "dieser",
+        "dieses",
+    }
+)
+# An umlaut/eszett is a near-certain German marker on its own (mirrors
+# ``content_lang._UMLAUT_RE``).
+_UNTRANSLATED_UMLAUT_RE = re.compile(r"[äöüÄÖÜß]")
+_UNTRANSLATED_WORD_RE = re.compile(r"[a-zA-ZäöüÄÖÜß]+")
+# Minimum function-word hits (total, not distinct) before umlaut-free text
+# counts as German — a single hit ("MIT license" lowercasing to "mit" would
+# have been one, "den" as the English noun is one) must never fire alone.
+_UNTRANSLATED_MIN_DE_HITS = 2
+
+
+def _python_comments_and_strings(source: str) -> str:
+    """Comment and string-literal text of a Python cell body, joined.
+
+    Identifiers and keywords are English by construction, so scanning whole
+    bodies would flag every cell — only comments and string literals can
+    carry natural language (#772). Uses :mod:`tokenize`; on a tokenize error
+    (half-finished stubs, magics) the tokens collected up to that point are
+    kept — a partial scan is fine for an advisory heuristic.
+    """
+    parts: list[str] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                parts.append(tok.string.lstrip("#"))
+            elif tok.type in (tokenize.STRING, tokenize.FSTRING_MIDDLE):
+                parts.append(tok.string)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return " ".join(parts)
+
+
+def _line_scan_comments_and_strings(source: str, comment_token: str) -> str:
+    """Line-based comment/string extraction for non-``#``-token languages.
+
+    A deliberately simple single-line scanner: tracks quote state so a
+    ``comment_token`` inside a string literal does not start a comment, and
+    collects completed single-line string literals. Multi-line strings and
+    block comments are out of scope — advisory heuristic, not a parser.
+    """
+    parts: list[str] = []
+    for line in source.splitlines():
+        quote: str | None = None
+        literal: list[str] = []
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if quote is not None:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    parts.append("".join(literal))
+                    literal = []
+                    quote = None
+                else:
+                    literal.append(ch)
+            elif line.startswith(comment_token, i):
+                parts.append(line[i + len(comment_token) :])
+                break
+            elif ch in "\"'":
+                quote = ch
+            i += 1
+    return " ".join(parts)
+
+
+def _looks_german(text: str) -> bool:
+    """Whether comment/string text carries a German signal (#772).
+
+    Umlaut/eszett presence, or at least ``_UNTRANSLATED_MIN_DE_HITS`` German
+    function-word hits. The method the corpus measurement used (120 German
+    cells across 730 decks, 0 false positives on sampled hits).
+    """
+    if _UNTRANSLATED_UMLAUT_RE.search(text):
+        return True
+    words = [w.lower() for w in _UNTRANSLATED_WORD_RE.findall(text)]
+    hits = sum(1 for w in words if w in _UNTRANSLATED_DE_WORDS)
+    return hits >= _UNTRANSLATED_MIN_DE_HITS
+
+
+def _check_split_untranslated_text(de_path: Path, en_path: Path) -> list[Finding]:
+    """Flag German text in the shared code cells of a split pair (#772).
+
+    A shared (no-``lang``) code cell is emitted verbatim into BOTH language
+    outputs, so ``# Das ist ein Kommentar.`` or ``print("Der Wert ...")``
+    sitting in one leaks German into the English deck. Worse, once such a
+    cell is banked as ``shared`` trust (``sync record`` /
+    ``record_neutral``), a later one-sided fix frames
+    ``propagate_shared_edit`` — a mechanical byte copy that would overwrite
+    the German half with English. Corpus measurement (730 decks): German in
+    0.92% of shared code cells — rare enough to warn on, real enough to
+    matter.
+
+    Scans comments and string literals only (identifiers/keywords are
+    English by construction), on the DE side of the pair: shared cells are
+    byte-identical across the halves — when they are not,
+    :func:`_check_shared_cell_parity` already errors — so scanning one side
+    suffices and reporting stays deduplicated. Severity is ``warning``, not
+    ``error``: the corpus carries pre-existing German shared cells, and the
+    split-pair family deliberately does not hard-fail CI on committed state.
+    The per-cell ``allow-untranslated`` tag is the escape hatch for
+    intentional German (the DE<->EN dictionary example). English text in
+    shared cells is deliberately NOT flagged — measured at 7.5% of shared
+    code cells with legitimate cases (docstrings, string-lesson demo
+    strings), a detector for it would drown the signal.
+    """
+    findings: list[Finding] = []
+    comment_token = comment_token_for_path(de_path)
+
+    de_text = de_path.read_text(encoding="utf-8")
+    _, de_cells = split_raw_cells(de_text, comment_token)
+
+    for cell in de_cells:
+        meta = cell.metadata
+        if meta.cell_type != "code" or meta.is_j2 or not _is_shared(cell):
+            continue
+        if _UNTRANSLATED_ALLOW_TAG in meta.tags:
+            continue
+        scanned = (
+            _python_comments_and_strings(cell.body)
+            if comment_token == "#"
+            else _line_scan_comments_and_strings(cell.body, comment_token)
+        )
+        if scanned and _looks_german(scanned):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="pairing",
+                    file=str(de_path),
+                    line=cell.line_number,
+                    message=(
+                        f"shared code cell at line {cell.line_number} contains "
+                        f"German text in a comment or string — shared cells are "
+                        f"emitted verbatim into BOTH language outputs "
+                        f"(also in {en_path.name})"
+                    ),
+                    suggestion=(
+                        "Translate the text, or move it into lang-tagged cells. "
+                        "If the German content is intentional (e.g. a DE<->EN "
+                        "dictionary example), add 'allow-untranslated' to the "
+                        "cell's tags."
+                    ),
+                )
+            )
+    return findings
+
+
 def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
     """Cross-side tag-set parity — delegated to the sync engine's oracle (Q4).
 
@@ -2251,6 +2451,7 @@ def validate_file(
             pair = split_twin_pair(path)
             if pair is not None:
                 findings.extend(_check_shared_cell_parity(*pair))
+                findings.extend(_check_split_untranslated_text(*pair))
                 findings.extend(_check_split_tag_parity(*pair))
                 findings.extend(_check_split_slide_id_parity(*pair))
                 findings.extend(_check_split_companion_for_slide_parity(*pair))
@@ -2408,6 +2609,7 @@ def validate_files(
     if "pairing" in check_set:
         for de_path, en_path in _slide_files_to_split_pairs(slide_files):
             all_findings.extend(_check_shared_cell_parity(de_path, en_path))
+            all_findings.extend(_check_split_untranslated_text(de_path, en_path))
             all_findings.extend(_check_split_tag_parity(de_path, en_path))
             all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
             all_findings.extend(_check_split_companion_for_slide_parity(de_path, en_path))
@@ -2473,6 +2675,7 @@ def validate_course(
             if "pairing" in check_set:
                 for de_path, en_path in _slide_files_to_split_pairs(slide_files):
                     all_findings.extend(_check_shared_cell_parity(de_path, en_path))
+                    all_findings.extend(_check_split_untranslated_text(de_path, en_path))
                     all_findings.extend(_check_split_tag_parity(de_path, en_path))
                     all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
                     all_findings.extend(_check_split_companion_for_slide_parity(de_path, en_path))
