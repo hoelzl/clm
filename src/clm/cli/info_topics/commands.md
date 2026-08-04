@@ -1051,7 +1051,8 @@ byte-identical output tree.
 
 Idempotent: re-running is safe. A byte-identical duplicate in both locations
 drops the legacy copy; diverging copies are reported as a **conflict**, left
-untouched, and exit 1 — resolve by hand and re-run. Use `--dry-run` to preview.
+untouched, and exit 1 — resolve by hand and re-run. `--dry-run` previews and
+uses the same exit codes (1 = conflicts exist), so it is CI-able.
 
 After migrating, commit the moves. Unmigrated repos keep building exactly as
 before: a committed legacy render keeps `img/` as its render target until it

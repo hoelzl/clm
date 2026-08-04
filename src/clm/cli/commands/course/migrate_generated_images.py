@@ -58,6 +58,11 @@ def migrate_generated_images_cmd(root: Path, dry_run: bool) -> None:
     partial or completed migration is safe. Exits 1 when a conflict
     (diverging bytes in both locations) needs a human decision.
     """
+    # Resolve first: with the default ROOT of ``.`` a shallow relative source
+    # path can have too few parents for the topic-dir derivation (a raw
+    # IndexError, review finding M1), and the containment check below needs
+    # absolute paths on both sides.
+    root = root.resolve()
     moved: list[Path] = []
     deduped: list[Path] = []
     conflicts: list[Path] = []
@@ -68,6 +73,11 @@ def migrate_generated_images_cmd(root: Path, dry_run: bool) -> None:
         if is_ignored_dir_for_course(source.parent):
             continue
         topic_dir = source.parents[1]
+        # A source directly under ROOT derives ROOT's *parent* as its topic
+        # dir; the contract is "every topic below ROOT", so never reach
+        # outside it (review finding M2).
+        if topic_dir != root and root not in topic_dir.parents:
+            continue
         for ext in _RENDER_EXTENSIONS:
             # The exact computation ImageFile.legacy_img_path/generated_img_path
             # perform, so the moved names match what the build looks for.

@@ -13,11 +13,14 @@ migration is byte-identical in the output tree), sweep/registry recognition,
 and the data-URL inliner's source-tree fallback.
 """
 
+import os
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+DATA_DIR = Path(__file__).parent.parent / "test-data"
 
 from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
 from clm.core.course_files.image_file import ImageFile
@@ -100,7 +103,7 @@ class TestOneOutputNamespace:
         image = DuplicatedImageFile(
             course=MagicMock(), path=tmp_path / "img-generated" / "diagram.png", topic=topic
         )
-        assert image._output_relative_path == Path("img") / "diagram.png"
+        assert image.output_relative_path == Path("img") / "diagram.png"
 
     def test_duplicated_mode_output_keeps_plain_img_unchanged(self, tmp_path):
         topic = MagicMock()
@@ -110,7 +113,79 @@ class TestOneOutputNamespace:
         image = DuplicatedImageFile(
             course=MagicMock(), path=tmp_path / "img" / "photo.png", topic=topic
         )
-        assert image._output_relative_path == Path("img") / "photo.png"
+        assert image.output_relative_path == Path("img") / "photo.png"
+
+    def test_only_the_leading_component_collapses(self, tmp_path):
+        """Review L1: the render target is always topic-level. A hand-authored
+        file under a DEEPER directory that happens to be named img-generated
+        keeps its pre-#664 verbatim copy — collapsing it would silently move
+        the output and break references to it."""
+        topic = MagicMock()
+        topic.path = tmp_path
+        nested = tmp_path / "data" / "img-generated"
+        nested.mkdir(parents=True)
+        (nested / "x.png").write_bytes(b"x")
+        image = DuplicatedImageFile(course=MagicMock(), path=nested / "x.png", topic=topic)
+        assert image.output_relative_path == Path("data") / "img-generated" / "x.png"
+
+
+class TestProvenanceManifest:
+    """Review H1: the manifest must enumerate what the copy WRITES. Using the
+    raw relative path silently dropped every migrated render from
+    ``.clm-manifest.json`` — and the release pipeline copies by manifest, so
+    frozen cohorts would have shipped without a single generated diagram."""
+
+    @pytest.fixture
+    def migrated_course(self, course_1_spec, tmp_path):
+        import shutil
+
+        from clm.cli.commands.course.migrate_generated_images import (
+            migrate_generated_images_cmd,
+        )
+        from clm.core.course import Course
+
+        data_dir = tmp_path / "test-data"
+        shutil.copytree(DATA_DIR, data_dir)
+        from click.testing import CliRunner
+
+        result = CliRunner().invoke(migrate_generated_images_cmd, [str(data_dir)])
+        assert result.exit_code == 0, result.output
+        assert "2 moved" in result.output
+        return Course.from_spec(course_1_spec, data_dir, tmp_path / "output")
+
+    def test_migrated_renders_stay_in_the_manifest(self, migrated_course):
+        from clm.core.provenance_manifest import enumerate_expected_outputs
+
+        target = migrated_course.output_targets[0]
+        expected_paths = [str(p) for p, _r in enumerate_expected_outputs(migrated_course, target)]
+        assert not any("img-generated" in p for p in expected_paths), (
+            "the manifest must enumerate the COLLAPSED output paths — "
+            "the build never writes an img-generated/ directory to output"
+        )
+        diag_paths = [p for p in expected_paths if p.endswith("my_diag.png")]
+        assert diag_paths, "the migrated render must still be enumerated"
+        assert all(f"img{os.sep}my_diag.png" in p for p in diag_paths)
+
+    def test_a_migrated_course_loads_without_the_legacy_warning(self, migrated_course):
+        assert not [
+            w
+            for w in migrated_course.loading_warnings
+            if w["category"] == "legacy_img_render_target"
+        ]
+
+    def test_an_unmigrated_course_warns_once_per_load(self, course_1_spec, tmp_path):
+        """Review M3: the transitional rule needs a signal — a resurrected
+        legacy render silently flips the target back, and unmigrated repos
+        should be nudged toward the migration."""
+        from clm.core.course import Course
+
+        course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path / "out")
+        warnings = [
+            w for w in course.loading_warnings if w["category"] == "legacy_img_render_target"
+        ]
+        assert len(warnings) == 1
+        assert "migrate-generated-images" in warnings[0]["message"]
+        assert len(warnings[0]["details"]["sources"]) >= 2  # my_diag.pu + my_drawing.drawio
 
 
 class TestRegistryRecognition:

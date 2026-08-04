@@ -7,6 +7,7 @@ naming, is idempotent, drops byte-identical duplicates, refuses diverging
 conflicts with exit 1, honors ``--dry-run``, and skips ignored trees.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,40 @@ class TestMigration:
         assert result.exit_code == 0, result.output
         expected = sanitize_path((topic / "img-generated" / source.stem).with_suffix(".png"))
         assert expected.exists()
+
+    def test_running_from_inside_a_topic_works_with_the_default_root(self, runner, tmp_path):
+        """Review M1: with ROOT defaulting to ``.``, shallow relative source
+        paths used to crash on ``parents[1]``. Resolving ROOT makes running
+        from inside a topic directory both safe and useful."""
+        topic = _topic(tmp_path)
+        (topic / "img" / "diag.png").write_bytes(b"render")
+
+        cwd = Path.cwd()
+        os.chdir(topic)
+        try:
+            result = runner.invoke(migrate_generated_images_cmd, [])
+        finally:
+            os.chdir(cwd)
+
+        assert result.exit_code == 0, result.output
+        assert (topic / "img-generated" / "diag.png").exists()
+
+    def test_never_reaches_outside_the_given_root(self, runner, tmp_path):
+        """Review M2: a diagram source directly under ROOT derives ROOT's
+        parent as its topic dir — the contract is "every topic below ROOT",
+        so nothing outside ROOT may move."""
+        outside_img = tmp_path / "img"
+        outside_img.mkdir()
+        (outside_img / "loose.png").write_bytes(b"outside the root")
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        (inner / "loose.drawio").write_text("<mxfile/>", encoding="utf-8")
+
+        result = runner.invoke(migrate_generated_images_cmd, [str(inner)])
+
+        assert result.exit_code == 0, result.output
+        assert (outside_img / "loose.png").exists()
+        assert not (tmp_path / "img-generated").exists()
 
     def test_ignored_trees_are_skipped(self, runner, tmp_path):
         """A diagram source inside e.g. ``__pycache__``/``.venv`` must not

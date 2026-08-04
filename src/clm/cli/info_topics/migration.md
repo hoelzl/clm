@@ -29,7 +29,14 @@ keeps rendering there. To migrate a course repo:
 
 Expect a one-time cache invalidation on the next build (source paths feed the
 cache keys). New diagrams always render to `img-generated/`, so an unmigrated
-repo that adds one becomes mixed — harmless, but migrating once is tidier.
+repo that adds one becomes mixed — functional (both layouts are fully
+understood, including by the provenance manifest the release pipeline copies
+from), and every course load logs one summary warning naming the diagrams
+that still render to the legacy location, so the migration nudge is visible
+until it is done. The same warning is the signal for the reverse accident: a
+legacy render resurrected into a migrated repo (a merge from an old branch)
+silently flips that diagram's render target back until the file is removed
+or re-migrated.
 
 ## German text in a shared code cell now fails `clm validate` ({version})
 

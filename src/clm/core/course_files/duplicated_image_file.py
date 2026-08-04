@@ -114,7 +114,7 @@ class DuplicatedImageFile(CourseFile):
         return Concurrently(
             CopyFileOperation(
                 input_file=self,
-                output_file=self.output_dir(output_dir, lang) / self._output_relative_path,
+                output_file=self.output_dir(output_dir, lang) / self.output_relative_path,
             )
             for lang, _, _, output_dir in output_specs(
                 self.course,
@@ -126,17 +126,25 @@ class DuplicatedImageFile(CourseFile):
         )
 
     @property
-    def _output_relative_path(self) -> Path:
-        """The source-relative path with ``img-generated`` collapsed to ``img``.
+    def output_relative_path(self) -> Path:
+        """The source-relative path with a leading ``img-generated`` collapsed to ``img``.
 
         Both image directories share one output namespace (#664): slide
         references say ``img/...`` and must keep resolving after a source
         moves to ``img-generated/``, so the output tree only ever contains
-        ``img/``.
+        ``img/``. Public because the provenance manifest must enumerate the
+        SAME path the copy writes — using the raw ``relative_path`` there
+        silently dropped every migrated render from the manifest, and the
+        release pipeline copies by manifest (review finding H1).
+
+        Only the FIRST component collapses: the render target is always
+        topic-level, and a hand-authored file that happens to live under a
+        deeper directory named ``img-generated`` keeps its pre-#664 verbatim
+        copy (review finding L1).
         """
         from clm.infrastructure.utils.path_utils import GENERATED_IMG_DIR
 
         rel = self.relative_path
-        if GENERATED_IMG_DIR not in rel.parts:
-            return rel
-        return Path(*("img" if part == GENERATED_IMG_DIR else part for part in rel.parts))
+        if rel.parts and rel.parts[0] == GENERATED_IMG_DIR:
+            return Path("img", *rel.parts[1:])
+        return rel
