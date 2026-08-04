@@ -396,7 +396,12 @@ class TestValidatorDirectoryIntegration:
 
 
 class _StubBuildReporter:
-    """Minimal stand-in for ``BuildReporter`` to drive ``_run_stages`` lifecycle."""
+    """Minimal stand-in for ``BuildReporter`` to drive the build lifecycle.
+
+    ``start_stage`` is the tripwire: it is the first reporter call of the
+    worker-stage loop, made even for a stage with zero jobs, so reaching it
+    means the split-routing abort gate let the build proceed to workers.
+    """
 
     def __init__(self) -> None:
         self.errors: list = []
@@ -414,52 +419,113 @@ class _StubBuildReporter:
     def report_output_writes(self, _registry) -> None:
         self.output_writes_reported = True
 
+    def start_build(self, **_kwargs) -> None:
+        pass
+
+    def start_stage(self, stage_name, _num_jobs) -> None:
+        raise AssertionError(
+            f"build reached worker stage {stage_name!r} — the split-routing abort gate did not fire"
+        )
+
+    def mark_aborted(self, _exc) -> None:
+        pass
+
+    def mark_timed_out(self) -> None:
+        pass
+
     def finish_build(self):
         self.finished = True
+        return None
 
     def cleanup(self) -> None:
         self.cleaned = True
 
 
-class TestBuildRefuses:
-    def test_dual_format_loading_error_aborts_build_run_stages(self, tmp_path: Path) -> None:
-        """Phase 6: build refuses before workers run on dual-format conflict."""
-        from clm.cli.commands import build as build_module
+class _StubBackend:
+    """Never used before the abort gate; present only so the signature holds."""
 
-        # Construct a course whose loading already recorded a split-slide
-        # routing error (skip the on-disk slide setup; we just need a
-        # loading_errors entry of the right category).
-        course_root, _ = _scaffold_course(tmp_path)
-        (
-            course_root / "slides" / "module_010_demo" / "topic_010_phase6_demo" / "slides_intro.py"
-        ).write_text(BILINGUAL_DECK, encoding="utf-8")
+    output_write_registry = None
+
+
+def _build_config(tmp_path: Path):
+    from clm.cli.commands.build import BuildConfig
+
+    return BuildConfig(
+        spec_file=tmp_path / "spec.xml",
+        data_dir=tmp_path / "course",
+        output_dir=tmp_path / "out",
+        log_level=None,
+        cache_db_path=tmp_path / "cache.db",
+        jobs_db_path=tmp_path / "jobs.db",
+        ignore_cache=False,
+        clear_cache=False,
+        watch=False,
+        print_correlation_ids=False,
+        workers=None,
+        notebook_workers=None,
+        plantuml_workers=None,
+        drawio_workers=None,
+        notebook_image=None,
+        plantuml_image=None,
+        drawio_image=None,
+    )
+
+
+class TestBuildRefuses:
+    @pytest.mark.parametrize(
+        ("scenario", "category"),
+        [
+            ("dual-format", "split_slide_dual_format"),
+            ("half-pair", "split_slide_half_pair"),
+        ],
+    )
+    def test_split_routing_error_aborts_build_before_workers(
+        self, tmp_path: Path, scenario: str, category: str
+    ) -> None:
+        """Phase 6: the build refuses before any worker stage on a routing error.
+
+        Drives the real ``process_course_with_backend`` — the loading error
+        comes from actually scaffolding the broken tree, and the abort comes
+        from the production gate in ``_run_stages`` (issue #778: a previous
+        version of this test re-implemented the gate in its own body, so
+        deleting the production gate kept it green).
+        """
+        import asyncio
+
+        from clm.cli.commands.build import process_course_with_backend
+
+        course_root, topic_dir = _scaffold_course(tmp_path)
+        if scenario == "dual-format":
+            source = topic_dir / "slides_intro.py"
+            source.write_text(BILINGUAL_DECK, encoding="utf-8")
+            split_in_file(source)
+            # Bilingual file stays in place — both formats present.
+        else:
+            # Only the DE half — missing EN companion.
+            (topic_dir / "slides_intro.de.py").write_text("# %%\nx = 1\n", encoding="utf-8")
+
         course = _make_course(course_root, tmp_path)
-        course.loading_errors.append(
-            {
-                "category": "split_slide_dual_format",
-                "message": "Topic 'phase6_demo': dual-format",
-                "details": {},
-            }
+        assert any(e["category"] == category for e in course.loading_errors), (
+            "scenario scaffold no longer records the loading error this test is about"
         )
 
         reporter = _StubBuildReporter()
         with pytest.raises(SystemExit) as excinfo:
-            build_module._report_loading_issues(course, reporter)
-            # Re-implement the abort gate to keep the test focused on the
-            # contract: any split_slide_* category aborts.
-            split_routing_categories = {
-                "split_slide_dual_format",
-                "split_slide_half_pair",
-            }
-            if any(e.get("category") in split_routing_categories for e in course.loading_errors):
-                reporter.finish_build()
-                reporter.cleanup()
-                raise SystemExit("Build failed: split-slide routing error")
+            asyncio.run(
+                process_course_with_backend(
+                    course=course,
+                    root_dirs=[tmp_path / "out"],
+                    backend=_StubBackend(),
+                    config=_build_config(tmp_path),
+                    start_time=0.0,
+                    build_reporter=reporter,
+                )
+            )
 
         assert "split-slide routing error" in str(excinfo.value)
         assert reporter.finished is True
         assert reporter.cleaned is True
-        assert any(e.category == "split_slide_dual_format" for e in reporter.errors)
+        assert any(e.category == category for e in reporter.errors)
 
 
 # ---------------------------------------------------------------------------
