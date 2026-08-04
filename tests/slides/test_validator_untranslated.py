@@ -4,8 +4,9 @@ A shared (no-``lang``) code cell is emitted verbatim into both language
 outputs, so German comments or strings in one leak into the English deck —
 and once banked as ``shared`` trust, a one-sided fix frames the mechanical
 ``propagate_shared_edit`` overwrite. The check scans comments and string
-literals only (identifiers and keywords are English by construction), warns
-on the DE side of the pair, and honors the per-cell ``allow-untranslated``
+literals only (identifiers and keywords are English by construction), errors
+on the DE side of the pair (#782 promoted it from warning once the corpus
+cleanup reached 0 findings), and honors the per-cell ``allow-untranslated``
 escape hatch (the DE<->EN dictionary example).
 """
 
@@ -74,7 +75,7 @@ class TestGermanDetection:
         de, en = _write_pair(tmp_path, "# %%\n# Das ist ein Kommentar.\nx = 1\n")
         findings = _untranslated_findings(de, en)
         assert len(findings) == 1
-        assert findings[0].severity == "warning"
+        assert findings[0].severity == "error"
         assert findings[0].category == "pairing"
         assert findings[0].file == str(de)
         assert "allow-untranslated" in findings[0].suggestion
@@ -168,11 +169,11 @@ class TestAllowUntranslatedTag:
         '# %% tags=["keep", "allow-untranslated"]\nwoerter = {"Tür": "door", "Haus": "house"}\n'
     )
 
-    def test_tag_suppresses_the_warning(self, tmp_path: Path) -> None:
+    def test_tag_suppresses_the_finding(self, tmp_path: Path) -> None:
         de, en = _write_pair(tmp_path, self.DICTIONARY_CELL)
         assert _untranslated_findings(de, en) == []
 
-    def test_without_tag_the_same_cell_warns(self, tmp_path: Path) -> None:
+    def test_without_tag_the_same_cell_errors(self, tmp_path: Path) -> None:
         de, en = _write_pair(tmp_path, self.DICTIONARY_CELL.replace(', "allow-untranslated"', ""))
         assert len(_untranslated_findings(de, en)) == 1
 

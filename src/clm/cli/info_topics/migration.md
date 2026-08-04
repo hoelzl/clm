@@ -2,6 +2,29 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## German text in a shared code cell now fails `clm validate` ({version})
+
+**Breaking only for a repo whose shared (no-`lang`) code cells still carry
+German comments or strings.** The maintained course repos were cleaned first
+(PythonCourses: 0 findings across all 659 split pairs), so none regresses.
+
+The shared-cell German-text check (issue #772) was born a `warning` while the
+corpus carried pre-existing German shared cells. With the cleanup complete the
+boundary is categorical, and issue #782 promoted the finding to `error`: a
+default `clm validate` run (and any `--fail-on error` gate) now exits non-zero
+on it instead of advising.
+
+To migrate a repo that still has findings, for each flagged cell either:
+
+- **translate** the German text (or move it into `lang="de"` / `lang="en"`
+  cell pairs), or
+- **declare it intentional** by adding `allow-untranslated` to the cell's tags
+  — the per-cell escape hatch for content where German is the point (a DE↔EN
+  dictionary example, regex lessons over German data).
+
+The check itself is unchanged: shared **code** cells only, comments and string
+literals only, reported once per offending cell on the `.de.py` side.
+
 ## A course repo can no longer choose which executable CLM runs ({version})
 
 **Breaking only for a course repo that sets an external-tool path in its own

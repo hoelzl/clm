@@ -92,10 +92,12 @@ _SIDES: tuple[Lang, Lang] = ("de", "en")
 #: confirmation somebody actually made.
 #:
 #: It deliberately does **not** claim "no translation divergence is possible".
-#: That is false for a measurable minority: 0.6% of the corpus's neutral members
-#: carry German in a comment or a string literal (``# Das ist ein Kommentar.``),
-#: sitting untranslated in the English deck. The engine compared the halves; it
-#: did not read them.
+#: That was measurably false at the time (#771: 0.6% of the corpus's neutral
+#: members carried German in a comment or a string literal, sitting
+#: untranslated in the English deck); the #772/#782 validate detector now
+#: polices that class (see :data:`NEUTRAL_KINDS`), but the detail's claim
+#: stays observational either way: the engine compared the halves; it did not
+#: read them.
 _NEUTRAL_DETAIL = (
     "declared language-neutral and byte-identical on both halves — recorded "
     "without asking (the halves were compared, not read)"
@@ -468,16 +470,21 @@ COSMETIC_SIDECELL_FIELDS = frozenset({"index", "line_number"})
 #: exclusion is the maintainer's explicit decision and costs 282 corpus
 #: members that stay real questions.
 #:
-#: **This is a base-rate trade, not a categorical guarantee.** §6.2.1 justified
-#: the boundary as "code and j2 carry no natural language". Measured, that is
-#: false for **~0.6% of neutral members** — 83 of 13,049, across 41 of 730 decks
-#: — which carry German in comments or string literals (``# Das ist ein
-#: Kommentar.``) and are therefore untranslated cells sitting in the English
-#: deck. The kind does not change what the engine can *see*; it only changes how
-#: often prose turns up. What makes this boundary defensible is the base rate
-#: (0.6% vs an assumed ~100% for markdown), not the categorical claim. A
-#: ``validate`` rule for natural-language content in a ``shared`` cell is the
-#: detector it would need to be categorical.
+#: **The code/j2 boundary is categorical, and policed.** §6.2.1 justifies the
+#: boundary as "code and j2 carry no natural language". Measured (#771), that
+#: was false for ~0.6% of neutral members — German in comments or string
+#: literals (``# Das ist ein Kommentar.``), i.e. untranslated cells sitting in
+#: the English deck — so for a while this was a base-rate trade, not a
+#: guarantee. It no longer is: ``validate``'s
+#: ``_check_split_untranslated_text`` (#772) errors on German text in a shared
+#: code cell (severity promoted after the corpus cleanup reached 0 findings,
+#: #782), with the per-cell ``allow-untranslated`` tag as the explicit escape
+#: hatch. Banking itself is NOT blocked — ``record`` gates on the structural
+#: verify only, which deliberately never sees this heuristic — so a German
+#: shared cell can still be banked before validation runs. What the detector
+#: guarantees is that unmarked German cannot *survive* a ``clm validate``
+#: gate (pre-commit/CI, where a repo wires one) unnoticed: banked-but-flagged
+#: trust gets fixed or declared, it no longer accumulates silently.
 NEUTRAL_KINDS = frozenset({"code", "j2"})
 
 

@@ -1560,14 +1560,20 @@ def _check_split_untranslated_text(de_path: Path, en_path: Path) -> list[Finding
     English by construction), on the DE side of the pair: shared cells are
     byte-identical across the halves — when they are not,
     :func:`_check_shared_cell_parity` already errors — so scanning one side
-    suffices and reporting stays deduplicated. Severity is ``warning``, not
-    ``error``: the corpus carries pre-existing German shared cells, and the
-    split-pair family deliberately does not hard-fail CI on committed state.
-    The per-cell ``allow-untranslated`` tag is the escape hatch for
-    intentional German (the DE<->EN dictionary example). English text in
-    shared cells is deliberately NOT flagged — measured at 7.5% of shared
-    code cells with legitimate cases (docstrings, string-lesson demo
-    strings), a detector for it would drown the signal.
+    suffices and reporting stays deduplicated. Severity is ``error`` (#782):
+    the check was born a ``warning`` while the corpus carried pre-existing
+    German shared cells, but the cleanup finished at 0 findings across all
+    659 split pairs, so the boundary is categorical — new German in a
+    shared cell fails validation instead of advising. This makes the check
+    the one deliberate exception to the gate⊇validate containment property
+    (a validate error the write gate never sees — see
+    ``test_gate_validate_containment.py``): the gate is a structural trust
+    oracle and must not adopt a content heuristic. The per-cell
+    ``allow-untranslated`` tag is the escape hatch for intentional German
+    (the DE<->EN dictionary example). English text in shared cells is
+    deliberately NOT flagged — measured at 7.5% of shared code cells with
+    legitimate cases (docstrings, string-lesson demo strings), a detector
+    for it would drown the signal.
     """
     findings: list[Finding] = []
     comment_token = comment_token_for_path(de_path)
@@ -1589,7 +1595,7 @@ def _check_split_untranslated_text(de_path: Path, en_path: Path) -> list[Finding
         if scanned and _looks_german(scanned):
             findings.append(
                 Finding(
-                    severity="warning",
+                    severity="error",
                     category="pairing",
                     file=str(de_path),
                     line=cell.line_number,
