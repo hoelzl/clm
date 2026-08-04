@@ -1154,7 +1154,10 @@ class Course(NotebookMixin):
             self.dir_groups.append(DirGroup.from_spec(dictionary_spec, self))
 
     def _add_source_output_files(self):
+        from clm.core.course_files.image_file import ImageFile
+
         logger.debug("Adding source output files.")
+        legacy_targets: list[Path] = []
         for topic in self.topics:
             for file in topic.files:
                 for new_file in file.source_outputs:
@@ -1170,6 +1173,30 @@ class Course(NotebookMixin):
                     if mark is not None:
                         mark()
                     logger.debug(f"Added source output file: {new_file}")
+                if isinstance(file, ImageFile) and file.img_path == file.legacy_img_path:
+                    legacy_targets.append(file.path)
+        if legacy_targets:
+            # #664 review finding M3: the transitional rule means a legacy
+            # render resurrected into a MIGRATED repo (a merge from an old
+            # branch, a stray copy) silently flips the render target back —
+            # with the img-generated/ twin now a second, byte-identical writer
+            # that DEDUPs without a signal. One summary line per build is the
+            # signal, and doubles as the migration nudge for unmigrated repos.
+            logger.warning(
+                f"{len(legacy_targets)} diagram(s) still render to the legacy "
+                f"<topic>/img/ location — run `clm course migrate-generated-images` "
+                f"to move them to img-generated/ (#664). First: {legacy_targets[0]}"
+            )
+            self.loading_warnings.append(
+                {
+                    "category": "legacy_img_render_target",
+                    "message": (
+                        f"{len(legacy_targets)} diagram(s) render to the legacy "
+                        "<topic>/img/ location — run `clm course migrate-generated-images`"
+                    ),
+                    "details": {"sources": [str(p) for p in legacy_targets]},
+                }
+            )
 
     def _collect_images(self):
         """Collect all images from course files into the image registry.

@@ -9,7 +9,7 @@ from base64 import b64decode
 from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha3_224
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, cast
 
@@ -1546,15 +1546,24 @@ class NotebookProcessor:
             if image_url.startswith(("data:", "http:", "https:")):
                 return match_tag
 
-            # Try reading from filesystem first
+            # Try reading from filesystem first. References always say
+            # ``img/...``, but since #664 a generated render lives in the
+            # build-owned ``img-generated/`` sibling — same output location,
+            # different source location — so a miss under ``img/`` retries
+            # there before giving up on the filesystem.
             image_data: bytes | None = None
             if source_dir:
-                image_path = source_dir / image_url
-                if image_path.is_file():
-                    try:
-                        image_data = image_path.read_bytes()
-                    except OSError:
-                        pass
+                candidates = [source_dir / image_url]
+                url_path = PurePosixPath(image_url)
+                if url_path.parts and url_path.parts[0] == "img":
+                    candidates.append(source_dir / "img-generated" / Path(*url_path.parts[1:]))
+                for image_path in candidates:
+                    if image_path.is_file():
+                        try:
+                            image_data = image_path.read_bytes()
+                            break
+                        except OSError:
+                            pass
 
             # Fall back to other_files payload
             if image_data is None and image_url in payload.other_files:

@@ -30,6 +30,8 @@ from clm.slides.sync_diff import (
     diff_deck,
 )
 
+from .corpus_revision import revision_context
+
 _BUNDLED_CORPUS = Path(__file__).parent.parent / "data" / "doc_corpus"
 
 # Phase 1 measured 33 parse observations over 644 parsed pairs; carried
@@ -120,9 +122,12 @@ class TestRealCorpusSelfDiff:
             for item in diff.items:
                 if item.action not in MECHANICAL_ACTIONS | FRAMED_ACTIONS:
                     unregistered.add(item.action)
-        assert parsed >= _REAL_PARSED_FLOOR
-        assert not unregistered, f"actions outside the closed registry: {unregistered}"
+        # #682: every scale-dependent verdict names the corpus revision it ran
+        # against, so a breach is interpretable (CLM regression vs corpus drift).
+        context = revision_context(_real)
+        assert parsed >= _REAL_PARSED_FLOOR, f"only {parsed} pairs parsed{context}"
+        assert not unregistered, f"actions outside the closed registry: {unregistered}{context}"
         assert total_items <= _REAL_SELF_DIFF_ITEM_CEILING, (
             f"{total_items} self-diff items exceed the noise ceiling "
-            f"{_REAL_SELF_DIFF_ITEM_CEILING}: {noisy[:10]}…"
+            f"{_REAL_SELF_DIFF_ITEM_CEILING}: {noisy[:10]}…{context}"
         )

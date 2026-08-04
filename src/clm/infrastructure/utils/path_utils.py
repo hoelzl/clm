@@ -166,6 +166,16 @@ IMG_FILE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg"})
 
 IMG_DATA_FOLDERS = frozenset({"imgdata"})
 
+# The two topic-level image directories (#664). ``img/`` is hand-authored and
+# never written by the build; ``img-generated/`` holds the DrawIO/PlantUML
+# renders and is only ever written by the build. Both collapse to ``img/`` in
+# every output tree, so slide references (``<img src="img/x.png">``) never
+# change. ``img/`` remains a *legal* render target only for unmigrated repos
+# (a committed legacy render keeps its location until
+# ``clm course migrate-generated-images`` moves it).
+GENERATED_IMG_DIR = "img-generated"
+IMG_DIRS = frozenset({"img", GENERATED_IMG_DIR})
+
 IMG_SOURCE_FILE_EXTENSIONS = frozenset({".pu", ".drawio", ".psd", ".xfc"})
 
 SUPPORTED_PROG_LANG_EXTENSIONS = frozenset(
