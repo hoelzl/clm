@@ -310,7 +310,7 @@ class TestContainment:
         """The containment property is only meaningful while validate has errors to contain.
 
         If every split-pair check became a warning, the parametrized test above would
-        pass on all twelve shapes without gating anything.
+        pass on every shape without gating anything.
         """
         error_shapes = [n for n, sev in VALIDATE_SEVERITY.items() if sev == "error"]
         assert error_shapes, "no validate-error shapes left — containment is now vacuous"
@@ -409,15 +409,24 @@ class TestDeliberateNonContainment:
         assert "German text" in findings[0].message
         assert gate_projected_pair(de, en, "#") == []
 
-    def test_the_exemption_set_names_real_error_shapes(self) -> None:
+    def test_the_exemption_set_names_real_error_shapes(self, pair_factory) -> None:
         """A stale exemption must fail loudly, not exempt vacuously.
 
         An entry that is no longer an error shape (or no longer a shape at all)
         would silently widen the containment claim back without anyone deciding
-        that.
+        that. And an entry the gate actually *refuses* would be a vacuous
+        exemption: the parametrized containment test skips exempt shapes, so
+        without the gate-emptiness pin here nothing anywhere would state what
+        the gate does with them.
         """
         assert CONTAINMENT_EXEMPT <= set(CORRUPTIONS)
         assert all(VALIDATE_SEVERITY[n] == "error" for n in CONTAINMENT_EXEMPT)
+        for name in sorted(CONTAINMENT_EXEMPT):
+            de, en = pair_factory(name)
+            assert gate_projected_pair(de, en, "#") == [], (
+                f"{name}: the gate refuses this pair, so exempting it from "
+                f"containment is vacuous — remove it from CONTAINMENT_EXEMPT"
+            )
 
 
 class TestPromotedViolationsAreLabelledBlocking:

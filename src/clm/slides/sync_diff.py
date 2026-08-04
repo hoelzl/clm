@@ -92,10 +92,12 @@ _SIDES: tuple[Lang, Lang] = ("de", "en")
 #: confirmation somebody actually made.
 #:
 #: It deliberately does **not** claim "no translation divergence is possible".
-#: That is false for a measurable minority: 0.6% of the corpus's neutral members
-#: carry German in a comment or a string literal (``# Das ist ein Kommentar.``),
-#: sitting untranslated in the English deck. The engine compared the halves; it
-#: did not read them.
+#: That was measurably false at the time (#771: 0.6% of the corpus's neutral
+#: members carried German in a comment or a string literal, sitting
+#: untranslated in the English deck); the #772/#782 validate detector now
+#: polices that class (see :data:`NEUTRAL_KINDS`), but the detail's claim
+#: stays observational either way: the engine compared the halves; it did not
+#: read them.
 _NEUTRAL_DETAIL = (
     "declared language-neutral and byte-identical on both halves — recorded "
     "without asking (the halves were compared, not read)"
@@ -477,9 +479,12 @@ COSMETIC_SIDECELL_FIELDS = frozenset({"index", "line_number"})
 #: ``_check_split_untranslated_text`` (#772) errors on German text in a shared
 #: code cell (severity promoted after the corpus cleanup reached 0 findings,
 #: #782), with the per-cell ``allow-untranslated`` tag as the explicit escape
-#: hatch. Banked ``shared`` trust can therefore no longer *silently* contain
-#: unmarked German — what slips past ``record_neutral`` here is caught by the
-#: validation gate, or was deliberately declared.
+#: hatch. Banking itself is NOT blocked — ``record`` gates on the structural
+#: verify only, which deliberately never sees this heuristic — so a German
+#: shared cell can still be banked before validation runs. What the detector
+#: guarantees is that unmarked German cannot *survive* a ``clm validate``
+#: gate (pre-commit/CI, where a repo wires one) unnoticed: banked-but-flagged
+#: trust gets fixed or declared, it no longer accumulates silently.
 NEUTRAL_KINDS = frozenset({"code", "j2"})
 
 

@@ -6,8 +6,11 @@
   per-cell `allow-untranslated` tag remains the escape hatch for cells where
   German is the point (a DE↔EN dictionary example, regex lessons over German
   data). This retires the #771 base-rate caveat on `record_neutral`'s
-  `NEUTRAL_KINDS`: banked `shared` trust can no longer silently contain
-  unmarked German — it failed validation first, or was deliberately declared.
+  `NEUTRAL_KINDS`: unmarked German in a shared code cell can no longer
+  survive a `clm validate` gate unnoticed, so banked `shared` trust stops
+  accumulating it silently (banking itself stays ungated — `sync record`
+  runs only the structural verify, which deliberately never sees this
+  content heuristic).
   The check is also the first declared exemption to the gate⊇validate
   containment property: a validate error the sync write gate deliberately
   never sees, because the halves agree byte-for-byte (structurally valid
