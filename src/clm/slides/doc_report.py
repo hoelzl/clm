@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 
 from clm.slides import doc_apply, doc_ledger
+from clm.slides.base_recovery import BASE_DIFF_ACTIONS, MemberBaseDiff, batch_observation
 from clm.slides.doc_lenses import LoadedBundle, project
 from clm.slides.sync_diff import DeckDiff, diff_outcome
 
@@ -81,7 +82,9 @@ def diff_bundle_at_ref(bundle: LoadedBundle, ref: str) -> tuple[DeckDiff, list[s
     return diff_outcome(bundle.outcome, base), base_refusal
 
 
-def item_payloads(diff: DeckDiff) -> list[dict]:
+def item_payloads(
+    diff: DeckDiff, *, base_diffs: dict[str, MemberBaseDiff] | None = None
+) -> list[dict]:
     """The §6.4 item rows, each carrying its vocabulary and how it resolves.
 
     ``answers`` is present on **every** item so consumers can filter with
@@ -92,12 +95,28 @@ def item_payloads(diff: DeckDiff) -> list[dict]:
     framed row it means "blocked — repair the files yourself". Schema 4 adds
     ``resolution`` (``mechanical`` / ``decision`` / ``manual``) so the two
     cases are distinguishable without a hardcoded action list.
+
+    ``base_diffs`` is #773's recovery result (schema 5, additive): a
+    recovered ``verify_translation`` / ``translate_edit`` row additionally
+    carries ``base_ref`` and per-side ``de_diff`` / ``en_diff``, so the
+    reader judges the hunks instead of re-diffing two full cells by eye. An
+    unrecovered row ships exactly as before — absence is the honest degrade.
     """
     items = []
     for item in diff.items:
         payload = item.payload()
         payload["answers"] = list(doc_apply.item_answers(item))
         payload["resolution"] = doc_apply.item_resolution(item)
+        recovered = base_diffs.get(item.key) if base_diffs else None
+        # The action guard matters: keys are shared across a member's aspect
+        # rows (e.g. a conflict_tags beside a verify_translation), and the
+        # recovery is a claim about the recovered actions only.
+        if recovered is not None and item.action in BASE_DIFF_ACTIONS:
+            payload["base_ref"] = recovered.base_ref
+            if recovered.de_diff is not None:
+                payload["de_diff"] = recovered.de_diff
+            if recovered.en_diff is not None:
+                payload["en_diff"] = recovered.en_diff
         items.append(payload)
     return items
 
@@ -190,16 +209,34 @@ def report_id_for(bundle: LoadedBundle, ledger: doc_ledger.TopicLedger | None = 
 
 
 def pair_payload(
-    bundle: LoadedBundle, diff: DeckDiff, *, ledger: doc_ledger.TopicLedger | None = None
+    bundle: LoadedBundle,
+    diff: DeckDiff,
+    *,
+    ledger: doc_ledger.TopicLedger | None = None,
+    base_diffs: dict[str, MemberBaseDiff] | None = None,
 ) -> dict:
-    """The full schema-4 report payload for one pair.
+    """The full schema-5 report payload for one pair.
 
     ``ledger`` is the already-loaded topic ledger when the caller has one
     (:func:`diff_bundle_with_ledger`): the token needs the same section the
     baseline came from, and re-loading it per deck is pure waste on a sweep.
+
+    ``base_diffs`` comes from :func:`clm.slides.base_recovery.
+    recover_base_diffs` — the caller runs the recovery because only it knows
+    the right candidate refs (the ``--since`` view diffs against a *named*
+    commit; the ledger view walks history). Passed through to the item rows,
+    and the deck-level ``verify_translation_batch`` observation is appended
+    when every such row recovered the same base.
     """
     payload = diff.to_payload()
-    payload["items"] = item_payloads(diff)
+    payload["items"] = item_payloads(diff, base_diffs=base_diffs)
+    if base_diffs:
+        batch = batch_observation(diff, base_diffs)
+        if batch is not None:
+            payload["observations"] = [
+                *payload["observations"],
+                {"kind": batch.kind, "member": None, "side": batch.side, "detail": batch.detail},
+            ]
     payload["de_path"] = str(bundle.de_path)
     payload["en_path"] = str(bundle.en_path)
     # The deck's trust identity, spelled out: `voiceover_x` and `slides_x` are

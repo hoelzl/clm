@@ -16,7 +16,7 @@ from pathlib import Path
 
 from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
 
-__all__ = ["bundle_texts_at_ref", "git_ref_text"]
+__all__ = ["bundle_texts_at_ref", "git_ref_text", "recent_change_refs"]
 
 
 def _git_capture(cwd: Path, *args: str) -> str | None:
@@ -94,6 +94,37 @@ def _repo_root(path: Path) -> Path | None:
 def _text_at_ref(root: Path, path: Path, ref: str) -> str | None:
     rel = path.resolve().relative_to(root.resolve()).as_posix()
     return _git_capture(root, "show", f"{ref}:{rel}")
+
+
+def recent_change_refs(de_path: Path, en_path: Path, *, cap: int) -> list[str]:
+    """Newest-first commits that changed any file of the ≤4-file bundle, ≤ ``cap``.
+
+    The candidate list for the #773 base-recovery walk: between two of these
+    commits the bundle's bytes are unchanged, so every distinct historical
+    state of the bundle is "the state at" exactly one of them — checking only
+    them visits each state once and skips the no-change commits in between.
+    Companion candidates use the same subdir-then-sibling locations as
+    :func:`bundle_texts_at_ref`. Empty when git is unavailable or nothing is
+    committed. Renames are not followed (``git log --follow`` takes a single
+    pathspec, and the walk spans up to six); a deck renamed since the base
+    state was committed degrades to no candidates, which the caller treats as
+    "base not recoverable" — honest, never wrong.
+    """
+    root = _repo_root(de_path)
+    if root is None:
+        return []
+    paths: list[str] = []
+    for deck in (de_path, en_path):
+        name = companion_name(deck)
+        for candidate in (deck, deck.parent / COMPANION_SUBDIR / name, deck.with_name(name)):
+            try:
+                rel = candidate.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                continue
+            if rel not in paths:
+                paths.append(rel)
+    out = _git_capture(root, "log", f"-{cap}", "--format=%H", "--", *paths)
+    return out.split() if out else []
 
 
 def bundle_texts_at_ref(

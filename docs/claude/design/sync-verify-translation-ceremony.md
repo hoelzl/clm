@@ -1,8 +1,13 @@
 # verify_translation ceremony — diff-first framing (design note for #773)
 
-**Status: proposed** (no engine change yet). Written 2026-08-04 against the
-v3 engine at `sync_diff.py` / `doc_report.py` / `doc_ledger.py` as of CLM
-1.23.1. Companion measurement: `scripts/measure_sync_ceremony.py`.
+**Status: phase 1 implemented** (2026-08-04, wire schema 5 —
+`clm/slides/base_recovery.py`, §13 row in the main design note). The §7
+questions were decided by the maintainer the same day; the decisions are
+recorded inline in §7. Phases 2–4 of §6 remain open. Originally written
+2026-08-04 against the v3 engine at `sync_diff.py` / `doc_report.py` /
+`doc_ledger.py` as of CLM 1.23.1. Companion measurement:
+`scripts/measure_sync_ceremony.py` (its `--recovery` mode now measures the
+live recovery rate for step 2 of §6).
 
 ## 1. The problem, measured
 
@@ -179,12 +184,20 @@ shape annotations inform a human/agent judgement; only an explicit per-row
 4. **D stays unbuilt** unless post-phase-1 measurement shows answer-writing
    as the residual cost.
 
-## 7. Open questions for the maintainer
+## 7. Open questions for the maintainer — decided 2026-08-04
 
 - Is `-n 30` an acceptable walk cap, or should it be time-bound
   (`--since`-style) to match course-repo commit cadence?
+  **Decided: `-n 30`, commit-count-bound.** A count cap bounds the *work*
+  (parses) directly, which a time bound does not; revisit only if the
+  `--recovery` measurement shows a meaningful miss rate.
 - Should `translate_edit` rows get the same `*_diff` fields in phase 1
   (same recovery, near-zero marginal cost), or stay minimal until the
   verify_translation value is proven?
+  **Decided: they ride along.** The walk is per deck and already paid; the
+  unmoved side's `""` diff is itself informative (byte-identity to base).
 - Where should diffs render in the human (non-`--json`) report — inline
   hunks, or a `--diffs` flag?
+  **Decided: inline hunks, no flag.** Reading two full cells is the measured
+  cost; a diff hidden behind a flag would not collapse it. Hunks are compact
+  (2 context lines) and only non-empty sides print.

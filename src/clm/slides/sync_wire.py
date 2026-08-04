@@ -20,6 +20,15 @@ Schema 4 (Q2/Q3 of ``docs/claude/sync-v3-adversarial-review.md``) is additive:
 * ``deck_key`` / ``ledger`` — the deck's ledger identity, in every payload, so
   two CLI spellings of one deck are visibly one deck.
 
+Schema 5 (#773 phase 1) is additive, on the **report** side only: framed
+``verify_translation`` / ``translate_edit`` items may carry ``base_ref`` plus
+per-side ``de_diff`` / ``en_diff`` — unified diffs against the newest commit
+whose bytes the ledger fingerprints recognize (:mod:`clm.slides.base_recovery`)
+— and a deck whose ``verify_translation`` rows all share one recovered base
+emits a ``verify_translation_batch`` observation. The fields are optional
+(recovery degrades to absence); the decision-document shape is unchanged, so
+schema-4 documents remain first-class input, not a compatibility case.
+
 Rollout: a decision document with **no** ``report_id`` is accepted with a
 warning naming the field (agents and downstream sweep drivers keep working);
 one whose token does not match is refused wholesale — exit 2, nothing written.
@@ -37,12 +46,14 @@ __all__ = [
 ]
 
 #: The version every report / apply / record payload announces.
-WIRE_SCHEMA = 4
+WIRE_SCHEMA = 5
 
 #: Decision-document schemas ``apply`` still reads. Schema 3 documents carry no
 #: ``report_id`` and no ``action`` discriminator; they remain valid input for
 #: one release so that a clm upgrade does not break a driver mid-flight.
-ACCEPTED_DECISION_SCHEMAS = (3, 4)
+#: Schema 4 and 5 decision documents are byte-identical (5 is report-side
+#: additive), so both stay accepted indefinitely.
+ACCEPTED_DECISION_SCHEMAS = (3, 4, 5)
 
 #: Flip to ``True`` in the release that drops schema 3 (see the module doc).
 REQUIRE_REPORT_ID = False
