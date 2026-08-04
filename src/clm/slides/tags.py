@@ -25,6 +25,10 @@ end-workshop Marks the first cell after a workshop, ending its scope (any cell t
 private      Cell visible only in private documents
 del          Cell deleted from all outputs
 nodataurl    Prevents data-URL inlining for images
+allow-untranslated  Per-cell escape hatch for the shared-cell natural-language
+             check (#772): declares that German text in a shared (no-``lang``)
+             code cell is intentional (e.g. a DE<->EN dictionary example).
+             Validate-only — no effect on output processing.
 ===========  ====================================================================
 """
 
@@ -52,6 +56,15 @@ CODE_CONTENT_TAGS: frozenset[str] = frozenset({"keep", "start", "completed"})
 # itself is outside the workshop.
 STRUCTURAL_TAGS: frozenset[str] = frozenset({"workshop", "end-workshop"})
 
+# --- Validate-only tags ---
+# Tags that exist purely as declarations to ``clm validate`` and have no
+# effect on output processing. ``allow-untranslated`` (#772) marks a shared
+# (no-``lang``) code cell whose German text is intentional — the DE<->EN
+# dictionary example being the canonical case — so the shared-cell
+# natural-language warning skips it. Code cells only for now: the check's
+# v1 scope is shared *code* cells.
+VALIDATE_ONLY_TAGS: frozenset[str] = frozenset({"allow-untranslated"})
+
 # --- Per-cell-type valid tag sets ---
 # These are the complete sets used by get_invalid_code_tags / get_invalid_markdown_tags.
 
@@ -59,7 +72,9 @@ EXPECTED_GENERIC_TAGS: frozenset[str] = frozenset(
     SLIDE_TAGS | PRIVATE_TAGS | STRUCTURAL_TAGS | frozenset({"alt", "completed", "del"})
 )
 
-EXPECTED_CODE_TAGS: frozenset[str] = frozenset(CODE_CONTENT_TAGS | EXPECTED_GENERIC_TAGS)
+EXPECTED_CODE_TAGS: frozenset[str] = frozenset(
+    CODE_CONTENT_TAGS | EXPECTED_GENERIC_TAGS | VALIDATE_ONLY_TAGS
+)
 
 EXPECTED_MARKDOWN_TAGS: frozenset[str] = frozenset(
     frozenset({"notes", "voiceover", "answer", "nodataurl"}) | EXPECTED_GENERIC_TAGS

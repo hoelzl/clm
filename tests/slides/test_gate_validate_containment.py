@@ -4,7 +4,8 @@ CLM judges the health of a split DE/EN pair from **two** places that grew
 independently:
 
 * ``clm validate``'s split-pair family — :func:`_check_shared_cell_parity`,
-  :func:`_check_split_tag_parity`, :func:`_check_split_slide_id_parity`,
+  :func:`_check_split_untranslated_text`, :func:`_check_split_tag_parity`,
+  :func:`_check_split_slide_id_parity`,
   :func:`_check_split_companion_for_slide_parity` — the authoring-time
   detective, run by the pre-commit gate;
 * :func:`~clm.slides.sync_verify.gate_projected_pair` — the sync engine's
@@ -47,6 +48,7 @@ from clm.slides.validator import (
     _check_split_companion_for_slide_parity,
     _check_split_slide_id_parity,
     _check_split_tag_parity,
+    _check_split_untranslated_text,
 )
 
 HEADER_DE = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Titel\") }}\n\n"
@@ -89,15 +91,16 @@ def _deck(
 
 
 def _validate_split_family(de: Path, en: Path) -> list[Finding]:
-    """Exactly the four cross-file checks ``clm validate`` runs on a split pair.
+    """Exactly the five cross-file checks ``clm validate`` runs on a split pair.
 
     Kept as an explicit list rather than driven off ``validate_slide_file`` so the
-    containment claim names the functions it covers: if a fifth split-pair check is
+    containment claim names the functions it covers: if a sixth split-pair check is
     added, this test does not silently keep passing while ignoring it — the
     companion :func:`test_the_split_pair_family_is_fully_enumerated` fails instead.
     """
     return [
         *_check_shared_cell_parity(de, en),
+        *_check_split_untranslated_text(de, en),
         *_check_split_tag_parity(de, en),
         *_check_split_slide_id_parity(de, en),
         *_check_split_companion_for_slide_parity(de, en),
@@ -148,6 +151,16 @@ CORRUPTIONS: dict[str, tuple[str, str, str | None, str | None]] = {
     "shared-markdown-diverged": (
         _deck("de", extra="# %% [markdown]\n#\n# Neutral A\n\n"),
         _deck("en", extra="# %% [markdown]\n#\n# Neutral B\n\n"),
+        None,
+        None,
+    ),
+    # --- shared-cell German text (#772): validate WARNING, gate passes -----------
+    # Byte-identical across the halves, so structurally it is *valid* trust —
+    # which is exactly why the validator (not the gate) must be the one to
+    # flag it before ``sync record`` banks it as ``shared``.
+    "shared-code-german-text": (
+        _deck("de", extra="# %%\n# Das ist ein geteilter Kommentar.\ny = 2\n\n"),
+        _deck("en", extra="# %%\n# Das ist ein geteilter Kommentar.\ny = 2\n\n"),
         None,
         None,
     ),
@@ -214,6 +227,7 @@ VALIDATE_SEVERITY: dict[str, str | None] = {
     "shared-cell-count-mismatch": "error",
     "shared-cell-tags-diverged": "error",
     "shared-markdown-diverged": "error",
+    "shared-code-german-text": "warning",
     "preamble-diverged": "error",
     "id-set-diverged": "warning",
     "id-order-diverged": "warning",
@@ -352,6 +366,29 @@ class TestDeliberateNonContainment:
         assert "mismatched tags" in findings[0].message
         assert gate_projected_pair(de, en, "#") == []
 
+    def test_german_shared_text_is_a_validate_warning_the_gate_never_sees(
+        self, pair_factory
+    ) -> None:
+        """German text in a byte-identical shared cell (#772) warns and never gates.
+
+        The two oracles disagree here *by design*: the halves agree byte-for-byte,
+        so structurally the pair is valid trust and the gate must record it — the
+        sync engine can even bank the cell as ``shared`` via ``record_neutral``.
+        That bankability is precisely the hazard: a later one-sided fix frames
+        ``propagate_shared_edit``, a mechanical byte copy that would overwrite the
+        German half with English. Content-language policing is therefore
+        validate's job (an advisory oracle allowed to use heuristics), not the
+        gate's (a trust oracle that must not) — and warning severity keeps
+        pre-existing committed German out of hard CI failure, matching the rest
+        of the split-pair family. The ``allow-untranslated`` tag is the per-cell
+        opt-out.
+        """
+        de, en = pair_factory("shared-code-german-text")
+        findings = _validate_split_family(de, en)
+        assert [f.severity for f in findings] == ["warning"]
+        assert "German text" in findings[0].message
+        assert gate_projected_pair(de, en, "#") == []
+
 
 class TestPromotedViolationsAreLabelledBlocking:
     """Everything :func:`structural_gate` returns is blocking — the labels must say so.
@@ -407,6 +444,7 @@ class TestPromotedViolationsAreLabelledBlocking:
 #: The split-pair family this module claims to cover.
 SPLIT_PAIR_CHECKS = {
     "_check_shared_cell_parity",
+    "_check_split_untranslated_text",
     "_check_split_tag_parity",
     "_check_split_slide_id_parity",
     "_check_split_companion_for_slide_parity",
@@ -437,7 +475,7 @@ def test_the_split_pair_family_is_fully_enumerated() -> None:
 
 @pytest.mark.parametrize("entry", ["validate_file", "validate_files", "validate_course"])
 def test_every_validation_scope_runs_the_whole_family(entry: str) -> None:
-    """All three scopes must run all four checks.
+    """All three scopes must run all five checks.
 
     A check wired into the directory scope but not the single-file one would make
     ``clm validate <file>`` quietly weaker than ``clm validate <dir>`` — and the

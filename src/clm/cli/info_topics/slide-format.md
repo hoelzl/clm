@@ -85,6 +85,7 @@ is also valid; `clm slides normalize --operations interleaving` converts to cano
 | `private` | Visible only in trainer/speaker output |
 | `del` | Removed from all outputs |
 | `nodataurl` | Prevents image inlining as data-URL |
+| `allow-untranslated` | (since {version}, issue #772) **Validate-only, code cells.** Declares that German text in a shared (no-`lang`) code cell is intentional — e.g. a DE↔EN dictionary example — so `clm validate`'s shared-cell German-text warning skips the cell. No effect on output processing. Shared cells are byte-identical across a split pair, so the tag always applies to both halves at once. |
 
 ### Workshop scope
 
