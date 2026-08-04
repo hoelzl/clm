@@ -100,9 +100,11 @@ recorded fingerprints, and puts per-side unified diffs on the row:
 The fields are **optional**: a base that was never committed (`record` runs
 pre-commit), a history rewritten away, or a repo without git yields rows
 without them — then fall back to the full cells as before. The recovery is
-exact (both sides' fingerprints must match), so a present `base_ref` is the
-recorded state, never a nearest guess. The text report prints the same hunks
-under each item.
+exact up to the `slide_id` attribute — the equivalence the ledger's own
+fingerprints define: both sides must match, and the match is key-aware (an
+id-keyed row only matches the member carrying its own id), so a present
+`base_ref` is the recorded state, never a nearest guess or another member's
+lookalike bytes. The text report prints the same hunks under each item.
 
 **Before working a wall of `verify_translation` rows, check `observations`
 for `verify_translation_batch`.** It fires when three or more such rows all

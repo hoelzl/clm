@@ -183,6 +183,49 @@ class TestRecovery:
         assert entry.de_diff == ""
         assert "+# EN two, neu" in entry.en_diff
 
+    def test_a_one_sided_fingerprint_match_is_not_a_match(self, tmp_path: Path):
+        """Review M1: the exact-on-BOTH-sides invariant is the feature's central
+        safety property. A ref where only one side sits at base (the other
+        already edited there) must be skipped, not half-matched."""
+        repo, sha_a, base = _repo_at_base(tmp_path)
+        repo.write(DE0, _edit(EN0, "EN one"))  # en moved, de still at base
+        sha_b = repo.commit("en-only edit")
+        repo.write(_edit(DE0, "DE eins"), _edit(EN0, "EN one", "EN one, neu"))
+        bundle, diff = _diff(repo, base)
+
+        assert [i.action for i in diff.items] == ["verify_translation"]
+        entry = recover_base_diffs(bundle, diff)["id:m1"]
+        assert entry.base_ref == sha_a, f"must skip {sha_b[:12]} (en already moved there)"
+        assert "-# EN one\n" in entry.en_diff + "\n"
+        assert "+# EN one, neu, neu" in entry.en_diff
+
+    def test_a_fingerprint_lookalike_under_another_id_cannot_steal_the_base(self, tmp_path: Path):
+        """Review F1: fingerprints are modulo ``slide_id``, so a member whose
+        bytes are another member's old bytes under its own id (copy-pasted
+        boilerplate) matches the fingerprint pair. Taking it would recover at
+        the wrong (newer) ref and fabricate an id-rename hunk that never
+        happened — the exact unread-divergence noise this feature removes."""
+        repo, sha_s, base = _repo_at_base(tmp_path)
+        lookalike = _build(
+            _edit(DE0, "DE eins"),
+            _localized("m9", "de", "DE eins"),  # m1's ORIGINAL bytes, id m9
+        )
+        lookalike_en = _build(
+            _edit(EN0, "EN one"),
+            _localized("m9", "en", "EN one"),
+        )
+        repo.write(lookalike, lookalike_en)
+        sha_t = repo.commit("m1 edited; m9 added with m1's old bytes")
+        repo.write(
+            _build(_edit(DE0, "DE eins", "DE eins, neu"), _localized("m9", "de", "DE eins")),
+            _build(_edit(EN0, "EN one", "EN one, neu"), _localized("m9", "en", "EN one")),
+        )
+        bundle, diff = _diff(repo, base)
+
+        entry = recover_base_diffs(bundle, diff)["id:m1"]
+        assert entry.base_ref == sha_s, f"the lookalike at {sha_t[:12]} must not steal the match"
+        assert "m9" not in entry.de_diff and "m9" not in entry.en_diff
+
     def test_the_newest_matching_ref_wins(self, tmp_path: Path):
         """A sibling's later commit keeps the target member at base, so the
         member recovers at the *newest* such commit — the semantics the batch
@@ -278,6 +321,21 @@ class TestDegrade:
         plain.mkdir()
         de, en = plain / "slides_t.de.py", plain / "slides_t.en.py"
         assert recent_change_refs(de, en, cap=30) == []
+
+    def test_a_non_utf8_commit_in_the_window_is_skipped_not_fatal(self, tmp_path: Path):
+        """Review F2: a historical latin-1 blob (German umlauts, legacy commit)
+        must degrade — mis-decoded text fails the match and the walk moves on.
+        Strict decoding used to raise ``UnicodeDecodeError`` out of the report
+        verb on POSIX (subprocess decodes in the main thread there)."""
+        repo, sha, base = _repo_at_base(tmp_path)
+        repo.de.write_bytes("# %% [markdown]\n# über\n".encode("latin-1"))
+        repo.commit("legacy latin-1 state")
+        repo.write(_edit(DE0, "DE eins"), _edit(EN0, "EN one"))
+        bundle, diff = _diff(repo, base)
+
+        assert [i.action for i in diff.items] == ["verify_translation"]
+        recovered = recover_base_diffs(bundle, diff)  # must not raise
+        assert recovered["id:m1"].base_ref == sha
 
 
 class TestBatchObservation:
@@ -434,6 +492,64 @@ class TestSurfaces:
         # Backward compatible: no recovery argument, no new output.
         bare = sync_v3._render_pair(bundle, diff)
         assert "vs base" not in bare and "verify_translation_batch" not in bare
+
+    def test_aspect_rows_sharing_the_key_are_not_enriched(self, tmp_path: Path):
+        """Review F3/M4: a member's mechanical aspect row (here ``mirror_tags``)
+        shares the item key with its ``verify_translation`` row. Enrichment is
+        a claim about the recovered actions only — the aspect row must carry no
+        base fields, and the text report must print the hunks exactly once."""
+        from clm.cli.commands.slides import sync_v3
+        from clm.slides.doc_report import pair_payload
+
+        repo, sha, base = _repo_at_base(tmp_path)
+        de = _edit(DE0, "DE eins").replace(
+            'lang="de" slide_id="m1"', 'lang="de" tags=["alert"] slide_id="m1"'
+        )
+        repo.write(de, _edit(EN0, "EN one"))
+        bundle, diff = _diff(repo, base)
+
+        m1_actions = sorted(i.action for i in diff.items if i.key == "id:m1")
+        assert m1_actions == ["mirror_tags", "verify_translation"], (
+            "fixture must co-frame an aspect row under the same key"
+        )
+        recovered = recover_base_diffs(bundle, diff)
+        payload = pair_payload(bundle, diff, base_diffs=recovered)
+        by_action = {i["action"]: i for i in payload["items"] if i["key"] == "id:m1"}
+        assert "base_ref" not in by_action["mirror_tags"]
+        assert "de_diff" not in by_action["mirror_tags"]
+        assert by_action["verify_translation"]["base_ref"] == sha
+
+        text = sync_v3._render_pair(bundle, diff, recovered)
+        assert text.count(f"de vs base {sha[:12]}:") == 1
+        assert text.count(f"en vs base {sha[:12]}:") == 1
+
+    def test_since_mode_resolves_the_ref_and_emits_no_batch(self, tmp_path: Path, capsys):
+        """Review F4/F5: in ``--since`` mode every changed row trivially
+        "recovers" at the named ref (its base fps were computed there), so the
+        batch observation would always fire and overclaim "one editing
+        session" — it is suppressed. And ``base_ref`` must be the resolved
+        full sha, not the user's relative spelling, which names a different
+        commit as soon as the next commit lands."""
+        from clm.cli.commands.slides.sync_v3 import run_report_v3
+
+        repo, sha_a, _base = _repo_at_base(tmp_path)
+        repo.write(
+            _edit(DE0, "DE eins", "DE zwei", "DE drei"),
+            _edit(EN0, "EN one", "EN two", "EN three"),
+        )
+        repo.commit("three members edited")
+
+        # Relative refs resolve against the DECK's repo (git runs in its
+        # root), not the process cwd — no chdir needed.
+        exit_code = run_report_v3(repo.de, repo.en, as_json=True, since_ref="HEAD~1")
+        payload = json.loads(capsys.readouterr().out)
+
+        assert exit_code == 1
+        rows = [i for i in payload["items"] if i["action"] == "verify_translation"]
+        assert len(rows) == 3
+        for row in rows:
+            assert row["base_ref"] == sha_a, "the relative spelling must be resolved"
+        assert not any(o["kind"] == "verify_translation_batch" for o in payload["observations"])
 
     def test_the_report_verb_wires_recovery_end_to_end(self, tmp_path: Path, capsys):
         """`run_report_v3` against a real committed ledger: the true read-verb

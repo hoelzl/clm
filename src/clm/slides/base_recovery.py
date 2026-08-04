@@ -18,10 +18,13 @@ View-layer only (design §12.3 — the ``--since`` posture): read-only git, no
 ledger schema change, no trust semantics, and the answer surface is untouched.
 Recovery **degrades to absence**: a base that was never committed, a history
 rewritten away, a renamed deck, or a repo without git simply yields no entry
-for the row, and the report keeps shipping the full cells. Absence is honest;
-a wrong base cannot happen — the fingerprint match is exact on both sides, so
-a recovered state *is* the recorded state, not a guess (several matching refs
-all reproduce identical bytes for that member).
+for the row, and the report keeps shipping the full cells. Absence is honest,
+and a match is the recorded state **modulo the slide_id attribute** — the same
+equivalence the ledger's fingerprints define (both sides must match exactly,
+and the match is key-aware: an id-keyed row only matches the member carrying
+*its own* id, and a pos-keyed row only matches id-less members, so another
+member's fingerprint lookalike — copy-pasted boilerplate — can neither steal
+the match at a newer ref nor leak its id into the hunks).
 
 Hash-version drift needs no handling here: a ledger entry recorded under an
 older ``LEDGER_HASH_VERSION`` drops to cold at load (``doc_ledger``), so it
@@ -44,7 +47,7 @@ from attrs import frozen
 from clm.slides.bilingual_doc import Lang, Member, Observation
 from clm.slides.doc_identity import content_fingerprint, iter_with_groups
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
-from clm.slides.git_text import bundle_texts_at_ref, recent_change_refs
+from clm.slides.git_text import bundle_texts_at_ref, recent_change_refs, resolve_commit
 from clm.slides.sync_diff import DeckDiff, DiffItem
 
 __all__ = [
@@ -114,7 +117,10 @@ def recover_base_diffs(
 
     ``candidates`` is for callers that already know the base ref (the
     ``--since REF`` forensic view diffs against a *named* commit, so walking
-    history for it would be both wasteful and wrong).
+    history for it would be both wasteful and wrong). Each candidate is
+    resolved to its full commit sha first — ``base_ref`` is a *stored* value,
+    and a relative spelling (``HEAD~2``) would name a different commit by the
+    time a consumer reads it.
     """
     targets: dict[str, DiffItem] = {}
     for item in diff.items:
@@ -127,11 +133,14 @@ def recover_base_diffs(
         targets[item.key] = item
     if not targets:
         return {}
-    refs = (
-        list(candidates)
-        if candidates is not None
-        else recent_change_refs(bundle.de_path, bundle.en_path, cap=cap)
-    )
+    if candidates is not None:
+        refs = [
+            sha
+            for sha in (resolve_commit(bundle.de_path, ref) for ref in candidates)
+            if sha is not None
+        ]
+    else:
+        refs = recent_change_refs(bundle.de_path, bundle.en_path, cap=cap)
     recovered: dict[str, MemberBaseDiff] = {}
     for ref in refs:
         if len(recovered) == len(targets):
@@ -147,12 +156,33 @@ def recover_base_diffs(
             matches = index.get((base.de_fp, base.en_fp))
             if not matches:
                 continue
-            # Identical fingerprint pairs reproduce identical bytes modulo the
-            # id attribute, so any match serves; preferring the same key keeps
-            # even that attribute byte-exact for id-keyed members.
-            member = next((m for m in matches if m.key.render() == key), matches[0])
+            member = _key_aware_match(key, matches)
+            if member is None:
+                continue
             recovered[key] = _member_base_diff(item, member, ref)
     return recovered
+
+
+def _key_aware_match(key: str, matches: list[Member]) -> Member | None:
+    """The member that may serve as ``key``'s base among fingerprint matches.
+
+    Fingerprints are modulo the ``slide_id`` attribute, so a fingerprint
+    lookalike can be *another* member entirely — copy-pasted boilerplate under
+    its own id. Matching it would steal the recovery at a newer ref (the true
+    base sits one ref older, unreachable once this row resolves) and fabricate
+    an id-rename hunk that never happened. The true base always satisfies the
+    key rule — an id rename or an id stamp re-keys the ledger entry, so the
+    row would be cold, not one of the recovered actions — hence requiring it
+    loses no genuine recovery:
+
+    * id-keyed row → only the member carrying its own key;
+    * pos-keyed row → only id-less members (ordinals alias across states, so
+      the rendered key means nothing, but an id'd lookalike would leak its
+      ``slide_id`` line into the hunks).
+    """
+    if key.startswith("id:"):
+        return next((m for m in matches if m.key.render() == key), None)
+    return next((m for m in matches if m.key.scheme == "pos"), None)
 
 
 def batch_observation(diff: DeckDiff, recovered: dict[str, MemberBaseDiff]) -> Observation | None:

@@ -205,7 +205,15 @@ def recovery_mode(repo: Path) -> int:
             stats["pairs skipped (load error)"] += 1
             continue
         diff = diff_bundle(bundle)
-        targets = [i for i in diff.items if i.action in BASE_DIFF_ACTIONS and i.base is not None]
+        # The same filter recover_base_diffs applies — a row it never attempts
+        # (no recorded fp on either side) must not count as "NOT recovered".
+        targets = [
+            i
+            for i in diff.items
+            if i.action in BASE_DIFF_ACTIONS
+            and i.base is not None
+            and not (i.base.de_fp is None and i.base.en_fp is None)
+        ]
         if not targets:
             continue
         decks_with_rows += 1
@@ -234,6 +242,9 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     if "--recovery" in argv:
         argv.remove("--recovery")
+        if not argv:
+            print(__doc__)
+            raise SystemExit(2)
         raise SystemExit(recovery_mode(Path(argv[0])))
     since = "2025-08-01"
     if "--since" in argv:

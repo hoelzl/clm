@@ -16,11 +16,20 @@ from pathlib import Path
 
 from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
 
-__all__ = ["bundle_texts_at_ref", "git_ref_text", "recent_change_refs"]
+__all__ = ["bundle_texts_at_ref", "git_ref_text", "recent_change_refs", "resolve_commit"]
 
 
 def _git_capture(cwd: Path, *args: str) -> str | None:
-    """``git <args>`` run in ``cwd`` — stdout, or ``None`` on any failure."""
+    """``git <args>`` run in ``cwd`` — stdout, or ``None`` on any failure.
+
+    ``errors="replace"``: a historical blob that is not valid UTF-8 (a legacy
+    latin-1 commit) must degrade to replacement characters — which then fail
+    any fingerprint match and are skipped — never raise ``UnicodeDecodeError``
+    out of a read helper. Strict decoding crashed the #773 recovery walk on
+    the first such commit inside its window (on POSIX the decode happens in
+    the main thread), and would equally have crashed ``--since REF`` aimed at
+    one.
+    """
     try:
         completed = subprocess.run(
             ["git", *args],
@@ -28,6 +37,7 @@ def _git_capture(cwd: Path, *args: str) -> str | None:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except (FileNotFoundError, OSError):
@@ -123,8 +133,27 @@ def recent_change_refs(de_path: Path, en_path: Path, *, cap: int) -> list[str]:
                 continue
             if rel not in paths:
                 paths.append(rel)
+    if not paths:
+        # Reachable when git's toplevel and Path.resolve() disagree (symlinked
+        # or subst'd course dirs). `git log --` with no pathspec would silently
+        # widen to whole-repo history — degrade instead.
+        return []
     out = _git_capture(root, "log", f"-{cap}", "--format=%H", "--", *paths)
     return out.split() if out else []
+
+
+def resolve_commit(path: Path, ref: str) -> str | None:
+    """``ref`` resolved to a full commit sha in ``path``'s repo, or ``None``.
+
+    A user-spelled ref (``HEAD~2``, a branch, an abbreviation) is only
+    meaningful at the moment it is typed; anything *stored* in a payload must
+    be the full sha so it still names the same commit later.
+    """
+    root = _repo_root(path)
+    if root is None:
+        return None
+    out = _git_capture(root, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    return out.strip() if out else None
 
 
 def bundle_texts_at_ref(

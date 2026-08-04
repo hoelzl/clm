@@ -214,6 +214,7 @@ def pair_payload(
     *,
     ledger: doc_ledger.TopicLedger | None = None,
     base_diffs: dict[str, MemberBaseDiff] | None = None,
+    batch: bool = True,
 ) -> dict:
     """The full schema-5 report payload for one pair.
 
@@ -227,15 +228,26 @@ def pair_payload(
     commit; the ledger view walks history). Passed through to the item rows,
     and the deck-level ``verify_translation_batch`` observation is appended
     when every such row recovered the same base.
+
+    ``batch=False`` is the ``--since`` caller: there every changed row
+    trivially "recovers" at the named ref (the base fps were *computed* from
+    it), so the same-base grouping is the query parameter echoed back, not a
+    discovered common sync point — the observation would always fire and
+    always overclaim "one editing session".
     """
     payload = diff.to_payload()
     payload["items"] = item_payloads(diff, base_diffs=base_diffs)
-    if base_diffs:
-        batch = batch_observation(diff, base_diffs)
-        if batch is not None:
+    if base_diffs and batch:
+        batch_obs = batch_observation(diff, base_diffs)
+        if batch_obs is not None:
             payload["observations"] = [
                 *payload["observations"],
-                {"kind": batch.kind, "member": None, "side": batch.side, "detail": batch.detail},
+                {
+                    "kind": batch_obs.kind,
+                    "member": None,
+                    "side": batch_obs.side,
+                    "detail": batch_obs.detail,
+                },
             ]
     payload["de_path"] = str(bundle.de_path)
     payload["en_path"] = str(bundle.en_path)

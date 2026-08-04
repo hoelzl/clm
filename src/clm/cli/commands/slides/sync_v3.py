@@ -27,7 +27,12 @@ from pathlib import Path
 import click
 
 from clm.slides import doc_apply, doc_ledger
-from clm.slides.base_recovery import MemberBaseDiff, batch_observation, recover_base_diffs
+from clm.slides.base_recovery import (
+    BASE_DIFF_ACTIONS,
+    MemberBaseDiff,
+    batch_observation,
+    recover_base_diffs,
+)
 from clm.slides.doc_lenses import DocLensError, LoadedBundle, load_bundle
 from clm.slides.doc_report import (
     cold_sweep_hint,
@@ -79,6 +84,8 @@ def _render_pair(
     bundle: LoadedBundle,
     diff: DeckDiff,
     base_diffs: dict[str, MemberBaseDiff] | None = None,
+    *,
+    batch: bool = True,
 ) -> str:
     lines = [
         f"{bundle.de_path.name}: "
@@ -99,9 +106,14 @@ def _render_pair(
         # #773: the recovered base renders inline, not behind a flag — reading
         # two full cells to spot a one-word change is the measured cost, and a
         # hidden diff would not collapse it. A side at base ("") prints
-        # nothing; an unrecovered row prints exactly what it did before.
+        # nothing; an unrecovered row prints exactly what it did before. The
+        # action guard mirrors item_payloads: keys are shared across a
+        # member's aspect rows (a mechanical mirror_tags beside the
+        # verify_translation), and the recovery is a claim about the
+        # recovered actions only — without it the hunks render duplicated
+        # under rows they do not describe.
         recovered = base_diffs.get(item.key) if base_diffs else None
-        if recovered is not None:
+        if recovered is not None and item.action in BASE_DIFF_ACTIONS:
             for lang in ("de", "en"):
                 hunks = recovered.side_diff(lang)
                 if hunks:
@@ -116,12 +128,12 @@ def _render_pair(
         # (Q5) — printing it after the items is deliberate, it is a summary.
         if obs.kind in ("group_order_divergence", "uniform_drift_side"):
             lines.append(f"  observation/{obs.kind}: {obs.detail}")
-    if base_diffs:
+    if base_diffs and batch:
         # The #773 batch summary — like uniform_drift_side, a summary prints
         # after what it summarizes.
-        batch = batch_observation(diff, base_diffs)
-        if batch is not None:
-            lines.append(f"  observation/{batch.kind}: {batch.detail}")
+        batch_obs = batch_observation(diff, base_diffs)
+        if batch_obs is not None:
+            lines.append(f"  observation/{batch_obs.kind}: {batch_obs.detail}")
     hint = cold_sweep_hint(diff)
     if hint is not None:
         lines.append(f"  hint: {hint}")
@@ -179,7 +191,9 @@ def run_report_v3(
     if as_json:
         payloads = []
         for bundle, diff, base_refusal, ledger, base_diffs in results:
-            payload = pair_payload(bundle, diff, ledger=ledger, base_diffs=base_diffs)
+            payload = pair_payload(
+                bundle, diff, ledger=ledger, base_diffs=base_diffs, batch=since_ref is None
+            )
             if since_ref is not None:
                 payload["baseline"] = f"since:{since_ref}"
                 if base_refusal:
@@ -205,7 +219,7 @@ def run_report_v3(
             )
     else:
         for bundle, diff, base_refusal, _ledger, base_diffs in results:
-            click.echo(_render_pair(bundle, diff, base_diffs))
+            click.echo(_render_pair(bundle, diff, base_diffs, batch=since_ref is None))
             if base_refusal:
                 click.echo(
                     f"  note: the bundle at {since_ref} refuses to parse "
