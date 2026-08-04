@@ -100,7 +100,13 @@ class TestRenameThenEdit:
         assert "body" in edited["answers"]
 
         # And the loop closes: supplying the fresh DE twin resolves it to clean.
-        decisions = json.dumps({"decisions": [{"key": "id:s0-x", "body": "# DE neu"}]})
+        # The freshness token is mandatory since schema 3's grace ended (Q2).
+        decisions = json.dumps(
+            {
+                "report_id": after_edit["report_id"],
+                "decisions": [{"key": "id:s0-x", "body": "# DE neu"}],
+            }
+        )
         applied = cli_runner.invoke(
             slides_sync_group, ["apply", str(de), "--decisions", "-", "--json"], input=decisions
         )

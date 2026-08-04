@@ -29,12 +29,13 @@ emits a ``verify_translation_batch`` observation. The fields are optional
 (recovery degrades to absence); the decision-document shape is unchanged, so
 schema-4 documents remain first-class input, not a compatibility case.
 
-Rollout: a decision document with **no** ``report_id`` is accepted with a
-warning naming the field (agents and downstream sweep drivers keep working);
-one whose token does not match is refused wholesale — exit 2, nothing written.
-The maintainer's decision (2026-07-31) is that the token-less form is accepted
-for one release and rejected in the next; that tightening flips
-:data:`REQUIRE_REPORT_ID`.
+Rollout, completed: schema 4 shipped in 1.24.0 with a one-release grace — a
+decision document with no ``report_id`` was accepted with a warning naming the
+field, so drivers kept working mid-upgrade. Per the maintainer's decision
+(2026-07-31, executed for the release after 1.24.0), the grace has ended:
+:data:`REQUIRE_REPORT_ID` is ``True`` and schema-3 documents are refused, so
+every decision document now carries the freshness token and a stale one is
+refused wholesale — exit 2, nothing written.
 """
 
 from __future__ import annotations
@@ -48,12 +49,12 @@ __all__ = [
 #: The version every report / apply / record payload announces.
 WIRE_SCHEMA = 5
 
-#: Decision-document schemas ``apply`` still reads. Schema 3 documents carry no
-#: ``report_id`` and no ``action`` discriminator; they remain valid input for
-#: one release so that a clm upgrade does not break a driver mid-flight.
-#: Schema 4 and 5 decision documents are byte-identical (5 is report-side
-#: additive), so both stay accepted indefinitely.
-ACCEPTED_DECISION_SCHEMAS = (3, 4, 5)
+#: Decision-document schemas ``apply`` reads. Schema 3 (no ``report_id``, no
+#: ``action`` discriminator) had its one-release grace in 1.24.0 and is now
+#: refused. Schema 4 and 5 decision documents are byte-identical (5 is
+#: report-side additive), so both stay accepted indefinitely.
+ACCEPTED_DECISION_SCHEMAS = (4, 5)
 
-#: Flip to ``True`` in the release that drops schema 3 (see the module doc).
-REQUIRE_REPORT_ID = False
+#: The Q2 tightening, flipped in the release after 1.24.0 (see the module doc):
+#: a decision document must carry the ``report_id`` it answers.
+REQUIRE_REPORT_ID = True

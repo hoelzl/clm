@@ -173,9 +173,9 @@ Every pair payload carries three identity fields:
   with **one** ledger section; the companion form now says so on stderr. Two
   passes over "different" paths are two passes over the same deck.
 
-A document with no `report_id` is still accepted, with a warning naming the
-field — schema 3 predates it. That grace ends in a future release; emit the
-token now.
+A document with no `report_id` is **refused** (exit 2, nothing written) — as
+is one announcing `"schema": 3`. Schema 3's one-release grace ended with CLM
+{version}; the refusal message names the field and where to copy it from.
 
 **Your own `apply` invalidates the token** — it records into the ledger, which
 is half of the token's input. That is deliberate: one report, one apply, then

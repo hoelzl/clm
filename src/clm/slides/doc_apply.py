@@ -306,9 +306,9 @@ class DecisionDocument:
     """A parsed decision document: its answers plus its schema-4 envelope.
 
     ``report_id`` is the freshness token copied out of the report envelope
-    (:func:`clm.slides.doc_report.report_id_for`). ``None`` means a schema-3
-    document that predates the token — accepted for now, warned about by the
-    caller (:mod:`clm.slides.sync_wire`).
+    (:func:`clm.slides.doc_report.report_id_for`). ``None`` means the document
+    omitted it — refused by the caller since schema 3's one-release grace
+    ended (:mod:`clm.slides.sync_wire`).
     """
 
     decisions: dict[str, Decision] = field(factory=dict)

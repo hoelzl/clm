@@ -2066,8 +2066,9 @@ every pair payload: `deck_key`, `ledger` (the trust store's path), and
 `report_id` — a hash of the bundle bytes plus this deck's ledger section.
 Echo `report_id` at the top level of the decision document; `apply` refuses
 the whole document with exit 2, writing nothing, when the deck has moved on
-since the report. Documents without the token are still accepted, with a
-warning. See `clm info sync-agents`.
+since the report — and (since CLM {version}) equally when the token is
+missing or the document announces the retired schema 3.
+See `clm info sync-agents`.
 
 Order divergence frames from the **current** cross-side state whether or not
 the ledger carries recorded order trust (CLM {version}): with trust, a
