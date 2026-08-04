@@ -226,6 +226,28 @@ class TestRecovery:
         assert entry.base_ref == sha_s, f"the lookalike at {sha_t[:12]} must not steal the match"
         assert "m9" not in entry.de_diff and "m9" not in entry.en_diff
 
+    def test_a_pos_keyed_header_row_recovers_too(self, tmp_path: Path):
+        """Review R2-1: the pos branch of the key-aware match. Header j2 cells
+        are the legal id-less localized members; editing both halves frames
+        ``verify_translation`` under a ``pos:`` handle, and recovery must
+        serve it through the id-less-members-only rule."""
+        repo, sha, base = _repo_at_base(tmp_path)
+        repo.write(
+            DE0.replace("import header_de", "import header_de  # v2"),
+            EN0.replace("import header_en", "import header_en  # v2"),
+        )
+        bundle, diff = _diff(repo, base)
+
+        pos_rows = [
+            i for i in diff.items if i.key.startswith("pos:") and i.action == "verify_translation"
+        ]
+        assert pos_rows, "fixture must frame a pos-keyed verify_translation row"
+        recovered = recover_base_diffs(bundle, diff)
+        entry = recovered[pos_rows[0].key]
+        assert entry.base_ref == sha
+        assert "+# j2 from 'macros.j2' import header_de  # v2" in entry.de_diff
+        assert "+# j2 from 'macros.j2' import header_en  # v2" in entry.en_diff
+
     def test_the_newest_matching_ref_wins(self, tmp_path: Path):
         """A sibling's later commit keeps the target member at base, so the
         member recovers at the *newest* such commit — the semantics the batch

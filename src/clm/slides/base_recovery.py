@@ -170,10 +170,12 @@ def _key_aware_match(key: str, matches: list[Member]) -> Member | None:
     lookalike can be *another* member entirely — copy-pasted boilerplate under
     its own id. Matching it would steal the recovery at a newer ref (the true
     base sits one ref older, unreachable once this row resolves) and fabricate
-    an id-rename hunk that never happened. The true base always satisfies the
-    key rule — an id rename or an id stamp re-keys the ledger entry, so the
-    row would be cold, not one of the recovered actions — hence requiring it
-    loses no genuine recovery:
+    an id-rename hunk that never happened. The true base satisfies the key
+    rule *under the row's recorded identity*: a rename's row frames under the
+    old handle (which old refs carry), and a §7.3 key migration re-keys the
+    entry. The one residual window is a member id-stamped since its last
+    record whose base was committed only id-less — there recovery degrades to
+    absence (honest, never wrong bytes):
 
     * id-keyed row → only the member carrying its own key;
     * pos-keyed row → only id-less members (ordinals alias across states, so
