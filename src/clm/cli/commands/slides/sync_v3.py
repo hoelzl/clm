@@ -417,10 +417,10 @@ def _report_id_errors(bundle: LoadedBundle, document: doc_apply.DecisionDocument
     per-handle rejection let the first apply's writes stand while telling the
     second one its decisions were stale (#649).
 
-    A document with no token is accepted with a warning — schema 3 predates
-    the field, and the drivers that emit those documents are still in flight.
-    :data:`~clm.slides.sync_wire.REQUIRE_REPORT_ID` flips that in the release
-    that drops schema 3.
+    A document with no token is refused since the release after 1.24.0
+    (:data:`~clm.slides.sync_wire.REQUIRE_REPORT_ID` — schema 3's one-release
+    grace, and the warning that used to accompany it, ended with the Q2
+    tightening); the message still names the field and where to copy it from.
     """
     if document.report_id is None:
         message = (

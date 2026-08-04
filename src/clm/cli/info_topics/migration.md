@@ -2,6 +2,23 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Sync decision documents must carry `report_id`; schema 3 retired ({version})
+
+**Breaking for scripted sync drivers only.** A decision document for
+`clm slides sync apply --decisions` is now refused (exit 2, nothing written)
+when it omits the `report_id` freshness token or announces `"schema": 3`.
+This completes the rollout that began with wire schema 4 (1.24.0), where the
+token-less form was accepted for exactly one release with a warning naming
+the field.
+
+To migrate a driver: copy `report_id` (and `schema`) straight out of the
+`report --json` envelope into the document —
+`{"schema": 5, "report_id": "…", "decisions": [...]}`. Documents announcing
+schema 4 remain accepted (4 and 5 are byte-identical on the decision side).
+Remember that your own `apply` invalidates the token (it records into the
+ledger), so staged `--member` runs must re-report between passes. See
+`clm info sync-agents`.
+
 ## German text in a shared code cell now fails `clm validate` ({version})
 
 **Breaking only for a repo whose shared (no-`lang`) code cells still carry
