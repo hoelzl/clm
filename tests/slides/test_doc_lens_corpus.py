@@ -34,6 +34,8 @@ import pytest
 from clm.slides.doc_lenses import LoadedBundle, load_bundle, project
 from clm.slides.pairing import find_split_slide_files_recursive, iter_split_pairs
 
+from .corpus_revision import revision_context
+
 _BUNDLED_CORPUS = Path(__file__).parent.parent / "data" / "doc_corpus"
 
 # The known v3-precondition failures on the real corpus, measured 2026-07-02
@@ -153,8 +155,12 @@ class TestRealCorpus:
                 continue
             parsed += 1
             _assert_byte_identity(bundle)
-        assert parsed >= _REAL_PARSED_FLOOR, f"only {parsed} pairs parsed"
+        # #682: every scale-dependent verdict names the corpus revision it ran
+        # against, so a breach is interpretable (CLM regression vs corpus drift).
+        context = revision_context(_real)
+        assert parsed >= _REAL_PARSED_FLOOR, f"only {parsed} pairs parsed{context}"
         assert len(refused) <= _REAL_REFUSAL_CEILING, (
-            f"{len(refused)} refusals exceed the ceiling {_REAL_REFUSAL_CEILING}: {refused[:10]}…"
+            f"{len(refused)} refusals exceed the ceiling {_REAL_REFUSAL_CEILING}: "
+            f"{refused[:10]}…{context}"
         )
-        assert not unexpected_codes, f"refusals with unexpected codes: {unexpected_codes}"
+        assert not unexpected_codes, f"refusals with unexpected codes: {unexpected_codes}{context}"
