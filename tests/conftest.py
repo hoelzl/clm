@@ -99,6 +99,19 @@ import pytest
 # here, in the test environment only.
 os.environ.setdefault("CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS", "30")
 
+# Strip ambient color-forcing before any Click/Rich console is created. Agent
+# harnesses and some terminal setups export ``FORCE_COLOR`` (observed:
+# ``FORCE_COLOR=3`` in the Claude Code shell), which makes Rich/Click emit ANSI
+# escapes into *captured, non-TTY* CLI output — and 11 CLI tests assert plain
+# substrings in that output (voiceover/recordings command tables, a JSON
+# stdout), so the whole fast suite goes red on the pre-push hook in such a
+# shell while CI (no FORCE_COLOR) stays green. Tests never rely on forced
+# color, so popping is safe; ``NO_COLOR`` is deliberately left alone (it makes
+# output *plainer*, which the assertions already expect). ``pop`` not
+# ``setdefault``: the variable must be absent, not defaulted.
+for _color_var in ("FORCE_COLOR", "CLICOLOR_FORCE"):
+    os.environ.pop(_color_var, None)
+
 from clm.core.course_spec import TopicSpec
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
