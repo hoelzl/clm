@@ -25,9 +25,18 @@ Three questions it answers:
    once, and how often those all sit on the same side (what the
    ``uniform_drift_side`` observation fires on).
 
+4. **Recovery rate** (``--recovery``, #773 phase 1's step-2 re-measurement) —
+   against the repo's *live* working tree and committed ledgers: of the
+   ``verify_translation`` / ``translate_edit`` rows the report frames right
+   now, how many recover a committed base inside the walk cap (i.e. would
+   ship ``base_ref``/``de_diff``/``en_diff``). This is a different lens from
+   the commit replay above — the replay's "base" is a parent commit by
+   construction, so measuring recovery there would be circular.
+
 Usage::
 
     python scripts/measure_sync_ceremony.py <course-repo> [commit-limit] [--since DATE]
+    python scripts/measure_sync_ceremony.py <course-repo> --recovery
 """
 
 from __future__ import annotations
@@ -174,11 +183,69 @@ def main(repo: Path, limit: int, since: str) -> int:
     return 0
 
 
+def recovery_mode(repo: Path) -> int:
+    """The live #773 measurement: how many framed rows recover a base today.
+
+    Imports are local so the replay path stays importable without the full
+    engine stack loaded up front.
+    """
+    from clm.slides.base_recovery import BASE_DIFF_ACTIONS, batch_observation, recover_base_diffs
+    from clm.slides.doc_lenses import DocLensError, load_bundle
+    from clm.slides.doc_report import diff_bundle
+    from clm.slides.pairing import find_split_slide_files_recursive, iter_split_pairs
+
+    pairs, _solos = iter_split_pairs(find_split_slide_files_recursive(repo / "slides"))
+    stats: Counter = Counter()
+    decks_with_rows = 0
+    batches = 0
+    for de, en in pairs:
+        try:
+            bundle = load_bundle(de, en)
+        except DocLensError:
+            stats["pairs skipped (load error)"] += 1
+            continue
+        diff = diff_bundle(bundle)
+        # The same filter recover_base_diffs applies — a row it never attempts
+        # (no recorded fp on either side) must not count as "NOT recovered".
+        targets = [
+            i
+            for i in diff.items
+            if i.action in BASE_DIFF_ACTIONS
+            and i.base is not None
+            and not (i.base.de_fp is None and i.base.en_fp is None)
+        ]
+        if not targets:
+            continue
+        decks_with_rows += 1
+        recovered = recover_base_diffs(bundle, diff)
+        for item in targets:
+            verdict = "recovered" if item.key in recovered else "NOT recovered"
+            stats[f"{item.action} {verdict}"] += 1
+        if batch_observation(diff, recovered) is not None:
+            batches += 1
+    print(f"pairs scanned    : {len(pairs)}")
+    print(f"decks with rows  : {decks_with_rows}")
+    for key, n in sorted(stats.items()):
+        print(f"  {key:<40} {n:>6}")
+    for action in ("verify_translation", "translate_edit"):
+        hit, miss = stats[f"{action} recovered"], stats[f"{action} NOT recovered"]
+        if hit + miss:
+            print(f"{action}: {hit}/{hit + miss} = {100 * hit / (hit + miss):.1f}% recovered")
+    print(f"verify_translation_batch observations: {batches}")
+    return 0
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(__doc__)
         raise SystemExit(2)
     argv = sys.argv[1:]
+    if "--recovery" in argv:
+        argv.remove("--recovery")
+        if not argv:
+            print(__doc__)
+            raise SystemExit(2)
+        raise SystemExit(recovery_mode(Path(argv[0])))
     since = "2025-08-01"
     if "--since" in argv:
         i = argv.index("--since")

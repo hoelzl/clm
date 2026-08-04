@@ -1995,7 +1995,7 @@ the languages, is **refused** with a normalize hint — never silently guessed.
 
 Read-only. Prints one `outcome/action` row per non-in-sync member, then any
 deck-level `observations` worth surfacing; exit `0` clean / `1` work pending /
-`2` error. The JSON envelope is self-describing (`"schema": 4, "engine": "v3"`)
+`2` error. The JSON envelope is self-describing (`"schema": 5, "engine": "v3"`)
 and carries the stable booleans:
 
 - `is_clean` — nothing to do (also false, with an `observations` entry, when
@@ -2016,15 +2016,24 @@ halves are byte-identical, because a genuinely neutral cell and German prose
 copied onto the EN side are indistinguishable to the tool; those stay questions.
 The all-cold seeding hint still applies to what remains.
 
-Two `observations` kinds are also printed in the text report:
-`group_order_divergence` (the one that suppresses `is_clean`) and
+Three `observations` kinds are also printed in the text report:
+`group_order_divergence` (the one that suppresses `is_clean`),
 `uniform_drift_side` — emitted when three or more `translate_edit` rows exist
 and all of them drifted on the *same* language half, the shape a
-review-after-translate pass leaves. It carries `side` so you can branch on it
+review-after-translate pass leaves; it carries `side` so you can branch on it
 without parsing prose, and it reports rather than recommends: the engine sees
-which side moved, never which side is authoritative. See `clm info sync-agents`.
+which side moved, never which side is authoritative — and
+`verify_translation_batch` (CLM {version}) — emitted when three or more
+`verify_translation` rows all diverge from the same recovered base commit
+(one editing session); it never changes what a row accepts as an answer.
+See `clm info sync-agents`.
 
-Schema 4 (CLM {version}) adds the deck's identity and a freshness token to
+Schema 5 (CLM {version}): `verify_translation` and `translate_edit` rows
+carry `base_ref` plus per-side `de_diff`/`en_diff` — unified hunks against
+the newest commit whose bytes match the ledger's recorded fingerprints — when
+that base is recoverable from git (capped walk; rows degrade to the plain
+shape when it is not). The text report prints the same hunks under each item.
+Schema 4 added the deck's identity and a freshness token to
 every pair payload: `deck_key`, `ledger` (the trust store's path), and
 `report_id` — a hash of the bundle bytes plus this deck's ledger section.
 Echo `report_id` at the top level of the decision document; `apply` refuses

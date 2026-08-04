@@ -7,9 +7,10 @@ paths (``sync_verify``) is loaded lazily inside the functions that need it.
 
 Verbs (design §8):
 
-* ``report`` — read-only, ledger-trusted; schema-4 envelope with the stable
+* ``report`` — read-only, ledger-trusted; schema-5 envelope with the stable
   ``is_clean`` / ``needs_model`` / ``needs_agent`` booleans; framed items
-  carry their decision vocabulary so an agent can answer in one document.
+  carry their decision vocabulary so an agent can answer in one document,
+  and recovered translation rows carry base diffs (#773).
 * ``apply``  — per-item: every mechanical row plus validated decisions; the
   ledger records each landed item; exit 0 all-applied / 1 residue / 2 error.
 * ``record`` — bless/accept collapsed: gated on the structural verify, then
@@ -26,6 +27,12 @@ from pathlib import Path
 import click
 
 from clm.slides import doc_apply, doc_ledger
+from clm.slides.base_recovery import (
+    BASE_DIFF_ACTIONS,
+    MemberBaseDiff,
+    batch_observation,
+    recover_base_diffs,
+)
 from clm.slides.doc_lenses import DocLensError, LoadedBundle, load_bundle
 from clm.slides.doc_report import (
     cold_sweep_hint,
@@ -73,7 +80,13 @@ def _load(de_path: Path, en_path: Path | None) -> LoadedBundle:
     return load_bundle(de_path, en_path)
 
 
-def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
+def _render_pair(
+    bundle: LoadedBundle,
+    diff: DeckDiff,
+    base_diffs: dict[str, MemberBaseDiff] | None = None,
+    *,
+    batch: bool = True,
+) -> str:
     lines = [
         f"{bundle.de_path.name}: "
         + (
@@ -90,6 +103,22 @@ def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
         lines.append(
             f"  {item.outcome}/{item.action} {item.key} ({item.direction}) {item.detail}{suffix}"
         )
+        # #773: the recovered base renders inline, not behind a flag — reading
+        # two full cells to spot a one-word change is the measured cost, and a
+        # hidden diff would not collapse it. A side at base ("") prints
+        # nothing; an unrecovered row prints exactly what it did before. The
+        # action guard mirrors item_payloads: keys are shared across a
+        # member's aspect rows (a mechanical mirror_tags beside the
+        # verify_translation), and the recovery is a claim about the
+        # recovered actions only — without it the hunks render duplicated
+        # under rows they do not describe.
+        recovered = base_diffs.get(item.key) if base_diffs else None
+        if recovered is not None and item.action in BASE_DIFF_ACTIONS:
+            for lang in ("de", "en"):
+                hunks = recovered.side_diff(lang)
+                if hunks:
+                    lines.append(f"    {lang} vs base {recovered.base_ref[:12]}:")
+                    lines.extend(f"      {hunk_line}" for hunk_line in hunks.splitlines())
     for obs in diff.observations:
         # Two kinds are worth a line in the human report, for opposite reasons:
         # ``group_order_divergence`` suppresses is_clean (issue #654), so without
@@ -99,6 +128,12 @@ def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
         # (Q5) — printing it after the items is deliberate, it is a summary.
         if obs.kind in ("group_order_divergence", "uniform_drift_side"):
             lines.append(f"  observation/{obs.kind}: {obs.detail}")
+    if base_diffs and batch:
+        # The #773 batch summary — like uniform_drift_side, a summary prints
+        # after what it summarizes.
+        batch_obs = batch_observation(diff, base_diffs)
+        if batch_obs is not None:
+            lines.append(f"  observation/{batch_obs.kind}: {batch_obs.detail}")
     hint = cold_sweep_hint(diff)
     if hint is not None:
         lines.append(f"  hint: {hint}")
@@ -124,7 +159,15 @@ def run_report_v3(
     this window"), never a trust change: the ledger is neither consulted nor
     written, and nothing else about the verb differs.
     """
-    results: list[tuple[LoadedBundle, DeckDiff, list[str], doc_ledger.TopicLedger | None]] = []
+    results: list[
+        tuple[
+            LoadedBundle,
+            DeckDiff,
+            list[str],
+            doc_ledger.TopicLedger | None,
+            dict[str, MemberBaseDiff],
+        ]
+    ] = []
     errors: list[str] = []
     pairs, solos = _scope_pairs(de_path, en_path)
     _warn_solos(solos)
@@ -137,14 +180,20 @@ def run_report_v3(
         ledger: doc_ledger.TopicLedger | None = None
         if since_ref is not None:
             diff, base_refusal = diff_bundle_at_ref(bundle, since_ref)
+            # The forensic view diffs against a NAMED commit — recovery must
+            # not walk history for a base the caller already spelled out.
+            base_diffs = recover_base_diffs(bundle, diff, candidates=[since_ref])
         else:
             (diff, ledger), base_refusal = diff_bundle_with_ledger(bundle), []
-        results.append((bundle, diff, base_refusal, ledger))
-    clean = all(diff.is_clean for _, diff, _refusal, _l in results) and not errors
+            base_diffs = recover_base_diffs(bundle, diff)
+        results.append((bundle, diff, base_refusal, ledger, base_diffs))
+    clean = all(diff.is_clean for _, diff, _refusal, _l, _bd in results) and not errors
     if as_json:
         payloads = []
-        for bundle, diff, base_refusal, ledger in results:
-            payload = pair_payload(bundle, diff, ledger=ledger)
+        for bundle, diff, base_refusal, ledger, base_diffs in results:
+            payload = pair_payload(
+                bundle, diff, ledger=ledger, base_diffs=base_diffs, batch=since_ref is None
+            )
             if since_ref is not None:
                 payload["baseline"] = f"since:{since_ref}"
                 if base_refusal:
@@ -160,16 +209,17 @@ def run_report_v3(
                     "engine": "v3",
                     "exit_code": 0 if clean else 1,
                     "is_clean": clean,
-                    "needs_model": any(d.needs_model for _, d, _r, _l in results),
-                    "needs_agent": any(d.needs_agent for _, d, _r, _l in results) or bool(errors),
+                    "needs_model": any(d.needs_model for _, d, _r, _l, _bd in results),
+                    "needs_agent": any(d.needs_agent for _, d, _r, _l, _bd in results)
+                    or bool(errors),
                     "errors": errors,
                     "skipped_solos": [str(p) for p in solos],
                     "pairs": payloads,
                 }
             )
     else:
-        for bundle, diff, base_refusal, _ledger in results:
-            click.echo(_render_pair(bundle, diff))
+        for bundle, diff, base_refusal, _ledger, base_diffs in results:
+            click.echo(_render_pair(bundle, diff, base_diffs, batch=since_ref is None))
             if base_refusal:
                 click.echo(
                     f"  note: the bundle at {since_ref} refuses to parse "

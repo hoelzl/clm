@@ -16,11 +16,20 @@ from pathlib import Path
 
 from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
 
-__all__ = ["bundle_texts_at_ref", "git_ref_text"]
+__all__ = ["bundle_texts_at_ref", "git_ref_text", "recent_change_refs", "resolve_commit"]
 
 
 def _git_capture(cwd: Path, *args: str) -> str | None:
-    """``git <args>`` run in ``cwd`` — stdout, or ``None`` on any failure."""
+    """``git <args>`` run in ``cwd`` — stdout, or ``None`` on any failure.
+
+    ``errors="replace"``: a historical blob that is not valid UTF-8 (a legacy
+    latin-1 commit) must degrade to replacement characters — which then fail
+    any fingerprint match and are skipped — never raise ``UnicodeDecodeError``
+    out of a read helper. Strict decoding crashed the #773 recovery walk on
+    the first such commit inside its window (on POSIX the decode happens in
+    the main thread), and would equally have crashed ``--since REF`` aimed at
+    one.
+    """
     try:
         completed = subprocess.run(
             ["git", *args],
@@ -28,6 +37,7 @@ def _git_capture(cwd: Path, *args: str) -> str | None:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except (FileNotFoundError, OSError):
@@ -94,6 +104,56 @@ def _repo_root(path: Path) -> Path | None:
 def _text_at_ref(root: Path, path: Path, ref: str) -> str | None:
     rel = path.resolve().relative_to(root.resolve()).as_posix()
     return _git_capture(root, "show", f"{ref}:{rel}")
+
+
+def recent_change_refs(de_path: Path, en_path: Path, *, cap: int) -> list[str]:
+    """Newest-first commits that changed any file of the ≤4-file bundle, ≤ ``cap``.
+
+    The candidate list for the #773 base-recovery walk: between two of these
+    commits the bundle's bytes are unchanged, so every distinct historical
+    state of the bundle is "the state at" exactly one of them — checking only
+    them visits each state once and skips the no-change commits in between.
+    Companion candidates use the same subdir-then-sibling locations as
+    :func:`bundle_texts_at_ref`. Empty when git is unavailable or nothing is
+    committed. Renames are not followed (``git log --follow`` takes a single
+    pathspec, and the walk spans up to six); a deck renamed since the base
+    state was committed degrades to no candidates, which the caller treats as
+    "base not recoverable" — honest, never wrong.
+    """
+    root = _repo_root(de_path)
+    if root is None:
+        return []
+    paths: list[str] = []
+    for deck in (de_path, en_path):
+        name = companion_name(deck)
+        for candidate in (deck, deck.parent / COMPANION_SUBDIR / name, deck.with_name(name)):
+            try:
+                rel = candidate.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                continue
+            if rel not in paths:
+                paths.append(rel)
+    if not paths:
+        # Reachable when git's toplevel and Path.resolve() disagree (symlinked
+        # or subst'd course dirs). `git log --` with no pathspec would silently
+        # widen to whole-repo history — degrade instead.
+        return []
+    out = _git_capture(root, "log", f"-{cap}", "--format=%H", "--", *paths)
+    return out.split() if out else []
+
+
+def resolve_commit(path: Path, ref: str) -> str | None:
+    """``ref`` resolved to a full commit sha in ``path``'s repo, or ``None``.
+
+    A user-spelled ref (``HEAD~2``, a branch, an abbreviation) is only
+    meaningful at the moment it is typed; anything *stored* in a payload must
+    be the full sha so it still names the same commit later.
+    """
+    root = _repo_root(path)
+    if root is None:
+        return None
+    out = _git_capture(root, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    return out.strip() if out else None
 
 
 def bundle_texts_at_ref(

@@ -43,7 +43,7 @@ writes**. The default is "tell me what is necessary", not "do it".
 
 ## Reading the report
 
-`report --json` emits a schema-4 envelope (`"schema": 4, "engine": "v3"`).
+`report --json` emits a schema-5 envelope (`"schema": 5, "engine": "v3"`).
 Branch on the stable booleans rather than scanning the lists:
 
 - `is_clean` — nothing to do; **stop**. One non-item state suppresses it:
@@ -81,6 +81,38 @@ stay open and only you know which applies:
 needing two-sided verification frame `verify_translation` and are counted
 separately in the observation's detail, precisely so a blanket sweep does not
 pick them up.
+
+### Base diffs on translation rows (`base_ref` / `de_diff` / `en_diff`)
+
+A `verify_translation` row asserts "both halves moved off the recorded base" —
+a judgement you can only make by seeing *what* moved. Since schema 5 the
+engine recovers that base for you when it can: it walks the deck's recent
+git history (capped), finds the newest commit whose bytes match the ledger's
+recorded fingerprints, and puts per-side unified diffs on the row:
+
+- **`base_ref`** — the full sha of the commit holding the recovered base
+  (`git show <base_ref>` works verbatim);
+- **`de_diff` / `en_diff`** — unified hunks from the base cell to the current
+  cell. **Read these instead of comparing the full `de`/`en` cells by eye.**
+  An empty string means that side is byte-identical to its base (the unmoved
+  side of a `translate_edit`, which carries the same fields).
+
+The fields are **optional**: a base that was never committed (`record` runs
+pre-commit), a history rewritten away, or a repo without git yields rows
+without them — then fall back to the full cells as before. The recovery is
+exact up to the `slide_id` attribute — the equivalence the ledger's own
+fingerprints define: both sides must match, and the match is key-aware (an
+id-keyed row only matches the member carrying its own id), so a present
+`base_ref` is the recorded state, never a nearest guess or another member's
+lookalike bytes. The text report prints the same hunks under each item.
+
+**Before working a wall of `verify_translation` rows, check `observations`
+for `verify_translation_batch`.** It fires when three or more such rows all
+diverge from the *same* recovered base — one editing session, most likely. If
+the hunks repeat one pattern (a rename, renumbering, a formatting sweep),
+judge the pattern once. It never changes what you answer: every row still
+takes its own explicit answer (`confirm`, or `body` + `side`); there is no
+batch answer, at any count.
 
 Each item row carries `key` (the member handle), `outcome`, `action`,
 `direction` (`de_to_en` / `en_to_de` / `both` / `none`), `detail`, the full
@@ -131,7 +163,7 @@ Every pair payload carries three identity fields:
 
 - **`report_id`** — a token over the bundle bytes **plus** this deck's ledger
   section. Put it at the top level of your decision document
-  (`{"schema": 4, "report_id": "…", "decisions": [...]}`). `apply` recomputes
+  (`{"schema": 5, "report_id": "…", "decisions": [...]}`). `apply` recomputes
   it and, on a mismatch, refuses the **whole document**: exit 2, nothing
   written, and a message naming both values. That is deliberate — if the deck
   moved since the report, every answer in the document is suspect, not just
@@ -414,7 +446,7 @@ they do not exist):
 
 ```json
 {
-  "schema": 4, "engine": "v3",
+  "schema": 5, "engine": "v3",
   "dry_run": false,
   "error": null,
   "wrote": true, "written": ["…/slides_x.en.py"],
@@ -630,8 +662,9 @@ sync handoff closes through the ordinary loop.
 
 ## Non-shell agents — the MCP tool
 
-`slides_sync_report` (MCP) returns the same schema-4 pair payload as
-`report --json`, including the `answers` vocabulary per framed item.
+`slides_sync_report` (MCP) returns the same schema-5 pair payload as
+`report --json`, including the `answers` vocabulary per framed item and the
+`base_ref`/`de_diff`/`en_diff` fields on recovered translation rows.
 Writing decisions currently requires the CLI `apply --decisions`.
 
 ## Working patterns for agents

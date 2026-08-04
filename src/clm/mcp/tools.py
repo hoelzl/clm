@@ -21,6 +21,7 @@ from clm.core.topic_resolver import (
 )
 from clm.slides.authoring_rules import AuthoringRulesResult
 from clm.slides.authoring_rules import get_authoring_rules as _get_authoring_rules
+from clm.slides.base_recovery import recover_base_diffs as _recover_base_diffs
 from clm.slides.doc_lenses import DocLensError
 from clm.slides.doc_lenses import load_bundle as _load_bundle
 from clm.slides.doc_report import diff_bundle as _diff_bundle
@@ -761,12 +762,14 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
     """Produce the sync report for a split DE/EN deck pair (v3 engine, #520).
 
     Runs the *same* read verb as ``clm slides sync report --json`` and returns the
-    schema-4 member table: per-member items (mechanical vs framed actions, each
+    schema-5 member table: per-member items (mechanical vs framed actions, each
     framed item carrying its decision-answer vocabulary) diffed against the
-    committed per-topic ledger — the only trust store. This is the blessed agent
+    committed per-topic ledger — the only trust store. Recovered
+    ``verify_translation`` / ``translate_edit`` rows additionally carry
+    ``base_ref`` / ``de_diff`` / ``en_diff`` (#773). This is the blessed agent
     contract for non-shell agents (the split-pair analogue of the legacy
     single-file ``slides_suggest_sync``). Read-only: no file is written, the
-    ledger is not touched, and no model is called.
+    ledger is not touched, and no model is called (recovery reads git).
 
     Args:
         file: A deck half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) or the bilingual
@@ -774,7 +777,7 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         data_dir: Root data directory (a relative ``file`` resolves against it).
 
     Returns:
-        JSON: the schema-4 pair payload (``de_path`` / ``en_path``, the ``items``
+        JSON: the schema-5 pair payload (``de_path`` / ``en_path``, the ``items``
         rows, and ``is_clean`` / ``needs_model`` / ``needs_agent``), or an
         ``{"error": …}`` object.
     """
@@ -801,7 +804,8 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         bundle = _load_bundle(de_path, en_path)
     except DocLensError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
-    payload = _pair_payload(bundle, _diff_bundle(bundle))
+    diff = _diff_bundle(bundle)
+    payload = _pair_payload(bundle, diff, base_diffs=_recover_base_diffs(bundle, diff))
     return json.dumps(payload, indent=2)
 
 
