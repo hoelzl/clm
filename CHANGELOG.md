@@ -9,6 +9,470 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.24.0] - 2026-08-04
+
+### Added
+
+- **Sync wire schema 4.** `report` / `apply` / `record` payloads now announce
+  `"schema": 4`, and every report pair payload carries the deck's identity and
+  a freshness token:
+  - `report_id` — a hash of the bundle bytes plus this deck's ledger section.
+    Echo it at the top level of the decision document
+    (`{"schema": 4, "report_id": "…", "decisions": [...]}`) and `apply` will
+    refuse the **whole** document — exit 2, nothing written — when the deck or
+    its ledger moved on since that report. Documents without the token are
+    still accepted, with a warning naming the field; that grace ends in a
+    future release (#649).
+  - `deck_key` and `ledger` — the deck's trust identity, so it is visible that
+    a deck half and its `voiceover_*` companion are one deck with one ledger
+    section. Pointing `sync` at a companion now says on stderr that it is
+    reconciling the deck.
+- `apply` distinguishes **`already_applied`** from `rejected`: an answer whose
+  member frames nothing in the current report is redundant, not wrong — the
+  state it asks for already holds — and no longer blocks exit 0. Only a handle
+  naming no member of the deck is a stale-handle rejection. This is the
+  verdict half of #649, where apply reported "rejected" for decisions whose
+  writes had demonstrably landed.
+- `report` and `apply` embed `exit_code` in their `--json` envelopes, decision
+  parse/freshness refusals emit a JSON envelope instead of an empty stdout, and
+  the rejection block is printed to stderr **before** the payload so a merged
+  stream still ends in valid JSON.
+
+- A decision row may now name the framed **`action`** it answers
+  (`{"key": "id:intro", "action": "translate_edit", "body": "…"}`). Two things
+  this fixes: a member that frames two rows can have both answered in one
+  document (previously the second row was a `duplicate key` error, and the
+  engine's own design notes sequenced around it), and an answer aimed at a row
+  the member does not currently frame is now *reported* — `rejected`, naming
+  both the framed action and the one you asked for — instead of silently
+  landing on whichever row the member does frame. The field is optional; a row
+  without it answers whatever the member frames, exactly as before.
+
+- Sync report items carry **`resolution`** (`mechanical` / `decision` /
+  `manual`). An empty `answers` list meant two opposite things — "nothing to
+  answer, `apply` executes it" on a mechanical row and "blocked, repair the
+  files yourself" on a framed one — and `clm info sync-agents` documented only
+  the first, so its own example filter script misclassified every blocked item.
+  Branch on `resolution`.
+- Report items also carry **`de_body`/`en_body`**: the same cell bytes as
+  `de`/`en` but without the `# %%` delimiter line, which is exactly what a
+  `body` answer must contain. Report output is now valid decision input; agents
+  no longer have to rediscover "strip line 1".
+- A cold member present on **one half only** no longer advertises `confirm`.
+  The executor always refused it (confirm asserts that both halves agree), and
+  for a positional member the rejection then blocked its whole `(group, kind)`
+  pool with no visible cause. The item now comes back with no answers,
+  `resolution: manual`, and a `detail` naming the repair — give the cell a
+  `slide_id` so its twin can be framed, or delete it.
+
+- `verify_translation` now accepts a **`body` + `side`** answer, not only
+  `confirm`. Both sides moved off base; when your review finds one of them
+  wrong you can replace it in the same pass instead of hand-editing the file
+  and re-reporting. (`side` is required here — both sides moved, so the engine
+  cannot infer which one you corrected.) `clm info sync-agents` documented this
+  answer before the engine accepted it; that contradiction is gone.
+- `fork_pending_twin` gains the **`mark_twin`** answer. Turning a shared cell
+  into a localized pair left the twin's `lang=` attribute to a hand edit —
+  which is precisely the operation the doctrine forbids ("never hand-edit the
+  other language"), so the flow's only route was the one it prohibits. The
+  engine now writes the attribute; the body adaptation stays yours, framed as
+  `translate_edit` on the next pass. The two-pass fork recipe is documented in
+  `clm info sync-agents` for the first time, including why doing both steps in
+  one edit drops the member's ledger history.
+
+- `clm build` gains `--plantuml-image` and `--drawio-image`, plumbed exactly
+  like `--notebook-image` (#690): a per-invocation image override for the
+  diagram workers, with the bare-tag shorthand expanding against each
+  service's own default repository (`--drawio-image test` →
+  `docker.io/mhoelzl/clm-drawio-converter:test`). Previously only the
+  notebook image was reachable from the command line; the diagram workers
+  required deriving `CLM_WORKER_MANAGEMENT__*__IMAGE` env-var spellings.
+  The env-var route keeps working. Caveat: worker reuse is image-blind —
+  stop lingering reused workers when switching images (cache keys follow
+  the image since #744).
+
+- **`clm slides sync report`** now emits a deck-level `uniform_drift_side`
+  observation when three or more `translate_edit` items exist and *every* one
+  drifted on the same language half — the shape a review-after-translate pass
+  leaves. Each row names its own side, but says nothing about the
+  others, so a report full of them still reads as N separate members to work
+  through; the observation is the one line saying they are N views of a
+  single event. It carries `side`, so a driver can branch on it without parsing
+  prose, and it reports rather than recommends: the engine sees which side
+  *moved*, never which side is *authoritative*, so both readings (bank the
+  reviewed half with `keep_twin`, or supply adapted bodies for the twin) are
+  spelled out. Members needing two-sided verification are counted separately so
+  a blanket sweep cannot pick up rows that do not accept `keep_twin`. Appears in
+  the JSON envelope and in the text report, below the items it summarizes.
+- **`clm slides sync report`**: `translate_edit` item details now name the
+  `keep_twin` answer alongside "adapt the twin".
+
+- **`clm validate` flags German text in shared code cells.** A shared
+  (no-`lang`) code cell is emitted verbatim into both language outputs, so
+  `# Das ist ein Kommentar.` in one leaks German into the English deck — and
+  once banked as `shared` trust, a later one-sided fix frames the mechanical
+  `propagate_shared_edit` overwrite (#771's review reproduced that end to
+  end). The new cross-file `pairing` check scans comments and string literals
+  only (identifiers/keywords are English by construction; corpus measurement:
+  German in 0.92% of shared code cells vs 7.5% English — an 8× asymmetry), and
+  warns once per offending cell, always on the `.de.py` side. Intentional German — the
+  DE↔EN dictionary example — opts out per cell via the new validate-only
+  `allow-untranslated` tag; because shared cells are byte-identical across the
+  halves, the hatch can never be applied one-sidedly. English text is
+  deliberately not flagged (legitimate cases: docstrings, string-lesson demo
+  strings). Warning severity, matching the split-pair family: pre-existing
+  committed German must not hard-fail CI; `--fail-on warning` gates it where
+  wanted. (#772)
+
+### Changed
+
+- **`clm slides sync`** no longer asks you to verify what it can see for itself.
+  A member with no ledger entry used to be framed as a question purely because
+  both halves were present — including cells the two halves share *byte for
+  byte*, where there is no translation divergence to verify and the question has
+  one possible answer. Such members now resolve as a new mechanical
+  `record_neutral` row that writes **no file bytes**, only the ledger entry
+  (provenance `structural`). On the reference corpus this removes **13,059 of a
+  cold start's 28,791 items — 45.4%**.
+
+  It fires only when the engine can check the claim rather than trust it: no
+  ledger entry, both halves present, declared language-neutral (no `lang=`), of
+  kind `code` or `j2`, and agreeing on every field the differ compares.
+
+  **Prose is deliberately excluded**, even when the halves are byte-identical: a
+  genuinely language-neutral `markdown` cell and German prose duplicated onto the
+  English side look the same to the tool, and auto-blessing the second would bank
+  an untranslated cell as in-sync. Those stay `verify_cold` for a human to judge.
+
+  That boundary is a **base-rate trade, not a guarantee**: about 0.6% of the
+  members this now records (83 of 13,049 on the reference corpus, across 41 of
+  730 decks) carry German inside a comment or string literal, so they are
+  untranslated cells in the English deck too. Code cells are auto-recorded
+  because prose is *rare* there, not because it is impossible — the tool
+  compares the two halves, it does not read them.
+
+  Nothing that was previously mechanical becomes a question, and nothing that
+  required judgement is now decided for you — a member failing any part of the
+  test keeps exactly its old framing.
+
+- **`clm validate`**: the split pair's **tag-set parity** check is now computed
+  by the sync engine's oracle — the same one `clm slides sync verify` runs —
+  instead of `validate`'s own pairing code.
+
+  The visible improvement is that **phantom findings are gone**. The old check
+  paired the two halves *positionally*, so a single one-sided insert offset every
+  later cell and each offset pair was reported as a tag mismatch, pointing at
+  lines where nothing was wrong. The engine pairs id'd cells by
+  `(slide_id, role)` and only falls back to positional matching *within* one
+  slide, so an offset cannot cascade. On the reference corpus 25 tag warnings
+  become 20 — one deck contributed 6, of which 5 were artefacts.
+
+  The message now names both tag sets rather than the one-sided delta. Severity
+  is unchanged, and the finding still points at the offending DE cell.
+
+  The other three pair checks are unchanged: they compare *sets*, or a
+  length-guarded shared-cell stream, so they cannot produce this artefact.
+
+### Fixed
+
+- `clm slides sync`: removing (or renaming) a slide no longer leaves its
+  separated voiceover/notes companion cell as a hand-edit-only dead end
+  (#650). The dangling `for_slide` was already framed (`broken_owner`) and
+  blocked the write gate, but the item carried no answers — the only remedy
+  was manually deleting the cell from both halves. Now: `broken_owner`
+  accepts `{"choice": "remove"}`, pruning the orphaned narration from every
+  present half; a framed `broken_owner` suppresses the member's other rows
+  for the pass (one key, one answer); and a slide **rename** the differ can
+  see in the same pass never frames the removal decision at all — the new
+  mechanical `retarget_owner` rewrites the companion's `for_slide` to
+  follow the rename, so live narration is never steered into a prune. The
+  item detail and `clm info sync-agents` name the answer and the hand-edit
+  alternatives.
+
+- **A one-sided `slide` tag change no longer refuses the deck** (#653). Removing
+  (or adding) `tags=["slide"]` on one half made the same id a slide anchor on
+  one side and a continuation cell on the other; the lens built two members
+  under one key and refused the whole deck with
+  `duplicate_id: member key id:X resolves to 2 distinct members` — zero items
+  framed, and a `rename-id` hint that renames *both* halves and therefore
+  cannot fix it.
+
+  Slide-hood is a **presentation** attribute — the tags select the transition
+  shown when a cell appears, and authors flip them because a rendered slide
+  looks too full — so anchor-hood is now a property of the **pair**: a boundary
+  only one half draws opens no group on either side. The cell stays an ordinary
+  member, pairs by id like any other, and the halves simply differ in one tag —
+  which is the mechanical `mirror_tags` row every other tag difference has been
+  since #615. The report also carries an `anchor_shape_divergence` observation
+  naming both halves and their line numbers.
+
+  Design: `docs/claude/design/sync-slide-hood-is-presentation.md`. The
+  positional keys of cells inside the affected span still churn (they are
+  scoped by the owning anchor); making them immune is the second half of that
+  design and needs a ledger migration.
+
+- `clm slides sync report` no longer reports a one-sided `slide` tag change as
+  `duplicate_id`. Removing (or adding) `tags=["slide"]` on one half of a split
+  deck makes the same id a slide start on one side and a continuation cell on
+  the other; the parse used to refuse the whole deck with
+  `duplicate_id: member key id:X resolves to 2 distinct members` — a message
+  about parsing ambiguity whose `rename-id` hint renames *both* halves and so
+  cannot fix it. The cause is now named by its own code,
+  `anchor_shape_divergence`, which locates both halves, says which side carries
+  the tag, and hints the edit that repairs it (#653).
+- A parse refusal whose reasons are all codes `normalize` cannot repair no
+  longer opens with "run `clm slides normalize --stamp-ids` first" — that
+  command reports nothing to do for a duplicate id or a one-sided slide tag.
+  The header names `normalize` only when at least one id-less reason is present.
+
+- `clm slides sync`: order divergence is now detected from the **current**
+  cross-side state, whether or not the ledger carries recorded order trust
+  (#654). Previously order items could only frame against recorded order
+  scopes, which only a full `record`/`split`/`translate-bootstrap` ever
+  seeded — a ledger built through report → confirm → apply was permanently
+  order-blind: a one-sided slide move framed nothing, `apply` left the twin
+  stale, and the follow-up report said `is_clean` while `clm validate`
+  flagged the divergence. Now: with recorded trust a one-sided move stays a
+  mechanical `mirror_order`; without it (cold decks included) the divergence
+  frames an `order_decision` naming both sequences; a same-pass rename+edit
+  of a slide no longer destroys the evidence; a fully-resolved `apply` pass
+  seeds order trust for the scopes whose sides agree, so the mechanical
+  path becomes available after the first clean pass; and a parse-observed
+  group-order divergence suppresses `is_clean` outright.
+
+- `clm slides sync apply`: decision bodies are normalized to the engine's
+  canonical cell shape at the write boundary (#655) — a markdown body
+  missing its leading blank comment line (`#`) gains it (a bare blank first
+  line is promoted), so `clm validate` no longer warns on the engine's own
+  output right after a clean apply, and the out-of-band fix plus
+  zero-content `keep_twin` round it forced disappears. Code cells and
+  single-line j2 macro cells are untouched. The `choice`/`body`
+  mutual-exclusivity rejection now explains that a `body` alone already
+  selects the body answer, and the decision-body contract (delimiter
+  exclusion, comment prefixes, auto-inserted blank lead, exclusivity) is
+  documented in `clm info sync-agents`.
+
+- `clm info sync-agents` no longer states two things the engine does not do:
+  `--dry-run` was described as validating "everything", but it stops before the
+  write and therefore never runs the structural verify gate — a clean dry run
+  is not a promise that the pass will record; and `pos: → id:` was called the
+  only key migration, which stopped being true when `clm slides rename-id`
+  gained `id: → id:` (including the cascade of a renamed group anchor into its
+  members' positional keys and order scopes).
+- The refusal for an unanswerable item no longer says "has no decision
+  vocabulary in Phase 3" — internal jargon with no remedy in it. It now names
+  the state (`resolution: manual`) and the way out: read the item's detail,
+  repair the files, re-report.
+
+- `clm info releases` and `clm release sync --help` now state that evergreen
+  freshness is fixed at **build** time (#657): regenerate the sources of
+  evergreen files (exported outlines, schedules — often a spec-declared
+  task) before `clm build`, or the sync truthfully reports `up-to-date` for
+  the stale content the build baked in and ships it to the cohort.
+
+- `clm git --dry-run` previews now resolve the real branch (#686): read-only
+  git queries (`rev-parse`, `status`, `rev-list`, `remote get-url`, …)
+  execute normally under dry-run, while mutating commands stay stubbed with
+  the `[dry-run] Would run:` preview. Previously every query was stubbed to
+  empty output, so `push --dry-run` previewed `push -u origin ''` and
+  "Pushed to origin/" — the one question a dry run exists to answer ("which
+  branch am I about to push?") was unanswerable. `fetch` stays stubbed
+  (it rewrites remote-tracking refs), so ahead/behind previews may compare
+  against slightly stale remote state — and `sync --dry-run` now exits 1
+  when those refs show the remote ahead, accurately predicting the real
+  run's abort. `init --dry-run`'s remote classification runs read-only and
+  prompt-free (`GIT_TERMINAL_PROMPT=0`; an unreachable remote degrades to
+  the local-only preview), its crash-recovery branch previews instead of
+  attempting a real `.git` restore, and the `.gitignore` it used to write
+  even under `--dry-run` is now only previewed. Commit/sync dry-run
+  previews gate on the real working-tree status, so "working tree clean"
+  no longer prints over a dirty tree.
+
+- `clm info slide-format`: two documentation gaps agents kept falling into
+  (#692, #693). The `alt` tag — which has its own normalize migration — now
+  appears in the code-visibility table with the pairing invariants
+  (`completed` always follows a `start` cell, `alt` never does; identical
+  output visibility otherwise; a legacy `start`→`alt` pair is migrated by
+  `tag_migration`, do not infer it from old corpora). And workshops are now
+  documented as a **range**, in a dedicated "Workshop scope" subsection:
+  both opener forms (`workshop` tag, `workshop-…` slide_id on a slide-start
+  markdown cell — with the #732 caveat that partial builds currently
+  recognize only the tag form), all three closers including the implicit
+  run-to-end-of-deck default, a worked example, and what the `partial`
+  output does inside vs outside the range — the per-cell reading of the old
+  tag table produced provably wrong coverage numbers.
+
+- `clm slides sync`: the pairing lens no longer adopts an id'd-on-one-half
+  cell as a positional twin when the id'd side's pool holds surplus cells
+  (#716). Previously a newly inserted id'd cell that was byte-identical to an
+  un-id'd neighbor (or carried a `lang` attribute) could steal that
+  neighbor's twin — making `apply` mechanically delete the authored cell on
+  the other half, or handing a new localized cell another slide's
+  translation. Under a surplus the cell now stays one-sided and frames
+  normally (`copy_new_shared` / `translate_new`).
+
+- `clm slides sync apply`: the verbatim-copy executor primitive
+  (`copy_new_shared`, and the `treat_as_new` / `keep` answers) now mints the
+  target half's `lang=` variant for a lang-attributed source cell instead of
+  copying the source attribute verbatim (#717) — a wrong-language cell in the
+  twin file would make the re-parse gate abort the entire apply pass.
+
+- `clm slides sync`: a both-halves slide-id rename recorded through the sync
+  loop (`record_group_rename`) no longer leaves dangling `id:<old>`
+  references in the committed ledger — `rename_group_scopes` now rewrites
+  owner references and the `id:` handles inside member-order lists too, and
+  every ledger save sweeps deck sections for dangling references (#718).
+  Ledgers already damaged by the old path heal on their next save.
+
+- `clm slides sync`: the structural checks now detect **order-parity**
+  divergence — the two halves ordering their common id'd cells differently
+  (a group swap, a one-sided slide move). `sync verify` reports it as a
+  warning; the ledger write gate treats it as blocking, so `record` and
+  `apply`'s ledger save refuse to certify an order-divergent pair (#719).
+  Previously a swap whose moved region held only localized cells passed the
+  gate and the ledger recorded the corrupt pair as verified (#652).
+
+- `clm slides sync apply`: minting a slide's missing twin now refuses when
+  the computed insert position would separate the slide from its group's
+  existing cells on the other half (#720) — under a divergent group order the
+  mirrored-predecessor placement previously wrote the twin at the end of the
+  file, structurally corrupting the pair (#652). The refusal fails only that
+  item, with a reorder-first instruction; all other items still land.
+
+- `clm build`: the `partial` output kind now recognizes **both** workshop
+  opener forms (#732). The build carried a tag-only duplicate of the range
+  detector, so a workshop opened only by the sanctioned `workshop-…`
+  slide_id form passed `clm validate` but its partial build detected no
+  range — the full solution shipped unblanked. One canonical detector
+  (`clm.slides.workshop_scope`) now backs the validator, `clm export`, and
+  the build — including the cached-HTML partial path: the cached executed
+  notebook now retains `slide_id`/`for_slide` metadata (stripped at the
+  export boundaries instead of before the cache write), and the notebook
+  cache schema version was bumped, so the first build after upgrading
+  re-executes once instead of replaying stale slide_id-less artifacts. The
+  validator's orphan-`end-workshop` warning uses the same opener predicate,
+  so a slide_id-opened workshop's closer no longer warns "the tag has no
+  effect".
+
+- `clm build`: cache-hit partial HTML no longer loses workshop starter
+  cells (#734). Recording deleted `start` cells before caching its executed
+  notebook, so the cached-partial path — unlike a fresh partial build —
+  emitted workshops without their scaffolding. The cached artifact now
+  retains the starters **unexecuted** (they are often deliberately
+  incomplete and are skipped at execution); the cached-partial view keeps
+  them in-range exactly like a fresh build, and every other view
+  (Recording's own HTML, completed/trainer-from-cache, pre-workshop
+  partial) drops them at its boundary as before. The notebook cache schema
+  version was bumped again — the first build after upgrading re-executes
+  once instead of replaying starter-less artifacts.
+
+- `clm build`: trainer HTML no longer loses speaker notes on an
+  execution-cache hit (#736). The cache-reuse path filtered every
+  non-partial kind through a hard-coded notes/voiceover drop; it now
+  projects the cached notebook through the consuming output kind's own
+  delete set, so trainer keeps its notes exactly as a cache-miss build
+  does (completed output is unchanged; the #734 starters stay dropped in
+  every non-partial view).
+
+- `clm build`: cache-hit partial HTML renders blanked in-workshop `answer`
+  markdown as the localized `*Answer:*` / `*Antwort:*` stub, matching a
+  fresh partial build (#737) — previously the cached path emitted an empty
+  cell where the fresh path showed the stub.
+
+- `clm build`: the caches now key on the **effective worker image** for all
+  three worker types (#744). Diagram (PlantUML/Draw.io) results previously
+  cached on the source bytes alone — a rebuilt converter image silently
+  replayed the old image's output for every unchanged diagram; their cache
+  keys now fold in the worker-image identity and a schema version
+  (one-time diagram re-render on upgrade). The notebook
+  image identity now sees CLI overrides too: `--notebook-image X` used to
+  execute on `X` but key the cache as the configured default, replaying
+  stale outputs — `clm build` records the post-override identities and
+  payload construction reads them. Residual limits: mutable tags
+  (`:latest`) re-pulled to a new image do not change keys, and worker
+  reuse remains image-blind.
+
+- `clm cache explain` gains `--workers` and the three image-override flags
+  (#746): the cache keys follow the effective worker image since #744, so
+  explain must be given the same flags as the build it explains — it used
+  to read the config singleton (which CLI overrides never touch) and
+  misattributed the resulting miss. With no flags it matches a no-flag
+  build, as before.
+
+- `clm build`: direct-mode diagram cache keys now fingerprint the PlantUML
+  JAR / Draw.io executable (path + size + mtime, #747) — upgrading either
+  binary invalidates the affected diagram caches the same way a Docker
+  image switch does, instead of silently replaying diagrams rendered by
+  the old binary. Direct-mode users get a one-time full diagram re-render
+  on the first build after upgrading (the identity value changed).
+  Binaries configured in a config file's `[external_tools]` section are
+  fingerprinted too — resolution follows the worker executor's exact
+  injection precedence. An unlocatable binary degrades to the previous keying;
+  notebook direct-mode identity is unchanged (covered by the template
+  fingerprint). The binary resolution is now shared between the workers
+  and the host-side identity (`clm.workers.diagram_tools`), so the
+  fingerprint always describes the binary that actually renders.
+
+- **Sync write gate**: the whole-deck structural gate now labels its promoted
+  `order-parity` violation `error` instead of passing it through as a
+  `warning`. Everything the gate returns is blocking, so a caller that
+  re-filtered its result on `severity == "error"` would have dropped the
+  promoted violation and re-opened the order-divergence hole (#652) that #719
+  closed. `clm slides sync verify` is unaffected — it reports `order-parity` as
+  a warning as before, so pre-existing committed divergences still do not
+  hard-fail CI.
+- **Sync write gate**: pinned the containment relation between `clm validate`'s
+  split-pair checks and the sync write gate — a pair `validate` reports an
+  *error* on can no longer be recorded into the trust store without a test
+  failing. The property holds across the full slide corpus today; it was
+  previously unguarded, so nothing would have caught a future change that broke
+  it.
+
+- **Sync trust store**: concurrent runs on sibling decks of the same topic no
+  longer silently revert each other. A topic ledger is one file holding
+  independent per-deck sections, and every verb read the whole file and wrote it
+  back, so the second of two parallel `sync apply` runs wrote its *pre-run* copy
+  of the first's deck over the first's work — with no error on either side, and
+  the reverted members reporting cold on the next run. Saves now merge: sections
+  another run changed while this one was working are preserved, and only the
+  sections this run actually modified are overwritten. Concurrent runs on the
+  **same** deck still cannot be ordered without a lock, so the later writer wins
+  and logs a warning — parallelize by deck, not within one.
+- **Sync trust store**: the normal `report` → `apply` → `record` loop no longer
+  rewrites every touched member on every pass. Re-recording compared the
+  `provenance` stamp, and the verbs alternate between `record` and `apply`, so
+  members whose content had not changed churned anyway — 883-line ledger diffs
+  for 60 changed cells, enough noise to make the store unreviewable. A verb's
+  own stamp no longer counts as a change; a `--provenance` you actually type
+  always does, including `--provenance record` used to reset a stale
+  `semantic:<model>` attribution.
+- **Docs**: `confirmed_commit` is now described as what it has always been — the
+  repo `HEAD` when the entry was last written with a real change. It does *not*
+  contain the recorded state (`record` runs before you commit), and a no-op
+  re-record leaves it alone. The previous wording ("the commit at which this
+  state was last actually established") described behaviour the code never had.
+
+- **`tests/build/` is collected again.** Pytest's default `norecursedirs`
+  contains `build`, so the `tests/build/` test package (split-source build
+  routing, shared-cell parity messages) was silently never collected by a bare
+  `pytest` — neither the pre-push hook nor any CI job ran it. `pyproject.toml`
+  now pins `norecursedirs` to the pytest default minus `build`; the 14
+  previously-invisible tests pass unchanged. (#776)
+
+### Security
+
+- `clm serve` Studio: the tier-2 cell preview's Jinja expansion runs in a
+  **killable subprocess under a wall-clock budget** (#698). The in-process
+  sandbox and value caps bound memory but could not bound CPU — a nested
+  `range()` loop burned hours producing two characters, and the old
+  worker-thread route let 40 slow renders occupy the shared threadpool that
+  also serves the `/studio/` app shell. A timed-out render now degrades to
+  the tier-1 client-side fallback like every other preview failure, the
+  route holds no threadpool token while waiting, and the child carries a
+  POSIX address-space rlimit as a belt. Reachable only by a Studio
+  bearer-token holder (the trust boundary, decision D4) — defense in depth,
+  not a new exposure.
+
 ## [1.23.1] - 2026-07-28
 
 ### Fixed
