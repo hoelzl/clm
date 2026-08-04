@@ -439,8 +439,10 @@ in one job, and the Docker tier (images built from scratch) in another.
 That is the one thing PR CI structurally cannot do. A PR run tells you "this
 change is fine"; thirty runs of identical code tell you "this test is 3% flaky",
 which is how a contention regression like issue #163 surfaces before it wastes
-someone's afternoon. It also means a red Docker tier — not a required check —
-surfaces within a day even if nobody inspects the merge commit's CI.
+someone's afternoon. It also re-runs the Docker tier (a required PR check since
+#679, but skipped for docs-only changes) against unchanged master, so an
+environment-induced Docker breakage surfaces within a day even when no code PR
+happens to trigger it.
 
 (Dependency drift, the other usual nightly justification, barely applies here:
 CI installs from `uv.lock` with `UV_EXCLUDE_NEWER` pinned, so nothing moves
