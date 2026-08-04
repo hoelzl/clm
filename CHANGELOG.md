@@ -9,6 +9,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.25.0] - 2026-08-05
+
+### Added
+
+- **Sync report: base diffs on translation rows (wire schema 5, #773 phase 1).**
+  `verify_translation` and `translate_edit` items now carry `base_ref` plus
+  per-side `de_diff`/`en_diff` — unified hunks against the newest commit whose
+  bytes match the ledger's recorded fingerprints — so the reader judges the
+  hunks instead of re-diffing two full cells by eye (`verify_translation` was
+  measured at 68% of all framed rows). Recovery is a capped, read-only git
+  walk that degrades to the previous plain shape when the base is not
+  committed; `--since REF` recovers against the named ref. A
+  `verify_translation_batch` observation fires when three or more
+  `verify_translation` rows all diverge from the same recovered base, and the
+  text report renders the hunks inline. The report/decision `schema` is now
+  `5`; schema-4 decision documents remain accepted (schema 3 is retired in
+  this same release — see below), and no auto-resolution
+  is added at any threshold — every row still takes its own explicit answer.
+
+### Changed
+
+- **Generated diagram renders move out of `img/` into `<topic>/img-generated/`
+  (#664).** In a migrated repo the topic-level `img/` directory is exclusively
+  hand-authored — the build never writes into it — while DrawIO/PlantUML
+  renders live in the build-owned `img-generated/` sibling, ending the
+  shared-namespace ambiguity behind the #661 nondeterminism class. Both
+  directories collapse onto the output's `img/`, so slide references
+  (`img/x.png`) never change and a migrated course builds a byte-identical
+  output tree. New command `clm course migrate-generated-images` moves a
+  repo's committed renders (spec-free, idempotent, conflict-safe,
+  `--dry-run`); unmigrated repos keep building exactly as before via a
+  transitional rule (a committed legacy render keeps its location until
+  moved) and get one summary warning per course load naming the diagrams
+  still on the legacy target. Inline-image data URLs, the shared and
+  duplicated image modes, the image registry, the provenance manifest (what
+  the release pipeline copies from), and the stray-file sweep all understand
+  both layouts.
+
+- **The shared-cell German-text finding is now an `error`.** The #772
+  detector was born a `warning` while the corpus carried pre-existing German
+  shared cells; the cleanup finished at 0 findings across all 659 PythonCourses
+  split pairs, so the code/j2 boundary is categorical again and new German in a
+  shared (no-`lang`) code cell fails `clm validate` instead of advising. The
+  per-cell `allow-untranslated` tag remains the escape hatch for cells where
+  German is the point (a DE↔EN dictionary example, regex lessons over German
+  data). This retires the #771 base-rate caveat on `record_neutral`'s
+  `NEUTRAL_KINDS`: unmarked German in a shared code cell can no longer
+  survive a `clm validate` gate unnoticed, so banked `shared` trust stops
+  accumulating it silently (banking itself stays ungated — `sync record`
+  runs only the structural verify, which deliberately never sees this
+  content heuristic).
+  The check is also the first declared exemption to the gate⊇validate
+  containment property: a validate error the sync write gate deliberately
+  never sees, because the halves agree byte-for-byte (structurally valid
+  trust) and content-language heuristics belong to the advisory oracle, not
+  the trust oracle. A repo that still carries findings either translates the
+  flagged cells or tags them — see `clm info migration`. (#782)
+
+- **Sync decision documents must now carry `report_id`; wire schema 3 is
+  retired.** `clm slides sync apply --decisions` refuses a document that omits
+  the freshness token or announces `"schema": 3` — exit 2, nothing written,
+  with the refusal naming the field and the accepted schemas ({4, 5}). This
+  executes the tightening announced with wire schema 4 (1.24.0), whose
+  token-less grace lasted exactly one release. Drivers copy `report_id` out of
+  the `report --json` envelope; see `clm info sync-agents` and the migration
+  guide.
+
+### Fixed
+
+- **The split-routing abort-gate test now exercises the production gate.**
+  `TestBuildRefuses` re-implemented the Phase-6 abort logic inside its own
+  body and asserted on its own `SystemExit`, so deleting the real gate in
+  `build.py` kept the test green (found by the #777 adversarial review). The
+  rewritten test scaffolds the actual broken trees (dual-format conflict and
+  half pair — both categories, the second previously untested) and drives the
+  real `process_course_with_backend`, with a poisoned `start_stage` as the
+  tripwire proving the build aborts before any worker stage starts.
+  Verified by mutation: removing the production gate now fails both cases.
+  (#778)
+
 ## [1.24.0] - 2026-08-04
 
 ### Added
