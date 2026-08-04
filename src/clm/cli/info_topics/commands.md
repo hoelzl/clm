@@ -1030,6 +1030,33 @@ clm course renumber module_550_ml_azav --spec course-specs/ml.xml
 clm course renumber --spec course-specs/ml.xml --start 10 --step 10 --json
 ```
 
+### `clm course migrate-generated-images`
+
+Move committed DrawIO/PlantUML renders from `<topic>/img/` into the
+build-owned `<topic>/img-generated/` sibling (the #664 layout, CLM {version}).
+
+```
+clm course migrate-generated-images [ROOT] [--dry-run]
+```
+
+`ROOT` is a course root, a slides directory, or any subtree (default: the
+current directory); the command is spec-free and covers every topic below it.
+It derives the generated set exactly the way the build does — a diagram source
+at `<topic>/{drawio,pu}/<stem>` renders to the sanitized
+`<topic>/img/<stem>.{png,svg}` — moves those files, and reports each move.
+Hand-authored files in `img/` are never touched; slide references
+(`img/x.png`) are output-relative and are **not** rewritten (both directories
+collapse to the output's `img/`), so a correct migration produces a
+byte-identical output tree.
+
+Idempotent: re-running is safe. A byte-identical duplicate in both locations
+drops the legacy copy; diverging copies are reported as a **conflict**, left
+untouched, and exit 1 — resolve by hand and re-run. Use `--dry-run` to preview.
+
+After migrating, commit the moves. Unmigrated repos keep building exactly as
+before: a committed legacy render keeps `img/` as its render target until it
+is moved.
+
 ### `clm course gate`
 
 Run the mechanical conversion passes over a course and report **readiness** —

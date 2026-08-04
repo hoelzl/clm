@@ -1116,7 +1116,7 @@ layouts). Within it, CLM distinguishes three kinds of file:
 | Kind | Examples | Copied to output? |
 |---|---|---|
 | **Core source** | `slides_*.<ext>` (incl. split `slides_*.de.<ext>` / `slides_*.en.<ext>`) | processed into notebooks/HTML |
-| **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
+| **Output companions** | `img/`, `img-generated/`, `drawio/`, loose data files | **yes**, verbatim (both image dirs land under the output's `img/`) |
 | **Authoring sidecars** | `voiceover_*.<ext>`, `*.http-cassette.yaml` | **no** |
 | **Build-internal tree** | `.clm/` — committed: `cassettes/` (replay input), `sync-ledger.json`; ignored scratch: legacy `voiceover-cache/`, `voiceover-backfill/`, `voiceover-traces/`, `config.toml`. Likewise `.clm-cache/` (the shared LLM + voiceover cache root, usually at the project root) is fully ignored wherever it appears | **no** — `.clm/cassettes/` is a build *input* (read at runtime) but never copied to output; the rest is fully ignored everywhere |
 
@@ -1130,10 +1130,26 @@ tree — `clm slides tidy` migrates a legacy top-level `cassettes/`):
 topic_070_rag_introduction/
 ├── .clm/cassettes/ # *.http-cassette.yaml      (also accepted: legacy top-level cassettes/ , _cassettes/)
 ├── voiceover/      # voiceover_*.<ext>
-├── drawio/  img/   # output companions (unchanged)
+├── drawio/  pu/    # diagram sources
+├── img/            # hand-authored assets — NEVER written by the build (CLM {version}, #664)
+├── img-generated/  # DrawIO/PlantUML renders — ONLY ever written by the build
 ├── slides_010_what_is_rag.de.py
 └── slides_010_what_is_rag.en.py
 ```
+
+**The two image directories (CLM {version}, #664).** `img/` holds hand-authored
+assets (screenshots, photos, hand-drawn SVGs); `img-generated/` holds the
+committed DrawIO/PlantUML renders. The invariant is structural: nothing in
+`img/` is ever written by the build, everything in `img-generated/` only ever
+is. Both collapse onto the **same** output namespace — a render at
+`img-generated/compiler.svg` still lands at `<course>/img/compiler.svg` — so
+slide references keep saying `img/...` and never change. Keep committing the
+renders (a machine without the diagram toolchain needs them). Transitional
+rule for unmigrated repos: a diagram whose committed render still sits at the
+legacy `<topic>/img/<stem>.<ext>` location keeps rendering **there**; run
+`clm course migrate-generated-images` (see `clm info commands`) to move the
+generated set — the migration changes no slide references and produces a
+byte-identical output tree.
 
 Both layouts work everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`,
 `validate`); they are auto-detected by directory presence, so no spec change is

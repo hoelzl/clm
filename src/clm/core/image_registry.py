@@ -18,28 +18,33 @@ logger = logging.getLogger(__name__)
 
 
 def get_relative_img_path(source_path: Path) -> str:
-    """Get the relative path from the img/ folder for an image file.
+    """Get the relative path from the image folder for an image file.
 
     For a path like /course/slides/module/topic/img/foo/bar.png, this returns
     "foo/bar.png". For a path like /course/slides/module/topic/img/bar.png,
-    this returns "bar.png".
+    this returns "bar.png". The build-owned ``img-generated/`` sibling (#664)
+    is recognized the same way, so both directories collapse onto one
+    namespace — which is what puts a migrated render at the *same* output
+    location (``<course>/img/...``) as before the migration.
 
-    If no "img" folder is found in the path, returns just the filename.
+    If neither folder is found in the path, returns just the filename.
 
     Args:
         source_path: Full path to the image file
 
     Returns:
-        The relative path from the img/ folder, using forward slashes
+        The relative path from the image folder, using forward slashes
     """
+    from clm.infrastructure.utils.path_utils import IMG_DIRS
+
     parts = source_path.parts
-    # Find the img folder in the path (searching from the end)
+    # Find the image folder in the path (searching from the end)
     for i in range(len(parts) - 1, -1, -1):
-        if parts[i] == "img":
-            # Return all parts after "img" joined with /
+        if parts[i] in IMG_DIRS:
+            # Return all parts after the folder joined with /
             rel_parts = parts[i + 1 :]
             return "/".join(rel_parts)
-    # Fallback to just the filename if no img folder found
+    # Fallback to just the filename if no image folder found
     return source_path.name
 
 

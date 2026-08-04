@@ -94,9 +94,14 @@ def is_image_path(source_path: Path) -> bool:
     This one selects the sources that additionally need an
     ``ImageRegistry.record_output_write`` call. Mirrors
     :func:`clm.core.image_registry.get_relative_img_path`'s detection rule
-    (presence of an ``img`` segment in the path).
+    (presence of an ``img`` or ``img-generated`` segment in the path, #664 —
+    without the latter, a migrated render's output copies would be absent
+    from the image registry's tracked set and the stray-file sweep would
+    delete them).
     """
-    return "img" in source_path.parts
+    from clm.infrastructure.utils.path_utils import IMG_DIRS
+
+    return bool(IMG_DIRS.intersection(source_path.parts))
 
 
 class WriteOutcome(Enum):
