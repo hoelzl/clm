@@ -150,11 +150,21 @@ def enumerate_expected_outputs(
             if isinstance(file, DataFile) and is_ignored_file_for_output(file.path):
                 continue
             asset_format = "image" if isinstance(file, DuplicatedImageFile) else "data"
+            # A duplicated image copies to its COLLAPSED path (#664:
+            # ``img-generated/`` lands under the output's ``img/``). The
+            # manifest must enumerate what the copy writes, or every migrated
+            # render is silently dropped from ``.clm-manifest.json`` — and the
+            # release pipeline copies by manifest (review finding H1).
+            rel_path = (
+                file.output_relative_path
+                if isinstance(file, DuplicatedImageFile)
+                else file.relative_path
+            )
             for lang, _fmt, _kind, output_dir in output_specs(
                 course, target.output_root, target=target
             ):
                 try:
-                    out_path = file.output_dir(output_dir, lang) / file.relative_path
+                    out_path = file.output_dir(output_dir, lang) / rel_path
                 except (KeyError, ValueError) as e:
                     logger.debug("provenance: skip asset %s (%s): %s", file.path, lang, e)
                     continue

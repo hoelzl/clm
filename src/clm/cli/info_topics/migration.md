@@ -2,6 +2,42 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Generated diagram renders move to `<topic>/img-generated/` (#664, {version})
+
+**Breaking only in the source-tree layout; the output tree is byte-identical
+and no slide reference changes.** `<topic>/img/` used to hold both
+hand-authored assets and the DrawIO/PlantUML renders; the build now renders
+into the build-owned sibling `<topic>/img-generated/`, making the split
+structural: nothing in `img/` is ever written by the build, everything in
+`img-generated/` only ever is. Both directories collapse onto the output's
+`img/`, so references like `<img src="img/compiler.svg">` keep working
+unchanged.
+
+**Unmigrated repos keep building exactly as before**: a diagram whose
+committed render still sits at the legacy `<topic>/img/<stem>.<ext>` location
+keeps rendering there. To migrate a course repo:
+
+1. `clm course migrate-generated-images <course-root> --dry-run` — preview.
+2. Run it without `--dry-run`; it moves exactly the generated set (derived
+   from the `drawio/`/`pu/` sources), is idempotent, and exits 1 on a
+   conflict (diverging bytes in both locations — resolve by hand, re-run).
+3. Commit the moves. Keep committing renders — machines without the diagram
+   toolchain need them.
+4. Optional but recommended: verify with the built-in harness — build once
+   before migrating with `--snapshot DIR`, once after with
+   `--verify-against DIR`. A correct migration reports no differences.
+
+Expect a one-time cache invalidation on the next build (source paths feed the
+cache keys). New diagrams always render to `img-generated/`, so an unmigrated
+repo that adds one becomes mixed — functional (both layouts are fully
+understood, including by the provenance manifest the release pipeline copies
+from), and every course load logs one summary warning naming the diagrams
+that still render to the legacy location, so the migration nudge is visible
+until it is done. The same warning is the signal for the reverse accident: a
+legacy render resurrected into a migrated repo (a merge from an old branch)
+silently flips that diagram's render target back until the file is removed
+or re-migrated.
+
 ## German text in a shared code cell now fails `clm validate` ({version})
 
 **Breaking only for a repo whose shared (no-`lang`) code cells still carry
