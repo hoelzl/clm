@@ -539,7 +539,7 @@ wheels = [
 
 [[package]]
 name = "coding-academy-lecture-manager"
-version = "1.23.1"
+version = "1.24.0"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },
