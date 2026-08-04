@@ -126,19 +126,31 @@ class TestMigration:
 
     def test_running_from_inside_a_topic_works_with_the_default_root(self, runner, tmp_path):
         """Review M1: with ROOT defaulting to ``.``, shallow relative source
-        paths used to crash on ``parents[1]``. Resolving ROOT makes running
-        from inside a topic directory both safe and useful."""
+        paths used to crash on ``parents[1]``. The crash shape is a ONE-part
+        relative source — cwd directly containing the ``.pu`` (running from
+        inside ``<topic>/pu/``), where an unresolved ``parents[1]`` does not
+        exist (review R2-1: chdir'ing into the topic yields two-part paths,
+        which never crashed). Resolving ROOT makes both shapes safe."""
         topic = _topic(tmp_path)
         (topic / "img" / "diag.png").write_bytes(b"render")
 
         cwd = Path.cwd()
-        os.chdir(topic)
+        os.chdir(topic / "pu")
         try:
-            result = runner.invoke(migrate_generated_images_cmd, [])
+            inside_pu = runner.invoke(migrate_generated_images_cmd, [])
         finally:
             os.chdir(cwd)
+        # From inside pu/ the derived topic dir is cwd's PARENT — outside the
+        # resolved root, so the M2 guard skips it rather than crashing.
+        assert inside_pu.exit_code == 0, inside_pu.output
+        assert (topic / "img" / "diag.png").exists()
 
-        assert result.exit_code == 0, result.output
+        os.chdir(topic)
+        try:
+            inside_topic = runner.invoke(migrate_generated_images_cmd, [])
+        finally:
+            os.chdir(cwd)
+        assert inside_topic.exit_code == 0, inside_topic.output
         assert (topic / "img-generated" / "diag.png").exists()
 
     def test_never_reaches_outside_the_given_root(self, runner, tmp_path):
