@@ -61,8 +61,8 @@ STRUCTURAL_TAGS: frozenset[str] = frozenset({"workshop", "end-workshop"})
 # effect on output processing. ``allow-untranslated`` (#772) marks a shared
 # (no-``lang``) code cell whose German text is intentional — the DE<->EN
 # dictionary example being the canonical case — so the shared-cell
-# natural-language warning skips it. Code cells only for now: the check's
-# v1 scope is shared *code* cells.
+# natural-language check (an ``error`` since #782) skips it. Code cells only
+# for now: the check's v1 scope is shared *code* cells.
 VALIDATE_ONLY_TAGS: frozenset[str] = frozenset({"allow-untranslated"})
 
 # --- Per-cell-type valid tag sets ---

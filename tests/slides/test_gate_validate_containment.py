@@ -19,7 +19,8 @@ families share no computation, and *no test related them at all*. This module
 is that missing relation, stated as a property:
 
     **containment** — if validate's split-pair family reports an *error* on a
-    pair, ``gate_projected_pair`` must return a non-empty list.
+    pair, ``gate_projected_pair`` must return a non-empty list — for every
+    shape except the one declared in :data:`CONTAINMENT_EXEMPT`.
 
 Direction matters. The gate being **stricter** than validate is fine and in fact
 routine (see :class:`TestGateIsStrictlyStronger`); the gate being *laxer* is the
@@ -27,9 +28,12 @@ bug class. So this pins one-way containment, not equivalence.
 
 The exemptions are pinned too (:class:`TestDeliberateNonContainment`). Tag parity
 is a warning in *both* oracles by design — an error there would make the write
-gate refuse a pair the apply pass is in the middle of reconciling — and a test
-that did not say so would leave a future reader unable to tell a deliberate
-exemption from an oversight.
+gate refuse a pair the apply pass is in the middle of reconciling. And the
+shared-cell German-text check (#772) is a validate *error* the gate never sees
+(#782): a content-language heuristic belongs to validate, the advisory oracle,
+never to the gate, the structural trust oracle. A test that did not say so
+would leave a future reader unable to tell a deliberate exemption from an
+oversight.
 
 Measured over the 730-pair PythonCourses corpus at the time of writing:
 containment holds on every pair, 0 gaps.
@@ -154,10 +158,11 @@ CORRUPTIONS: dict[str, tuple[str, str, str | None, str | None]] = {
         None,
         None,
     ),
-    # --- shared-cell German text (#772): validate WARNING, gate passes -----------
+    # --- shared-cell German text (#772): validate ERROR, gate passes (exempt) ----
     # Byte-identical across the halves, so structurally it is *valid* trust —
     # which is exactly why the validator (not the gate) must be the one to
-    # flag it before ``sync record`` banks it as ``shared``.
+    # flag it before ``sync record`` banks it as ``shared``. The one declared
+    # containment exemption (#782): see CONTAINMENT_EXEMPT.
     "shared-code-german-text": (
         _deck("de", extra="# %%\n# Das ist ein geteilter Kommentar.\ny = 2\n\n"),
         _deck("en", extra="# %%\n# Das ist ein geteilter Kommentar.\ny = 2\n\n"),
@@ -227,7 +232,7 @@ VALIDATE_SEVERITY: dict[str, str | None] = {
     "shared-cell-count-mismatch": "error",
     "shared-cell-tags-diverged": "error",
     "shared-markdown-diverged": "error",
-    "shared-code-german-text": "warning",
+    "shared-code-german-text": "error",
     "preamble-diverged": "error",
     "id-set-diverged": "warning",
     "id-order-diverged": "warning",
@@ -236,6 +241,19 @@ VALIDATE_SEVERITY: dict[str, str | None] = {
     "companion-one-sided": "warning",
     "companion-shared-body-diverged": None,
 }
+
+#: Error shapes deliberately outside the containment property — validate errors,
+#: the gate still records. Exactly one member (#782): German text in a
+#: byte-identical shared code cell. The halves agree byte-for-byte, so
+#: structurally the pair IS valid trust; the objection is to the *content*, and
+#: content-language policing is a heuristic the trust oracle must never adopt
+#: (a false positive at the gate would block mechanical recording outright,
+#: while at validate it is a CI message with a per-cell opt-out). The
+#: promotion to ``error`` (the corpus reached 0 findings, so the boundary
+#: became categorical) hard-fails CI instead — the pair is stopped before it
+#: is ever committed, not at the trust store. Every OTHER validate error must
+#: reach the gate; growing this set needs the same class of argument.
+CONTAINMENT_EXEMPT = frozenset({"shared-code-german-text"})
 
 
 @pytest.fixture
@@ -276,6 +294,8 @@ class TestContainment:
 
         if not validate_errors:
             return  # not an error shape; the gate relation is pinned in the classes below
+        if name in CONTAINMENT_EXEMPT:
+            return  # declared exemption; pinned in TestDeliberateNonContainment
         assert gate_projected_pair(de, en, "#"), (
             f"CONTAINMENT VIOLATED for {name}: validate reports "
             f"{len(validate_errors)} error(s) but the write gate would record "
@@ -366,10 +386,8 @@ class TestDeliberateNonContainment:
         assert "mismatched tags" in findings[0].message
         assert gate_projected_pair(de, en, "#") == []
 
-    def test_german_shared_text_is_a_validate_warning_the_gate_never_sees(
-        self, pair_factory
-    ) -> None:
-        """German text in a byte-identical shared cell (#772) warns and never gates.
+    def test_german_shared_text_is_a_validate_error_the_gate_never_sees(self, pair_factory) -> None:
+        """German text in a byte-identical shared cell (#772) errors and never gates.
 
         The two oracles disagree here *by design*: the halves agree byte-for-byte,
         so structurally the pair is valid trust and the gate must record it — the
@@ -378,16 +396,28 @@ class TestDeliberateNonContainment:
         ``propagate_shared_edit``, a mechanical byte copy that would overwrite the
         German half with English. Content-language policing is therefore
         validate's job (an advisory oracle allowed to use heuristics), not the
-        gate's (a trust oracle that must not) — and warning severity keeps
-        pre-existing committed German out of hard CI failure, matching the rest
-        of the split-pair family. The ``allow-untranslated`` tag is the per-cell
-        opt-out.
+        gate's (a trust oracle that must not). The check was born a warning while
+        the corpus carried pre-existing German shared cells; the cleanup reached
+        0 findings across all 659 split pairs, so #782 promoted it to ``error``
+        — making this the one shape where a validate error does NOT imply a gate
+        refusal (:data:`CONTAINMENT_EXEMPT`). The ``allow-untranslated`` tag is
+        the per-cell opt-out.
         """
         de, en = pair_factory("shared-code-german-text")
         findings = _validate_split_family(de, en)
-        assert [f.severity for f in findings] == ["warning"]
+        assert [f.severity for f in findings] == ["error"]
         assert "German text" in findings[0].message
         assert gate_projected_pair(de, en, "#") == []
+
+    def test_the_exemption_set_names_real_error_shapes(self) -> None:
+        """A stale exemption must fail loudly, not exempt vacuously.
+
+        An entry that is no longer an error shape (or no longer a shape at all)
+        would silently widen the containment claim back without anyone deciding
+        that.
+        """
+        assert CONTAINMENT_EXEMPT <= set(CORRUPTIONS)
+        assert all(VALIDATE_SEVERITY[n] == "error" for n in CONTAINMENT_EXEMPT)
 
 
 class TestPromotedViolationsAreLabelledBlocking:

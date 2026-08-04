@@ -468,16 +468,18 @@ COSMETIC_SIDECELL_FIELDS = frozenset({"index", "line_number"})
 #: exclusion is the maintainer's explicit decision and costs 282 corpus
 #: members that stay real questions.
 #:
-#: **This is a base-rate trade, not a categorical guarantee.** §6.2.1 justified
-#: the boundary as "code and j2 carry no natural language". Measured, that is
-#: false for **~0.6% of neutral members** — 83 of 13,049, across 41 of 730 decks
-#: — which carry German in comments or string literals (``# Das ist ein
-#: Kommentar.``) and are therefore untranslated cells sitting in the English
-#: deck. The kind does not change what the engine can *see*; it only changes how
-#: often prose turns up. What makes this boundary defensible is the base rate
-#: (0.6% vs an assumed ~100% for markdown), not the categorical claim. A
-#: ``validate`` rule for natural-language content in a ``shared`` cell is the
-#: detector it would need to be categorical.
+#: **The code/j2 boundary is categorical, and policed.** §6.2.1 justifies the
+#: boundary as "code and j2 carry no natural language". Measured (#771), that
+#: was false for ~0.6% of neutral members — German in comments or string
+#: literals (``# Das ist ein Kommentar.``), i.e. untranslated cells sitting in
+#: the English deck — so for a while this was a base-rate trade, not a
+#: guarantee. It no longer is: ``validate``'s
+#: ``_check_split_untranslated_text`` (#772) errors on German text in a shared
+#: code cell (severity promoted after the corpus cleanup reached 0 findings,
+#: #782), with the per-cell ``allow-untranslated`` tag as the explicit escape
+#: hatch. Banked ``shared`` trust can therefore no longer *silently* contain
+#: unmarked German — what slips past ``record_neutral`` here is caught by the
+#: validation gate, or was deliberately declared.
 NEUTRAL_KINDS = frozenset({"code", "j2"})
 
 
