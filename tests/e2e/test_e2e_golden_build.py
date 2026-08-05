@@ -53,6 +53,15 @@ def _build(course: Path, spec_name: str, *args: str) -> subprocess.CompletedProc
             sys.executable,
             "-m",
             "clm",
+            # Round-2 review finding: without these, the CWD-anchored defaults
+            # put BOTH builds' cache/jobs DBs at the repo root — shared state
+            # whose harmlessness rested entirely on --ignore-cache staying
+            # total. Per-course DBs make the isolation structural (and stop
+            # golden runs from growing a cache DB at every dev's repo root).
+            "--cache-db-path",
+            str(course / "golden-cache.db"),
+            "--jobs-db-path",
+            str(course / "golden-jobs.db"),
             "build",
             str(course / "course-specs" / spec_name),
             "-d",
@@ -69,7 +78,7 @@ def _build(course: Path, spec_name: str, *args: str) -> subprocess.CompletedProc
     )
 
 
-def _double_build_is_byte_identical(tmp_path: Path, spec_name: str) -> None:
+def _double_build_is_byte_identical(tmp_path: Path, spec_name: str, min_files: int) -> None:
     snapshot = tmp_path / "snapshot"
 
     course_a = tmp_path / "a"
@@ -77,7 +86,16 @@ def _double_build_is_byte_identical(tmp_path: Path, spec_name: str) -> None:
     first = _build(course_a, spec_name, "--snapshot", str(snapshot))
     assert first.returncode == 0, first.stdout + first.stderr
 
-    # A completely fresh copy: cold job/cache DBs, untouched source tree —
+    # Round-2 review finding: the verifier reports has_diffs=False over an
+    # empty or all-missing tree, so without a floor a build that produced
+    # NOTHING would still "verify". The comparison must be about something.
+    compared = [p for p in snapshot.rglob("*") if p.is_file() and p.suffix != ".html"]
+    assert len(compared) >= min_files, (
+        f"snapshot holds only {len(compared)} non-html files (< {min_files}) — "
+        "the golden comparison would be vacuous"
+    )
+
+    # A completely fresh copy with its own cold DBs and untouched source tree —
     # nothing from build A can leak into build B except through the outputs
     # being genuinely deterministic.
     course_b = tmp_path / "b"
@@ -87,13 +105,17 @@ def _double_build_is_byte_identical(tmp_path: Path, spec_name: str) -> None:
     assert "Verification passed" in second.stdout
 
 
+# Explicit per-test budgets: CI runs e2e with a 600 s default that would cap
+# BOTH builds of one test (round-2 finding); these markers take precedence.
+@pytest.mark.timeout(1900)
 def test_rich_course_double_build_is_byte_identical(tmp_path: Path) -> None:
     """test-spec-1: notebooks, both diagram converters, images, data,
     dir-groups — the golden gate over the paths Phase 8 will move."""
-    _double_build_is_byte_identical(tmp_path, "test-spec-1.xml")
+    _double_build_is_byte_identical(tmp_path, "test-spec-1.xml", min_files=50)
 
 
+@pytest.mark.timeout(1900)
 def test_minimal_notebook_course_double_build_is_byte_identical(tmp_path: Path) -> None:
     """test-spec-3: the single-notebook course — a determinism break in the
     core notebook path fails here without the full course's noise."""
-    _double_build_is_byte_identical(tmp_path, "test-spec-3.xml")
+    _double_build_is_byte_identical(tmp_path, "test-spec-3.xml", min_files=20)

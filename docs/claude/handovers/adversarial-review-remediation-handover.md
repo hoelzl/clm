@@ -1095,16 +1095,18 @@ which is another reason Phase 1 precedes everything.
 
 ---
 
-### Phase 7 — Re-layering prerequisites (D11)  ▸ STATUS: DONE 2026-08-06 ▸ TRACKED: #801
+### Phase 7 — Re-layering prerequisites (D11)  ▸ STATUS: DONE 2026-08-06 (wiring proof = the delivering PR's own CI run) ▸ TRACKED: #801
 
 **Landed as** (all four items; acceptance met — the golden suite passed
 twice in a row on unchanged code): (1) `tests/e2e/test_e2e_golden_build.py`
 — double-build byte-identity over test-spec-1 (rich) and test-spec-3
 (minimal), on the `--snapshot`/`--verify-against` harness; the #681 replay
 round trip covers the http-replay course. (2)
-`tests/test_architecture_contracts.py` — the 46-entry layer-violation
-RATCHET (file-level, both-direction, lazy-import-aware; Phase 8's
-shrinking checklist), the Backend-surface pin (incl. the honest A11
+`tests/test_architecture_contracts.py` — the 50-edge layer-violation
+RATCHET over the FULL documented stack (file-level, both-direction,
+lazy-import-aware, string-import-guarded; the round-2 review added the
+infrastructure→workers and workers→extensions edges its round-1 inventory
+missed; Phase 8's shrinking checklist), the Backend-surface pin (incl. the honest A11
 ladder shape: LocalOpsBackend is itself partially abstract), and the
 worker payload schema pins. (3) `tests/build/test_pipeline_unmocked.py`
 — T3: real Course + real SqliteBackend + temp DB, data-only stage flow

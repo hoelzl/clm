@@ -37,20 +37,24 @@ def _extension_packages() -> frozenset[str]:
 
 
 def _forbidden_targets() -> dict[str, frozenset[str]]:
-    """The documented layering, as forbidden import edges (review §4).
+    """The documented layering, as forbidden import edges.
 
-    ``core`` may depend on nothing above it — not infrastructure (A1), not
-    the CLI (A2's mirror), not workers or extension packages (A3).
-    ``infrastructure`` and ``workers`` may not reach into the CLI (A2).
-    Extension packages are derived, not hardcoded, so a new top-level
-    package is automatically protected from ``core`` without editing this
-    test.
+    ``architecture.md`` stacks core → infrastructure → workers → extensions
+    → cli: each layer may depend only on the layers *below* it. So ``core``
+    depends on nothing (A1/A2/A3), ``infrastructure`` may not reach up into
+    workers, extensions or the CLI (A2), and ``workers`` may not reach into
+    extensions or the CLI. Extension packages and the CLI are unconstrained
+    (they sit at the top). The extension set is derived, not hardcoded, so a
+    new top-level package is automatically protected without editing this
+    test. (The review's own inventory covered only the A1/A2/A3 edges; the
+    round-2 review of this gate found live violations on the two missing
+    edge classes, now part of the ratchet.)
     """
     extensions = _extension_packages()
     return {
         "core": frozenset({"infrastructure", "cli", "workers"} | extensions),
-        "infrastructure": frozenset({"cli"}),
-        "workers": frozenset({"cli"}),
+        "infrastructure": frozenset({"cli", "workers"} | extensions),
+        "workers": frozenset({"cli"} | extensions),
     }
 
 
@@ -83,10 +87,15 @@ def _current_violations() -> set[str]:
 
 
 #: The complete violation inventory at the time the ratchet was pinned
-#: (2026-08-06, 46 files — matching the review's A1/A2/A3 findings). Phase 8
-#: removes entries as it moves code; nothing may be added.
+#: (2026-08-06: 50 edges over 40 files — the review's A1/A2/A3 findings plus
+#: the infrastructure→workers and workers→extensions residents its inventory
+#: missed). Phase 8 removes entries as it moves code; nothing may be added.
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
+        "infrastructure -> workers: infrastructure/workers/image_identity.py",
+        "workers -> slides: workers/notebook/notebook_processor.py",
+        "workers -> slides: workers/notebook/output_spec.py",
+        "workers -> slides: workers/notebook/utils/jupyter_utils.py",
         "core -> cli: core/operations/process_notebook.py",
         "core -> infrastructure: core/affected_specs.py",
         "core -> infrastructure: core/cmake_export.py",
@@ -152,31 +161,49 @@ class TestLayerBoundaryRatchet:
             "KNOWN_LAYER_VIOLATIONS (the list only shrinks):\n  " + "\n  ".join(sorted(fixed))
         )
 
-    def test_the_scanner_sees_lazy_imports(self):
+    def test_the_scanner_sees_lazy_imports(self, tmp_path):
         """The ratchet is only as good as the scanner: A2's inventory hid in
-        function bodies, so a module-level-only scan would ratchet a fiction."""
+        function bodies, so a module-level-only scan would ratchet a fiction.
+        Exercises the REAL ``_clm_imports`` (review round 2: an inline
+        reimplementation would pass while the scanner itself regressed)."""
         import textwrap
 
-        tree_file = _SRC / "infrastructure" / "backends" / "sqlite_backend.py"
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            textwrap.dedent(
+                """
+                def lazy():
+                    from clm.cli.build_data_classes import BuildWarning
+                    return BuildWarning
+                """
+            ),
+            encoding="utf-8",
+        )
+        assert "clm.cli.build_data_classes" in _clm_imports(probe)
+        # ...and the live inventory carries a known lazy-import resident.
         assert "infrastructure -> cli: infrastructure/backends/sqlite_backend.py" in (
             KNOWN_LAYER_VIOLATIONS
         )
-        # And on a synthetic module, straight from source text:
-        snippet = textwrap.dedent(
-            """
-            def lazy():
-                from clm.cli.build_data_classes import BuildWarning
-                return BuildWarning
-            """
+
+    def test_no_string_based_imports_dodge_the_ratchet(self):
+        """The scanner is AST-based, so ``importlib.import_module("clm...")``
+        or ``__import__("clm...")`` would slip past it (round-2 finding M4).
+        There are none in the constrained layers today, and this guard keeps
+        it that way — a Phase 8 mover must not "fix" a ratchet entry by
+        stringifying the import."""
+        offenders: list[str] = []
+        for file in sorted(_SRC.rglob("*.py")):
+            rel = file.relative_to(_SRC).as_posix()
+            if rel.split("/", 1)[0] not in _forbidden_targets():
+                continue
+            text = file.read_text(encoding="utf-8")
+            for needle in ('import_module("clm.', "import_module('clm.", '__import__("clm.'):
+                if needle in text:
+                    offenders.append(f"{rel}: {needle}")
+        assert not offenders, (
+            "string-based clm imports in constrained layers dodge the AST "
+            "ratchet — use a real import statement:\n  " + "\n  ".join(offenders)
         )
-        tree = ast.parse(snippet)
-        found = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module
-        }
-        assert "clm.cli.build_data_classes" in found
-        assert tree_file.is_file()
 
 
 class TestBackendContract:
@@ -255,10 +282,38 @@ class TestWorkerPayloadContract:
         "worker_image_identity",
     }
 
+    #: PlantUML/DrawIO extend the image payload with the output file NAME —
+    #: renaming it strands lagging Docker workers, the exact scenario this
+    #: class exists to make deliberate (round-2 finding: it was unpinned).
+    DIAGRAM_FIELDS = IMAGE_FIELDS | {"output_file_name"}
+    JUPYTERLITE_FIELDS = BASE_FIELDS | {
+        "app_archive",
+        "branding_logo",
+        "branding_site_name",
+        "branding_theme",
+        "course_root",
+        "environment_yml",
+        "jupyterlite_core_version",
+        "kernel",
+        "kinds",
+        "language",
+        "launcher",
+        "notebook_trees",
+        "output_dir",
+        "target_name",
+        "wheels",
+    }
+
     def test_payload_schemas_are_pinned(self):
         from clm.infrastructure.messaging.base_classes import ImagePayload, Payload
+        from clm.infrastructure.messaging.drawio_classes import DrawioPayload
+        from clm.infrastructure.messaging.jupyterlite_classes import JupyterLitePayload
         from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.infrastructure.messaging.plantuml_classes import PlantUmlPayload
 
         assert frozenset(Payload.model_fields) == self.BASE_FIELDS
         assert frozenset(ImagePayload.model_fields) == self.IMAGE_FIELDS
         assert frozenset(NotebookPayload.model_fields) == self.NOTEBOOK_FIELDS
+        assert frozenset(PlantUmlPayload.model_fields) == self.DIAGRAM_FIELDS
+        assert frozenset(DrawioPayload.model_fields) == self.DIAGRAM_FIELDS
+        assert frozenset(JupyterLitePayload.model_fields) == self.JUPYTERLITE_FIELDS
