@@ -1185,20 +1185,26 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: blocked on Phase 7 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A2 + A6 DONE 2026-08-06, ratchet 50 → 31 edges; next A1/A3 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
 
-1. **A2 — move `build_data_classes.py` and `error_categorizer.py` out of
-   `clm.cli`** into infrastructure. Mechanical, and it alone kills the
-   infrastructure→CLI cycle (`dummy_backend.py:7`, `local_ops_backend.py:36`,
-   `sqlite_backend.py:874/998/1698/1804`, `worker_base.py:758`,
-   `progress_tracker.py:356`, `db_operations.py:336`).
-2. **A6 — extract the domain vocabulary from `path_utils`** (`Lang`, `Format`,
-   `Kind`, `OutputSpec`, `output_specs()`, `output_path_for()`) into `clm.core`.
-   43 files import this module; most of the core↔infrastructure cycle flows
-   through it.
+1. ✔ **A2 — move `build_data_classes.py` and `error_categorizer.py` out of
+   `clm.cli`** into infrastructure — **DONE 2026-08-06, PR #804**. Both modules
+   now live in `clm.infrastructure`; `strip_ansi` moved to
+   `clm.infrastructure.utils.text_utils`; backends type their reporter against
+   the structural `BuildReporterProtocol` (beside the data classes) instead of
+   the CLI's `BuildReporter`. Killed every infrastructure→cli edge AND the only
+   core→cli edge (ratchet 50 → 42).
+2. ✔ **A6 — extract the domain vocabulary from `path_utils`** into `clm.core` —
+   **DONE 2026-08-06, PR #805**. The whole course-domain vocabulary (not just
+   the six named symbols — also the skip/ignore tables+predicates, slide
+   family detection, image dir constants, prog-lang mapping) moved to a new
+   `clm.core.utils.path_utils`; `clm.infrastructure.utils.path_utils` keeps
+   only `find_project_root` + `atomic_write_all`/`atomic_write_bytes`. No
+   re-export shims — all ~54 importers retargeted. Cleared the 11 core files
+   whose only infrastructure import was path_utils (ratchet 42 → 31).
 3. **A1/A3 — break the remaining cycles**: core's module-level infrastructure
    imports (`core/course.py:53-56`, `course_file.py:8-10`, `dir_group.py:9-10`,
    all of `core/operations/`), core's imports of `clm.workers` and of extension
