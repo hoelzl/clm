@@ -66,11 +66,20 @@ def migrate_generated_images_cmd(root: Path, dry_run: bool) -> None:
     moved: list[Path] = []
     deduped: list[Path] = []
     conflicts: list[Path] = []
+    seen_legacy: set[Path] = set()
 
     for source in sorted(root.rglob("*")):
         if not source.is_file() or source.suffix not in DIAGRAM_SOURCE_EXTENSIONS:
             continue
         if is_ignored_dir_for_course(source.parent):
+            continue
+        # ``.claude/`` holds agent state, including LINKED GIT WORKTREES whose
+        # ``slides/`` copies belong to other sessions' checkouts — moving
+        # files inside them corrupts those checkouts (found the hard way on a
+        # course repo carrying ``.claude/worktrees/``). ``is_ignored_dir_for_
+        # course`` does not know the directory because the course scan starts
+        # below it; this command scans the repo ROOT, so it must.
+        if ".claude" in source.parts:
             continue
         topic_dir = source.parents[1]
         # A source directly under ROOT derives ROOT's *parent* as its topic
@@ -82,6 +91,13 @@ def migrate_generated_images_cmd(root: Path, dry_run: bool) -> None:
             # The exact computation ImageFile.legacy_img_path/generated_img_path
             # perform, so the moved names match what the build looks for.
             legacy = sanitize_path((topic_dir / "img" / source.stem).with_suffix(f".{ext}"))
+            # Two sources can share one stem (a ``.pu`` and a ``.drawio``
+            # sibling): the render is one file, and counting it once per
+            # source made ``--dry-run`` over-report what the real run
+            # (whose first move empties the path) would do.
+            if legacy in seen_legacy:
+                continue
+            seen_legacy.add(legacy)
             target = sanitize_path(
                 (topic_dir / GENERATED_IMG_DIR / source.stem).with_suffix(f".{ext}")
             )
