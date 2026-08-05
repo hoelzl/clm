@@ -430,6 +430,28 @@ Marker choice, restated: `integration` keeps a test off the per-commit gate but
 on every PR. `slow` now also runs on every PR, so the two differ only in which
 job they land in — pick by what the test *is*, not by where you want it to run.
 
+### The corpus gates: bundled, pinned-public, and private
+
+Three tiers exercise the sync/lens engines against real deck corpora:
+
+1. **Bundled fixtures** (`tests/data/doc_corpus/`) — five pairs, fast suite,
+   always present.
+2. **Pinned public corpus** (`tests/slides/test_public_corpus.py`,
+   `integration`) — the [ClmTestCourse](https://github.com/hoelzl/ClmTestCourse)
+   repo at the commit pinned in `tests/slides/public_corpus_pin.py`, fetched
+   by `python scripts/fetch_test_corpus.py` into the gitignored
+   `.clm-test-corpus/` (CI does this for the integration suite). Because the
+   corpus is pinned, the gates assert **exact** numbers, not ceilings — any
+   drift is a CLM behavior change. Bump the pin and the expected numbers
+   together, deliberately; regenerate the corpus itself with
+   `scripts/curate_test_course.py` (#682).
+3. **Private full corpus** (`TestRealCorpus*` in `test_doc_lens_corpus.py` /
+   `test_sync_diff_corpus.py`, `integration + slow`) — the maintainer's live
+   PythonCourses checkout via `CLM_SYNC_CORPUS_DIR`; local/release-time only.
+   Its ceilings carry a corpus-revision context line
+   (`tests/slides/corpus_revision.py`) so a breach says whether CLM or the
+   corpus moved.
+
 ### The nightly full-suite run
 
 `.github/workflows/nightly.yml` is a **flake and rot detector**, not a coverage
