@@ -15,7 +15,7 @@ import sqlite3
 import pytest
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
-from clm.cli.build_data_classes import BuildError, BuildWarning
+from clm.infrastructure.build_data_classes import BuildError, BuildWarning
 from clm.infrastructure.database.cache_path_migration import (
     PathMapping,
     migrate_cache_paths,

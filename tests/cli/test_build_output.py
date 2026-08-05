@@ -5,15 +5,15 @@ from datetime import datetime
 
 import pytest
 
-from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.cli.build_reporter import BuildReporter
-from clm.cli.error_categorizer import ErrorCategorizer
 from clm.cli.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
+from clm.infrastructure.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clm.infrastructure.error_categorizer import ErrorCategorizer
 
 
 class TestBuildDataClasses:
@@ -1280,7 +1280,7 @@ class TestBuildReporterProgressIntegration:
 
     def test_on_progress_update_after_multiple_stages(self):
         """Test on_progress_update callback works across multiple stages."""
-        from clm.cli.build_data_classes import ProgressUpdate
+        from clm.infrastructure.build_data_classes import ProgressUpdate
 
         formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
         reporter = BuildReporter(output_formatter=formatter)

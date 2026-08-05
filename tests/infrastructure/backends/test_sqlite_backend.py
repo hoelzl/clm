@@ -686,7 +686,7 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_copy_dir_group_reports_warnings_to_build_reporter(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output reports warnings to build_reporter."""
-    from clm.cli.build_data_classes import BuildWarning
+    from clm.infrastructure.build_data_classes import BuildWarning
     from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 
     # Create mock build reporter

@@ -90,13 +90,15 @@ def _current_violations() -> set[str]:
 #: (2026-08-06: 50 edges over 40 files — the review's A1/A2/A3 findings plus
 #: the infrastructure→workers and workers→extensions residents its inventory
 #: missed). Phase 8 removes entries as it moves code; nothing may be added.
+#: Ratcheted down so far: A2 (#802) moved build_data_classes +
+#: error_categorizer into infrastructure, clearing every infrastructure→cli
+#: edge and core→cli's only resident → 42 edges over 33 files.
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
         "infrastructure -> workers: infrastructure/workers/image_identity.py",
         "workers -> slides: workers/notebook/notebook_processor.py",
         "workers -> slides: workers/notebook/output_spec.py",
         "workers -> slides: workers/notebook/utils/jupyter_utils.py",
-        "core -> cli: core/operations/process_notebook.py",
         "core -> infrastructure: core/affected_specs.py",
         "core -> infrastructure: core/cmake_export.py",
         "core -> infrastructure: core/course.py",
@@ -135,13 +137,6 @@ KNOWN_LAYER_VIOLATIONS = frozenset(
         "core -> workers: core/course.py",
         "core -> workers: core/operations/build_jupyterlite_site.py",
         "core -> workers: core/operations/process_notebook.py",
-        "infrastructure -> cli: infrastructure/backend.py",
-        "infrastructure -> cli: infrastructure/backends/dummy_backend.py",
-        "infrastructure -> cli: infrastructure/backends/local_ops_backend.py",
-        "infrastructure -> cli: infrastructure/backends/sqlite_backend.py",
-        "infrastructure -> cli: infrastructure/database/db_operations.py",
-        "infrastructure -> cli: infrastructure/workers/progress_tracker.py",
-        "infrastructure -> cli: infrastructure/workers/worker_base.py",
     }
 )
 
@@ -180,8 +175,10 @@ class TestLayerBoundaryRatchet:
             encoding="utf-8",
         )
         assert "clm.cli.build_data_classes" in _clm_imports(probe)
-        # ...and the live inventory carries a known lazy-import resident.
-        assert "infrastructure -> cli: infrastructure/backends/sqlite_backend.py" in (
+        # ...and the live inventory carries a known lazy-import resident —
+        # an entry that would silently vanish under a module-level-only scan
+        # (image_identity's workers import is function-body only).
+        assert "infrastructure -> workers: infrastructure/workers/image_identity.py" in (
             KNOWN_LAYER_VIOLATIONS
         )
 

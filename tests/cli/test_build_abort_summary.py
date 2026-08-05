@@ -13,7 +13,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from clm.cli.build_data_classes import BuildSummary
 from clm.cli.build_reporter import BuildReporter
 from clm.cli.output_formatter import (
     DefaultOutputFormatter,
@@ -21,6 +20,7 @@ from clm.cli.output_formatter import (
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
+from clm.infrastructure.build_data_classes import BuildSummary
 
 
 def _reporter() -> BuildReporter:

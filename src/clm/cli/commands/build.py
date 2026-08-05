@@ -17,7 +17,6 @@ import click
 from attrs import evolve
 from rich.console import Console
 
-from clm.cli.build_data_classes import BuildSummary
 from clm.cli.build_reporter import BuildReporter
 
 # Import shared logging setup
@@ -40,6 +39,7 @@ from clm.core.course_spec import (
 )
 from clm.infrastructure.backend import JobsPendingTimeoutError
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.build_data_classes import BuildSummary
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.messaging.correlation_ids import all_correlation_ids
 from clm.infrastructure.utils.path_utils import output_path_for
@@ -644,7 +644,7 @@ def report_validation_errors(
     """Report validation errors in the appropriate output format."""
     import json as json_module
 
-    from clm.cli.build_data_classes import BuildError
+    from clm.infrastructure.build_data_classes import BuildError
 
     output_mode = output_mode.lower()
 
@@ -1037,7 +1037,7 @@ def start_managed_workers(lifecycle_manager, worker_config) -> list:
 
 def _report_duplicate_file_warnings(course: Course, build_reporter: BuildReporter) -> None:
     """Check for duplicate output files and report warnings."""
-    from clm.cli.build_data_classes import BuildWarning
+    from clm.infrastructure.build_data_classes import BuildWarning
 
     try:
         duplicates = course.detect_duplicate_output_files()
@@ -1073,7 +1073,7 @@ def _report_image_collisions(course: Course, build_reporter: BuildReporter) -> b
     if course.image_mode == "duplicated":
         return False
 
-    from clm.cli.build_data_classes import BuildError
+    from clm.infrastructure.build_data_classes import BuildError
 
     collisions = course.image_registry.collisions
     if not collisions:
@@ -1107,7 +1107,7 @@ def _report_image_collisions(course: Course, build_reporter: BuildReporter) -> b
 
 def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> None:
     """Report any errors or warnings encountered during course loading."""
-    from clm.cli.build_data_classes import BuildError, BuildWarning
+    from clm.infrastructure.build_data_classes import BuildError, BuildWarning
 
     for error in course.loading_errors:
         category = error.get("category", "loading_error")
@@ -1195,8 +1195,8 @@ def _report_cross_reference_issues(course: Course, build_reporter: BuildReporter
     ``--section`` selection because the resolver is built from the already
     filtered ``course.sections``.
     """
-    from clm.cli.build_data_classes import BuildError, BuildWarning
     from clm.core.cross_references import validate_cross_references
+    from clm.infrastructure.build_data_classes import BuildError, BuildWarning
 
     findings = validate_cross_references(course, fail_on_missing=course.fail_on_missing_xref)
     for finding in findings:
@@ -1688,7 +1688,7 @@ def _record_teardown_orphans(summary: BuildSummary, orphans: list[dict[str, Any]
     ``BuildError`` and the summary is marked timed-out, giving the same
     unconditional non-zero exit a per-stage job timeout gets (issue #617).
     """
-    from clm.cli.build_data_classes import BuildError
+    from clm.infrastructure.build_data_classes import BuildError
 
     for orphan in orphans:
         summary.errors.append(

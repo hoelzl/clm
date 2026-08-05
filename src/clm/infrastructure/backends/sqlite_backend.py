@@ -33,8 +33,7 @@ from clm.infrastructure.utils.path_utils import atomic_write_bytes
 from clm.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 if TYPE_CHECKING:
-    from clm.cli.build_data_classes import BuildWarning
-    from clm.cli.build_reporter import BuildReporter
+    from clm.infrastructure.build_data_classes import BuildReporterProtocol, BuildWarning
     from clm.infrastructure.database.execution_telemetry import ExecutionTelemetryStore
     from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
     from clm.infrastructure.utils.copy_file_data import CopyFileData
@@ -68,7 +67,9 @@ class SqliteBackend(LocalOpsBackend):
     progress_tracker: ProgressTracker | None = field(init=False, default=None)
     enable_progress_tracking: bool = True
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
-    build_reporter: Optional["BuildReporter"] = None  # Optional build reporter for improved output
+    build_reporter: Optional["BuildReporterProtocol"] = (
+        None  # Reporting surface (CLI's BuildReporter or a test stub)
+    )
     incremental: bool = False  # Incremental mode: skip writing cached results
     # When True (``clm build --explain-rebuilds`` / ``CLM_EXPLAIN_REBUILDS``),
     # a ``processed_files`` cache MISS runs one extra read-only probe to log
@@ -912,7 +913,7 @@ class SqliteBackend(LocalOpsBackend):
                         )
 
                     # Import ErrorCategorizer
-                    from clm.cli.error_categorizer import ErrorCategorizer
+                    from clm.infrastructure.error_categorizer import ErrorCategorizer
 
                     # Categorize the error
                     categorized_error = ErrorCategorizer.categorize_job_error(
@@ -1036,7 +1037,7 @@ class SqliteBackend(LocalOpsBackend):
         if not self.build_reporter:
             return
 
-        from clm.cli.build_data_classes import BuildError
+        from clm.infrastructure.build_data_classes import BuildError
 
         for job_info in self.active_jobs.values():
             input_file = str(job_info.get("input_file", "unknown"))
@@ -1736,7 +1737,7 @@ class SqliteBackend(LocalOpsBackend):
             logger.debug(f"Job {job_id} completed with {len(warnings_data)} warning(s)")
 
             # Import required classes
-            from clm.cli.build_data_classes import BuildWarning
+            from clm.infrastructure.build_data_classes import BuildWarning
 
             # Parse payload for output_metadata
             payload_dict = json.loads(payload_json) if payload_json else {}
@@ -1842,7 +1843,7 @@ class SqliteBackend(LocalOpsBackend):
         Returns:
             List of BuildWarning objects for any issues encountered.
         """
-        from clm.cli.build_data_classes import BuildWarning
+        from clm.infrastructure.build_data_classes import BuildWarning
 
         warnings: list[BuildWarning] = await super().copy_dir_group_to_output(copy_data)
 

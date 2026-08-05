@@ -7,7 +7,8 @@ reporting, error collection, and summary generation during course builds.
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from clm.cli.build_data_classes import (
+from clm.cli.output_formatter import OutputFormatter
+from clm.infrastructure.build_data_classes import (
     BuildError,
     BuildSummary,
     BuildWarning,
@@ -15,7 +16,6 @@ from clm.cli.build_data_classes import (
     OutputConflictInfo,
     ProgressUpdate,
 )
-from clm.cli.output_formatter import OutputFormatter
 
 if TYPE_CHECKING:
     from clm.core.output_write_registry import OutputWriteRegistry

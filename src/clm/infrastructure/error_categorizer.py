@@ -9,8 +9,8 @@ import json
 import re
 from typing import Any, Literal, cast
 
-from clm.cli.build_data_classes import BuildError
-from clm.cli.text_utils import strip_ansi
+from clm.infrastructure.build_data_classes import BuildError
+from clm.infrastructure.utils.text_utils import strip_ansi
 
 
 class ErrorCategorizer:

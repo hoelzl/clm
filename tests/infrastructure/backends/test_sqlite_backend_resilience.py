@@ -32,8 +32,8 @@ from unittest.mock import patch
 import pytest
 from attrs import frozen
 
-from clm.cli.build_data_classes import BuildError
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.build_data_classes import BuildError
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
@@ -874,7 +874,7 @@ async def test_report_cached_issues_reports_stored_errors_and_warnings(
     backend.db_manager = DatabaseManager(cache_db)
     backend.db_manager.__enter__()
     try:
-        from clm.cli.build_data_classes import BuildWarning
+        from clm.infrastructure.build_data_classes import BuildWarning
 
         backend.db_manager.store_error(
             file_path="f.py",
@@ -983,7 +983,7 @@ async def test_results_cache_hit_replays_stored_issues(temp_db, temp_workspace, 
     hit (e.g. after retention pruned the processed_files entry) returned
     early and the build went silently green.
     """
-    from clm.cli.build_data_classes import BuildWarning
+    from clm.infrastructure.build_data_classes import BuildWarning
 
     cache_db = tmp_path / "cache.db"
     backend = _backend(temp_db, temp_workspace, build_reporter=_StubReporter())

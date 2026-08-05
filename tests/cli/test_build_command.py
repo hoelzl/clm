@@ -20,7 +20,6 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.cli.commands import build as build_module
 from clm.cli.commands.build import (
     BuildConfig,
@@ -51,6 +50,7 @@ from clm.cli.output_formatter import (
     VerboseOutputFormatter,
 )
 from clm.core.course_spec import CourseSpecError
+from clm.infrastructure.build_data_classes import BuildError, BuildSummary, BuildWarning
 
 # ---------------------------------------------------------------------------
 # Factories

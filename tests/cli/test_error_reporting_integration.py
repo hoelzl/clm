@@ -15,10 +15,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clm.cli.build_data_classes import BuildError, BuildWarning
 from clm.cli.build_reporter import BuildReporter
 from clm.cli.output_formatter import QuietOutputFormatter
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+from clm.infrastructure.build_data_classes import BuildError, BuildWarning
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
@@ -245,8 +245,8 @@ class TestCachedErrorReportingIntegration:
 
     def test_error_stored_on_job_failure(self, tmp_path):
         """Test that errors are stored in the cache database when jobs fail."""
-        from clm.cli.build_data_classes import BuildError
-        from clm.cli.error_categorizer import ErrorCategorizer
+        from clm.infrastructure.build_data_classes import BuildError
+        from clm.infrastructure.error_categorizer import ErrorCategorizer
 
         db_path = tmp_path / "test_jobs.db"
         cache_db_path = tmp_path / "test_cache.db"

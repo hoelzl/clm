@@ -180,7 +180,7 @@ def report_voiceover_merge_issues(
     """
     if build_reporter is None or not unmatched:
         return
-    from clm.cli.build_data_classes import BuildError
+    from clm.infrastructure.build_data_classes import BuildError
 
     for for_slide in unmatched:
         target = "(cell has no for_slide)" if for_slide == "<no for_slide>" else repr(for_slide)

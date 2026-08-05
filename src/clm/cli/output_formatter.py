@@ -22,8 +22,9 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
-from clm.cli.text_utils import format_error_path, strip_ansi
+from clm.cli.text_utils import format_error_path
+from clm.infrastructure.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clm.infrastructure.utils.text_utils import strip_ansi
 
 
 def _occurrence_note(count: int) -> str:
