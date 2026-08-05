@@ -104,9 +104,9 @@ def _sanitize_j2_line(line: str) -> str:
     lang = "de" if "_de" in line else ("en" if "_en" in line else None)
 
     def repl(match: re.Match) -> str:
-        original = match.group(1)
+        original = str(match.group(1))
         if not original.strip():
-            return match.group(0)
+            return str(match.group(0))
         return '"' + _filler(original, _words_for(lang), len(original)).title() + '"'
 
     return _QUOTED_RE.sub(repl, line)
@@ -312,7 +312,8 @@ _SYNTHETIC_DECKS: dict[str, dict[str, str]] = {
 
 
 def _load_manifest(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    manifest: dict = json.loads(path.read_text(encoding="utf-8"))
+    return manifest
 
 
 def _resolve_sources(pairs: list[str]) -> dict[str, Path]:
