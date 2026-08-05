@@ -111,7 +111,7 @@ class SharedImageFile(CourseFile):
             if this isn't the right stage.
         """
         from clm.core.operations.copy_file import CopyFileOperation
-        from clm.infrastructure.utils.path_utils import output_path_for
+        from clm.core.utils.path_utils import output_path_for
 
         # Only run in our designated stage
         if stage is not None and stage != self.execution_stage:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.utils.path_utils import relative_path_to_course_img
+from clm.core.utils.path_utils import relative_path_to_course_img
 
 
 class TestRelativePathToCourseImg:

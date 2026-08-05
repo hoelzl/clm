@@ -36,13 +36,13 @@ from typing import TYPE_CHECKING
 
 import click
 
+from clm.core.utils.path_utils import path_to_prog_lang
 from clm.infrastructure.llm.cache import (
     CACHE_DB_NAME,
     TranslationCache,
     resolve_cache_dir,
 )
 from clm.infrastructure.llm.openrouter_client import has_openrouter_api_key
-from clm.infrastructure.utils.path_utils import path_to_prog_lang
 from clm.slides.glossary import GLOSSARY_STEM, resolve_guidance
 from clm.slides.sync_translate import (
     DEFAULT_TRANSLATION_MODEL,

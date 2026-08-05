@@ -99,7 +99,7 @@ def is_image_path(source_path: Path) -> bool:
     from the image registry's tracked set and the stray-file sweep would
     delete them).
     """
-    from clm.infrastructure.utils.path_utils import IMG_DIRS
+    from clm.core.utils.path_utils import IMG_DIRS
 
     return bool(IMG_DIRS.intersection(source_path.parts))
 

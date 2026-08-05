@@ -344,7 +344,7 @@ def test_build_file_map_excludes_voiceover_subdir_keeps_cassettes(tmp_path):
     """Sidecar subdirs in the build walk: ``voiceover/`` is fully excluded from
     the course file map; ``cassettes/`` stays in the map (the kernel reads
     cassettes at runtime) but is suppressed from output."""
-    from clm.infrastructure.utils.path_utils import is_ignored_file_for_output
+    from clm.core.utils.path_utils import is_ignored_file_for_output
 
     course, topic, course_root = _make_isolated_topic(tmp_path)
     (topic.path / "slides_010.py").write_text("# slide content\n")
@@ -379,10 +379,7 @@ def test_build_file_map_clm_cassettes_in_map_ledger_and_scratch_excluded(tmp_pat
     (#448) and the regenerable ``.clm/voiceover-cache/`` scratch never enter the
     map, the provenance-eligible output tree, or output.
     """
-    from clm.infrastructure.utils.path_utils import (
-        is_ignored_file_for_output,
-        is_ignored_path_in_output_tree,
-    )
+    from clm.core.utils.path_utils import is_ignored_file_for_output, is_ignored_path_in_output_tree
 
     course, topic, course_root = _make_isolated_topic(tmp_path)
     (topic.path / "slides_010.py").write_text("# slide content\n")

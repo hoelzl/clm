@@ -26,12 +26,12 @@ from pathlib import Path
 
 import click
 
-from clm.core.utils.text_utils import sanitize_path
-from clm.infrastructure.utils.path_utils import (
+from clm.core.utils.path_utils import (
     DIAGRAM_SOURCE_EXTENSIONS,
     GENERATED_IMG_DIR,
     is_ignored_dir_for_course,
 )
+from clm.core.utils.text_utils import sanitize_path
 
 #: Both formats a repo may have committed over time — a course that switched
 #: ``image_format`` can carry a stale render in the other format beside the

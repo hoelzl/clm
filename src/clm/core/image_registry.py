@@ -35,7 +35,7 @@ def get_relative_img_path(source_path: Path) -> str:
     Returns:
         The relative path from the image folder, using forward slashes
     """
-    from clm.infrastructure.utils.path_utils import IMG_DIRS
+    from clm.core.utils.path_utils import IMG_DIRS
 
     parts = source_path.parts
     # Find the image folder in the path (searching from the end)

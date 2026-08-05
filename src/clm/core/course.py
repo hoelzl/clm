@@ -49,14 +49,11 @@ from clm.core.utils.execution_utils import (
     execution_stages,
 )
 from clm.core.utils.notebook_mixin import NotebookMixin
+from clm.core.utils.path_utils import is_image_file, is_in_dir
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backend import Backend
 from clm.infrastructure.operation import NoOperation
 from clm.infrastructure.utils.file import File
-from clm.infrastructure.utils.path_utils import (
-    is_image_file,
-    is_in_dir,
-)
 
 if TYPE_CHECKING:
     from clm.core.cross_references import CrossReferenceResolver
@@ -815,7 +812,7 @@ class Course(NotebookMixin):
         from clm.core.operations.build_jupyterlite_site import (
             BuildJupyterLiteSiteOperation,
         )
-        from clm.infrastructure.utils.path_utils import OutputSpec
+        from clm.core.utils.path_utils import OutputSpec
 
         jl_targets = [t for t in self.output_targets if t.includes_format("jupyterlite")]
         if not jl_targets:
@@ -1232,8 +1229,8 @@ class Course(NotebookMixin):
         Returns:
             Set of Path objects for all output directories
         """
+        from clm.core.utils.path_utils import output_specs
         from clm.core.utils.text_utils import sanitize_file_name
-        from clm.infrastructure.utils.path_utils import output_specs
 
         directories: set[Path] = set()
 
@@ -1297,7 +1294,7 @@ class Course(NotebookMixin):
             - files: List of source file paths that produce this output
         """
         from clm.core.course_files.notebook_file import NotebookFile
-        from clm.infrastructure.utils.path_utils import ext_for, output_specs
+        from clm.core.utils.path_utils import ext_for, output_specs
 
         duplicates = []
 

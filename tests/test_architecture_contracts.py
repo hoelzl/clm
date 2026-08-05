@@ -92,27 +92,25 @@ def _current_violations() -> set[str]:
 #: missed). Phase 8 removes entries as it moves code; nothing may be added.
 #: Ratcheted down so far: A2 (#802) moved build_data_classes +
 #: error_categorizer into infrastructure, clearing every infrastructure→cli
-#: edge and core→cli's only resident → 42 edges over 33 files.
+#: edge and core→cli's only resident → 42 edges over 33 files. A6 (#802)
+#: moved the path domain vocabulary into clm.core.utils.path_utils, clearing
+#: every core file whose only infrastructure import was path_utils → 31
+#: edges over 23 files.
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
         "infrastructure -> workers: infrastructure/workers/image_identity.py",
         "workers -> slides: workers/notebook/notebook_processor.py",
         "workers -> slides: workers/notebook/output_spec.py",
         "workers -> slides: workers/notebook/utils/jupyter_utils.py",
-        "core -> infrastructure: core/affected_specs.py",
-        "core -> infrastructure: core/cmake_export.py",
         "core -> infrastructure: core/course.py",
         "core -> infrastructure: core/course_file.py",
         "core -> infrastructure: core/course_files/data_file.py",
         "core -> infrastructure: core/course_files/drawio_file.py",
         "core -> infrastructure: core/course_files/duplicated_image_file.py",
-        "core -> infrastructure: core/course_files/image_file.py",
         "core -> infrastructure: core/course_files/notebook_file.py",
         "core -> infrastructure: core/course_files/plantuml_file.py",
         "core -> infrastructure: core/course_files/shared_image_file.py",
-        "core -> infrastructure: core/cross_references.py",
         "core -> infrastructure: core/dir_group.py",
-        "core -> infrastructure: core/image_registry.py",
         "core -> infrastructure: core/operations/build_jupyterlite_site.py",
         "core -> infrastructure: core/operations/convert_drawio_file.py",
         "core -> infrastructure: core/operations/convert_plantuml_file.py",
@@ -121,12 +119,6 @@ KNOWN_LAYER_VIOLATIONS = frozenset(
         "core -> infrastructure: core/operations/copy_file.py",
         "core -> infrastructure: core/operations/delete_file.py",
         "core -> infrastructure: core/operations/process_notebook.py",
-        "core -> infrastructure: core/output_write_registry.py",
-        "core -> infrastructure: core/provenance_manifest.py",
-        "core -> infrastructure: core/section.py",
-        "core -> infrastructure: core/spec_orphans.py",
-        "core -> infrastructure: core/topic.py",
-        "core -> infrastructure: core/topic_resolver.py",
         "core -> notebooks: core/cmake_export.py",
         "core -> notebooks: core/operations/process_notebook.py",
         "core -> slides: core/cmake_export.py",

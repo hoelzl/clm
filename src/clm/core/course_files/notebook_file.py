@@ -13,9 +13,9 @@ from clm.core.utils.execution_utils import (
     LAST_EXECUTION_STAGE,
 )
 from clm.core.utils.notebook_utils import find_notebook_titles
+from clm.core.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
 from clm.core.utils.text_utils import Text, sanitize_file_name
 from clm.infrastructure.operation import Concurrently, NoOperation, Operation
-from clm.infrastructure.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
 
 if TYPE_CHECKING:
     from clm.core.course import Course
@@ -342,7 +342,7 @@ class NotebookFile(CourseFile):
                         f"to populate cache for notebook {self.path}"
                     )
                     # Import OutputSpec to generate path
-                    from clm.infrastructure.utils.path_utils import OutputSpec
+                    from clm.core.utils.path_utils import OutputSpec
 
                     spec = OutputSpec(
                         course=self.course,

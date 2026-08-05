@@ -24,11 +24,7 @@ from pathlib import Path
 
 from clm.core.spec_decks import shipping_set
 from clm.core.topic_resolver import TopicMatch, build_topic_map
-from clm.infrastructure.utils.path_utils import (
-    is_private_dir_name,
-    is_slides_file,
-    split_lang_suffix,
-)
+from clm.core.utils.path_utils import is_private_dir_name, is_slides_file, split_lang_suffix
 
 __all__ = [
     "CHECKPOINT_DIR_NAME",

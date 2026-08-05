@@ -2599,7 +2599,7 @@ class TestCompletionMarker:
         Tests the ``is_ignored_file_for_output`` predicate that the
         payload builder and output copier both consult.
         """
-        from clm.infrastructure.utils.path_utils import is_ignored_file_for_output
+        from clm.core.utils.path_utils import is_ignored_file_for_output
 
         marker = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc.completed"
         marker.parent.mkdir(parents=True, exist_ok=True)

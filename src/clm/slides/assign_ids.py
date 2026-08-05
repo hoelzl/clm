@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.infrastructure.utils.path_utils import split_lang_suffix
+from clm.core.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import (
     CellMetadata,
     comment_token_for_path,

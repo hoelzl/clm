@@ -23,8 +23,8 @@ class ImageFile(CourseFile):
         The build-owned sibling of the hand-authored ``img/`` — nothing in
         ``img/`` is ever written by the build, everything here only ever is.
         """
+        from clm.core.utils.path_utils import GENERATED_IMG_DIR
         from clm.core.utils.text_utils import sanitize_path
-        from clm.infrastructure.utils.path_utils import GENERATED_IMG_DIR
 
         ext = f".{self.course.image_format}"
         unsanitized = (self.path.parents[1] / GENERATED_IMG_DIR / self.path.stem).with_suffix(ext)

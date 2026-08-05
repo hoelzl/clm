@@ -34,7 +34,7 @@ from clm.core.topic_resolver import (
     find_slide_files_recursive,
     matches_for_binding,
 )
-from clm.infrastructure.utils.path_utils import split_lang_suffix
+from clm.core.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header
 from clm.slides.pairing import build_slide_groups
 from clm.slides.raw_cells import RawCell as _RawCell

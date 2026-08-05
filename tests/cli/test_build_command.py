@@ -700,7 +700,7 @@ class TestComputeSectionDirsForCleanup:
             ]
 
         monkeypatch.setattr(
-            "clm.infrastructure.utils.path_utils.output_specs",
+            "clm.core.utils.path_utils.output_specs",
             fake_output_specs,
         )
         # sanitize_file_name is called per section.name[lang]; default is fine.

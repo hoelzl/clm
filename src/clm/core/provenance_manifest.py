@@ -43,7 +43,7 @@ from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_files.shared_image_file import SharedImageFile
 from clm.core.image_registry import get_relative_img_path
-from clm.infrastructure.utils.path_utils import (
+from clm.core.utils.path_utils import (
     ext_for,
     is_ignored_file_for_output,
     is_ignored_path_in_output_tree,
