@@ -184,6 +184,12 @@ jobs:
       run: |
         uv run --no-sync pytest -v -m "not slow and not integration and not e2e and not docker" --timeout=120 --cov=src/clm --cov-report=xml --cov-report=term
 
+    # Phase 7 item 4 (#801): the modules the #802 re-layering will move may
+    # not lose test coverage on the way — floors measured on this suite.
+    - name: Coverage floors on the re-layering modules
+      if: needs.changes.outputs.code == 'true' && matrix.suite == 'unit'
+      run: python scripts/check_coverage_floor.py coverage.xml
+
     # The pinned public corpus (#682): tests/slides/test_public_corpus.py
     # skips cleanly when the checkout is absent, so only the integration
     # suite pays the (shallow, pinned) fetch. Best-effort on purpose — a
