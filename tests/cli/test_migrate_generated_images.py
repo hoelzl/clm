@@ -170,6 +170,41 @@ class TestMigration:
         assert (outside_img / "loose.png").exists()
         assert not (tmp_path / "img-generated").exists()
 
+    def test_claude_agent_dirs_are_never_entered(self, runner, tmp_path):
+        """Field regression (CppCourses/PythonCourses): ``.claude/`` holds
+        linked git worktrees whose slides copies belong to OTHER sessions'
+        checkouts — moving files inside them corrupts those checkouts. The
+        course scan never sees ``.claude`` (it starts below it), so the
+        root-scanning migrate command must exclude it itself."""
+        wt_topic = tmp_path / ".claude" / "worktrees" / "some-session" / "slides" / "m" / "t"
+        (wt_topic / "pu").mkdir(parents=True)
+        (wt_topic / "img").mkdir()
+        (wt_topic / "pu" / "diag.pu").write_text("@startuml\n@enduml\n", encoding="utf-8")
+        (wt_topic / "img" / "diag.png").write_bytes(b"another session's checkout")
+
+        result = runner.invoke(migrate_generated_images_cmd, [str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert (wt_topic / "img" / "diag.png").exists()
+        assert not (wt_topic / "img-generated").exists()
+
+    def test_dry_run_counts_a_shared_stem_once(self, runner, tmp_path):
+        """Field regression: a ``.pu`` and a ``.drawio`` sharing one stem
+        render to ONE file; the dry run counted it per source, over-reporting
+        against the real run (692 vs 688 on PythonCourses)."""
+        topic = _topic(tmp_path)
+        (topic / "pu" / "same.pu").write_text("@startuml\n@enduml\n", encoding="utf-8")
+        (topic / "drawio" / "same.drawio").write_text("<mxfile/>", encoding="utf-8")
+        (topic / "img" / "same.png").write_bytes(b"one render")
+
+        dry = runner.invoke(migrate_generated_images_cmd, [str(tmp_path), "--dry-run"])
+        assert dry.exit_code == 0
+        assert "1 would move" in dry.output
+
+        real = runner.invoke(migrate_generated_images_cmd, [str(tmp_path)])
+        assert real.exit_code == 0
+        assert "1 moved" in real.output
+
     def test_ignored_trees_are_skipped(self, runner, tmp_path):
         """A diagram source inside e.g. ``__pycache__``/``.venv`` must not
         drive a move (mirrors the course scan's ignore rules): a vendored
