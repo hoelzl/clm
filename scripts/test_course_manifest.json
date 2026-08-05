@@ -1,0 +1,21 @@
+{
+  "comment": "Selection manifest for the #682 public test-course corpus. Chosen from the 2026-08-05 `curate_test_course.py analyze` measurement over PythonCourses (724 parsed / 6 refused) and CppCourses (340 / 0). Each entry names the shape it exists to cover; `synthetic` entries are hand-authored because the live corpora no longer carry the shape.",
+  "decks": [
+    {"corpus": "python", "topic": "module_510_numpy/topic_340_np_computation_old", "deck": "slides_np_computation_old", "dest": "module_100_pools/topic_110_giant_pool", "shape": "largest positional pool in the corpus (170 of 186 members, single anchor) — the blast-radius class"},
+    {"corpus": "python", "topic": "module_540_ml_basics/topic_630_pandas_example", "deck": "slides_pandas_example", "dest": "module_100_pools/topic_120_wide_pool", "shape": "second-largest pool (124), different pool composition"},
+    {"corpus": "python", "topic": "module_510_numpy/topic_400_numpy_old", "deck": "slides_numpy_old", "dest": "module_110_shared/topic_110_code_heavy", "shape": "most members (241) and most shared code (197) — the record_neutral population"},
+    {"corpus": "python", "topic": "module_550_ml_azav/topic_1070_chatbot_decorators_deep_dive", "deck": "slides_010_chatbot_decorators", "dest": "module_120_localized/topic_110_companion_subdir", "shape": "most localized members (89 of 104) plus a voiceover/ subdir companion"},
+    {"corpus": "python", "topic": "module_340_design_patterns/topic_230_command", "deck": "slides_command", "dest": "module_120_localized/topic_120_command_py", "shape": "localized-heavy with subdir companion; cross-language twin of the C++ command deck"},
+    {"corpus": "python", "topic": "module_120_functions/topic_100_functions_very_short", "deck": "slides_functions_very_short", "dest": "module_130_observations/topic_110_one_sided", "shape": "parse observations: one_sided_member + shared_divergence"},
+    {"corpus": "python", "topic": "module_120_functions/topic_230_signatures", "deck": "slides_signatures", "dest": "module_130_observations/topic_120_shared_divergence", "shape": "parse observation: shared_divergence"},
+    {"corpus": "python", "topic": "module_110_basics/topic_100_basic_data_types_long", "deck": "slides_basic_data_types_long", "dest": "module_200_refusals/topic_110_idless_localized", "shape": "the one refusal code still live in the corpus (idless_localized)", "expect_refusal": ["idless_localized"]},
+    {"corpus": "cpp", "topic": "module_720_cpp_patterns/topic_200_static_strategy", "deck": "slides_static_strategy", "dest": "module_300_cpp/topic_110_static_strategy", "shape": "// comment token, 137 members, localized-heavy"},
+    {"corpus": "cpp", "topic": "module_340_design_patterns/topic_230_command", "deck": "slides_command", "dest": "module_300_cpp/topic_120_command_cpp", "shape": "// token cross-language twin of the Python command deck"},
+    {"corpus": "cpp", "topic": "projects", "deck": "project_120_caesar_cipher", "dest": "module_300_cpp/topic_130_project_pool", "shape": "// token project deck with a 40-member pool"},
+    {"corpus": "synthetic", "deck": "duplicate_id", "dest": "module_200_refusals/topic_120_duplicate_id", "shape": "refusal code extinct in the live corpora", "expect_refusal": ["duplicate_id"]},
+    {"corpus": "synthetic", "deck": "idless_anchor", "dest": "module_200_refusals/topic_130_idless_anchor", "shape": "refusal code extinct in the live corpora", "expect_refusal": ["idless_anchor"]},
+    {"corpus": "synthetic", "deck": "idless_narrative", "dest": "module_200_refusals/topic_140_idless_narrative", "shape": "refusal code extinct in the live corpora", "expect_refusal": ["idless_narrative"]},
+    {"corpus": "synthetic", "deck": "legacy_title_companion", "dest": "module_200_refusals/topic_150_legacy_title", "shape": "refusal code extinct in the live corpora; the pre-#242 shape genuinely co-fires idless_narrative (the 'title' id is an owner reference, not identity)", "expect_refusal": ["idless_narrative", "legacy_title_companion"]},
+    {"corpus": "synthetic", "deck": "companion_sibling", "dest": "module_140_layouts/topic_110_companion_sibling", "shape": "sibling companion layout, extinct in the live corpora"}
+  ]
+}
