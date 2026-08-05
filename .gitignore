@@ -292,3 +292,4 @@ tests/test-data/_volatile_specs/
 .clm-cache/
 clm-http-replay-traces*/
 clm_telemetry.db
+.clm-test-corpus/

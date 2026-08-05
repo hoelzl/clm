@@ -274,12 +274,15 @@ _SYNTHETIC_DECKS: dict[str, dict[str, str]] = {
         + '# %% [markdown] lang="en" tags=["slide"]\n#\n# # No identifier\n',
     },
     "idless_narrative": {
+        # The canonical blank `#` lead keeps validate quiet here — this deck
+        # exists for exactly ONE finding class (the id-less narrative), and a
+        # cosmetic co-finding would blur what a gate failure on it means.
         "slides_idless_narrative.de.py": _HDR_DE
         + _slide("de", "s0", "Titel")
-        + '# %% [markdown] lang="de" tags=["notes"]\n# Notiz ohne Bezeichner.\n',
+        + '# %% [markdown] lang="de" tags=["notes"]\n#\n# Notiz ohne Bezeichner.\n',
         "slides_idless_narrative.en.py": _HDR_EN
         + _slide("en", "s0", "Title")
-        + '# %% [markdown] lang="en" tags=["notes"]\n# Note without identifier.\n',
+        + '# %% [markdown] lang="en" tags=["notes"]\n#\n# Note without identifier.\n',
     },
     "legacy_title_companion": {
         "slides_legacy_title.de.py": _HDR_DE + _slide("de", "s0", "Titel"),
