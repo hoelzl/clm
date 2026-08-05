@@ -950,7 +950,7 @@ keep the security change reviewable in one sitting, and neither is blocked.
 
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: not started (S5 pulled forward to Phase 3a)
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: not started (S5 pulled forward to Phase 3a) ▸ TRACKED: #798
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -1020,7 +1020,7 @@ recorded cassette contains no Azure/Gemini key and no `Set-Cookie`;
 
 ---
 
-### Phase 5 — Job-queue correctness  ▸ STATUS: not started
+### Phase 5 — Job-queue correctness  ▸ STATUS: not started ▸ TRACKED: #799
 **Depends on**: Phase 1 (T1's resurrected tests cover exactly this code).
 
 **Goal**: no job runs twice, no build interferes with another, no corrupted
@@ -1072,7 +1072,7 @@ deliberately torn output file is rejected rather than cached.
 
 ---
 
-### Phase 6 — Cross-machine coordination via the worker API (D5)  ▸ STATUS: not started
+### Phase 6 — Cross-machine coordination via the worker API (D5)  ▸ STATUS: not started ▸ TRACKED: #800
 **Depends on**: Phase 2 (auth + coordinator-mode binding) and Phase 5 (the queue
 semantics being replicated must be correct first).
 
@@ -1095,7 +1095,25 @@ which is another reason Phase 1 precedes everything.
 
 ---
 
-### Phase 7 — Re-layering prerequisites (D11)  ▸ STATUS: not started
+### Phase 7 — Re-layering prerequisites (D11)  ▸ STATUS: DONE 2026-08-06 (wiring proof = the delivering PR's own CI run) ▸ TRACKED: #801
+
+**Landed as** (all four items; acceptance met — the golden suite passed
+twice in a row on unchanged code): (1) `tests/e2e/test_e2e_golden_build.py`
+— double-build byte-identity over test-spec-1 (rich) and test-spec-3
+(minimal), on the `--snapshot`/`--verify-against` harness; the #681 replay
+round trip covers the http-replay course. (2)
+`tests/test_architecture_contracts.py` — the 50-edge layer-violation
+RATCHET over the FULL documented stack (file-level, both-direction,
+lazy-import-aware, string-import-guarded; the round-2 review added the
+infrastructure→workers and workers→extensions edges its round-1 inventory
+missed; Phase 8's shrinking checklist), the Backend-surface pin (incl. the honest A11
+ladder shape: LocalOpsBackend is itself partially abstract), and the
+worker payload schema pins. (3) `tests/build/test_pipeline_unmocked.py`
+— T3: real Course + real SqliteBackend + temp DB, data-only stage flow
+and a real PlantUML worker round-tripping a job through the queue, in
+the fast suite (~15 s). (4) `scripts/check_coverage_floor.py` + a CI
+unit-job step flooring `build.py`, `course.py`, `path_utils.py`, the
+backends.
 
 **Hard gate**: no Phase 8 commit lands until all four items below are complete
 and green. This is the maintainer's explicit condition on D10.
@@ -1167,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: blocked on Phase 7
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: blocked on Phase 7 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
