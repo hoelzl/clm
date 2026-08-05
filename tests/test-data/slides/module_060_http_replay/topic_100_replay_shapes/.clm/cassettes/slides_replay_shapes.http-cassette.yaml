@@ -1,0 +1,137 @@
+interactions:
+- request:
+    body: '{"model": "stub-model", "messages": [{"role": "user", "content": "Say hello."}]}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '80'
+      Content-Type:
+      - application/json
+      Host:
+      - 127.0.0.1:47113
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: http://127.0.0.1:47113/v1/chat/completions
+  response:
+    body:
+      string: '{"choices": [{"finish_reason": "stop", "index": 0, "message": {"content":
+        "Hello from the replay stub.", "role": "assistant"}}], "id": "chatcmpl-stub-0001",
+        "model": "stub-model", "object": "chat.completion"}'
+    headers:
+      Content-Length:
+      - '208'
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 05 Aug 2026 20:17:54 GMT
+      Server:
+      - BaseHTTP/0.6 Python/3.13.2
+    status:
+      code: 200
+      message: OK
+- request:
+    body: ''
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Host:
+      - 127.0.0.1:47113
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: http://127.0.0.1:47113/stream
+  response:
+    body:
+      string: 'data: alpha
+
+
+        data: beta
+
+
+        data: gamma
+
+
+        '
+    headers:
+      Content-Type:
+      - text/event-stream
+      Date:
+      - Wed, 05 Aug 2026 20:17:54 GMT
+      Server:
+      - BaseHTTP/0.6 Python/3.13.2
+      Transfer-Encoding:
+      - chunked
+    status:
+      code: 200
+      message: OK
+- request:
+    body: ''
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Host:
+      - 127.0.0.1:47113
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: http://127.0.0.1:47113/old-location
+  response:
+    body:
+      string: ''
+    headers:
+      Content-Length:
+      - '0'
+      Date:
+      - Wed, 05 Aug 2026 20:17:54 GMT
+      Location:
+      - /new-location
+      Server:
+      - BaseHTTP/0.6 Python/3.13.2
+    status:
+      code: 302
+      message: Found
+- request:
+    body: ''
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Host:
+      - 127.0.0.1:47113
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: http://127.0.0.1:47113/new-location
+  response:
+    body:
+      string: '{"auth_seen": true, "location": "new"}'
+    headers:
+      Content-Length:
+      - '38'
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 05 Aug 2026 20:17:54 GMT
+      Server:
+      - BaseHTTP/0.6 Python/3.13.2
+    status:
+      code: 200
+      message: OK
+version: 1
