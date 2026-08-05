@@ -9,7 +9,7 @@ from clm.core.course_file import CourseFile
 from clm.core.include_ledger import LEDGER_NAME, Ledger
 from clm.core.utils.notebook_mixin import NotebookMixin
 from clm.core.utils.notebook_utils import find_images, find_imports
-from clm.infrastructure.utils.path_utils import (
+from clm.core.utils.path_utils import (
     is_diagram_source,
     is_ignored_dir_for_course,
     is_ignored_file_for_course,

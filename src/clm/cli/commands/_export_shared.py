@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, TypeVar
 import click
 
 from clm.core.utils.notebook_utils import find_notebook_titles
-from clm.infrastructure.utils.path_utils import is_slides_file, split_lang_suffix
+from clm.core.utils.path_utils import is_slides_file, split_lang_suffix
 
 if TYPE_CHECKING:
     from clm.core.course import Course

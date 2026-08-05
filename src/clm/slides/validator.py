@@ -22,7 +22,7 @@ from clm.core.topic_resolver import (
     find_slide_files_recursive,
     matches_for_binding,
 )
-from clm.infrastructure.utils.path_utils import split_lang_suffix
+from clm.core.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 from clm.slides.cpp_code_analysis import (
     DEFINITION_CATEGORIES,

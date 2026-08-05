@@ -3507,7 +3507,7 @@ def inline_notes_cmd(
         clm voiceover inline-notes slides            # migrate a whole course
         clm voiceover inline-notes slides --json
     """
-    from clm.infrastructure.utils.path_utils import is_slides_file
+    from clm.core.utils.path_utils import is_slides_file
 
     if path.is_dir():
         targets = sorted(

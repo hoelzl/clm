@@ -5,13 +5,9 @@ from typing import TYPE_CHECKING
 from attrs import define, field
 
 from clm.core.utils.execution_utils import FIRST_EXECUTION_STAGE
+from clm.core.utils.path_utils import PLANTUML_EXTENSIONS, is_image_file, is_slides_file
 from clm.infrastructure.operation import NoOperation, Operation
 from clm.infrastructure.utils.file import File
-from clm.infrastructure.utils.path_utils import (
-    PLANTUML_EXTENSIONS,
-    is_image_file,
-    is_slides_file,
-)
 
 if TYPE_CHECKING:
     from clm.core.course import Course

@@ -165,7 +165,7 @@ def _locate_topic_for_path(slide: Path, slides_dir: Path) -> tuple[str, str] | N
     the module is what lets the caller distinguish a slide in the live
     module from the same-named slide in a frozen-cohort archive.
     """
-    from clm.infrastructure.utils.path_utils import simplify_ordered_name
+    from clm.core.utils.path_utils import simplify_ordered_name
 
     topic_map = build_topic_map(slides_dir)
 

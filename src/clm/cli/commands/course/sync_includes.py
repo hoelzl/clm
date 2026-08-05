@@ -48,10 +48,7 @@ from clm.core.include_ledger import (
     LedgerEntry as _LedgerEntry,
 )
 from clm.core.topic_resolver import build_topic_map, matches_for_binding
-from clm.infrastructure.utils.path_utils import (
-    is_ignored_dir_for_course,
-    is_ignored_file_for_course,
-)
+from clm.core.utils.path_utils import is_ignored_dir_for_course, is_ignored_file_for_course
 
 logger = logging.getLogger(__name__)
 

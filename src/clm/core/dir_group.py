@@ -5,11 +5,9 @@ from typing import TYPE_CHECKING
 from attrs import evolve, frozen
 
 from clm.core.course_spec import DirGroupSpec
+from clm.core.utils.path_utils import output_path_for
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.path_utils import (
-    output_path_for,
-)
 
 if TYPE_CHECKING:
     from clm.core.course import Course

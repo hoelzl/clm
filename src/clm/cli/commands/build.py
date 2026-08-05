@@ -37,12 +37,12 @@ from clm.core.course_spec import (
     CourseSpecError,
     SectionSelection,
 )
+from clm.core.utils.path_utils import output_path_for
 from clm.infrastructure.backend import JobsPendingTimeoutError
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.build_data_classes import BuildSummary
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.messaging.correlation_ids import all_correlation_ids
-from clm.infrastructure.utils.path_utils import output_path_for
 
 logger = get_logger(__name__)
 
@@ -1236,8 +1236,8 @@ def _compute_section_dirs_for_cleanup(course: Course) -> list[Path]:
     intentionally **not** included — they must stay intact so unselected
     sections survive.
     """
+    from clm.core.utils.path_utils import output_specs
     from clm.core.utils.text_utils import sanitize_file_name
-    from clm.infrastructure.utils.path_utils import output_specs
 
     directories: list[Path] = []
     seen: set[Path] = set()

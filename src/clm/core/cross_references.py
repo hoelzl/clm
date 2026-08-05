@@ -28,7 +28,7 @@ This module provides three layers:
 
 Identifier scheme (v1, locked): the path-derived **topic id** — the same
 identifier ``<topic>id</topic>`` references in a spec, produced by
-:func:`clm.infrastructure.utils.path_utils.simplify_ordered_name`. An
+:func:`clm.core.utils.path_utils.simplify_ordered_name`. An
 optional ``/notebook-stem`` disambiguator selects one deck inside a
 multi-notebook directory topic; ``#anchor`` sub-section targets are out of
 scope for v1 and are stripped.
@@ -43,11 +43,8 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from clm.core.utils.path_utils import ext_for, simplify_ordered_name
 from clm.core.utils.text_utils import sanitize_file_name
-from clm.infrastructure.utils.path_utils import (
-    ext_for,
-    simplify_ordered_name,
-)
 
 if TYPE_CHECKING:
     from clm.core.course import Course

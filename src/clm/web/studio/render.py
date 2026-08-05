@@ -261,7 +261,7 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
     try:
         from jinja2 import ChoiceLoader, FileSystemLoader, PackageLoader
 
-        from clm.infrastructure.utils.path_utils import path_to_prog_lang
+        from clm.core.utils.path_utils import path_to_prog_lang
         from clm.workers.notebook.utils.prog_lang_utils import jinja_prefix_for
     except Exception as exc:  # noqa: BLE001 - missing optional dep → tier-1 fallback
         return False, f"render unavailable: {exc}", body
@@ -567,7 +567,7 @@ async def render_j2_cell_html_in_subprocess(
 def _finish_preview_html(deck_path: Path, text: str) -> tuple[bool, str | None, str | None]:
     """The deterministic HTML tail shared by both render variants."""
     try:
-        from clm.infrastructure.utils.path_utils import path_to_prog_lang
+        from clm.core.utils.path_utils import path_to_prog_lang
         from clm.workers.notebook.utils.prog_lang_utils import line_comment_for
 
         try:

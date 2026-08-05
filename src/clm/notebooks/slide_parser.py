@@ -355,7 +355,7 @@ def comment_token_for_path(path: Path) -> str:
     Falls back to ``"#"`` for unknown extensions. Imports are local to avoid a
     module-load cycle (slide_parser is imported very early).
     """
-    from clm.infrastructure.utils.path_utils import path_to_prog_lang
+    from clm.core.utils.path_utils import path_to_prog_lang
     from clm.workers.notebook.utils.prog_lang_utils import line_comment_for
 
     try:

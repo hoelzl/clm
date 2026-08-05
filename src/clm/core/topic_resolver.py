@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from clm.infrastructure.utils.path_utils import (
+from clm.core.utils.path_utils import (
     is_ignored_dir_for_course,
     is_private_dir_name,
     is_slides_file,

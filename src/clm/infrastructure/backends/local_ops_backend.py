@@ -38,16 +38,16 @@ from clm.core.output_write_registry import (
     WriteOutcome,
     is_image_path,
 )
+from clm.core.utils.path_utils import (
+    SKIP_DIRS_FOR_OUTPUT,
+    SKIP_DIRS_PATTERNS,
+    SKIP_OUTPUT_FILE_GLOBS,
+)
 from clm.infrastructure.backend import Backend
 from clm.infrastructure.build_data_classes import BuildWarning
 from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
 from clm.infrastructure.utils.copy_file_data import CopyFileData
 from clm.infrastructure.utils.file import File
-from clm.infrastructure.utils.path_utils import (
-    SKIP_DIRS_FOR_OUTPUT,
-    SKIP_DIRS_PATTERNS,
-    SKIP_OUTPUT_FILE_GLOBS,
-)
 
 logger = logging.getLogger(__name__)
 

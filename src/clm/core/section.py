@@ -32,7 +32,7 @@ class Section(NotebookMixin):
         same notebook in two source files. Numbering them independently
         would offset the EN-side filename by one and break the
         byte-identical parity with the bilingual companion. The family
-        key derived from :func:`clm.infrastructure.utils.path_utils.slide_family_key`
+        key derived from :func:`clm.core.utils.path_utils.slide_family_key`
         keys each split pair under its bilingual companion's filename so
         the assignment is stable regardless of iteration order.
 
@@ -41,7 +41,7 @@ class Section(NotebookMixin):
         may reuse the same file name (e.g. several ``workshop.py``
         folders in one section), and those must each get their own slot.
         """
-        from clm.infrastructure.utils.path_utils import slide_family_key
+        from clm.core.utils.path_utils import slide_family_key
 
         family_number: dict[tuple[Path, str], int] = {}
         next_index = 1

@@ -9,10 +9,10 @@ from clm.core.course_spec import TopicSpec
 from clm.core.operations.process_notebook import ProcessNotebookOperation
 from clm.core.section import Section
 from clm.core.topic import Topic
+from clm.core.utils.path_utils import output_specs
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.dummy_backend import DummyBackend
 from clm.infrastructure.operation import Concurrently
-from clm.infrastructure.utils.path_utils import output_specs
 
 NOTEBOOK_FILE = "slides_some_topic_from_test_1.py"
 

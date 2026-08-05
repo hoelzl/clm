@@ -64,10 +64,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.infrastructure.utils.path_utils import (
-    SUPPORTED_PROG_LANG_EXTENSIONS,
-    atomic_write_all,
-)
+from clm.core.utils.path_utils import SUPPORTED_PROG_LANG_EXTENSIONS
+from clm.infrastructure.utils.path_utils import atomic_write_all
 from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 

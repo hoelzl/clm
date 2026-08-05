@@ -34,10 +34,7 @@ from pathlib import Path
 from clm.core.course_spec import CourseSpec, CourseSpecError
 from clm.core.topic_resolver import TopicMatch, build_topic_map, matches_for_binding
 from clm.core.utils.notebook_utils import find_images, find_imports
-from clm.infrastructure.utils.path_utils import (
-    is_private_dir_name,
-    prog_lang_to_extension,
-)
+from clm.core.utils.path_utils import is_private_dir_name, prog_lang_to_extension
 
 __all__ = [
     "STATUS_CLAIMED",

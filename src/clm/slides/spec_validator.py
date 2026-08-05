@@ -29,7 +29,7 @@ from clm.core.topic_resolver import (
     find_slide_files,
     matches_for_binding,
 )
-from clm.infrastructure.utils.path_utils import is_private_dir_name
+from clm.core.utils.path_utils import is_private_dir_name
 
 
 @dataclass

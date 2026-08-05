@@ -22,8 +22,8 @@ from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
 )
+from clm.core.utils.path_utils import output_specs
 from clm.infrastructure.operation import Concurrently, NoOperation, Operation
-from clm.infrastructure.utils.path_utils import output_specs
 
 if TYPE_CHECKING:
     from clm.core.output_target import OutputTarget
@@ -142,7 +142,7 @@ class DuplicatedImageFile(CourseFile):
         deeper directory named ``img-generated`` keeps its pre-#664 verbatim
         copy (review finding L1).
         """
-        from clm.infrastructure.utils.path_utils import GENERATED_IMG_DIR
+        from clm.core.utils.path_utils import GENERATED_IMG_DIR
 
         rel = self.relative_path
         if rel.parts and rel.parts[0] == GENERATED_IMG_DIR:

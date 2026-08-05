@@ -16,7 +16,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Protocol
 
-from clm.infrastructure.utils.path_utils import (
+from clm.core.utils.path_utils import (
     SUPPORTED_PROG_LANG_EXTENSIONS,
     is_ignored_dir_for_course,
     is_private_dir_name,
@@ -160,7 +160,7 @@ def split_lang_tag(path: Path) -> str | None:
     """The trailing ``.de`` / ``.en`` language tag of a filename, if present.
 
     Prefix-agnostic on purpose: unlike
-    :func:`~clm.infrastructure.utils.path_utils.split_lang_suffix` it does *not*
+    :func:`~clm.core.utils.path_utils.split_lang_suffix` it does *not*
     require the ``slides_``/``topic_``/``project_`` routing prefix — it only
     looks for a ``.de`` / ``.en`` segment immediately before the final
     extension. ``clm slides sync`` reconciles whatever two halves the author
@@ -291,7 +291,7 @@ def _is_split_slide_file(path: Path) -> bool:
     supported program extension — and is **not** a voiceover companion.
 
     Prefix-agnostic (uses :func:`split_lang_tag`, not
-    :func:`~clm.infrastructure.utils.path_utils.is_slides_file`). Voiceover
+    :func:`~clm.core.utils.path_utils.is_slides_file`). Voiceover
     companions (``voiceover_*``) carry a language tag and a ``.py`` extension but
     are extract *output*, never decks — excluding them here keeps them from being
     enumerated and then warned about as phantom solo halves.
