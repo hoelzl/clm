@@ -8,7 +8,7 @@ from clm.infrastructure.database.journal_mode import configure_connection
 from clm.infrastructure.messaging.base_classes import Result
 
 if TYPE_CHECKING:
-    from clm.cli.build_data_classes import BuildError, BuildWarning
+    from clm.infrastructure.build_data_classes import BuildError, BuildWarning
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +333,7 @@ class DatabaseManager:
         Returns:
             Tuple of (errors list, warnings list)
         """
-        from clm.cli.build_data_classes import BuildError, BuildWarning
+        from clm.infrastructure.build_data_classes import BuildError, BuildWarning
 
         assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()

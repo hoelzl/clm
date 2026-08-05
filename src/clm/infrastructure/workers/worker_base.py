@@ -755,7 +755,7 @@ class Worker(ABC):
 
                     # Add error categorization for better monitoring integration
                     try:
-                        from clm.cli.error_categorizer import ErrorCategorizer
+                        from clm.infrastructure.error_categorizer import ErrorCategorizer
 
                         categorized = ErrorCategorizer.categorize_job_error(
                             job_type=job.job_type,

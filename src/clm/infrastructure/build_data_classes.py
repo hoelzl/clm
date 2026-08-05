@@ -7,7 +7,7 @@ errors, warnings, and summaries during course builds.
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 
 @dataclass
@@ -327,3 +327,43 @@ class ProgressUpdate:
     failed: int
     stage: str | None = None
     cached: int = 0
+
+
+class BuildReporterProtocol(Protocol):
+    """The reporting surface backends call during a build.
+
+    Structural on purpose: the CLI's ``BuildReporter`` satisfies it, and
+    tests drive backends with duck-typed stubs. Infrastructure depends on
+    this protocol, never on the CLI implementation (review finding A2 —
+    the reverse import was the infrastructure→CLI cycle).
+    """
+
+    def on_progress_update(self, update: ProgressUpdate) -> None: ...
+
+    def report_cache_hit(
+        self, file_path: str, job_type: str, detail: str | None = None
+    ) -> None: ...
+
+    def report_rebuild_reason(
+        self, file_path: str, job_type: str, reason: str, reason_code: str
+    ) -> None: ...
+
+    def report_file_started(
+        self, file_path: str, job_type: str, job_id: int | None = None
+    ) -> None: ...
+
+    def report_file_completed(
+        self, file_path: str, job_type: str, job_id: int | None = None, success: bool = True
+    ) -> None: ...
+
+    def report_error(self, error: BuildError) -> None: ...
+
+    def report_warning(self, warning: BuildWarning) -> None: ...
+
+    def report_flaky_file(
+        self,
+        file_path: str,
+        attempts: int,
+        failure_types: list[str] | None = None,
+        language: str = "",
+    ) -> None: ...

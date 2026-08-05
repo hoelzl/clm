@@ -11,6 +11,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from clm.infrastructure.build_data_classes import ProgressUpdate
+
 logger = logging.getLogger(__name__)
 
 
@@ -351,21 +353,14 @@ class ProgressTracker:
         """Trigger progress update callback if set."""
         if self.on_progress_update:
             summary = self.get_summary()
-            # Import here to avoid circular dependency
-            try:
-                from clm.cli.build_data_classes import ProgressUpdate
-
-                update = ProgressUpdate(
-                    completed=summary["completed"],
-                    total=summary["total"],
-                    active=summary["active"],
-                    failed=summary["failed"],
-                    stage=self.current_stage,
-                )
-                self.on_progress_update(update)
-            except ImportError:
-                # If build_data_classes is not available, skip callback
-                pass
+            update = ProgressUpdate(
+                completed=summary["completed"],
+                total=summary["total"],
+                active=summary["active"],
+                failed=summary["failed"],
+                stage=self.current_stage,
+            )
+            self.on_progress_update(update)
 
 
 def get_progress_tracker_config() -> dict:

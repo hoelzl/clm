@@ -3,9 +3,9 @@
 import json
 from unittest.mock import MagicMock
 
-from clm.cli.build_data_classes import BuildSummary
 from clm.cli.build_reporter import BuildReporter
 from clm.cli.output_formatter import DefaultOutputFormatter, JSONOutputFormatter
+from clm.infrastructure.build_data_classes import BuildSummary
 
 
 def _reporter() -> BuildReporter:

@@ -4,8 +4,8 @@ from pathlib import Path
 
 from attrs import define
 
-from clm.cli.build_data_classes import BuildWarning
 from clm.infrastructure.backend import Backend
+from clm.infrastructure.build_data_classes import BuildWarning
 from clm.infrastructure.messaging.base_classes import Payload
 from clm.infrastructure.operation import Operation
 from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
