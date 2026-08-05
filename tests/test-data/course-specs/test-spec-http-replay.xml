@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The #681 replay course: one topic, marked http-replay, whose deck
+     requests the three shapes that historically break the replay transport
+     (OpenAI-style JSON POST + auth, chunked text/event-stream, redirect
+     with auth). tests/e2e/test_e2e_http_replay.py drives it through
+     record -> replay -> byte-identical; the committed cassette under the
+     topic's .clm/cassettes/ replays without any server. -->
+<course>
+    <name>
+        <de>HTTP-Replay-Testkurs</de>
+        <en>HTTP Replay Test Course</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs mit einem HTTP-Replay-Thema.</de>
+        <en>A course with a single HTTP-replay topic.</en>
+    </description>
+    <certificate>
+        <de>Kein Zertifikat.</de>
+        <en>No certificate.</en>
+    </certificate>
+    <project-slug>http-replay-test</project-slug>
+    <sections>
+        <section>
+            <name>
+                <de>Replay</de>
+                <en>Replay</en>
+            </name>
+            <topics>
+                <topic http-replay="yes">replay_shapes</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
