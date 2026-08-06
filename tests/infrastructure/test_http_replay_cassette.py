@@ -11,7 +11,7 @@ import io
 
 import pytest
 
-from clm.workers.notebook.http_replay_cassette import (
+from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
     CassettePaths,
     _body_to_dedup_bytes,
     _dedup_key,

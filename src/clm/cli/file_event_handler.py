@@ -125,10 +125,32 @@ class FileEventHandler(PatternMatchingEventHandler):
         await backend.delete_dependencies(file)
 
     @staticmethod
+    def _sweep_orphan_cassettes(course: Course) -> None:
+        """Sweep orphan staging cassettes before a watch-mode rebuild.
+
+        ``Course.process_file`` no longer sweeps for itself (Phase 8 S3) —
+        the sweep belongs to the entry points, exactly as ``clm build``
+        sweeps before its stage loop. Defensive: a sweep failure must not
+        block the rebuild.
+        """
+        try:
+            from clm.infrastructure.http_replay_mitm.cassette_staging import (
+                sweep_orphan_cassette_staging_files,
+            )
+
+            sweep_orphan_cassette_staging_files(course.http_replay_canonical_paths())
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning(
+                f"Orphan cassette sweep raised {type(exc).__name__}: {exc}; "
+                f"continuing without sweep."
+            )
+
+    @staticmethod
     async def on_file_created(course: Course, backend: Backend, path: Path):
         logger.debug(f"On file created: {path}")
         topic = course.add_file(path, warn_if_no_topic=False)
         if topic is not None:
+            FileEventHandler._sweep_orphan_cassettes(course)
             await course.process_file(backend, path)
         else:
             logger.debug(f"File not in course: {path}")
@@ -140,6 +162,7 @@ class FileEventHandler(PatternMatchingEventHandler):
             # Cancel any pending jobs for this file before reprocessing
             # This prevents stale jobs from running with outdated content
             await backend.cancel_jobs_for_file(path)
+            FileEventHandler._sweep_orphan_cassettes(course)
             await course.process_file(backend, path)
 
     def _schedule_debounced_task(self, method, event_name: str, *args):

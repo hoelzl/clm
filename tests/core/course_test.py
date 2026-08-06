@@ -906,8 +906,10 @@ def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path, monkeypatch):
     build's ``compute_other_files`` reaches that orphan before
     ``merge_staging_into_canonical`` does, payload b64 encoding crashes
     with ``FileNotFoundError`` because a concurrent worker may delete
-    the staging file mid-glob. The sweep runs eagerly at ``process_all``
-    start so this race is closed before any payload is built.
+    the staging file mid-glob. The build entry points run the sweep before
+    any processing starts (Phase 8 S3: ``clm build``'s pre-stage hook and
+    watch mode's ``FileEventHandler``), closing the race before any
+    payload is built — mirrored explicitly here.
 
     Markerless orphans (aborted sessions, partial chains) are
     *discarded* by the pre-build sweep (issue #115). That contract is
@@ -956,10 +958,15 @@ def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path, monkeypatch):
     assert orphan_one.exists()
     assert orphan_two.exists()
 
+    from clm.infrastructure.http_replay_mitm.cassette_staging import (
+        sweep_orphan_cassette_staging_files,
+    )
+
+    sweep_orphan_cassette_staging_files(course.http_replay_canonical_paths())
     backend = PytestLocalOpsBackend()
     asyncio.run(course.process_all(backend))
 
-    # Both orphan staging files are gone after process_all completes.
+    # Both orphan staging files are gone after the sweep + process_all.
     assert not orphan_one.exists()
     assert not orphan_two.exists()
 
@@ -973,10 +980,11 @@ def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path, monkeypatch):
 def test_sweep_orphan_staging_files_no_replay_topics(tmp_path):
     """A course without ``http-replay`` topics doesn't touch any cassettes.
 
-    Defensive — the sweep runs unconditionally inside ``process_all`` so
-    we make sure it short-circuits cleanly (and never imports
-    ``vcrpy``/``filelock``) when no topic opted in. This also exercises
-    that the sweep does not crash on a course with no notebooks at all.
+    Defensive — the entry points run the sweep unconditionally before
+    processing, so we make sure it short-circuits cleanly (and never
+    imports ``vcrpy``/``filelock``) when no topic opted in. This also
+    exercises that the sweep does not crash on a course with no notebooks
+    at all.
     """
     import asyncio
 
@@ -991,9 +999,11 @@ def test_sweep_orphan_staging_files_no_replay_topics(tmp_path):
     """
     course = _build_course(tmp_path, sections_xml)
 
-    # Sweep is a method so we can call it directly without spinning up
-    # the full process_all pipeline.
-    swept = course._sweep_orphan_cassette_staging_files()
+    from clm.infrastructure.http_replay_mitm.cassette_staging import (
+        sweep_orphan_cassette_staging_files,
+    )
+
+    swept = sweep_orphan_cassette_staging_files(course.http_replay_canonical_paths())
     assert swept == 0
 
     # Full process_all also runs without raising.
@@ -1017,7 +1027,11 @@ def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
     """
     course = _build_course(tmp_path, sections_xml)
 
-    swept = course._sweep_orphan_cassette_staging_files()
+    from clm.infrastructure.http_replay_mitm.cassette_staging import (
+        sweep_orphan_cassette_staging_files,
+    )
+
+    swept = sweep_orphan_cassette_staging_files(course.http_replay_canonical_paths())
     assert swept == 0
 
 
@@ -1026,7 +1040,7 @@ def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_p
 
     The out-of-process transport (issue #165 P2) writes per-cassette
     ``*.staging-mitm-*`` files beside each canonical with a ``.completed``
-    marker on clean shutdown. ``Course.merge_mitmproxy_cassette_staging``
+    marker on clean shutdown. ``cassette_staging.merge_mitmproxy_cassette_staging``
     folds the markered ones (build finished cleanly) and leaves markerless
     ones (mitmdump force-killed) for the next pre-build sweep to discard —
     the same partial-recording protection the vcrpy workers get.
@@ -1055,7 +1069,11 @@ def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_p
     """
     course = _build_course(tmp_path, sections_xml)
 
-    folded = course.merge_mitmproxy_cassette_staging()
+    from clm.infrastructure.http_replay_mitm.cassette_staging import (
+        merge_mitmproxy_cassette_staging,
+    )
+
+    folded = merge_mitmproxy_cassette_staging(course.http_replay_canonical_paths())
 
     assert folded == 1
     assert canonical.exists()
@@ -1080,7 +1098,11 @@ def test_merge_mitmproxy_cassette_staging_no_replay_topics(tmp_path):
     </sections>
     """
     course = _build_course(tmp_path, sections_xml)
-    assert course.merge_mitmproxy_cassette_staging() == 0
+    from clm.infrastructure.http_replay_mitm.cassette_staging import (
+        merge_mitmproxy_cassette_staging,
+    )
+
+    assert merge_mitmproxy_cassette_staging(course.http_replay_canonical_paths()) == 0
 
 
 # ---------------------------------------------------------------------------

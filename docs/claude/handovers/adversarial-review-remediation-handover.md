@@ -1225,7 +1225,13 @@ one PR per step, golden suite green after each.
    build_profiling) descended into core; ratchet 19 → 5 edges over 4 files
    (exactly the S3/S4/S5 residue). `clm.infrastructure`'s lazy
    Backend/Operation exports stay as a compatibility surface, now pointing
-   at core.
+   at core. **S3 DONE 2026-08-06** — cassette staging maintenance moved off
+   `Course` into `infrastructure.http_replay_mitm.cassette_staging`
+   (functions take `Course.http_replay_canonical_paths()`; sweeping is the
+   entry points' job — build pre-stage hook + watch-mode FileEventHandler);
+   `http_replay_cassette` moved workers → infrastructure. Ratchet 5 → 4
+   edges over 3 files. Remaining: S4 (identity inversion), S5 (slide-text
+   cone), S6 (import-linter).
 4. **A11 — import-linter contract in CI.** Add it as soon as the first contract
    is true, not at the end — each subsequent step then cannot regress.
 5. **A4 — extract build orchestration** from `cli/commands/build.py` (2694 lines;

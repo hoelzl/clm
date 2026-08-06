@@ -378,7 +378,7 @@ def test_filter_constants_and_matchers_are_pinned():
 
 def test_merge_helper_loads_bridge_cassette(tmp_path):
     """The host-side merge must consume a bridge-written cassette unchanged."""
-    from clm.workers.notebook.http_replay_cassette import (
+    from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
         CassettePaths,
         merge_staging_into_canonical,
         write_completion_marker,

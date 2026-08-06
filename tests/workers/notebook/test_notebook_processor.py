@@ -2289,7 +2289,7 @@ class TestCassetteMerge:
     def test_merge_creates_canonical_when_only_staging_exists(self, tmp_path):
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2311,7 +2311,7 @@ class TestCassetteMerge:
     def test_merge_is_noop_with_no_staging_files(self, tmp_path):
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2330,7 +2330,7 @@ class TestCassetteMerge:
         """Staging files from previously-killed workers must be absorbed too."""
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2363,7 +2363,7 @@ class TestCassetteMerge:
         """An interaction already present in canonical must not be appended twice."""
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2385,7 +2385,7 @@ class TestCassetteMerge:
     def test_merge_appends_new_interactions_to_existing_canonical(self, tmp_path):
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2414,7 +2414,7 @@ class TestCassetteMerge:
         """
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2440,7 +2440,7 @@ class TestCassetteMerge:
         pytest.importorskip("filelock")
         import threading
 
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2493,7 +2493,7 @@ class TestCompletionMarker:
     """
 
     def test_marker_path_sits_beside_staging(self, tmp_path):
-        from clm.workers.notebook.http_replay_cassette import marker_path
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import marker_path
 
         staging = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc"
         expected = tmp_path / "_cassettes" / "slides.http-cassette.yaml.staging-abc.completed"
@@ -2501,7 +2501,7 @@ class TestCompletionMarker:
         assert marker_path(staging) == expected
 
     def test_has_completion_marker_false_when_absent(self, tmp_path):
-        from clm.workers.notebook.http_replay_cassette import has_completion_marker
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import has_completion_marker
 
         staging = tmp_path / "slides.http-cassette.yaml.staging-xyz"
         # Staging file doesn't even exist — marker still reports False.
@@ -2512,7 +2512,7 @@ class TestCompletionMarker:
         assert has_completion_marker(staging) is False
 
     def test_has_completion_marker_true_when_present(self, tmp_path):
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             has_completion_marker,
             marker_path,
         )
@@ -2524,7 +2524,7 @@ class TestCompletionMarker:
         assert has_completion_marker(staging) is True
 
     def test_write_completion_marker_creates_file(self, tmp_path):
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             has_completion_marker,
             marker_path,
@@ -2542,7 +2542,7 @@ class TestCompletionMarker:
         assert has_completion_marker(staging) is True
 
     def test_write_completion_marker_payload_is_valid_json_with_iso_timestamp(self, tmp_path):
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             write_completion_marker,
@@ -2567,7 +2567,7 @@ class TestCompletionMarker:
         assert abs(delta.total_seconds()) < 60
 
     def test_write_completion_marker_is_idempotent(self, tmp_path):
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             write_completion_marker,
@@ -2626,7 +2626,7 @@ class TestDiscriminatingMerge:
         """Default per-worker merge folds markered staging into canonical."""
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             merge_staging_into_canonical,
@@ -2659,7 +2659,7 @@ class TestDiscriminatingMerge:
         """
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2691,7 +2691,7 @@ class TestDiscriminatingMerge:
         """
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
@@ -2718,7 +2718,7 @@ class TestDiscriminatingMerge:
         """Folded markered staging cleans up both the staging file and the marker."""
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             merge_staging_into_canonical,
@@ -2755,7 +2755,7 @@ class TestDiscriminatingMerge:
         """
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             merge_staging_into_canonical,
@@ -2877,7 +2877,7 @@ class TestIssue115PartialChainRegression:
         """
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             merge_staging_into_canonical,
@@ -2966,7 +2966,7 @@ class TestIssue115PartialChainRegression:
         """
         pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
-        from clm.workers.notebook.http_replay_cassette import (
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
             CassettePaths,
             marker_path,
             merge_staging_into_canonical,

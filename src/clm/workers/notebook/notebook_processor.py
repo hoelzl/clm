@@ -1930,7 +1930,7 @@ class NotebookProcessor:
         notebook's own parent while the tag here resolves against
         ``source_topic_dir``; for a notebook nested in a sub-directory of the
         topic the two diverge, so the proxy would write staging to a dir the
-        host-side merge (``Course.merge_mitmproxy_cassette_staging``) does not
+        host-side merge (``cassette_staging.merge_mitmproxy_cassette_staging``) does not
         scan and a record-mode recording would be misplaced (replay is
         unaffected — it reads the committed canonical). Converging nested
         layouts onto per-notebook cassette dirs is a separate follow-up.
@@ -1947,7 +1947,7 @@ class NotebookProcessor:
             target_dir = source_dir
         else:
             return None
-        from .http_replay_cassette import resolve_canonical_path
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import resolve_canonical_path
 
         return str(resolve_canonical_path(target_dir, cassette_name))
 
@@ -2005,7 +2005,7 @@ class NotebookProcessor:
                 # happen entirely outside the worker — the shared replay
                 # proxy writes per-cassette staging files on the host and
                 # the host build merges them after the proxy stops
-                # (Course.merge_mitmproxy_cassette_staging).
+                # (cassette_staging.merge_mitmproxy_cassette_staging).
                 replay_injected = self._maybe_inject_http_replay(processed_nb, payload, source_dir)
                 try:
                     # To silence warnings about frozen modules...
