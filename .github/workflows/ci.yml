@@ -287,6 +287,13 @@ jobs:
       run: |
         uv run --no-sync mypy src/clm
 
+    - name: Run import-linter (layer contracts)
+      if: needs.changes.outputs.code == 'true'
+      run: |
+        # Phase 8 S6 (#802): the four-layer architecture as an enforced
+        # contract (config in pyproject [tool.importlinter]).
+        uv run --no-sync lint-imports
+
   docker-test:
     name: Docker Integration Tests
     needs: changes
