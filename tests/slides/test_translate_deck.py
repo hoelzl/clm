@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from clm.slides.raw_cells import split_cells
+from clm.core.slide_text.raw_cells import split_cells
 from clm.slides.split import split_text, unify_texts
 from clm.slides.sync_translate import StaticSlideTranslator, TranslationError
 from clm.slides.translate_deck import (

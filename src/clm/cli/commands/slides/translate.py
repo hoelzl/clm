@@ -294,7 +294,7 @@ def _exit_code(result: BootstrapResult) -> int:
 
 def _count_cells(text: str) -> tuple[int, int]:
     """(translatable, copied): lang-tagged cells vs language-neutral/shared cells."""
-    from clm.slides.raw_cells import split_cells
+    from clm.core.slide_text.raw_cells import split_cells
 
     _, cells = split_cells(text)
     translatable = sum(1 for c in cells if c.metadata.lang is not None)

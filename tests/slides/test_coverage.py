@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+from clm.core.slide_text.slide_parser import parse_cells
 from clm.infrastructure.llm.cache import CoverageCache
 from clm.infrastructure.llm.ollama_client import (
     BulletVerdict,
@@ -12,7 +13,6 @@ from clm.infrastructure.llm.ollama_client import (
     StaticCoverageJudge,
     coverage_key,
 )
-from clm.notebooks.slide_parser import parse_cells
 from clm.slides.coverage import (
     CoverageOptions,
     build_coverage_pairs,
@@ -673,7 +673,7 @@ class TestCheckCoverageForText:
 
 def _narrative_text_de() -> str:
     """Whatever _narrative_text() would return for the DE voiceover."""
-    from clm.notebooks.slide_parser import parse_cells
+    from clm.core.slide_text.slide_parser import parse_cells
     from clm.slides.coverage import _narrative_text
 
     cells = parse_cells(_slide_text())
@@ -682,7 +682,7 @@ def _narrative_text_de() -> str:
 
 
 def _narrative_text_en_with_gap() -> str:
-    from clm.notebooks.slide_parser import parse_cells
+    from clm.core.slide_text.slide_parser import parse_cells
     from clm.slides.coverage import _narrative_text
 
     cells = parse_cells(_slide_text_with_gap_en())

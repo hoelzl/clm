@@ -450,7 +450,7 @@ class TestIdentifyCommand:
         slide_mock.title = "Title"
         fake_parser = MagicMock()
         fake_parser.parse_slides = MagicMock(return_value=[slide_mock])
-        monkeypatch.setitem(sys.modules, "clm.notebooks.slide_parser", fake_parser)
+        monkeypatch.setitem(sys.modules, "clm.core.slide_text.slide_parser", fake_parser)
 
         # Fake keyframes
         fake_keyframes = MagicMock()

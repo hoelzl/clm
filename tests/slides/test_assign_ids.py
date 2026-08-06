@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.slide_text.slide_parser import parse_cells
 from clm.infrastructure.llm.ollama_client import StaticTitleSuggester
-from clm.notebooks.slide_parser import parse_cells
 from clm.slides.assign_ids import (
     AssignOptions,
     assign_ids_for_text,

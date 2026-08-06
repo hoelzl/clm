@@ -23,8 +23,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.slides.pairing import TITLE_SLIDE_ID
-from clm.slides.raw_cells import split_cells
+from clm.core.slide_text.pairing import TITLE_SLIDE_ID
+from clm.core.slide_text.raw_cells import split_cells
 from clm.slides.slug import MAX_SLUG_LENGTH, strip_preserve_marker
 
 __all__ = [

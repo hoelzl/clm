@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from clm.notebooks.slide_parser import SlideGroup
+from clm.core.slide_text.slide_parser import SlideGroup
 from clm.voiceover.keyframes import TransitionEvent
 from clm.voiceover.matcher import (
     _build_timeline,

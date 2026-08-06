@@ -26,6 +26,7 @@ from pathlib import Path
 
 import click
 
+from clm.core.slide_text.pairing import find_split_slide_files_recursive, iter_split_pairs
 from clm.slides import doc_apply, doc_ledger
 from clm.slides.base_recovery import (
     BASE_DIFF_ACTIONS,
@@ -41,10 +42,6 @@ from clm.slides.doc_report import (
     diff_bundle_with_ledger,
     pair_payload,
     report_id_for,
-)
-from clm.slides.pairing import (
-    find_split_slide_files_recursive,
-    iter_split_pairs,
 )
 from clm.slides.sync_diff import DeckDiff
 from clm.slides.sync_wire import REQUIRE_REPORT_ID, WIRE_SCHEMA

@@ -11,7 +11,7 @@ cell, it becomes the **body** of the j2 header cell::
     # %% [markdown] lang="de" ...
 
 Because ``# {{ `` and ``# j2 `` are themselves cell boundaries, this code is
-**never** part of the :func:`clm.slides.raw_cells.split_cells` preamble string —
+**never** part of the :func:`clm.core.slide_text.raw_cells.split_cells` preamble string —
 it lives in ``RawCell.lines[1:]`` of the trailing j2 cell.
 
 At build time the header macro expands to the title slide(s), and the trailing
@@ -34,8 +34,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clm.notebooks.slide_parser import parse_cell_header
-from clm.slides.raw_cells import RawCell
+from clm.core.slide_text.raw_cells import RawCell
+from clm.core.slide_text.slide_parser import parse_cell_header
 
 
 @dataclass(frozen=True)

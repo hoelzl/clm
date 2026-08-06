@@ -83,9 +83,9 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from clm.core.slide_text.raw_cells import RawCell, split_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides.git_text import git_ref_text
-from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.split import UnifyError, unify_texts
 from clm.slides.sync_companion import ProjectedPair, project_pair
 from clm.slides.sync_writeback import role_of

@@ -423,8 +423,8 @@ class ProcessNotebookOperation(Operation):
         data = self.input_file.path.read_text(encoding="utf-8")
         companion = self.input_file.companion_voiceover_path
         if companion is not None:
+            from clm.core.slide_text.voiceover_merge import merge_voiceover_text
             from clm.core.utils.prog_lang_utils import comment_token_for_path
-            from clm.slides.voiceover_tools import merge_voiceover_text
 
             companion_text = companion.read_text(encoding="utf-8")
             data, unmatched = merge_voiceover_text(

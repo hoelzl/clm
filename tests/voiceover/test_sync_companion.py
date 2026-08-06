@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from clm.cli.commands.voiceover import _merge_notes, _require_slide_ids
-from clm.notebooks.slide_parser import parse_slides
+from clm.core.slide_text.slide_parser import parse_slides
 from clm.voiceover.aligner import AlignmentResult
 from clm.voiceover.merge import MergeResult
 

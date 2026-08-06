@@ -167,7 +167,7 @@ def _read_voiceover_for_slide(
     if not slide_file.exists():
         return None
 
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
 
     try:
         slide_groups = parse_slides(slide_file, language)

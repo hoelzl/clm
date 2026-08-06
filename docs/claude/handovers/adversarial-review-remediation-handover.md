@@ -1234,10 +1234,13 @@ one PR per step, golden suite green after each.
    inverted through the `clm.core.worker_identity` registry;
    infrastructure records identities and registers the singleton fallback
    provider (eager at image_identity import + lazy via
-   `clm.infrastructure.__init__`). Ratchet 4 → 1 edge:
-   `core -> slides: core/operations/process_notebook.py` — S5's
-   slide-text-cone descent (maintainer-approved) is all that remains
-   before S6 (import-linter). LANDMINE learned on #809: the Phase 7
+   `clm.infrastructure.__init__`). Ratchet 4 → 1 edge. **S5 DONE
+   2026-08-06** — the slide-text model (slide_parser, raw_cells,
+   anchor_primitives, pairing, voiceover_merge) descended into
+   `clm.core.slide_text`; ~72 importers retargeted. **Ratchet EMPTY —
+   the documented architecture exists in the import graph.** Remaining:
+   S6 (import-linter in CI), then A10's final architecture.md rewrite.
+   LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
    same commit as any floored file, and check floors locally via

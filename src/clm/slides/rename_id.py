@@ -35,9 +35,9 @@ import re
 
 from attrs import evolve, frozen
 
-from clm.notebooks.slide_parser import parse_cell_header
+from clm.core.slide_text.raw_cells import reconstruct, split_cells
+from clm.core.slide_text.slide_parser import parse_cell_header
 from clm.slides.doc_ledger import DeckLedger, rename_group_scopes
-from clm.slides.raw_cells import reconstruct, split_cells
 
 #: A usable ``slide_id``: non-empty, no whitespace, no ``"`` (which would break
 #: the header attribute). Deliberately permissive — slug *quality* is a separate

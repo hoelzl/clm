@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from clm.core.slide_text.pairing import split_lang_tag
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides.assign_ids import AssignOptions, AssignResult, assign_ids_in_split_pair
-from clm.slides.pairing import split_lang_tag
 from clm.slides.translate_deck import TranslateDeckResult, translate_deck_text
 
 if TYPE_CHECKING:
@@ -149,7 +149,7 @@ class BootstrapResult:
 def _twin_path(source_path: Path, target_lang: str) -> Path:
     """The sibling split half's path for ``target_lang`` — existence-agnostic.
 
-    Unlike :func:`~clm.slides.pairing.derive_split_twin` (which returns the twin
+    Unlike :func:`~clm.core.slide_text.pairing.derive_split_twin` (which returns the twin
     only if it is already on disk), this derives the path the twin *would* have
     so the bootstrap can create it. The ``.de`` / ``.en`` tag sits immediately
     before the final extension (``split_lang_tag`` guarantees the

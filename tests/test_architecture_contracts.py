@@ -107,13 +107,13 @@ def _current_violations() -> set[str]:
 #: infrastructure.http_replay_mitm.cassette_staging (sweeping is the entry
 #: points' job now) → 4 edges over 3 files. S4 inverted the worker-image
 #: identity reads through the clm.core.worker_identity registry
-#: (infrastructure records + provides the singleton fallback) → 1 edge
-#: over 1 file: the payload-time voiceover merge, S5.
-KNOWN_LAYER_VIOLATIONS = frozenset(
-    {
-        "core -> slides: core/operations/process_notebook.py",
-    }
-)
+#: (infrastructure records + provides the singleton fallback) → 1 edge.
+#: S5 descended the slide-text model (slide_parser, raw_cells,
+#: anchor_primitives, pairing, the payload-time voiceover merge) into
+#: clm.core.slide_text → **EMPTY**. The documented architecture now exists
+#: in the import graph; S6 (#802) adds the import-linter contract to CI,
+#: after which this inventory test becomes belt-and-braces.
+KNOWN_LAYER_VIOLATIONS = frozenset()
 
 
 class TestLayerBoundaryRatchet:
@@ -150,12 +150,11 @@ class TestLayerBoundaryRatchet:
             encoding="utf-8",
         )
         assert "clm.cli.build_data_classes" in _clm_imports(probe)
-        # ...and the live inventory carries a known lazy-import resident —
-        # an entry that would silently vanish under a module-level-only scan
-        # (process_notebook's merge_voiceover_text import is function-body
-        # only; it survives until step S5 of the A1/A3 plan, by which point
-        # the inventory is empty and this pin retires with the ratchet).
-        assert "core -> slides: core/operations/process_notebook.py" in KNOWN_LAYER_VIOLATIONS
+        # The companion "live inventory carries a lazy resident" pin retired
+        # with S5: the inventory is empty, so the probe above is the whole
+        # guarantee — a module-level-only scanner regression would now show
+        # up as a missed NEW violation, and this test keeps _clm_imports
+        # honest about function-body imports.
 
     def test_no_string_based_imports_dodge_the_ratchet(self):
         """The scanner is AST-based, so ``importlib.import_module("clm...")``

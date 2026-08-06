@@ -21,8 +21,8 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from clm.core.slide_text.pairing import derive_split_pair
 from clm.core.voiceover_companions import resolve_companion
-from clm.slides.pairing import derive_split_pair
 from clm.slides.voiceover_tools import (
     ExtractionResult,
     InlineResult,
@@ -307,7 +307,7 @@ def sync(
 
     video_paths = _expand_video_args(videos)
 
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.aligner import align_transcript
     from clm.voiceover.cache import (
@@ -878,7 +878,7 @@ async def _run_propagation(
     """
     from uuid import uuid4
 
-    from clm.notebooks.slide_parser import SlideGroup, parse_slides
+    from clm.core.slide_text.slide_parser import SlideGroup, parse_slides
     from clm.slides.voiceover_tools import read_companion_baselines
     from clm.voiceover.merge import (
         PropagationInput,
@@ -1359,7 +1359,7 @@ def detect(ctx, video, output):
 @click.pass_context
 def identify(ctx, video, slides, lang, output):
     """Identify which slides appear in a video (OCR + matching)."""
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.cache import CachePolicy, cached_detect, cached_timeline
     from clm.voiceover.keyframes import detect_transitions
     from clm.voiceover.matcher import match_events_to_slides
@@ -1810,7 +1810,7 @@ def _port_voiceover_notes(
     """
     import asyncio
 
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.port import polish_and_port
     from clm.voiceover.slide_matcher import MatchKind, match_slides
 

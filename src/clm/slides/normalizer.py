@@ -28,6 +28,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.core.slide_text.pairing import build_slide_groups
+from clm.core.slide_text.raw_cells import RawCell as _RawCell
+from clm.core.slide_text.raw_cells import reconstruct as _reconstruct
+from clm.core.slide_text.raw_cells import split_cells as _split_raw_cells
+from clm.core.slide_text.slide_parser import parse_cell_header
 from clm.core.topic_resolver import (
     build_topic_map,
     find_slide_files,
@@ -36,11 +41,6 @@ from clm.core.topic_resolver import (
 )
 from clm.core.utils.path_utils import split_lang_suffix
 from clm.core.utils.prog_lang_utils import comment_token_for_path
-from clm.notebooks.slide_parser import parse_cell_header
-from clm.slides.pairing import build_slide_groups
-from clm.slides.raw_cells import RawCell as _RawCell
-from clm.slides.raw_cells import reconstruct as _reconstruct
-from clm.slides.raw_cells import split_cells as _split_raw_cells
 
 if TYPE_CHECKING:
     from clm.slides.assign_ids import AssignOptions
@@ -406,7 +406,7 @@ def _apply_workshop_symmetry(cells: list[_RawCell], file_path: str) -> list[Chan
     This pass closes that gap by copying the tag to the untagged half of every
     DE/EN heading pair. Bilingual output is unchanged (the range was already
     detected); split output now matches it. Headings must be adjacent in source
-    order to be paired (see :func:`clm.slides.pairing.build_slide_groups`),
+    order to be paired (see :func:`clm.core.slide_text.pairing.build_slide_groups`),
     which holds after interleaving and after ``unify``.
     """
     changes: list[Change] = []

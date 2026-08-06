@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.slide_text.pairing import find_split_slide_files_recursive, iter_split_pairs
 from clm.slides.doc_lenses import load_bundle
-from clm.slides.pairing import find_split_slide_files_recursive, iter_split_pairs
 from clm.slides.sync_diff import (
     FRAMED_ACTIONS,
     MECHANICAL_ACTIONS,

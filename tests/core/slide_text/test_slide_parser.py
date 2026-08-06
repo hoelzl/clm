@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from clm.notebooks.slide_parser import (
+from clm.core.slide_text.slide_parser import (
     Cell,
     CellMetadata,
     SlideGroup,

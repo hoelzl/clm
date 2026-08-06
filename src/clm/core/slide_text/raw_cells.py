@@ -3,7 +3,7 @@
 Several slide tools (``assign_ids``, ``normalizer``, ``split``) need to
 walk a percent-format ``.py`` file at cell granularity *and* reconstruct
 the file byte-identically afterwards. The standard parser in
-:mod:`clm.notebooks.slide_parser` strips whitespace and joins content
+:mod:`clm.core.slide_text.slide_parser` strips whitespace and joins content
 into a single string, which is lossy.
 
 This module exposes a raw representation: each cell keeps its original
@@ -21,14 +21,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clm.notebooks.slide_parser import CellMetadata, _is_cell_boundary, parse_cell_header
+from clm.core.slide_text.slide_parser import CellMetadata, _is_cell_boundary, parse_cell_header
 
 
 def is_cell_boundary(line: str, comment_token: str = "#") -> bool:
     """Return True iff ``line`` opens a new percent-format cell.
 
     Delegates to the single canonical predicate in
-    :mod:`clm.notebooks.slide_parser` so the boundary rule can never drift between
+    :mod:`clm.core.slide_text.slide_parser` so the boundary rule can never drift between
     the two. ``comment_token`` is the source language's line-comment token
     (``"#"`` python/rust, ``"//"`` cpp/csharp/java/typescript).
     """

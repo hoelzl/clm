@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from clm.notebooks.slide_parser import SlideGroup, group_slides, parse_cells
+from clm.core.slide_text.slide_parser import SlideGroup, group_slides, parse_cells
 from clm.voiceover.narrative_commits import (
     CommitInfo,
     NarrativeRun,

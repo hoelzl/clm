@@ -27,7 +27,7 @@ from click.testing import CliRunner
 
 from clm.cli.commands.harvest import harvest_group
 from clm.cli.commands.voiceover import _merge_notes
-from clm.notebooks.slide_parser import parse_slides
+from clm.core.slide_text.slide_parser import parse_slides
 from clm.voiceover.aligner import AlignmentResult, SlideNotes
 from clm.voiceover.merge import MergeResult, PropagationResult
 

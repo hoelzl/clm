@@ -45,7 +45,7 @@ def polish(slides, lang, slides_range, dry_run, output, model, polish_level):
 
     Requires: pip install clm[summarize]
     """
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
 
     console.print(f"[bold]Parsing slides:[/bold] {slides}")

@@ -14,8 +14,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from clm.core.slide_text.slide_parser import Cell, parse_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
-from clm.notebooks.slide_parser import Cell, parse_cells
 
 logger = logging.getLogger(__name__)
 

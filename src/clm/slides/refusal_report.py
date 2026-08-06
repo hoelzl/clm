@@ -22,9 +22,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.core.slide_text.raw_cells import RawCell, split_cells
 from clm.slides.assign_ids import Refusal
 from clm.slides.headingless import extract_heading
-from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.slug import strip_preserve_marker
 
 __all__ = [

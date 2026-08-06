@@ -7,7 +7,7 @@ coverage independent of either consumer.
 
 from __future__ import annotations
 
-from clm.slides.anchor_primitives import (
+from clm.core.slide_text.anchor_primitives import (
     TITLE_MACRO_ANCHOR,
     anchor_candidates,
     anchor_key,
@@ -16,7 +16,7 @@ from clm.slides.anchor_primitives import (
     find_predecessor_index,
     split_anchor,
 )
-from clm.slides.raw_cells import split_cells
+from clm.core.slide_text.raw_cells import split_cells
 
 
 def _cells(text: str):

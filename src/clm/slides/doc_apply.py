@@ -44,6 +44,7 @@ from pathlib import Path
 
 from attrs import define, evolve, field, frozen
 
+from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, MemberKey, SideCell
 from clm.slides.doc_identity import (
     content_fingerprint,
@@ -65,7 +66,6 @@ from clm.slides.doc_ledger import (
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
 from clm.slides.doc_write import DeckEmitter, DeckWriteError, write_changed_files
-from clm.slides.raw_cells import is_cell_boundary
 from clm.slides.sync_diff import (
     FRAMED_ACTIONS,
     MECHANICAL_ACTIONS,

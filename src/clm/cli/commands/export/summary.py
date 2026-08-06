@@ -97,9 +97,9 @@ def notebook_contains_workshop(notebook_path: Path) -> bool:
             text = notebook_path.read_text(encoding="utf-8")
         except OSError:
             return False
+        from clm.core.slide_text.slide_parser import parse_cells
         from clm.core.utils.prog_lang_utils import comment_token_for_path
         from clm.core.workshop_scope import find_workshop_ranges
-        from clm.notebooks.slide_parser import parse_cells
 
         cells = parse_cells(text, comment_token_for_path(notebook_path))
         return bool(find_workshop_ranges(cells))

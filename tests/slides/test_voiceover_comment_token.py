@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clm.core.slide_text.voiceover_merge import merge_voiceover_text
 from clm.core.utils.path_utils import is_ignored_file_for_output
 from clm.notebooks.slide_writer import format_narrative_cell
-from clm.slides.voiceover_tools import merge_voiceover_text, render_companion_update
+from clm.slides.voiceover_tools import render_companion_update
 
 _SLIDE_CS = "\n".join(
     [
