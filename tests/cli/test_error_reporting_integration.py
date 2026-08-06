@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clm.cli.build_reporter import BuildReporter
-from clm.cli.output_formatter import QuietOutputFormatter
+from clm.build.output_formatter import QuietOutputFormatter
+from clm.build.reporter import BuildReporter
 from clm.core.build_data_classes import BuildError, BuildWarning
 from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
@@ -175,9 +175,9 @@ class TestDuplicateFileDetection:
 
     def test_report_duplicate_file_warnings_called(self):
         """Test that _report_duplicate_file_warnings is called during build."""
-        from clm.cli.build_reporter import BuildReporter
+        from clm.build.output_formatter import QuietOutputFormatter
+        from clm.build.reporter import BuildReporter
         from clm.cli.main import _report_duplicate_file_warnings
-        from clm.cli.output_formatter import QuietOutputFormatter
 
         # Create mock course with duplicates
         mock_course = MagicMock()
@@ -205,9 +205,9 @@ class TestDuplicateFileDetection:
 
     def test_report_duplicate_file_warnings_no_duplicates(self):
         """Test that no warnings are reported when there are no duplicates."""
-        from clm.cli.build_reporter import BuildReporter
+        from clm.build.output_formatter import QuietOutputFormatter
+        from clm.build.reporter import BuildReporter
         from clm.cli.main import _report_duplicate_file_warnings
-        from clm.cli.output_formatter import QuietOutputFormatter
 
         mock_course = MagicMock()
         mock_course.detect_duplicate_output_files.return_value = []
@@ -222,9 +222,9 @@ class TestDuplicateFileDetection:
 
     def test_report_duplicate_file_warnings_handles_exception(self):
         """Test that exceptions in duplicate detection are handled gracefully."""
-        from clm.cli.build_reporter import BuildReporter
+        from clm.build.output_formatter import QuietOutputFormatter
+        from clm.build.reporter import BuildReporter
         from clm.cli.main import _report_duplicate_file_warnings
-        from clm.cli.output_formatter import QuietOutputFormatter
 
         mock_course = MagicMock()
         mock_course.detect_duplicate_output_files.side_effect = Exception("Test error")

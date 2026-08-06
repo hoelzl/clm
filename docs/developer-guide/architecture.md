@@ -37,6 +37,17 @@ formats using a worker-based architecture orchestrated by an SQLite job queue.
 └──────────────────────────────┬─────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼─────────────────────────────────────┐
+│                    clm.build (Build Engine)                         │
+│                                                                    │
+│  config   — BuildConfig + option resolvers (flag > env > default)  │
+│  engine   — run_build(): the programmatic `clm build`              │
+│  reporter / output_formatter — build progress + summary rendering  │
+│  output_sweep, git_dir_mover — output-tree maintenance             │
+│                                                                    │
+│  May import workers, infrastructure, and core.                      │
+└──────────────────────────────┬─────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼─────────────────────────────────────┐
 │                 clm.workers (Worker Implementations)                │
 │                                                                    │
 │  notebook/   — notebook processing + execution (multi-kernel)      │
@@ -82,10 +93,10 @@ formats using a worker-based architecture orchestrated by an SQLite job queue.
 
 Two properties distinguish this from the usual layered-architecture diagram:
 
-1. **The bottom three layers are constrained; the top is not.** `clm.cli` and
+1. **The bottom four layers are constrained; the top is not.** `clm.cli` and
    the extension packages may import each other and anything below — there is
    deliberately no ordering among them. The contracts only guarantee that
-   `core`, `infrastructure`, and `workers` never import upward.
+   `core`, `infrastructure`, `workers`, and `build` never import upward.
 2. **The contract seam lives in core.** The `Operation` hierarchy, the
    `Backend` ABC, and the Pydantic payload schemas that cross the worker
    process boundary are *contracts and data*, so they live at the bottom of
@@ -97,11 +108,12 @@ Two properties distinguish this from the usual layered-architecture diagram:
 Three [import-linter](https://import-linter.readthedocs.io/) contracts, defined
 in `pyproject.toml` under `[tool.importlinter]`:
 
-1. **"Layered: core below infrastructure below workers"** — a `layers`
-   contract over `clm.workers` / `clm.infrastructure` / `clm.core`.
+1. **"Layered: core below infrastructure below workers below build"** — a
+   `layers` contract over `clm.build` / `clm.workers` / `clm.infrastructure` /
+   `clm.core`.
 2. **"Constrained layers never import the CLI"** — `core`, `infrastructure`,
-   and `workers` are forbidden from importing `clm.cli`.
-3. **"Constrained layers never import extension packages"** — the same three
+   `workers`, and `build` are forbidden from importing `clm.cli`.
+3. **"Constrained layers never import extension packages"** — the same four
    layers are forbidden from importing `clm.cohort_calendar`, `clm.mcp`,
    `clm.notebooks`, `clm.recordings`, `clm.release`, `clm.slides`,
    `clm.snapshot`, `clm.voiceover`, and `clm.web`.
@@ -314,6 +326,40 @@ spec block; preview with `clm jupyterlite preview`.
 Both modes share one jobs database; claiming is mode-tagged and
 session-owned so direct and Docker builds cannot steal each other's jobs.
 
+### Layer 4: `clm.build` (Build Engine)
+
+**Purpose**: the programmatic equivalent of `clm build` (#802/A4) — the
+orchestration that historically lived inside the Click command, callable by
+MCP tools, the web studio, and tests without importing any CLI module.
+
+**Entry point**:
+
+```python
+from clm.build import BuildConfig, run_build
+
+summary = await run_build(config)   # BuildSummary | None (watch mode)
+```
+
+`run_build` pins the HTTP-replay mode/transport env for worker subprocesses,
+loads and validates the course (`initialize_paths_and_course`), initializes
+the databases, records worker identities, starts worker pools and the
+mitmproxy transport when needed, drives `Course.process_all` against a
+`SqliteBackend`, runs the post-build stray-file sweep, and emits the
+provenance manifest and CMake exports. Exit-code policy stays with the
+caller.
+
+**Modules**: `config` (the `BuildConfig` parameter object + the `resolve_*`
+option family implementing flag > `CLM_*` env var > default precedence),
+`engine` (orchestration), `reporter` / `output_formatter` (build progress
+and summary rendering — JSON, quiet, verbose, default), `output_sweep`
+(stray-file sweep), `git_dir_mover` (preserves nested `.git/` during
+`--clean` wipes), `errors` (typed failures: `BuildOptionError`,
+`SpecValidationFailure` — the engine never raises Click exceptions).
+
+**Deliberate seams**: the engine does not configure logging (the CLI does;
+programmatic callers bring their own), and watch mode requires the caller to
+inject a `watch_runner` — the watchdog-based loop lives in the CLI.
+
 ### Top of the Stack: `clm.cli`
 
 **Entry point**: the `clm` command (`clm.cli.main:cli`), a Click application.
@@ -331,15 +377,14 @@ definition is mechanical:
   `commands/<group>.py` when the whole group is one cohesive module
   (`calendar.py`, `db.py`, `git.py`, `harvest.py`, `voiceover.py`, ...)
 
-**Where build orchestration lives — honestly**: `clm build`'s engine is
-`main_build()` in `cli/commands/build.py` (~2,800 lines; the Click command
-itself starts near the end of the file). It resolves paths and options,
-initializes the databases, records worker identities, starts worker pools,
-sweeps orphaned cassette staging files, drives `Course.process_all()` against
-a backend, and applies exit-code policy from the returned `BuildSummary`.
-Extracting this into a callable core-level API — so MCP, the web studio, and
-tests can run builds without going through Click — is **#802/A4, still
-open**. Until it lands, programmatic builds go through the CLI layer.
+**The build command is a thin adapter** (#802/A4): `cli/commands/build.py`
+parses and resolves the flags into a `BuildConfig`, loads `.env`, installs
+signal handlers, calls `setup_logging`, and delegates to
+`clm.build.run_build` with its watchdog-based watch runner injected. What
+remains CLI-side is genuinely CLI: exit-code policy over the returned
+`BuildSummary`, the `--snapshot` / `--verify-against` wiring, and converting
+the engine's typed errors (`BuildOptionError`, `SpecValidationFailure`) into
+Click's usage/error rendering.
 
 **Watch mode**: `file_event_handler.py` uses `watchdog` to monitor the course
 tree, debounces changes, sweeps cassette staging orphans, and triggers
@@ -461,7 +506,7 @@ for browser- and mobile-based slide editing. Requires `[web]`.
 ## Build Flow
 
 What actually happens on `clm build course.xml` (orchestrated by
-`main_build()` in `cli/commands/build.py` — see the CLI section):
+`run_build()` in `clm.build.engine`, invoked by the Click adapter):
 
 ```
 clm build course.xml
@@ -642,9 +687,6 @@ Details: `docs/archive/migration-history/`.
 The layering above is fully enforced, but #802 tracks remaining structural
 work. Keep this list honest — update it when an item lands:
 
-- **A4** — build orchestration still lives in `cli/commands/build.py`;
-  extraction into a callable core API is the next step (unblocked by the
-  contract descent)
 - **A5** — voiceover merge/propagation logic still in
   `cli/commands/voiceover.py` (with private-symbol imports) instead of
   `clm.voiceover`

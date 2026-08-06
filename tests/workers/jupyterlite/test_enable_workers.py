@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from clm.cli.commands.build import enable_jupyterlite_workers_if_needed
+from clm.build.engine import enable_jupyterlite_workers_if_needed
 from clm.infrastructure.config import WorkersManagementConfig
 
 

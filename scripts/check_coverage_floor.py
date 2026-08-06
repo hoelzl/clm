@@ -28,7 +28,12 @@ from pathlib import Path
 #: integration and not e2e and not docker" --cov=src/clm`); floors sit ~5
 #: points below the measurement.
 FLOORS: dict[str, float] = {
-    "cli/commands/build.py": 75.0,  # measured 2026-08-06: 80.9
+    # Phase 8 A4 (#802) split the build engine out of cli/commands/build.py
+    # into clm.build: the engine + config carry their own floors, and the
+    # residual Click adapter keeps (a re-measured) one.
+    "cli/commands/build.py": 74.0,  # measured 2026-08-06 post-A4: 78.6
+    "build/engine.py": 75.0,  # measured 2026-08-06: 79.8
+    "build/config.py": 88.0,  # measured 2026-08-06: 93.0
     "core/course.py": 84.0,  # measured 2026-08-06: 89.5
     "infrastructure/utils/path_utils.py": 91.0,  # measured 2026-08-06: 96.5
     # Phase 8 S2 (#802) moved the Backend ABC to core/backend.py — same

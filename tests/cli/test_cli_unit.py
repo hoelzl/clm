@@ -695,7 +695,7 @@ class TestOutputFiltering:
 
     def test_no_diagrams_disables_diagram_workers(self):
         """--no-diagrams zeroes the plantuml/drawio worker counts"""
-        from clm.cli.commands.build import disable_diagram_workers_if_requested
+        from clm.build.engine import disable_diagram_workers_if_requested
         from clm.infrastructure.config import WorkersManagementConfig
 
         config = self._create_config()
@@ -714,7 +714,7 @@ class TestOutputFiltering:
 
     def test_default_does_not_disable_diagram_workers(self):
         """Without --no-diagrams the worker counts are left alone"""
-        from clm.cli.commands.build import disable_diagram_workers_if_requested
+        from clm.build.engine import disable_diagram_workers_if_requested
         from clm.infrastructure.config import WorkersManagementConfig
 
         config = self._create_config()

@@ -185,11 +185,14 @@ register_powershell_completion()
 # assignments.
 # ---------------------------------------------------------------------
 _COMPAT_EXPORTS: dict[str, tuple[str, str]] = {
-    "BuildConfig": (f"{_COMMANDS}.build", "BuildConfig"),
-    "initialize_paths_and_course": (f"{_COMMANDS}.build", "initialize_paths_and_course"),
-    "_report_duplicate_file_warnings": (f"{_COMMANDS}.build", "_report_duplicate_file_warnings"),
-    "_report_image_collisions": (f"{_COMMANDS}.build", "_report_image_collisions"),
-    "_report_loading_issues": (f"{_COMMANDS}.build", "_report_loading_issues"),
+    # The build engine moved to clm.build (Phase 8 A4, #802); these compat
+    # names follow it so ``from clm.cli.main import BuildConfig`` keeps
+    # resolving.
+    "BuildConfig": ("clm.build.config", "BuildConfig"),
+    "initialize_paths_and_course": ("clm.build.engine", "initialize_paths_and_course"),
+    "_report_duplicate_file_warnings": ("clm.build.engine", "_report_duplicate_file_warnings"),
+    "_report_image_collisions": ("clm.build.engine", "_report_image_collisions"),
+    "_report_loading_issues": ("clm.build.engine", "_report_loading_issues"),
     "_is_ci_environment": (f"{_COMMANDS}.shared", "is_ci_environment"),
     "build": (f"{_COMMANDS}.build", "build"),
     "validate_cmd": (f"{_COMMANDS}.validate", "validate_cmd"),

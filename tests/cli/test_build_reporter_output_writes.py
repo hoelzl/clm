@@ -12,8 +12,8 @@ the bridge.
 
 from pathlib import Path
 
-from clm.cli.build_reporter import BuildReporter
-from clm.cli.output_formatter import QuietOutputFormatter
+from clm.build.output_formatter import QuietOutputFormatter
+from clm.build.reporter import BuildReporter
 from clm.core.build_data_classes import BuildSummary
 from clm.core.output_write_registry import OutputWriteRegistry
 
@@ -173,7 +173,7 @@ class TestSummaryStringIncludesCounts:
 
 class TestJsonFormatterIncludesOutputKeys:
     def test_json_formatter_emits_keys_even_when_empty(self, tmp_path, capsys):
-        from clm.cli.output_formatter import JSONOutputFormatter
+        from clm.build.output_formatter import JSONOutputFormatter
 
         formatter = JSONOutputFormatter()
         formatter.show_build_start("test", total_files=0, output_dirs=[])
@@ -189,7 +189,7 @@ class TestJsonFormatterIncludesOutputKeys:
         assert data["output_conflicts"] == []
 
     def test_json_formatter_emits_conflict_records(self, tmp_path, capsys):
-        from clm.cli.output_formatter import JSONOutputFormatter
+        from clm.build.output_formatter import JSONOutputFormatter
         from clm.core.build_data_classes import OutputConflictInfo
 
         formatter = JSONOutputFormatter()

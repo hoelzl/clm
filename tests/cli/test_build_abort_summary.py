@@ -13,13 +13,13 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from clm.cli.build_reporter import BuildReporter
-from clm.cli.output_formatter import (
+from clm.build.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
+from clm.build.reporter import BuildReporter
 from clm.core.build_data_classes import BuildSummary
 
 
@@ -117,13 +117,13 @@ class TestSweepSkipsAfterAbort:
     def test_stale_output_sweep_skips_when_build_aborted(self):
         """The abort error keeps the sweep from deleting outputs that the
         aborted build never got around to (re)writing."""
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         reporter = _reporter()
         reporter.mark_aborted(RuntimeError("No workers available"))
 
         config = SimpleNamespace(sweep=True, clean=False, watch=False)
-        with patch("clm.cli.output_sweep.sweep_stray_files") as sweep:
+        with patch("clm.build.output_sweep.sweep_stray_files") as sweep:
             sweep.return_value = MagicMock(skipped=True, skip_reason="errors")
             _maybe_run_sweep(
                 config=config,
@@ -142,7 +142,7 @@ class TestWiring:
         handler (same style as the orphan-cassette-sweep pin test)."""
         import inspect
 
-        from clm.cli.commands.build import process_course_with_backend
+        from clm.build.engine import process_course_with_backend
 
         source = inspect.getsource(process_course_with_backend)
         assert "mark_aborted" in source, (
@@ -159,7 +159,7 @@ class TestRecordTeardownOrphans:
     discovered after finish_build has rendered the summary (issue #617)."""
 
     def test_orphans_are_recorded_as_errors_and_force_nonzero_exit(self):
-        from clm.cli.commands.build import _record_teardown_orphans
+        from clm.build.engine import _record_teardown_orphans
 
         summary = BuildSummary(duration=1.0, total_files=3)
         assert summary.timed_out is False
@@ -189,7 +189,7 @@ class TestFormatExitFailure:
     error summary above' is wrong on both counts for them."""
 
     def test_orphans_produce_dedicated_message_naming_the_files(self):
-        from clm.cli.commands.build import _format_exit_failure, _record_teardown_orphans
+        from clm.build.engine import _format_exit_failure, _record_teardown_orphans
 
         summary = BuildSummary(duration=1.0, total_files=3)
         orphans = [
@@ -207,7 +207,7 @@ class TestFormatExitFailure:
         assert "timed out" not in message
 
     def test_genuine_timeout_keeps_the_timeout_message(self):
-        from clm.cli.commands.build import _format_exit_failure
+        from clm.build.engine import _format_exit_failure
 
         summary = BuildSummary(duration=1.0, total_files=3, timed_out=True)
 
