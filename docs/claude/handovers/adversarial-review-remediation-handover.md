@@ -1210,6 +1210,13 @@ one PR per step, golden suite green after each.
    all of `core/operations/`), core's imports of `clm.workers` and of extension
    modules (including spec parsing depending on `clm.slides.sidecar_layout` at
    `course_spec.py:2599`).
+   **Design pass DONE 2026-08-06** —
+   `docs/claude/design/phase8-a1-a3-core-decoupling.md` decomposes the 31
+   remaining edges into six PR-sized steps (S1 vocabulary descents → S2
+   contract descent → S3 cassette relocation → S4 identity inversion → S5
+   slide-text model descent → S6 = A11 import-linter), with edge accounting,
+   risks, and four maintainer questions (the consequential one: S5 descends
+   the slide-parser/pairing/anchor cone into core).
 4. **A11 — import-linter contract in CI.** Add it as soon as the first contract
    is true, not at the end — each subsequent step then cannot regress.
 5. **A4 — extract build orchestration** from `cli/commands/build.py` (2694 lines;
