@@ -25,10 +25,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.core.slide_text.pairing import TITLE_SLIDE_ID, is_title_macro_cell
+from clm.core.slide_text.slide_parser import Cell, parse_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop
-from clm.notebooks.slide_parser import Cell, parse_cells
-from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.slug import strip_preserve_marker
 
 if TYPE_CHECKING:
@@ -242,7 +242,7 @@ def _synthetic_title_cell(*, line_number: int, lang: str) -> Cell:
     in ``pairs_total`` (and skipped cleanly because there is nothing to
     cover).
     """
-    from clm.notebooks.slide_parser import CellMetadata
+    from clm.core.slide_text.slide_parser import CellMetadata
 
     metadata = CellMetadata(
         cell_type="markdown",

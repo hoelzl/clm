@@ -23,7 +23,7 @@ import fnmatch
 from collections.abc import Iterable
 from pathlib import Path
 
-from clm.slides.pairing import split_lang_tag
+from clm.core.slide_text.pairing import split_lang_tag
 
 
 def _matches_any_glob(path: Path, patterns: Iterable[str]) -> bool:

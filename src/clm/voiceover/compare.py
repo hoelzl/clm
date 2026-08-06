@@ -235,7 +235,7 @@ async def run_compare_async(
     callers.  ``progress_cb`` receives short status strings; callers
     without a UI can pass ``None``.
     """
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.slide_matcher import match_slides
 
     source_groups = parse_slides(source, lang, include_header=True)

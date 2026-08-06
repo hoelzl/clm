@@ -31,8 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.slide_text.pairing import find_split_slide_files_recursive, iter_split_pairs
 from clm.slides.doc_lenses import LoadedBundle, load_bundle, project
-from clm.slides.pairing import find_split_slide_files_recursive, iter_split_pairs
 
 from .corpus_revision import revision_context
 

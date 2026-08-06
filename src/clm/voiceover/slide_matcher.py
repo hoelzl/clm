@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from clm.notebooks.slide_parser import SlideGroup
+from clm.core.slide_text.slide_parser import SlideGroup
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class MatchedSlide:
     """One slide-level match result.
 
     ``target_index`` and ``source_index`` refer to the position in the
-    respective :func:`~clm.notebooks.slide_parser.group_slides` output
+    respective :func:`~clm.core.slide_text.slide_parser.group_slides` output
     (same scheme ``slide_writer`` uses for its notes map). Either may
     be ``None`` for new/removed slides.
     """

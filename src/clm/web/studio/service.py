@@ -31,8 +31,8 @@ import sys
 import time
 from pathlib import Path
 
+from clm.core.slide_text.slide_parser import parse_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
-from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_writeback import (
     FileState,
     anchor_of,
@@ -337,7 +337,7 @@ class StudioService:
         **read-only and LLM-free**. Returns an unlocked state for any deck with no
         split twin on disk.
         """
-        from clm.slides.pairing import derive_split_twin, order_split_pair, split_lang_tag
+        from clm.core.slide_text.pairing import derive_split_twin, order_split_pair, split_lang_tag
 
         lang = split_lang_tag(path)
         twin = derive_split_twin(path)
@@ -425,7 +425,7 @@ class StudioService:
         :class:`InvalidStructuralOpError` for a deck with no split twin
         (nothing to sync).
         """
-        from clm.slides.pairing import derive_split_twin, order_split_pair, split_lang_tag
+        from clm.core.slide_text.pairing import derive_split_twin, order_split_pair, split_lang_tag
 
         path = self._resolve_deck_id(deck_id)
         if not path.exists():

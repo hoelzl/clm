@@ -32,8 +32,7 @@ import click
 from attrs import define
 from click.core import ParameterSource
 
-from clm.core.voiceover_companions import COMPANION_SUBDIR, resolve_companion
-from clm.slides.pairing import (
+from clm.core.slide_text.pairing import (
     derive_split_pair_from_stem,
     derive_split_twin,
     find_split_slide_files_recursive,
@@ -41,6 +40,7 @@ from clm.slides.pairing import (
     order_split_pair,
     split_lang_tag,
 )
+from clm.core.voiceover_companions import COMPANION_SUBDIR, resolve_companion
 from clm.slides.sync_verify import VerifyResult, verify_pair
 
 

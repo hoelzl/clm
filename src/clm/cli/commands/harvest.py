@@ -214,7 +214,7 @@ def _build_report_data(
         _load_alignment_override,
         _load_transcript_override,
     )
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.cache import CachePolicy
     from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline
 

@@ -30,9 +30,9 @@ from collections import Counter
 
 from attrs import define, field
 
-from clm.notebooks.slide_parser import parse_cell_header
-from clm.slides.anchor_primitives import owning_group
-from clm.slides.raw_cells import RawCell, reconstruct, split_cells
+from clm.core.slide_text.anchor_primitives import owning_group
+from clm.core.slide_text.raw_cells import RawCell, reconstruct, split_cells
+from clm.core.slide_text.slide_parser import parse_cell_header
 from clm.slides.sync_writeback import role_of
 
 # The narrative identity used to pair the two halves: the n-th narrative of its role

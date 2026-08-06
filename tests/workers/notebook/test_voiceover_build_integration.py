@@ -101,7 +101,7 @@ class TestPayloadMerging:
         )
 
         # Use the merge function directly (payload() requires full Course setup)
-        from clm.slides.voiceover_tools import merge_voiceover_text
+        from clm.core.slide_text.voiceover_merge import merge_voiceover_text
 
         slide_text = slide.read_text(encoding="utf-8")
         companion_text = companion.read_text(encoding="utf-8")
@@ -112,7 +112,7 @@ class TestPayloadMerging:
 
     def test_unmatched_for_slide_produces_warnings(self, tmp_path: Path, caplog):
         """Unmatched for_slide references should produce log warnings."""
-        from clm.slides.voiceover_tools import merge_voiceover_text
+        from clm.core.slide_text.voiceover_merge import merge_voiceover_text
 
         slide_text = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## Intro\n'
         companion_text = (
@@ -138,7 +138,7 @@ class TestPayloadMerging:
         data = slide.read_text(encoding="utf-8")
         companion = nf.companion_voiceover_path
         if companion is not None:
-            from clm.slides.voiceover_tools import merge_voiceover_text
+            from clm.core.slide_text.voiceover_merge import merge_voiceover_text
 
             companion_text = companion.read_text(encoding="utf-8")
             data, _ = merge_voiceover_text(data, companion_text)
@@ -470,7 +470,8 @@ class TestTitleVoiceoverRenderParity:
     an extract+merge deck is identical to the inline-authored deck."""
 
     async def test_extract_merge_renders_identically_to_inline(self, tmp_path: Path):
-        from clm.slides.voiceover_tools import extract_voiceover, merge_voiceover_text
+        from clm.core.slide_text.voiceover_merge import merge_voiceover_text
+        from clm.slides.voiceover_tools import extract_voiceover
 
         inline = (
             "# j2 from 'macros.j2' import header_de\n"

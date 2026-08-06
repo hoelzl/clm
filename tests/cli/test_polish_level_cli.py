@@ -31,7 +31,7 @@ class TestPolishCommandPolishLevel:
     def _setup_mocks(self, monkeypatch, groups, polish_mock, tmp_path):
         """Wire up standard monkeypatches for the polish command."""
         monkeypatch.setattr(
-            "clm.notebooks.slide_parser.parse_slides", MagicMock(return_value=groups)
+            "clm.core.slide_text.slide_parser.parse_slides", MagicMock(return_value=groups)
         )
         monkeypatch.setattr(
             "clm.notebooks.slide_writer.write_narrative",

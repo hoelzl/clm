@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
-from clm.slides.raw_cells import split_cells
+from clm.core.slide_text.raw_cells import split_cells
 from clm.slides.sync_writeback import FileState, build_cell, role_of
 
 DECK = dedent(

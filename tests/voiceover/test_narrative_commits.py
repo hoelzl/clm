@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.notebooks.slide_parser import parse_cells
+from clm.core.slide_text.slide_parser import parse_cells
 from clm.voiceover.narrative_commits import (
     CommitInfo,
     CommitMetrics,

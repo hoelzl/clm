@@ -261,9 +261,9 @@ def _run_stamp_ids(
     unions the routing-prefixed slide files with every prefix-less split
     half (voiceover companions are excluded by both walks).
     """
+    from clm.core.slide_text.pairing import derive_split_twin, find_split_slide_files_recursive
     from clm.core.topic_resolver import find_slide_files_recursive
     from clm.slides.assign_ids import AssignOptions, assign_ids_in_files
-    from clm.slides.pairing import derive_split_twin, find_split_slide_files_recursive
 
     if path.is_file() and path.suffix == ".xml":
         raise click.UsageError(

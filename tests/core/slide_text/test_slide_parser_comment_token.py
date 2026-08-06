@@ -1,7 +1,7 @@
 """Comment-token (``#`` vs ``//``) parametrization of the slide parsers.
 
 Problem A Phase 1: the shared percent-format parsers
-(:mod:`clm.notebooks.slide_parser`, :mod:`clm.slides.raw_cells`) now take a
+(:mod:`clm.core.slide_text.slide_parser`, :mod:`clm.core.slide_text.raw_cells`) now take a
 ``comment_token`` (default ``"#"``) so they parse C#/C++/Java/TypeScript
 (``//``) decks as well as Python (``#``) ones. The default must reproduce the
 old Python behaviour exactly; the two languages must parse to equivalent cells.
@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.slide_text.raw_cells import is_cell_boundary, reconstruct, split_cells
+from clm.core.slide_text.slide_parser import parse_cell_header, parse_cells, parse_slides
 from clm.core.utils.prog_lang_utils import comment_token_for_path, line_comment_for
-from clm.notebooks.slide_parser import parse_cell_header, parse_cells, parse_slides
-from clm.slides.raw_cells import is_cell_boundary, reconstruct, split_cells
 
 
 def deck(tok: str) -> str:

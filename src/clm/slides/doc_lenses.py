@@ -49,6 +49,15 @@ from pathlib import Path
 
 from attrs import define, field
 
+from clm.core.slide_text.pairing import (
+    TITLE_SLIDE_ID,
+    derive_split_pair,
+    derive_split_pair_from_stem,
+    is_title_macro_cell,
+    order_split_pair,
+)
+from clm.core.slide_text.raw_cells import RawCell, split_cells
+from clm.core.slide_text.voiceover_merge import parse_vo_anchor as _parse_vo_anchor
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 
 # The single vo_anchor read path (the attribute is not part of CellMetadata);
@@ -71,16 +80,7 @@ from clm.slides.bilingual_doc import (
     SideCell,
     SlideGroup,
 )
-from clm.slides.pairing import (
-    TITLE_SLIDE_ID,
-    derive_split_pair,
-    derive_split_pair_from_stem,
-    is_title_macro_cell,
-    order_split_pair,
-)
-from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.slug import strip_preserve_marker
-from clm.slides.voiceover_tools import _parse_vo_anchor
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ def _read_source(text: str, lang: Lang, part: Part, comment_token: str) -> _Sour
     """Split one file into verbatim preamble lines and :class:`SideCell`\\ s.
 
     The preamble is kept as a *line list* rather than the joined string that
-    :func:`clm.slides.raw_cells.split_cells` returns, so a file whose first
+    :func:`clm.core.slide_text.raw_cells.split_cells` returns, so a file whose first
     line is blank (preamble ``""``) survives the round trip —
     ``reconstruct`` drops a falsy preamble, this lens must not.
     """

@@ -25,9 +25,9 @@ import enum
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.core.slide_text.pairing import iter_split_pairs, split_lang_tag
+from clm.core.slide_text.raw_cells import split_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
-from clm.slides.pairing import iter_split_pairs, split_lang_tag
-from clm.slides.raw_cells import split_cells
 
 __all__ = [
     "CoverageEntry",

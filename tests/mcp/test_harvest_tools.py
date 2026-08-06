@@ -429,7 +429,7 @@ def _write_deck_fixture(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _slide_indices(de_path: Path) -> dict[str, int]:
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
 
     groups = parse_slides(de_path, "de")
     return {

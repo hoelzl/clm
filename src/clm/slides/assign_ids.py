@@ -48,17 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.core.utils.path_utils import split_lang_suffix
-from clm.core.utils.prog_lang_utils import comment_token_for_path
-from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
-from clm.slides.code_cell_extract import extract_from_code
-from clm.slides.headingless import (
-    Category,
-    Extraction,
-    cell_text_for_llm,
-    classify,
-)
-from clm.slides.pairing import (
+from clm.core.slide_text.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
     build_slide_pairs,
@@ -67,9 +57,19 @@ from clm.slides.pairing import (
     split_lang_tag,
     split_twin,
 )
-from clm.slides.raw_cells import RawCell as _Cell
-from clm.slides.raw_cells import reconstruct as _reconstruct
-from clm.slides.raw_cells import split_cells as _split_cells
+from clm.core.slide_text.raw_cells import RawCell as _Cell
+from clm.core.slide_text.raw_cells import reconstruct as _reconstruct
+from clm.core.slide_text.raw_cells import split_cells as _split_cells
+from clm.core.slide_text.slide_parser import CellMetadata, parse_cell_header
+from clm.core.utils.path_utils import split_lang_suffix
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.slides.code_cell_extract import extract_from_code
+from clm.slides.headingless import (
+    Category,
+    Extraction,
+    cell_text_for_llm,
+    classify,
+)
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_preserved,
@@ -163,7 +163,7 @@ class AssignResult:
 # Cell representation
 #
 # ``_Cell``, ``_split_cells``, ``_reconstruct`` are imported as aliases of
-# the shared primitives in :mod:`clm.slides.raw_cells`. They preserve the
+# the shared primitives in :mod:`clm.core.slide_text.raw_cells`. They preserve the
 # original lines verbatim so the round-trip ``text ==
 # _reconstruct(*_split_cells(text))`` holds for any cell-shaped input,
 # which is what keeps the on-disk diff minimal here and what Phase 5's

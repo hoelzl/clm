@@ -5,7 +5,7 @@ to paired cells) and :mod:`clm.slides.validator` (Phase 3 — verifying
 that already-assigned ids honor adjacency and pair-equivalence). The
 helpers operate on any cell-like object that exposes ``metadata`` and
 ``header`` attributes, which covers both the validator's
-:class:`clm.notebooks.slide_parser.Cell` and ``assign_ids``'s private
+:class:`clm.core.slide_text.slide_parser.Cell` and ``assign_ids``'s private
 ``_Cell`` dataclass.
 """
 
@@ -16,13 +16,13 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Protocol
 
+from clm.core.slide_text.slide_parser import CellMetadata
 from clm.core.utils.path_utils import (
     SUPPORTED_PROG_LANG_EXTENSIONS,
     is_ignored_dir_for_course,
     is_private_dir_name,
     split_lang_suffix,
 )
-from clm.notebooks.slide_parser import CellMetadata
 
 # Title-slide anchors:
 #

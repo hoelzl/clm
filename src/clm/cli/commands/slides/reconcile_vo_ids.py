@@ -21,14 +21,14 @@ from pathlib import Path
 
 import click
 
-from clm.core.utils.prog_lang_utils import comment_token_for_path
-from clm.slides.pairing import (
+from clm.core.slide_text.pairing import (
     derive_split_pair,
     derive_split_twin,
     find_split_slide_files_recursive,
     iter_split_pairs,
     split_lang_tag,
 )
+from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides.reconcile_vo_ids import (
     TO_IDLESS,
     TO_IDS,

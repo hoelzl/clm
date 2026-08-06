@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from clm.slides.raw_cells import split_cells
+from clm.core.slide_text.raw_cells import split_cells
 from clm.web.studio.service import (
     CellNotFoundError,
     DeckNotFoundError,

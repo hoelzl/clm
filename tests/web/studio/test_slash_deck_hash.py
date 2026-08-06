@@ -12,7 +12,7 @@ for ``//`` decks and exercising the fix at the unit level.)
 
 from __future__ import annotations
 
-from clm.notebooks.slide_parser import parse_cells
+from clm.core.slide_text.slide_parser import parse_cells
 from clm.slides.sync_writeback import hash_cell
 
 from .conftest import Course  # noqa: F401  (imported for the `service`/`course` fixtures)

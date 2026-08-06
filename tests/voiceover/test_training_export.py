@@ -361,7 +361,7 @@ class TestExtractTrainingData:
         slide_file.write_text(SLIDE_FILE_CONTENT, encoding="utf-8")
 
         # Read what the parser will return for slide 2
-        from clm.notebooks.slide_parser import parse_slides
+        from clm.core.slide_text.slide_parser import parse_slides
 
         groups = parse_slides(slide_file, "de")
         slide2_text = ""

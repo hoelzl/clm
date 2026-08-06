@@ -16,12 +16,12 @@ import click
 
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.slide_text.pairing import split_lang_tag
 from clm.core.spec_decks import (
     SpecDeckResolution,
     resolve_spec_decks,
 )
 from clm.core.topic_resolver import build_topic_map
-from clm.slides.pairing import split_lang_tag
 
 
 def _slides_dir(data_dir: Path | None, spec_file: Path) -> Path:

@@ -16,6 +16,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.core.deck_markers import has_header_marker
+from clm.core.slide_text.pairing import (
+    TITLE_SLIDE_ID,
+    build_slide_groups,
+    is_title_macro_cell,
+    split_twin_pair,
+)
+from clm.core.slide_text.raw_cells import RawCell
+from clm.core.slide_text.raw_cells import split_cells as split_raw_cells
+from clm.core.slide_text.slide_parser import Cell, parse_cells
 from clm.core.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.core.topic_resolver import (
     _group_paths_into_units,
@@ -27,15 +36,6 @@ from clm.core.topic_resolver import (
 from clm.core.utils.path_utils import split_lang_suffix
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
-from clm.notebooks.slide_parser import Cell, parse_cells
-from clm.slides.pairing import (
-    TITLE_SLIDE_ID,
-    build_slide_groups,
-    is_title_macro_cell,
-    split_twin_pair,
-)
-from clm.slides.raw_cells import RawCell
-from clm.slides.raw_cells import split_cells as split_raw_cells
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_valid_slug,
@@ -1278,7 +1278,7 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
 
     Reuses :func:`clm.slides.split._is_shared` to classify cells (so the
     rule stays aligned with Phase 5's split semantics) and compares the
-    raw cell bytes via :class:`~clm.slides.raw_cells.RawCell`. The check
+    raw cell bytes via :class:`~clm.core.slide_text.raw_cells.RawCell`. The check
     is positional within the shared-cell stream: shared cell *i* in the
     DE file must be byte-identical to shared cell *i* in the EN file.
     Length mismatches surface as a single finding on the DE side so the
@@ -1894,8 +1894,8 @@ def _check_companion_for_slide_resolves(path: Path) -> list[Finding]:
     positive). A deck with no companion (``resolve_companion`` ``None``) yields
     nothing, so a voiceover-less deck stays silent.
     """
+    from clm.core.slide_text.voiceover_merge import merge_voiceover_text
     from clm.core.voiceover_companions import resolve_companion
-    from clm.slides.voiceover_tools import merge_voiceover_text
 
     companion = resolve_companion(path)
     if companion is None:
@@ -2497,8 +2497,8 @@ def validate_file(
             # layout (voiceover cells in voiceover/*.py) produces a false
             # positive for every slide (issue #360).
             voiceover_cells = cells
+            from clm.core.slide_text.voiceover_merge import merge_voiceover_text
             from clm.core.voiceover_companions import resolve_companion
-            from clm.slides.voiceover_tools import merge_voiceover_text
 
             companion = resolve_companion(path)
             if companion is not None:

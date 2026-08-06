@@ -40,8 +40,8 @@ from __future__ import annotations
 
 import hashlib
 
-from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
-from clm.slides.raw_cells import RawCell
+from clm.core.slide_text.pairing import TITLE_SLIDE_ID, is_title_macro_cell
+from clm.core.slide_text.raw_cells import RawCell
 
 __all__ = [
     "TITLE_MACRO_ANCHOR",

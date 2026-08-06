@@ -36,9 +36,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Literal
 
-from clm.notebooks.slide_parser import CellMetadata
+from clm.core.slide_text.raw_cells import RawCell, reconstruct, split_cells
+from clm.core.slide_text.slide_parser import CellMetadata
 from clm.slides import split
-from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 from clm.slides.sync_translate import SlideTranslator, TranslationError
 from clm.slides.sync_writeback import CODE_ROLE, build_twin_cell, role_of
 

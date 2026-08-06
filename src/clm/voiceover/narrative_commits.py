@@ -24,7 +24,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.core.slide_text.slide_parser import Cell, parse_cells
 
 
 @dataclass(frozen=True)

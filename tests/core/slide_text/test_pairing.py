@@ -1,4 +1,4 @@
-"""Tests for clm.slides.pairing — DE/EN group detection + title macro anchor.
+"""Tests for clm.core.slide_text.pairing — DE/EN group detection + title macro anchor.
 
 The helpers are consumed by both :mod:`clm.slides.assign_ids` (Phase 2)
 and :mod:`clm.slides.validator` (Phase 3). Phase 2 already covers the
@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clm.notebooks.slide_parser import parse_cells
-from clm.slides.pairing import (
+from clm.core.slide_text.pairing import (
     HEADER_MACRO_RE,
     TITLE_SLIDE_ID,
     build_slide_groups,
@@ -27,6 +26,7 @@ from clm.slides.pairing import (
     split_twin,
     split_twin_pair,
 )
+from clm.core.slide_text.slide_parser import parse_cells
 
 
 def _cells(text: str):

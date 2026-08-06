@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from clm.notebooks.slide_parser import SlideGroup
+    from clm.core.slide_text.slide_parser import SlideGroup
     from clm.slides.bilingual_doc import Lang, Member
     from clm.slides.doc_lenses import LoadedBundle
     from clm.voiceover.aligner import AlignmentResult

@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 
 from attrs import define, evolve, field
 
+from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.bilingual_doc import (
     BilingualDeck,
     Lang,
@@ -60,7 +61,6 @@ from clm.slides.doc_identity import (
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
 from clm.slides.doc_write import DeckEmitter, write_changed_files
-from clm.slides.raw_cells import is_cell_boundary
 
 if TYPE_CHECKING:
     from pathlib import Path

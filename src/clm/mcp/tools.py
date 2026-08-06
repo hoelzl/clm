@@ -13,6 +13,8 @@ from pathlib import Path
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.slide_text.pairing import derive_split_pair as _derive_split_pair
+from clm.core.slide_text.pairing import derive_split_pair_from_stem as _derive_split_pair_from_stem
 from clm.core.topic_resolver import (
     ResolutionResult,
 )
@@ -33,8 +35,6 @@ from clm.slides.normalizer import NormalizationResult
 from clm.slides.normalizer import normalize_course as _normalize_course
 from clm.slides.normalizer import normalize_directory as _normalize_directory
 from clm.slides.normalizer import normalize_file as _normalize_file
-from clm.slides.pairing import derive_split_pair as _derive_split_pair
-from clm.slides.pairing import derive_split_pair_from_stem as _derive_split_pair_from_stem
 from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
 from clm.slides.spec_validator import SpecValidationResult
@@ -1321,7 +1321,7 @@ def _assemble_harvest_report(
         _load_alignment_override,
         _load_transcript_override,
     )
-    from clm.notebooks.slide_parser import parse_slides
+    from clm.core.slide_text.slide_parser import parse_slides
     from clm.slides.doc_lenses import DocLensError, load_bundle
     from clm.voiceover.cache import CachePolicy
     from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline

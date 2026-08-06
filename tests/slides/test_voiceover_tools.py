@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.slide_text.slide_parser import parse_cells
+from clm.core.slide_text.voiceover_merge import merge_voiceover_text
 from clm.core.voiceover_companions import companion_path, resolve_companion
-from clm.notebooks.slide_parser import parse_cells
 from clm.slides.split import split_text
 from clm.slides.voiceover_tools import (
     InlineTextResult,
@@ -19,7 +20,6 @@ from clm.slides.voiceover_tools import (
     extract_voiceover_pair,
     inline_pair_text,
     inline_voiceover,
-    merge_voiceover_text,
     read_companion_baselines,
     render_companion_update,
     update_companion_narrative,

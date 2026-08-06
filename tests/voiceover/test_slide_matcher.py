@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from clm.notebooks.slide_parser import group_slides, parse_cells
+from clm.core.slide_text.slide_parser import group_slides, parse_cells
 from clm.voiceover.slide_matcher import MatchKind, content_similarity, match_slides
 
 

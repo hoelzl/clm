@@ -8,8 +8,8 @@ own ``# %%`` code cell by :func:`wrap_preamble_code`.
 
 from __future__ import annotations
 
+from clm.core.slide_text.raw_cells import reconstruct, split_cells
 from clm.slides.preamble_code import find_preamble_code, wrap_preamble_code
-from clm.slides.raw_cells import reconstruct, split_cells
 
 # The exact issue-#253 shape: code between the header macro and the first cell.
 _DECK_WITH_PREAMBLE = (
