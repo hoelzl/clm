@@ -31,7 +31,9 @@ FLOORS: dict[str, float] = {
     "cli/commands/build.py": 75.0,  # measured 2026-08-06: 80.9
     "core/course.py": 84.0,  # measured 2026-08-06: 89.5
     "infrastructure/utils/path_utils.py": 91.0,  # measured 2026-08-06: 96.5
-    "infrastructure/backend.py": 95.0,  # measured 2026-08-06: 100.0
+    # Phase 8 S2 (#802) moved the Backend ABC to core/backend.py — same
+    # module, same floor; the suffix must track the file when Phase 8 moves it.
+    "core/backend.py": 95.0,  # measured 2026-08-06: 100.0
     "infrastructure/backends/local_ops_backend.py": 83.0,  # measured 2026-08-06: 88.6
     "infrastructure/backends/sqlite_backend.py": 79.0,  # measured 2026-08-06: 84.2
 }
