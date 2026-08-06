@@ -173,6 +173,7 @@ dev = [
     "hypothesis>=6.148.2",  # Property-based testing (slides split/unify round-trip)
     "mypy>=1.0",
     "ruff>=0.1.0",
+    "import-linter>=2.3",  # layer contracts (Phase 8 S6, #802); run: uv run lint-imports
     "respx>=0.20.0",  # httpx mock transport for Auphonic client tests
     # Note: httpx is now a core dependency (for Docker worker REST API)
 ]
@@ -511,6 +512,7 @@ dev = [
     "hypothesis>=6.148.2",
     "mypy>=1.0",
     "ruff>=0.1.0",
+    "import-linter>=2.3",  # layer contracts (Phase 8 S6, #802); run: uv run lint-imports
     "respx>=0.20.0",
     "pre-commit>=4.5.0",
 ]
@@ -555,4 +557,45 @@ torch = [
 ]
 torchvision = [
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+# ---------------------------------------------------------------------------
+# Import-linter: the layer contracts (Phase 8 S6, #802). The documented stack
+# is core <- infrastructure <- workers <- extensions <- cli (each layer may
+# import only BELOW itself); extensions and the CLI are unconstrained sources.
+# The extension list is static here (import-linter cannot derive it): when a
+# new top-level package is added under src/clm, add it to the forbidden list
+# of the third contract. Runs in CI's lint job and as a pre-commit hook
+# (`uv run lint-imports`). Grimp sees function-body and TYPE_CHECKING imports,
+# so lazy imports cannot dodge these contracts; string-based importlib dodges
+# are guarded by tests/test_architecture_contracts.py.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "clm"
+
+[[tool.importlinter.contracts]]
+name = "Layered: core below infrastructure below workers"
+type = "layers"
+layers = ["clm.workers", "clm.infrastructure", "clm.core"]
+
+[[tool.importlinter.contracts]]
+name = "Constrained layers never import the CLI"
+type = "forbidden"
+source_modules = ["clm.core", "clm.infrastructure", "clm.workers"]
+forbidden_modules = ["clm.cli"]
+
+[[tool.importlinter.contracts]]
+name = "Constrained layers never import extension packages"
+type = "forbidden"
+source_modules = ["clm.core", "clm.infrastructure", "clm.workers"]
+forbidden_modules = [
+    "clm.cohort_calendar",
+    "clm.mcp",
+    "clm.notebooks",
+    "clm.recordings",
+    "clm.release",
+    "clm.slides",
+    "clm.snapshot",
+    "clm.voiceover",
+    "clm.web",
 ]

@@ -154,8 +154,10 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
   (~72s) on `git push`. So commits are near-instant and the test gate fires once
   before a push. Re-run `pre-commit install` if you set up hooks before the
   pre-push split landed.
-- Manual checks: `uv run ruff check src/ tests/` and
-  `uv run ruff format src/ tests/`.
+- Manual checks: `uv run ruff check src/ tests/`,
+  `uv run ruff format src/ tests/`, and `uv run lint-imports` (the
+  four-layer import contracts — config in pyproject `[tool.importlinter]`;
+  also enforced by pre-commit and CI's lint job).
 - Commits that fail a hook did **not** happen — fix the issue, re-stage, and
   create a **new** commit. Never `--amend` a commit the hook rejected.
 - **`master` belongs to the main repo — a worktree must NEVER switch to it.**

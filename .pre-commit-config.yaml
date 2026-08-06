@@ -47,6 +47,20 @@ repos:
         pass_filenames: false
         args: [src/clm]
 
+  # Layer contracts (Phase 8 S6, #802): the four-layer architecture as an
+  # enforced import contract — config in pyproject [tool.importlinter].
+  # Grimp sees function-body and TYPE_CHECKING imports, so a lazy import
+  # cannot dodge it. Only fires when src/clm files are staged (~2s).
+  - repo: local
+    hooks:
+      - id: lint-imports
+        name: import-linter (layer contracts)
+        entry: uv run lint-imports
+        language: system
+        files: ^src/clm/
+        types: [python]
+        pass_filenames: false
+
   # Fast test suite (~72s) — runs on PRE-PUSH, not pre-commit, so commits stay
   # fast (ruff+mypy only) and the full suite gates ``git push`` instead. Invoked
   # via scripts/run_pytest_hook.py, which clears leaking GIT_* env vars before

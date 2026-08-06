@@ -1238,8 +1238,18 @@ one PR per step, golden suite green after each.
    2026-08-06** — the slide-text model (slide_parser, raw_cells,
    anchor_primitives, pairing, voiceover_merge) descended into
    `clm.core.slide_text`; ~72 importers retargeted. **Ratchet EMPTY —
-   the documented architecture exists in the import graph.** Remaining:
-   S6 (import-linter in CI), then A10's final architecture.md rewrite.
+   the documented architecture exists in the import graph.**
+   **S6 (= A11) DONE 2026-08-06** — import-linter contracts in
+   pyproject `[tool.importlinter]` (layers core < infrastructure <
+   workers; constrained layers never import cli or extensions), wired
+   into CI's lint job and pre-commit; the inventory ratchet is replaced,
+   `tests/test_architecture_contracts.py` keeps the string-import guard
+   + Backend/payload pins. **A1/A2/A3/A6/A11 are complete.** Remaining
+   Phase 8 items: A4 (build orchestration out of build.py — now
+   unblocked by the S2 contract descent), A5 (voiceover CLI logic),
+   A7 (config unification), A8 (jobs-DB path), A9 (residual private
+   cross-imports), A10 (architecture.md rewrite — now describable as
+   fact), A12 (extras/lazy imports + DummyBackend to tests).
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
