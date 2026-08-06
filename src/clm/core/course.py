@@ -440,8 +440,10 @@ class Course(NotebookMixin):
             logger.warning(f"Cannot process file: not in course: {path}")
             return
 
-        # Sweep orphan staging cassettes (see ``process_all``).
-        self._sweep_orphan_cassette_staging_files()
+        # Orphan-staging-cassette sweeping is the CALLER's job (Phase 8 S3):
+        # watch mode sweeps in ``FileEventHandler`` before invoking this, and
+        # ``clm build`` sweeps before its stage loop — core no longer reaches
+        # into the cassette machinery.
 
         # Process file for each output target
         for target in self.output_targets:
@@ -454,16 +456,13 @@ class Course(NotebookMixin):
         logger.info(f"Processing all files for {self.course_root}")
         logger.debug(f"Output targets: {[t.name for t in self.output_targets]}")
 
-        # Sweep orphan HTTP-replay staging files into their canonical
-        # cassettes *before* any payload is constructed. Otherwise a
-        # ``*.http-cassette.yaml.staging-*`` file left behind by a
-        # previously-killed worker can race with concurrent worker B's
-        # merge-and-delete pass, causing worker A's payload builder to
-        # crash with ``FileNotFoundError`` when it tries to b64-encode
-        # the file. The sweep folds the orphan's recorded interactions
-        # into the canonical cassette via the existing dedup helper, so
-        # no recordings are lost.
-        self._sweep_orphan_cassette_staging_files()
+        # NOTE (Phase 8 S3): callers that may encounter orphan HTTP-replay
+        # staging files must sweep them BEFORE invoking this (see
+        # ``infrastructure.http_replay_mitm.cassette_staging``) — otherwise a
+        # ``*.staging-*`` file left by a previously-killed worker can race a
+        # concurrent worker's merge-and-delete pass and crash payload
+        # construction with ``FileNotFoundError``. ``clm build`` sweeps in its
+        # pre-stage hook; watch mode sweeps in ``FileEventHandler``.
 
         for stage in execution_stages():
             logger.debug(f"Processing stage {stage}")
@@ -485,7 +484,7 @@ class Course(NotebookMixin):
         await self.process_dir_group_for_targets(backend)
         await self.process_jupyterlite_for_targets(backend)
 
-    def _collect_http_replay_canonical_paths(self) -> set[Path]:
+    def http_replay_canonical_paths(self) -> set[Path]:
         """Unique canonical cassette paths for every http-replay notebook.
 
         A topic may contain several notebooks but only one canonical
@@ -493,8 +492,9 @@ class Course(NotebookMixin):
         canonical (preferring the nested ``_cassettes/`` layout);
         ``expected_cassette_path`` always yields a path even when no
         cassette has been recorded yet, and its parent dir is the right
-        glob target for staging files on a first run. Shared by the
-        pre-build orphan sweep and the post-build mitmproxy merge.
+        glob target for staging files on a first run. Consumed by the
+        pre-build orphan sweep and the post-build mitmproxy merge in
+        ``infrastructure.http_replay_mitm.cassette_staging`` (Phase 8 S3).
         """
         from clm.core.course_files.notebook_file import NotebookFile
 
@@ -507,175 +507,6 @@ class Course(NotebookMixin):
             canonical = file.cassette_path or file.expected_cassette_path
             canonical_paths.add(canonical)
         return canonical_paths
-
-    def merge_mitmproxy_cassette_staging(
-        self, build_id: str | None = None, *, mode: str | None = None
-    ) -> int:
-        """Fold per-target staging files written by the mitmproxy transport.
-
-        The replay proxy (issue #165) records into per-(topic,
-        language,kind) ``<cassette>.staging-mitm-<build_id>`` files beside
-        each canonical cassette. This runs **after** the proxy stops (from
-        the build's ``finally``) to fold them into their canonicals via the
-        shared dedup/merge path.
-
-        Reaching this method *is* the build-completion signal (the build's
-        ``finally`` ran), so for each canonical we write the ``.completed``
-        marker for **this build's** staging file (``build_id``) — the marker
-        is what tells the merge a staging file holds a complete recording
-        session. mitmproxy's ``done`` hook is unreliable on a Windows
-        ``CTRL_BREAK`` shutdown, so the host owns this signal. A force-killed
-        build never reaches here, so its staging stays markerless and is
-        discarded by the next build's pre-build sweep (issue #115).
-
-        ``sweep_orphans=False``: markerless staging (older builds, or a
-        concurrent build still recording) is left untouched. A no-op for
-        builds that did not use the transport.
-
-        ``mode`` is the CLM http-replay mode; ``refresh`` folds with
-        ``overwrite_existing=True`` so a re-recorded interaction supersedes the
-        stale canonical entry (issue #165 P3), matching vcrpy ``all`` semantics.
-
-        Returns the number of staging files folded into canonical.
-        """
-        canonical_paths = self._collect_http_replay_canonical_paths()
-        if not canonical_paths:
-            return 0
-
-        from clm.workers.notebook.http_replay_cassette import (
-            CassettePaths,
-            merge_staging_into_canonical,
-            write_completion_marker,
-        )
-
-        overwrite_existing = mode == "refresh"
-        folded = 0
-        for canonical in sorted(canonical_paths):
-            if not canonical.parent.is_dir():
-                continue
-            # Mark this build's staging file complete so the merge folds it.
-            if build_id:
-                staging = canonical.parent / f"{canonical.name}.staging-mitm-{build_id}"
-                if staging.is_file():
-                    write_completion_marker(CassettePaths(canonical=canonical, staging=staging))
-            if not any(canonical.parent.glob(f"{canonical.name}.staging-*")):
-                continue
-            synthetic = canonical.parent / f"{canonical.name}.staging-mitm-merge"
-            try:
-                merged = merge_staging_into_canonical(
-                    CassettePaths(canonical=canonical, staging=synthetic),
-                    sweep_orphans=False,
-                    overwrite_existing=overwrite_existing,
-                    # The replay proxy records a per-request response
-                    # *sequence* (a non-deterministic endpoint answers an
-                    # identical request differently on successive calls); fold it
-                    # order-preserving so a downstream request that embedded the
-                    # later response still replay-matches. Only the pre-build
-                    # orphan sweep keeps the deduped fold (preserve_sequence
-                    # defaults to False there).
-                    preserve_sequence=True,
-                )
-            except Exception as exc:  # noqa: BLE001 — never mask the build result
-                logger.warning(
-                    f"Post-build mitmproxy cassette merge failed for "
-                    f"'{canonical}' ({type(exc).__name__}: {exc})."
-                )
-                continue
-            if merged:
-                logger.info(f"Merged {merged} mitmproxy staging cassette(s) into '{canonical}'.")
-                folded += merged
-        return folded
-
-    def _sweep_orphan_cassette_staging_files(self) -> int:
-        """Merge any orphan HTTP-replay staging cassettes into canonical.
-
-        Walks every notebook file whose topic opted into ``http_replay``
-        and, for each *unique* canonical cassette location with at least
-        one ``*.http-cassette.yaml.staging-*`` sibling, invokes
-        :func:`merge_staging_into_canonical` with ``sweep_orphans=True``.
-        That helper takes the cross-process file lock, folds completed
-        sibling stagings (those with a ``.completed`` marker) into
-        canonical and **discards** markerless stagings — partial chains
-        from previously-aborted recording sessions whose chain-closing
-        request never landed on disk (issue #115). Without the discard,
-        a markerless chain-opener with a body that depends on the
-        chain-closer's stored response would poison the canonical
-        cassette permanently (dedup is first-seen-wins).
-
-        Running this *before* payload construction prevents a stale
-        staging file from being enumerated by
-        :meth:`ProcessNotebookOperation.compute_other_files` and then
-        deleted by a concurrent worker's post-execution merge, which
-        used to surface as a ``FileNotFoundError`` during base64
-        encoding. Defense-in-depth: ``compute_other_files`` also filters
-        ``*.staging-*`` via ``is_ignored_file_for_output`` so a *new*
-        orphan appearing mid-build can't sneak into the payload either.
-
-        The discriminator between "decisive discard" here and
-        "conservative leave-alone" in the post-execution worker sweep
-        is the ``sweep_orphans`` flag: by contract this method runs
-        single-threaded before any worker starts, so every staging file
-        present must be from a previous build — no concurrency, no risk
-        of clobbering a still-recording worker.
-
-        Returns:
-            Number of canonical cassettes for which a merge ran (i.e.,
-            had at least one staging file present). Zero when nothing
-            needed sweeping or when ``http-replay`` is not used.
-        """
-        canonical_paths = self._collect_http_replay_canonical_paths()
-        if not canonical_paths:
-            return 0
-
-        # Import here so the dependency on vcrpy / filelock (the
-        # ``[replay]`` extra) only kicks in for courses that actually use
-        # http-replay. Otherwise the module-level import would force the
-        # extra on every install.
-        from clm.core.http_replay_trace import get_writer
-        from clm.workers.notebook.http_replay_cassette import (
-            CassettePaths,
-            merge_staging_into_canonical,
-        )
-
-        _host_writer = get_writer("host")
-        _host_writer.emit(
-            "cassette.sweep.start",
-            {"n_canonical_paths": len(canonical_paths)},
-        )
-
-        swept = 0
-        for canonical in sorted(canonical_paths):
-            staging_glob = f"{canonical.name}.staging-*"
-            if not canonical.parent.is_dir():
-                continue
-            if not any(canonical.parent.glob(staging_glob)):
-                continue
-            # The ``staging`` field is irrelevant for the sweep call —
-            # ``merge_staging_into_canonical`` globs for every staging
-            # file in the canonical's parent dir, including orphans this
-            # worker did not produce. Pass a synthetic name to satisfy
-            # the dataclass.
-            synthetic = canonical.parent / f"{canonical.name}.staging-sweep"
-            try:
-                merged = merge_staging_into_canonical(
-                    CassettePaths(canonical=canonical, staging=synthetic),
-                    sweep_orphans=True,
-                )
-            except Exception as exc:  # noqa: BLE001 — defensive
-                logger.warning(
-                    f"Pre-build orphan staging sweep failed for "
-                    f"'{canonical}' ({type(exc).__name__}: {exc}); "
-                    f"continuing — the worker-side sweep will retry."
-                )
-                continue
-            if merged:
-                logger.info(f"Merged {merged} orphan staging cassette(s) into '{canonical}'.")
-                swept += 1
-        _host_writer.emit(
-            "cassette.sweep.end",
-            {"n_canonical_paths": len(canonical_paths), "swept": swept},
-        )
-        return swept
 
     async def process_stage_for_target(
         self,

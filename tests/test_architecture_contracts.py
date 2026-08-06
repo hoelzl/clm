@@ -102,16 +102,17 @@ def _current_violations() -> set[str]:
 #: manifest, diagram-tool locators, C++ analysis/emission) → 19 edges over
 #: 17 files. S2 descended the contract seam (Operation hierarchy, Backend
 #: ABC, the messaging/payload package, File, copy-data, build_data_classes,
-#: build_profiling) into clm.core → 5 edges over 4 files: the worker-image
-#: identity reads (S4), the payload-time voiceover merge (S5), and the
-#: cassette staging methods on Course (S3).
+#: build_profiling) into clm.core → 5 edges over 4 files. S3 relocated the
+#: cassette staging maintenance off Course into
+#: infrastructure.http_replay_mitm.cassette_staging (sweeping is the entry
+#: points' job now) → 4 edges over 3 files: the worker-image identity reads
+#: (S4) and the payload-time voiceover merge (S5).
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
         "core -> infrastructure: core/operations/convert_drawio_file.py",
         "core -> infrastructure: core/operations/convert_plantuml_file.py",
         "core -> infrastructure: core/operations/process_notebook.py",
         "core -> slides: core/operations/process_notebook.py",
-        "core -> workers: core/course.py",
     }
 )
 

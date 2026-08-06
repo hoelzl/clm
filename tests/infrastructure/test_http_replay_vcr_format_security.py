@@ -72,7 +72,7 @@ def test_python_object_tag_does_not_execute_via_load_cassette(monkeypatch, tmp_p
     """Same guarantee through the public file-loading entry point.
 
     ``load_cassette`` is what ``clm build`` actually calls (via
-    ``Course.merge_mitmproxy_cassette_staging``), so the guarantee has to hold
+    ``cassette_staging.merge_mitmproxy_cassette_staging``), so the guarantee has to hold
     here and not only on the string-level helper.
     """
     module = sys.modules[__name__]

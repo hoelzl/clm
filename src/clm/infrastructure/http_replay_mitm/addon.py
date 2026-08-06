@@ -231,7 +231,7 @@ class ClmReplayAddon:
 
     The ``.completed`` markers that tell the host merge a staging file is
     safe to fold are written by the **host** in the build's ``finally``
-    (see ``Course.merge_mitmproxy_cassette_staging``) — that is the
+    (see ``cassette_staging.merge_mitmproxy_cassette_staging``) — that is the
     reliable build-completion signal, and mitmproxy's ``done`` hook does
     not fire on a Windows ``CTRL_BREAK`` shutdown. A force-killed build
     never reaches the host marker step, so its staging stays markerless

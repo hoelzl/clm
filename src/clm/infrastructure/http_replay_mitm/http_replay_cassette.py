@@ -13,7 +13,7 @@ addon). This module owns the host-side logic that
 4. manages the per-staging ``.completed`` markers that distinguish a
    finished recording session from a partial chain (issue #115).
 
-The merge runs after the proxy stops (``Course.merge_mitmproxy_cassette_staging``,
+The merge runs after the proxy stops (``cassette_staging.merge_mitmproxy_cassette_staging``,
 called from the build's ``finally``), so it executes even when the build
 raised — the addon's eager per-response writes mean recordings are already
 on disk by the time a failure propagates.
@@ -108,11 +108,11 @@ def merge_staging_into_canonical(
             field is only relevant for naming; the merge globs every
             ``*.staging-*`` sibling of the canonical regardless.
         sweep_orphans: When ``True`` (pre-build invocation from
-            :meth:`clm.core.course.Course._sweep_orphan_cassette_staging_files`),
+            :func:`clm.infrastructure.http_replay_mitm.cassette_staging.sweep_orphan_cassette_staging_files`),
             markerless staging files are treated as confirmed orphans from
             aborted previous builds: their entries are discarded and the
             staging files are deleted. When ``False`` (default — the
-            post-build host merge, ``Course.merge_mitmproxy_cassette_staging``),
+            post-build host merge, ``cassette_staging.merge_mitmproxy_cassette_staging``),
             markerless staging files are left untouched — they may belong
             to a concurrent build that hasn't completed yet.
         overwrite_existing: Mode-aware merge for ``refresh`` (vcrpy ``all``).
@@ -484,7 +484,7 @@ def has_completion_marker(staging: Path) -> bool:
 def write_completion_marker(paths: CassettePaths) -> None:
     """Atomically write the completion marker for one staging file.
 
-    Called by the host from :meth:`Course.merge_mitmproxy_cassette_staging`
+    Called by the host from :func:`~clm.infrastructure.http_replay_mitm.cassette_staging.merge_mitmproxy_cassette_staging`
     in the build's ``finally`` — reaching that step is the signal that the
     build (and the proxy's recording session) completed. The marker tells
     the merge that this staging file is safe to fold into the canonical

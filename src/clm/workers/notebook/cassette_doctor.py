@@ -365,7 +365,7 @@ def diagnose_cassette(
     )
 
     if fix and orphans:
-        from clm.workers.notebook.http_replay_cassette import _atomic_write_text
+        from clm.infrastructure.http_replay_mitm.http_replay_cassette import _atomic_write_text
 
         orphan_indexes = {o.index for o in orphans}
         keep_requests = [r for i, r in enumerate(requests) if i not in orphan_indexes]

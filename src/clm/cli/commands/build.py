@@ -1421,7 +1421,11 @@ async def process_course_with_backend(
         # the per-stage build path used by ``clm build`` previously did
         # not, leaving the sweep unreachable in normal use.
         try:
-            swept = course._sweep_orphan_cassette_staging_files()
+            from clm.infrastructure.http_replay_mitm.cassette_staging import (
+                sweep_orphan_cassette_staging_files,
+            )
+
+            swept = sweep_orphan_cassette_staging_files(course.http_replay_canonical_paths())
         except Exception as exc:  # noqa: BLE001 — defensive: sweep failure must not block build
             logger.warning(
                 f"Pre-build orphan cassette sweep raised "
@@ -2082,8 +2086,14 @@ async def main_build(
             # never reaches this point) stay markerless and are discarded by the
             # next build's pre-build sweep.
             try:
-                course.merge_mitmproxy_cassette_staging(
-                    mitm_manager.build_id, mode=config.http_replay_mode
+                from clm.infrastructure.http_replay_mitm.cassette_staging import (
+                    merge_mitmproxy_cassette_staging,
+                )
+
+                merge_mitmproxy_cassette_staging(
+                    course.http_replay_canonical_paths(),
+                    mitm_manager.build_id,
+                    mode=config.http_replay_mode,
                 )
             except Exception as e:
                 logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)

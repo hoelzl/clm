@@ -377,7 +377,7 @@ def test_routing_demuxes_tagged_requests_to_per_cassette_staging(
     # the staging into its canonical (issue #165 P2). Drive that real merge
     # path against the proxy-written staging and assert the interaction lands
     # in the canonical cassette.
-    from clm.workers.notebook.http_replay_cassette import (
+    from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
         CassettePaths,
         merge_staging_into_canonical,
         write_completion_marker,
@@ -420,7 +420,7 @@ def test_once_mode_starts_without_existing_catchall(
 def _fold_staging_to_canonical(canonical: Path, staging: Path) -> None:
     """Drive the real host marker+merge so the recorded staging lands in the
     canonical cassette (what a subsequent replay-mode proxy loads from)."""
-    from clm.workers.notebook.http_replay_cassette import (
+    from clm.infrastructure.http_replay_mitm.http_replay_cassette import (
         CassettePaths,
         merge_staging_into_canonical,
         write_completion_marker,

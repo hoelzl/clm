@@ -144,7 +144,7 @@ class MitmproxyManager:
         # Per-build id: the addon names its staging files
         # ``<cassette>.staging-mitm-<build_id>`` so the host can mark
         # exactly this build's recordings complete after the proxy stops
-        # (see ``Course.merge_mitmproxy_cassette_staging``).
+        # (see ``cassette_staging.merge_mitmproxy_cassette_staging``).
         self.build_id = uuid.uuid4().hex
         self._process: subprocess.Popen | None = None
         # Reader thread + bounded ring buffer draining mitmdump stdout so the

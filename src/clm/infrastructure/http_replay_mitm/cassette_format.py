@@ -4,7 +4,7 @@ The mitmproxy addon records and replays at the network layer, but the
 *on-disk* format must stay byte-compatible with the vcrpy v1 YAML
 cassette schema so that committed course cassettes, ``clm cassette
 doctor``, ``strip_cassette_hosts.py`` and
-:func:`clm.workers.notebook.http_replay_cassette.merge_staging_into_canonical`
+:func:`clm.infrastructure.http_replay_mitm.http_replay_cassette.merge_staging_into_canonical`
 keep working unchanged.
 
 The format itself (Request model, YAML (de)serialization, secret filters,
@@ -185,7 +185,7 @@ def vcr_response_dict_from_parts(
 def fingerprint(request: Request) -> tuple[str, str, bytes]:
     """Dedup/replay fingerprint: ``(method, uri, body-bytes)``.
 
-    Matches :func:`clm.workers.notebook.http_replay_cassette._dedup_key`
+    Matches :func:`clm.infrastructure.http_replay_mitm.http_replay_cassette._dedup_key`
     so the addon's in-build dedup and the host-side merge agree on what
     counts as "the same request". (JSON-semantic body matching is P3.)
     """
@@ -412,7 +412,7 @@ def write_cassette(path: Path, interactions: Iterable[Interaction]) -> None:
     """Serialize and atomically write a cassette with LF line endings.
 
     LF-only writes are required (see
-    :func:`clm.workers.notebook.http_replay_cassette._atomic_write_text`):
+    :func:`clm.infrastructure.http_replay_mitm.http_replay_cassette._atomic_write_text`):
     the repo's ``eol=lf`` gitattributes would otherwise flap the cassette
     CRLF↔LF between builds and checkouts and perturb its bytes.
     """
