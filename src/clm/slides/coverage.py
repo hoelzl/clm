@@ -25,10 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop
+from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.slug import strip_preserve_marker
-from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import CoverageCache
@@ -143,7 +144,7 @@ def build_coverage_pairs(
 
     Cells inside a workshop scope (between a ``workshop``-tagged
     markdown cell and the next ``end-workshop`` or EOF, per
-    :mod:`clm.slides.workshop_scope`) are skipped entirely: workshop
+    :mod:`clm.core.workshop_scope`) are skipped entirely: workshop
     exercise slides intentionally have no voiceover, and flagging
     them as gaps drowns the report in known-OK findings. When
     ``workshop_slide_count`` is passed, its first entry is replaced

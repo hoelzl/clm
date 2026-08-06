@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.voiceover_companions import companion_path, resolve_companion
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.split import split_text
 from clm.slides.voiceover_tools import (
     InlineTextResult,
     PairedExtractionResult,
     VoiceoverError,
-    companion_path,
     extract_pair_text,
     extract_voiceover,
     extract_voiceover_pair,
@@ -22,7 +22,6 @@ from clm.slides.voiceover_tools import (
     merge_voiceover_text,
     read_companion_baselines,
     render_companion_update,
-    resolve_companion,
     update_companion_narrative,
 )
 
@@ -91,20 +90,20 @@ def test_companion_path_split_pair_is_distinct(tmp_path: Path):
 
 
 def test_companion_name_is_directory_independent(tmp_path: Path):
-    from clm.slides.voiceover_tools import companion_name
+    from clm.core.voiceover_companions import companion_name
 
     assert companion_name(tmp_path / "slides_intro.de.py") == "voiceover_intro.de.py"
     assert companion_name(Path("a/b/c/topic_overview.py")) == "voiceover_overview.py"
 
 
 def test_resolve_companion_none_when_absent(tmp_path: Path):
-    from clm.slides.voiceover_tools import resolve_companion
+    from clm.core.voiceover_companions import resolve_companion
 
     assert resolve_companion(tmp_path / "slides_intro.py") is None
 
 
 def test_resolve_companion_finds_sibling(tmp_path: Path):
-    from clm.slides.voiceover_tools import resolve_companion
+    from clm.core.voiceover_companions import resolve_companion
 
     slide = tmp_path / "slides_intro.py"
     sibling = tmp_path / "voiceover_intro.py"
@@ -113,7 +112,7 @@ def test_resolve_companion_finds_sibling(tmp_path: Path):
 
 
 def test_resolve_companion_prefers_voiceover_subdir(tmp_path: Path):
-    from clm.slides.voiceover_tools import COMPANION_SUBDIR, resolve_companion
+    from clm.core.voiceover_companions import COMPANION_SUBDIR, resolve_companion
 
     slide = tmp_path / "slides_intro.py"
     (tmp_path / COMPANION_SUBDIR).mkdir()
@@ -126,7 +125,7 @@ def test_resolve_companion_prefers_voiceover_subdir(tmp_path: Path):
 
 def test_inline_reads_and_deletes_voiceover_subdir_companion(tmp_path: Path):
     """A companion relocated into ``voiceover/`` is inlined and removed there."""
-    from clm.slides.voiceover_tools import COMPANION_SUBDIR
+    from clm.core.voiceover_companions import COMPANION_SUBDIR
 
     slide = tmp_path / "slides_intro.py"
     slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
@@ -156,7 +155,7 @@ def test_inline_reads_and_deletes_voiceover_subdir_companion(tmp_path: Path):
 
 
 def test_expected_companion_layouts(tmp_path: Path):
-    from clm.slides.voiceover_tools import expected_companion
+    from clm.core.voiceover_companions import expected_companion
 
     slide = tmp_path / "slides_intro.py"
     # auto, nothing present -> subdir (new default for a brand-new companion)

@@ -71,7 +71,7 @@ class TestEnabled:
         records = _read_lines(log.path)
         assert len(records) == 2
         for rec in records:
-            # Same field set as clm.workers.notebook.http_replay_trace.TraceWriter.
+            # Same field set as clm.core.http_replay_trace.TraceWriter.
             assert set(rec) == {"ts_mono", "ts_wall", "pid", "tid", "stream", "event", "data"}
             assert rec["stream"] == PROXY_STREAM
             assert rec["pid"] == os.getpid()

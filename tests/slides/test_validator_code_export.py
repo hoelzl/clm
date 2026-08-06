@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import textwrap
 
-from clm.slides.cpp_code_analysis import (
+from clm.slides.validator import validate_file
+from clm.workers.notebook.cpp_code_analysis import (
     classify_item,
     classify_source,
     normalize_args,
     split_top_level,
     strip_comments_and_strings,
 )
-from clm.slides.validator import validate_file
 
 # ---------------------------------------------------------------------------
 # Helpers

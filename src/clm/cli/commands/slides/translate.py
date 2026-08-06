@@ -305,7 +305,7 @@ def _count_cells(text: str) -> tuple[int, int]:
 def _companion_preview(paths: BootstrapPaths) -> str | None:
     """The target companion name a bootstrap would write, if a source companion
     exists (read-only — used by --dry-run)."""
-    from clm.slides.voiceover_tools import companion_name, resolve_companion
+    from clm.core.voiceover_companions import companion_name, resolve_companion
 
     source_companion = resolve_companion(paths.source_path)
     if source_companion is None:

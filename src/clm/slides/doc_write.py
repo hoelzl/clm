@@ -237,7 +237,7 @@ class DeckEmitter:
 
 def new_companion_path(bundle: LoadedBundle, lang: Lang) -> Path:
     """Where a newly created companion file goes (standard subdir layout)."""
-    from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
+    from clm.core.voiceover_companions import COMPANION_SUBDIR, companion_name
 
     deck_path = bundle.de_path if lang == "de" else bundle.en_path
     return deck_path.parent / COMPANION_SUBDIR / companion_name(deck_path)

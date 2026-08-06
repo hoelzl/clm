@@ -25,7 +25,7 @@ from pathlib import Path
 
 import click
 
-from clm.notebooks.slide_parser import comment_token_for_path
+from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides import doc_ledger
 from clm.slides.doc_ledger import deck_key_for, ledger_path_for
 from clm.slides.pairing import derive_split_pair, order_split_pair, split_lang_tag

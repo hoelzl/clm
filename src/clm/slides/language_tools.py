@@ -11,7 +11,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.raw_cells import is_cell_boundary
 
 

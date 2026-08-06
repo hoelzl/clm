@@ -15,13 +15,9 @@ from unittest.mock import patch
 
 import pytest
 
+from clm.core.utils.jupyterlite_manifest import JUPYTERLITE_CORE_VERSION
 from clm.workers.jupyterlite import builder as builder_module
-from clm.workers.jupyterlite.builder import (
-    JUPYTERLITE_CORE_VERSION,
-    BuildArgs,
-    build_result_to_summary,
-    build_site,
-)
+from clm.workers.jupyterlite.builder import BuildArgs, build_result_to_summary, build_site
 
 
 @pytest.fixture

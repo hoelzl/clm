@@ -11,14 +11,14 @@ import textwrap
 
 import pytest
 
-from clm.slides.cpp_code_analysis import (
+from clm.workers.notebook.cpp_code_analysis import (
     classify_source,
     classify_source_spans,
     mask_comments_and_strings,
     split_top_level,
     split_top_level_spans,
 )
-from clm.slides.cpp_code_emitter import emit_cpp_translation_unit
+from clm.workers.notebook.cpp_code_emitter import emit_cpp_translation_unit
 
 
 def _dedent(text: str) -> str:

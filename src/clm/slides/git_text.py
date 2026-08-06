@@ -14,7 +14,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
+from clm.core.voiceover_companions import COMPANION_SUBDIR, companion_name
 
 __all__ = ["bundle_texts_at_ref", "git_ref_text", "recent_change_refs", "resolve_commit"]
 

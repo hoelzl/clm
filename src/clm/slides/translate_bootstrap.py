@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from clm.notebooks.slide_parser import comment_token_for_path
+from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides.assign_ids import AssignOptions, AssignResult, assign_ids_in_split_pair
 from clm.slides.pairing import split_lang_tag
 from clm.slides.translate_deck import TranslateDeckResult, translate_deck_text
@@ -396,7 +396,7 @@ def _translate_companion(
     exactly the companion ``for_slide`` parity the validator checks.
     """
     # Deferred import: a deck with no companion never pulls in the voiceover layer.
-    from clm.slides.voiceover_tools import companion_name, resolve_companion
+    from clm.core.voiceover_companions import companion_name, resolve_companion
 
     source_companion = resolve_companion(paths.source_path)
     if source_companion is None:

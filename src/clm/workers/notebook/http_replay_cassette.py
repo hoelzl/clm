@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def _trace(event: str, data: dict | None = None) -> None:
     """Emit a cassette-stream trace event (no-op when tracing is off)."""
-    from clm.workers.notebook.http_replay_trace import get_writer
+    from clm.core.http_replay_trace import get_writer
 
     get_writer("host").emit(event, data)
 

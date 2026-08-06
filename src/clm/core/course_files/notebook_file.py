@@ -125,7 +125,7 @@ class NotebookFile(CourseFile):
         sibling layout (see ``voiceover_tools.resolve_companion``); the build
         merges the companion's narration host-side at payload time.
         """
-        from clm.slides.voiceover_tools import resolve_companion
+        from clm.core.voiceover_companions import resolve_companion
 
         return resolve_companion(self.path)
 

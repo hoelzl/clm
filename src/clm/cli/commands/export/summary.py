@@ -84,7 +84,7 @@ def notebook_contains_workshop(notebook_path: Path) -> bool:
     Source decks are jupytext percent-format (``.py``/``.cs``/``.cpp``/…); for
     those this uses the **canonical** workshop-range detection — the
     ``workshop`` / ``end-workshop`` tag and ``workshop-…`` slide_id convention
-    shared with the validator (:func:`clm.slides.workshop_scope.find_workshop_ranges`)
+    shared with the validator (:func:`clm.core.workshop_scope.find_workshop_ranges`)
     — rather than a heading regex, so it agrees with the rest of the toolchain.
 
     ``.ipynb`` (build output, not a source format in practice) falls back to the
@@ -97,8 +97,9 @@ def notebook_contains_workshop(notebook_path: Path) -> bool:
             text = notebook_path.read_text(encoding="utf-8")
         except OSError:
             return False
-        from clm.notebooks.slide_parser import comment_token_for_path, parse_cells
-        from clm.slides.workshop_scope import find_workshop_ranges
+        from clm.core.utils.prog_lang_utils import comment_token_for_path
+        from clm.core.workshop_scope import find_workshop_ranges
+        from clm.notebooks.slide_parser import parse_cells
 
         cells = parse_cells(text, comment_token_for_path(notebook_path))
         return bool(find_workshop_ranges(cells))
@@ -165,7 +166,7 @@ def extract_notebook_content(
     if suffix == ".ipynb":
         return _extract_from_ipynb(text, audience, language)
     elif suffix in _PERCENT_SUFFIXES:
-        from clm.notebooks.slide_parser import comment_token_for_path
+        from clm.core.utils.prog_lang_utils import comment_token_for_path
 
         return _extract_from_py(text, audience, comment_token_for_path(notebook_path))
     else:

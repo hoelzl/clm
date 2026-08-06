@@ -40,7 +40,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.slides.voiceover_tools import COMPANION_SUBDIR
+from clm.core.voiceover_companions import COMPANION_SUBDIR
 
 # Canonical cassette sidecar dir (issue #453): committed HTTP-replay cassettes
 # consolidated under the build-internal ``.clm/`` tree. ``tidy --layout subdir``

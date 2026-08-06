@@ -21,7 +21,7 @@ from pathlib import Path
 
 import click
 
-from clm.notebooks.slide_parser import comment_token_for_path
+from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides.pairing import (
     derive_split_pair,
     derive_split_twin,

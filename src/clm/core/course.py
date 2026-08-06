@@ -290,7 +290,7 @@ class Course(NotebookMixin):
         cassette is recorded when no per-topic ``cassettes/`` directory exists
         yet. ``None`` leaves per-topic directory presence in charge (sibling).
         """
-        from clm.slides.sidecar_layout import resolve_layout
+        from clm.core.sidecar_layout import resolve_layout
 
         return resolve_layout(self.spec.sidecar_layout, self.course_root)
 
@@ -631,11 +631,11 @@ class Course(NotebookMixin):
         # ``[replay]`` extra) only kicks in for courses that actually use
         # http-replay. Otherwise the module-level import would force the
         # extra on every install.
+        from clm.core.http_replay_trace import get_writer
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
             merge_staging_into_canonical,
         )
-        from clm.workers.notebook.http_replay_trace import get_writer
 
         _host_writer = get_writer("host")
         _host_writer.emit(

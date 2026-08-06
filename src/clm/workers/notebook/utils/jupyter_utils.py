@@ -52,12 +52,7 @@ def get_cell_language(cell: Cell) -> str:
     return cast(str, cell["metadata"].get("lang", ""))
 
 
-from clm.slides.tags import (
-    EXPECTED_CODE_TAGS,
-    EXPECTED_MARKDOWN_TAGS,
-    PRIVATE_TAGS,
-    SLIDE_TAGS,
-)
+from clm.core.tags import EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS, PRIVATE_TAGS, SLIDE_TAGS
 
 _SLIDE_TAGS = SLIDE_TAGS
 _PRIVATE_TAGS = PRIVATE_TAGS
