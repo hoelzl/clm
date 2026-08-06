@@ -32,6 +32,7 @@ import click
 from attrs import define
 from click.core import ParameterSource
 
+from clm.core.voiceover_companions import COMPANION_SUBDIR, resolve_companion
 from clm.slides.pairing import (
     derive_split_pair_from_stem,
     derive_split_twin,
@@ -41,7 +42,6 @@ from clm.slides.pairing import (
     split_lang_tag,
 )
 from clm.slides.sync_verify import VerifyResult, verify_pair
-from clm.slides.voiceover_tools import COMPANION_SUBDIR, resolve_companion
 
 
 def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:

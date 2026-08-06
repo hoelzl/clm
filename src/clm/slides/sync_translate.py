@@ -361,7 +361,7 @@ def _prog_lang_descriptors(prog_lang: str) -> tuple[str, str]:
     e.g. ``"python"`` -> ``("# ", "Python")``; ``"csharp"`` -> ``("// ", "C#")``.
     Falls back to ``("# ", <prog_lang>)`` for an unknown language.
     """
-    from clm.workers.notebook.utils.prog_lang_utils import language_info, line_comment_for
+    from clm.core.utils.prog_lang_utils import language_info, line_comment_for
 
     try:
         prefix = line_comment_for(prog_lang) + " "

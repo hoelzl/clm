@@ -68,7 +68,7 @@ def _direct_binary_fingerprint(worker_type: str) -> str:
     Resolution follows the worker executor's injection precedence
     (``external_tools`` config with the env vars folded over it, then the
     workers' own default resolution via
-    :mod:`clm.workers.diagram_tools`), so the fingerprint describes the
+    :mod:`clm.infrastructure.utils.diagram_tools`), so the fingerprint describes the
     binary that will actually render — including one configured only in a
     config file's ``[external_tools]`` section (#747 review F1). Residue:
     a binary replaced in place with identical size and mtime keeps the
@@ -89,7 +89,7 @@ def _direct_binary_fingerprint(worker_type: str) -> str:
         # config file) — mirror that exactly, then fall back to the
         # workers' own default resolution.
         from clm.infrastructure.config import get_config, resolve_setting
-        from clm.workers.diagram_tools import (
+        from clm.infrastructure.utils.diagram_tools import (
             locate_drawio_executable,
             locate_plantuml_jar,
         )

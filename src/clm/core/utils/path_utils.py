@@ -84,7 +84,7 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         # topic opts into the foldered layout. Fully excluded from the course
         # file map because the build merges their narration host-side at
         # payload time (it locates them by a direct probe — see
-        # ``slides.voiceover_tools.resolve_companion`` — not this walk), so they
+        # ``core.voiceover_companions.resolve_companion`` — not this walk), so they
         # reach neither output nor the worker.
         "voiceover",
     )

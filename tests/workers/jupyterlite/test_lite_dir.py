@@ -13,17 +13,16 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.utils.jupyterlite_manifest import collect_notebook_tree, sha256_of_file
 from clm.workers.jupyterlite.lite_dir import (
     JUPYTERLITE_KERNELSPECS,
     assemble_lite_dir,
-    collect_notebook_tree,
     hash_manifest,
     patch_notebook_kernelspec,
     patch_notebooks_in_dir,
     populate_environment,
     populate_files,
     populate_wheels,
-    sha256_of_file,
     write_jupyter_lite_config,
     write_jupyter_lite_json,
     write_overrides,

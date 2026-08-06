@@ -15,7 +15,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 # resolves at CreateProcess/exec time (implicit .exe on Windows, extra
 # search locations), which shutil.which cannot replicate exactly — only the
 # host-side cache-key fingerprint uses which() as a best-effort stat target
-# (clm.workers.diagram_tools.locate_drawio_executable).
+# (clm.infrastructure.utils.diagram_tools.locate_drawio_executable).
 DRAWIO_EXECUTABLE = os.environ.get("DRAWIO_EXECUTABLE", "drawio")
 
 # Retry configuration for DrawIO

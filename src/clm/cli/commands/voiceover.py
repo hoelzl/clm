@@ -21,6 +21,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from clm.core.voiceover_companions import resolve_companion
 from clm.slides.pairing import derive_split_pair
 from clm.slides.voiceover_tools import (
     ExtractionResult,
@@ -31,7 +32,6 @@ from clm.slides.voiceover_tools import (
     extract_voiceover_pair,
     inline_notes,
     inline_voiceover,
-    resolve_companion,
 )
 
 if TYPE_CHECKING:
@@ -239,8 +239,8 @@ def sync(
     """
     import warnings
 
+    from clm.core.voiceover_companions import expected_companion, resolve_companion
     from clm.notebooks.polish_levels import PolishLevel
-    from clm.slides.voiceover_tools import expected_companion, resolve_companion
 
     # Resolve effective polish level from --polish-level and deprecated --mode.
     if mode is not None:
@@ -285,7 +285,7 @@ def sync(
     # Read/write the existing companion wherever it lives (``voiceover/`` subdir
     # or sibling); a not-yet-created companion uses the --layout write target,
     # folded with the course-wide default (CLM_SIDECAR_LAYOUT / [tool.clm]).
-    from clm.slides.sidecar_layout import effective_write_layout
+    from clm.core.sidecar_layout import effective_write_layout
 
     existing_companion = resolve_companion(slides)
     companion_file = (
@@ -1184,7 +1184,7 @@ def _emit_companion_dry_run_diff(
     results: list,
 ):
     """Emit a unified diff scoped to the companion file for dry-run mode."""
-    from clm.notebooks.slide_parser import comment_token_for_path
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
     from clm.slides.voiceover_tools import render_companion_update
 
     original_text = companion_file.read_text(encoding="utf-8") if companion_file.exists() else ""
@@ -3369,7 +3369,7 @@ def extract_voiceover_cmd(
     # Fold the --layout flag with the course-wide default (CLM_SIDECAR_LAYOUT /
     # [tool.clm] sidecar-layout). A flag wins; otherwise a course default of
     # subdir steers new companions into voiceover/.
-    from clm.slides.sidecar_layout import effective_write_layout
+    from clm.core.sidecar_layout import effective_write_layout
 
     layout = effective_write_layout(path, layout)
 

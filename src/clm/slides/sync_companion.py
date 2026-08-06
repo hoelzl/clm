@@ -39,12 +39,9 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from clm.notebooks.slide_parser import comment_token_for_path
-from clm.slides.voiceover_tools import (
-    has_voiceover_cells_text,
-    inline_pair_text,
-    resolve_companion,
-)
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.core.voiceover_companions import resolve_companion
+from clm.slides.voiceover_tools import has_voiceover_cells_text, inline_pair_text
 
 
 class Representation(Enum):

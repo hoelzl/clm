@@ -1215,8 +1215,11 @@ one PR per step, golden suite green after each.
    remaining edges into six PR-sized steps (S1 vocabulary descents → S2
    contract descent → S3 cassette relocation → S4 identity inversion → S5
    slide-text model descent → S6 = A11 import-linter), with edge accounting,
-   risks, and four maintainer questions (the consequential one: S5 descends
-   the slide-parser/pairing/anchor cone into core).
+   risks, and four maintainer questions. **Maintainer approved S5 as proposed
+   2026-08-06** (slide-text model into core — wanted for future
+   generalization anyway). **S1 DONE 2026-08-06** — leaf vocabulary descents,
+   ratchet 31 → 19 edges over 17 files; the lazy-import canary now pins
+   process_notebook's core→slides entry (survives until S5).
 4. **A11 — import-linter contract in CI.** Add it as soon as the first contract
    is true, not at the end — each subsequent step then cannot regress.
 5. **A4 — extract build orchestration** from `cli/commands/build.py` (2694 lines;

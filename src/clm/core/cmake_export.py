@@ -31,9 +31,9 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.deck_markers import has_no_compile_marker
 from clm.core.utils.path_utils import ext_for, output_specs
-from clm.notebooks.slide_parser import comment_token_for_path
-from clm.slides.validator import has_no_compile_marker
+from clm.core.utils.prog_lang_utils import comment_token_for_path
 
 if TYPE_CHECKING:
     from clm.core.course import Course

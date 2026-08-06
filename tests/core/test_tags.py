@@ -1,6 +1,6 @@
-"""Tests for clm.slides.tags — canonical tag definitions."""
+"""Tests for clm.core.tags — canonical tag definitions."""
 
-from clm.slides.tags import (
+from clm.core.tags import (
     ALL_VALID_TAGS,
     CODE_CONTENT_TAGS,
     EXPECTED_CODE_TAGS,

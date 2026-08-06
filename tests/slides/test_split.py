@@ -26,6 +26,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from clm.core.voiceover_companions import companion_path
 from clm.slides.split import (
     SplitError,
     UnifyError,
@@ -34,11 +35,7 @@ from clm.slides.split import (
     unify_in_file,
     unify_texts,
 )
-from clm.slides.voiceover_tools import (
-    companion_path,
-    extract_voiceover,
-    inline_voiceover,
-)
+from clm.slides.voiceover_tools import extract_voiceover, inline_voiceover
 
 # ---------------------------------------------------------------------------
 # Helpers / building blocks

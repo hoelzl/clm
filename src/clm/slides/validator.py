@@ -15,6 +15,8 @@ import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.core.deck_markers import has_header_marker
+from clm.core.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.core.topic_resolver import (
     _group_paths_into_units,
     build_topic_map,
@@ -23,12 +25,9 @@ from clm.core.topic_resolver import (
     matches_for_binding,
 )
 from clm.core.utils.path_utils import split_lang_suffix
-from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
-from clm.slides.cpp_code_analysis import (
-    DEFINITION_CATEGORIES,
-    STATEMENT_CATEGORIES,
-    classify_source,
-)
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
+from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
@@ -44,8 +43,11 @@ from clm.slides.slug import (
 )
 from clm.slides.split import _is_shared
 from clm.slides.sync_verify import tag_parity_violations
-from clm.slides.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
-from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
+from clm.workers.notebook.cpp_code_analysis import (
+    DEFINITION_CATEGORIES,
+    STATEMENT_CATEGORIES,
+    classify_source,
+)
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -149,44 +151,15 @@ _VOICEOVER_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*voiceover-coverage\s*$")
 ALLOW_MAIN_MARKER = "clm: allow-main"
 _ALLOW_MAIN_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*allow-main\s*$")
 
-# Header marker for decks whose code export legitimately cannot compile
-# outside the kernel (e.g. xeus-specific includes, deliberate error
-# demonstrations). The CMake generation (#333) marks such decks
-# EXCLUDE_FROM_ALL: still buildable explicitly, skipped by "build all" and
-# by the CI compile check.
-NO_COMPILE_MARKER = "clm: no-compile"
-_NO_COMPILE_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*no-compile\s*$")
-
-
-def _has_header_marker(text: str, comment_token: str, marker_re: re.Pattern[str]) -> bool:
-    """Whether the deck's file header contains a ``clm:`` directive comment.
-
-    Scans only the file header — lines before the first ``<token> %%`` cell
-    marker — so the directive is a per-file declaration, not cell content.
-    """
-    cell_marker = f"{comment_token} %%"
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(cell_marker):
-            break
-        if marker_re.match(stripped):
-            return True
-    return False
-
 
 def has_voiceover_coverage_marker(text: str, comment_token: str = "#") -> bool:
     """Whether the deck opts into voiceover coverage via its header (#178)."""
-    return _has_header_marker(text, comment_token, _VOICEOVER_MARKER_RE)
+    return has_header_marker(text, comment_token, _VOICEOVER_MARKER_RE)
 
 
 def has_allow_main_marker(text: str, comment_token: str = "#") -> bool:
     """Whether the deck whitelists its ``main()`` definition via its header (#331)."""
-    return _has_header_marker(text, comment_token, _ALLOW_MAIN_MARKER_RE)
-
-
-def has_no_compile_marker(text: str, comment_token: str = "#") -> bool:
-    """Whether the deck opts out of the default code-export build (#333)."""
-    return _has_header_marker(text, comment_token, _NO_COMPILE_MARKER_RE)
+    return has_header_marker(text, comment_token, _ALLOW_MAIN_MARKER_RE)
 
 
 def _check_malformed_markers(text: str, file_path: str, comment_token: str) -> list[Finding]:
@@ -609,7 +582,7 @@ def _check_workshop_headings(cells: list[Cell], file_path: str) -> list[Finding]
     The ``partial`` output kind relies on workshop scope to decide which code
     cells to leave empty for code-alongs. A workshop is opened by either a
     ``workshop`` tag or a slide-start cell whose ``slide_id`` starts with
-    ``workshop-`` (see :mod:`clm.slides.workshop_scope`). When a markdown cell
+    ``workshop-`` (see :mod:`clm.core.workshop_scope`). When a markdown cell
     *looks* like a workshop heading (``# Workshop …``) but no workshop scope
     covers it, the ``partial`` build silently renders every code cell instead
     of leaving the exercise cells empty — issue #78.
@@ -1788,7 +1761,7 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     # validator/split layer; import it lazily (as ``split.py`` does for the
     # companion seam) so the validator carries no hard dependency on the
     # optional voiceover tooling.
-    from clm.slides.voiceover_tools import companion_path, resolve_companion
+    from clm.core.voiceover_companions import companion_path, resolve_companion
 
     # Resolve the *existing* companion in either layout (``voiceover/`` subdir or
     # sibling); fall back to the nominal sibling name only for messaging.
@@ -1877,7 +1850,7 @@ def _check_companion_location_ambiguity(path: Path) -> list[Finding]:
     duplicate can be reconciled to a single companion per slide. Warning
     severity, consistent with the rest of the companion-pairing family.
     """
-    from clm.slides.voiceover_tools import companion_locations
+    from clm.core.voiceover_companions import companion_locations
 
     locations = companion_locations(path)
     if len(locations) < 2:
@@ -1921,7 +1894,8 @@ def _check_companion_for_slide_resolves(path: Path) -> list[Finding]:
     positive). A deck with no companion (``resolve_companion`` ``None``) yields
     nothing, so a voiceover-less deck stays silent.
     """
-    from clm.slides.voiceover_tools import merge_voiceover_text, resolve_companion
+    from clm.core.voiceover_companions import resolve_companion
+    from clm.slides.voiceover_tools import merge_voiceover_text
 
     companion = resolve_companion(path)
     if companion is None:
@@ -2523,7 +2497,8 @@ def validate_file(
             # layout (voiceover cells in voiceover/*.py) produces a false
             # positive for every slide (issue #360).
             voiceover_cells = cells
-            from clm.slides.voiceover_tools import merge_voiceover_text, resolve_companion
+            from clm.core.voiceover_companions import resolve_companion
+            from clm.slides.voiceover_tools import merge_voiceover_text
 
             companion = resolve_companion(path)
             if companion is not None:

@@ -14,13 +14,13 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.voiceover_companions import companion_name
 from clm.slides.split import (
     split_in_file,
     split_text,
     unify_in_file,
     unify_texts,
 )
-from clm.slides.voiceover_tools import companion_name
 
 DECK_CS = "\n".join(
     [

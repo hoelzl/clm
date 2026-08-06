@@ -31,7 +31,8 @@ import sys
 import time
 from pathlib import Path
 
-from clm.notebooks.slide_parser import comment_token_for_path, parse_cells
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_writeback import (
     FileState,
     anchor_of,
@@ -542,7 +543,7 @@ class StudioService:
         write so the stored form is unchanged for an unedited round-trip.
         """
         if body_format == "clean":
-            from clm.notebooks.slide_parser import comment_token_for_path
+            from clm.core.utils.prog_lang_utils import comment_token_for_path
             from clm.web.studio.prefix import reprefix
 
             return reprefix(body, comment_token_for_path(path))

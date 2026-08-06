@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, cast
 
 ProgLangConfig = dict[str, Any]
@@ -181,3 +182,17 @@ def kernelspec_for(prog_lang: str) -> dict[str, Any]:
         return cast(dict[str, Any], config.prog_lang[prog_lang]["kernelspec"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
+
+
+def comment_token_for_path(path: Path) -> str:
+    """Resolve a slide file's line-comment token from its extension.
+
+    ``.py``/``.rs``/``.md`` → ``"#"``; ``.cs``/``.cpp``/``.java``/``.ts`` → ``"//"``.
+    Falls back to ``"#"`` for unknown extensions.
+    """
+    from clm.core.utils.path_utils import path_to_prog_lang
+
+    try:
+        return line_comment_for(path_to_prog_lang(path))
+    except (KeyError, ValueError):
+        return "#"

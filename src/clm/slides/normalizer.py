@@ -35,7 +35,8 @@ from clm.core.topic_resolver import (
     matches_for_binding,
 )
 from clm.core.utils.path_utils import split_lang_suffix
-from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.notebooks.slide_parser import parse_cell_header
 from clm.slides.pairing import build_slide_groups
 from clm.slides.raw_cells import RawCell as _RawCell
 from clm.slides.raw_cells import reconstruct as _reconstruct

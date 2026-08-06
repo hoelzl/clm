@@ -38,12 +38,8 @@ from pathlib import Path
 
 import pytest
 
-from clm.workers.notebook.utils.prog_lang_utils import config as prog_lang_config
-from clm.workers.notebook.utils.prog_lang_utils import (
-    kernelspec_for,
-    line_comment_for,
-    suffix_for,
-)
+from clm.core.utils.prog_lang_utils import config as prog_lang_config
+from clm.core.utils.prog_lang_utils import kernelspec_for, line_comment_for, suffix_for
 from tests.docker_image_helpers import docker_available, find_notebook_image
 
 pytestmark = [

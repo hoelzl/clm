@@ -95,13 +95,14 @@ def _current_violations() -> set[str]:
 #: edge and core→cli's only resident → 42 edges over 33 files. A6 (#802)
 #: moved the path domain vocabulary into clm.core.utils.path_utils, clearing
 #: every core file whose only infrastructure import was path_utils → 31
-#: edges over 23 files.
+#: edges over 23 files. S1 of the A1/A3 design
+#: (docs/claude/design/phase8-a1-a3-core-decoupling.md) descended the leaf
+#: vocabulary (prog-lang tables + comment tokens, tags, workshop scope,
+#: sidecar layout, deck markers, companion paths, replay trace, jupyterlite
+#: manifest, diagram-tool locators, C++ analysis/emission) → 19 edges over
+#: 17 files.
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
-        "infrastructure -> workers: infrastructure/workers/image_identity.py",
-        "workers -> slides: workers/notebook/notebook_processor.py",
-        "workers -> slides: workers/notebook/output_spec.py",
-        "workers -> slides: workers/notebook/utils/jupyter_utils.py",
         "core -> infrastructure: core/course.py",
         "core -> infrastructure: core/course_file.py",
         "core -> infrastructure: core/course_files/data_file.py",
@@ -119,16 +120,8 @@ KNOWN_LAYER_VIOLATIONS = frozenset(
         "core -> infrastructure: core/operations/copy_file.py",
         "core -> infrastructure: core/operations/delete_file.py",
         "core -> infrastructure: core/operations/process_notebook.py",
-        "core -> notebooks: core/cmake_export.py",
-        "core -> notebooks: core/operations/process_notebook.py",
-        "core -> slides: core/cmake_export.py",
-        "core -> slides: core/course.py",
-        "core -> slides: core/course_files/notebook_file.py",
-        "core -> slides: core/course_spec.py",
         "core -> slides: core/operations/process_notebook.py",
         "core -> workers: core/course.py",
-        "core -> workers: core/operations/build_jupyterlite_site.py",
-        "core -> workers: core/operations/process_notebook.py",
     }
 )
 
@@ -169,10 +162,10 @@ class TestLayerBoundaryRatchet:
         assert "clm.cli.build_data_classes" in _clm_imports(probe)
         # ...and the live inventory carries a known lazy-import resident —
         # an entry that would silently vanish under a module-level-only scan
-        # (image_identity's workers import is function-body only).
-        assert "infrastructure -> workers: infrastructure/workers/image_identity.py" in (
-            KNOWN_LAYER_VIOLATIONS
-        )
+        # (process_notebook's merge_voiceover_text import is function-body
+        # only; it survives until step S5 of the A1/A3 plan, by which point
+        # the inventory is empty and this pin retires with the ratchet).
+        assert "core -> slides: core/operations/process_notebook.py" in KNOWN_LAYER_VIOLATIONS
 
     def test_no_string_based_imports_dodge_the_ratchet(self):
         """The scanner is AST-based, so ``importlib.import_module("clm...")``

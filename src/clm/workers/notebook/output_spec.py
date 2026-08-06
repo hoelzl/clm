@@ -20,6 +20,8 @@ from collections.abc import Iterable
 
 from attr import Factory, define
 
+from clm.core.utils.prog_lang_utils import jupytext_format_for, suffix_for
+
 from .utils.jupyter_utils import (
     Cell,
     get_tags,
@@ -27,7 +29,6 @@ from .utils.jupyter_utils import (
     is_code_cell,
     set_tags,
 )
-from .utils.prog_lang_utils import jupytext_format_for, suffix_for
 
 # Synthetic tag attached by PartialOutput.annotate_cells() to every cell
 # at or after the first ``workshop`` heading. It drives per-cell filter
@@ -67,7 +68,7 @@ def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
     """Return ``[(start_inclusive, end_exclusive), ...]`` for each workshop.
 
     A thin adapter over the canonical detector in
-    :mod:`clm.slides.workshop_scope` — one implementation for the
+    :mod:`clm.core.workshop_scope` — one implementation for the
     validator, ``clm export``, AND the build (issue #732: this used to be
     a tag-only duplicate, so a workshop opened by the sanctioned
     ``workshop-…`` slide_id form passed validation but the partial build
@@ -84,7 +85,7 @@ def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
     cache-hit path — which additionally requires the cached notebook to
     retain ``slide_id``).
     """
-    from clm.slides.workshop_scope import find_workshop_ranges as _canonical
+    from clm.core.workshop_scope import find_workshop_ranges as _canonical
 
     return _canonical([_NotebookCellView(cell) for cell in cells])
 

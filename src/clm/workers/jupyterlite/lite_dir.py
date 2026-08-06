@@ -23,6 +23,8 @@ import logging
 import shutil
 from pathlib import Path
 
+from clm.core.utils.jupyterlite_manifest import collect_notebook_trees, sha256_of_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,45 +48,9 @@ JUPYTERLITE_KERNELSPECS: dict[str, dict[str, str]] = {
 }
 
 
-def sha256_of_file(path: Path) -> str:
-    """Return the lowercase hex SHA-256 digest of a file."""
-    hasher = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(64 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def collect_notebook_tree(notebook_tree: Path) -> list[tuple[str, str]]:
-    """Enumerate notebooks under ``notebook_tree`` with their content hashes.
-
-    Returns a list of ``(relative_posix_path, sha256)`` sorted by path.
-    Only files ending in ``.ipynb`` are included — supporting assets
-    (images, data) travel with the notebooks via sibling inclusion in
-    ``populate_files``.
-    """
-    if not notebook_tree.is_dir():
-        raise FileNotFoundError(f"Notebook tree does not exist: {notebook_tree}")
-
-    entries: list[tuple[str, str]] = []
-    for path in sorted(notebook_tree.rglob("*.ipynb")):
-        rel = path.relative_to(notebook_tree).as_posix()
-        entries.append((rel, sha256_of_file(path)))
-    return entries
-
-
-def collect_notebook_trees(
-    notebook_trees: dict[str, Path],
-) -> dict[str, list[tuple[str, str]]]:
-    """Enumerate notebooks across multiple kind-keyed trees.
-
-    Returns ``{kind: [(relative_posix_path, sha256), ...]}`` with entries
-    sorted by path within each kind and kinds sorted alphabetically.
-    """
-    result: dict[str, list[tuple[str, str]]] = {}
-    for kind in sorted(notebook_trees):
-        result[kind] = collect_notebook_tree(notebook_trees[kind])
-    return result
+# sha256_of_file / collect_notebook_tree(s) live in
+# clm.core.utils.jupyterlite_manifest (Phase 8 S1, #802) — the build
+# operation computes the same manifest host-side for the cache key.
 
 
 def populate_files(lite_dir: Path, notebook_tree: Path) -> list[str]:

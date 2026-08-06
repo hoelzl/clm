@@ -14,9 +14,9 @@ from pathlib import Path
 
 from attrs import evolve
 
+from clm.core.voiceover_companions import COMPANION_SUBDIR
 from clm.slides.doc_lenses import LoadedBundle, load_bundle, parse_bundle
 from clm.slides.doc_write import DeckEmitter, new_companion_path, write_changed_files
-from clm.slides.voiceover_tools import COMPANION_SUBDIR
 
 HEADER_DE = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Titel DE\") }}\n\n"
 HEADER_EN = "# j2 from 'macros.j2' import header_en\n# {{ header_en(\"Title EN\") }}\n\n"

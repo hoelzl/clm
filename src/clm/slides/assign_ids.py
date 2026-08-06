@@ -49,11 +49,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.core.utils.path_utils import split_lang_suffix
-from clm.notebooks.slide_parser import (
-    CellMetadata,
-    comment_token_for_path,
-    parse_cell_header,
-)
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.headingless import (
     Category,
@@ -1745,7 +1742,7 @@ def stamp_ids_in_companion_pair(
 
 def _companion_pair_for(de_path: Path, en_path: Path) -> tuple[Path | None, Path | None]:
     """The existing companion halves for a split deck pair (``None`` where absent)."""
-    from clm.slides.voiceover_tools import resolve_companion
+    from clm.core.voiceover_companions import resolve_companion
 
     return resolve_companion(de_path), resolve_companion(en_path)
 

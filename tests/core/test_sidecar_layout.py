@@ -1,13 +1,10 @@
-"""Tests for clm.slides.sidecar_layout (course-wide sidecar-layout default)."""
+"""Tests for clm.core.sidecar_layout (course-wide sidecar-layout default)."""
 
 from __future__ import annotations
 
 import pytest
 
-from clm.slides.sidecar_layout import (
-    effective_write_layout,
-    resolve_course_sidecar_default,
-)
+from clm.core.sidecar_layout import effective_write_layout, resolve_course_sidecar_default
 
 
 @pytest.fixture(autouse=True)

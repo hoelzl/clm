@@ -61,7 +61,7 @@ class TestSandboxBlocksTraversal:
         """
         from jinja2 import Environment
 
-        from clm.workers.notebook.utils.prog_lang_utils import jinja_prefix_for
+        from clm.core.utils.prog_lang_utils import jinja_prefix_for
 
         env = Environment(  # noqa: S701 - deliberately the pre-fix unsafe one
             autoescape=False,

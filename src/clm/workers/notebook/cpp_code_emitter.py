@@ -19,7 +19,7 @@ place in a translation unit:
 
 Decks that define their own ``main()`` suppress the generated one.
 
-The heuristics live in :mod:`clm.slides.cpp_code_analysis`; this module only
+The heuristics live in :mod:`clm.workers.notebook.cpp_code_analysis`; this module only
 routes and formats. See ``REPORT_CPP_CODE_EXPORT_FEASIBILITY.md`` in the
 CppCourses repo for the corpus numbers behind the design.
 """
@@ -29,10 +29,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from clm.slides.cpp_code_analysis import (
-    STATEMENT_CATEGORIES,
-    classify_source_spans,
-)
+from clm.workers.notebook.cpp_code_analysis import STATEMENT_CATEGORIES, classify_source_spans
 
 # C++20 (the course standard): concepts and if-constexpr drive the
 # operator<<-availability fallback at compile time.

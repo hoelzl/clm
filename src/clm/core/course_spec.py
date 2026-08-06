@@ -2603,7 +2603,7 @@ class CourseSpec:
         # cassettes / voiceover companions). Coerce + validate here so an
         # unrecognised value is a loud no-op rather than a silent miss at
         # resolve time.
-        from clm.slides.sidecar_layout import SIDECAR_LAYOUTS
+        from clm.core.sidecar_layout import SIDECAR_LAYOUTS
 
         sidecar_layout_raw = element_text(root, "sidecar-layout").strip()
         sidecar_layout: str | None = None

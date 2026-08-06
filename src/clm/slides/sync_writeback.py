@@ -18,7 +18,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from clm.notebooks.slide_parser import CellMetadata, comment_token_for_path, parse_cell_header
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 from clm.slides.slug import slugify

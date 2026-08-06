@@ -9,9 +9,9 @@ from clm.infrastructure.services.subprocess_tools import run_subprocess
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 
 # PlantUML JAR path - configurable via environment variable. Resolution
-# lives in clm.workers.diagram_tools (issue #747: the host-side cache-key
+# lives in clm.infrastructure.utils.diagram_tools (issue #747: the host-side cache-key
 # identity must fingerprint the SAME binary this worker runs).
-from clm.workers.diagram_tools import PLANTUML_DEFAULT_JAR_PATHS, locate_plantuml_jar
+from clm.infrastructure.utils.diagram_tools import PLANTUML_DEFAULT_JAR_PATHS, locate_plantuml_jar
 
 _located_jar = locate_plantuml_jar()
 if _located_jar is None:

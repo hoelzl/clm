@@ -65,8 +65,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.core.utils.path_utils import SUPPORTED_PROG_LANG_EXTENSIONS
+from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.infrastructure.utils.path_utils import atomic_write_all
-from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ def _plan_companion_split(
     The ``voiceover_tools`` import is deferred so a plain deck split never
     pulls in the voiceover layer.
     """
-    from clm.slides.voiceover_tools import companion_name, resolve_companion
+    from clm.core.voiceover_companions import companion_name, resolve_companion
 
     companion = resolve_companion(source)
     if companion is None:
@@ -720,7 +720,7 @@ def _plan_companion_unify(
     both halves). Raising here (divergent shared companion cell, misalignment)
     aborts the whole unify before any file is written.
     """
-    from clm.slides.voiceover_tools import companion_name, resolve_companion
+    from clm.core.voiceover_companions import companion_name, resolve_companion
 
     de_comp = resolve_companion(de_source)
     en_comp = resolve_companion(en_source)

@@ -1,14 +1,10 @@
-"""Tests for clm.slides.workshop_scope."""
+"""Tests for clm.core.workshop_scope."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from clm.slides.workshop_scope import (
-    find_workshop_ranges,
-    find_workshop_start_index,
-    is_in_workshop,
-)
+from clm.core.workshop_scope import find_workshop_ranges, find_workshop_start_index, is_in_workshop
 
 
 @dataclass

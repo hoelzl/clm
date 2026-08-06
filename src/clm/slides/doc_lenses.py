@@ -49,7 +49,12 @@ from pathlib import Path
 
 from attrs import define, field
 
-from clm.notebooks.slide_parser import comment_token_for_path
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+
+# The single vo_anchor read path (the attribute is not part of CellMetadata);
+# importing the private helper rather than copying its regex keeps the two
+# from drifting — the same pattern voiceover_tools itself uses on normalizer.
+from clm.core.voiceover_companions import resolve_companion
 from clm.slides.bilingual_doc import (
     HEADER_GROUP,
     ORPHAN_GROUP,
@@ -75,11 +80,7 @@ from clm.slides.pairing import (
 )
 from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.slug import strip_preserve_marker
-
-# The single vo_anchor read path (the attribute is not part of CellMetadata);
-# importing the private helper rather than copying its regex keeps the two
-# from drifting — the same pattern voiceover_tools itself uses on normalizer.
-from clm.slides.voiceover_tools import _parse_vo_anchor, resolve_companion
+from clm.slides.voiceover_tools import _parse_vo_anchor
 
 logger = logging.getLogger(__name__)
 

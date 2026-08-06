@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.workers.notebook import http_replay_trace as trace_mod
+from clm.core import http_replay_trace as trace_mod
 
 
 @pytest.fixture(autouse=True)

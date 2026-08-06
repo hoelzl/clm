@@ -73,8 +73,14 @@ if TYPE_CHECKING:
         ) -> None: ...
 
 
+from clm.core.utils.prog_lang_utils import (
+    jinja_prefix_for,
+    jupytext_format_for,
+    kernelspec_for,
+    language_info,
+)
 from clm.infrastructure.messaging.base_classes import ProcessingWarning
-from clm.slides.cpp_code_emitter import emit_cpp_translation_unit
+from clm.workers.notebook.cpp_code_emitter import emit_cpp_translation_unit
 
 from .utils.jupyter_utils import (
     Cell,
@@ -88,12 +94,6 @@ from .utils.jupyter_utils import (
     is_cell_included_for_language,
     is_code_cell,
     is_markdown_cell,
-)
-from .utils.prog_lang_utils import (
-    jinja_prefix_for,
-    jupytext_format_for,
-    kernelspec_for,
-    language_info,
 )
 
 

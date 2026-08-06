@@ -13,14 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from clm.notebooks.slide_parser import (
-    comment_token_for_path,
-    parse_cell_header,
-    parse_cells,
-    parse_slides,
-)
+from clm.core.utils.prog_lang_utils import comment_token_for_path, line_comment_for
+from clm.notebooks.slide_parser import parse_cell_header, parse_cells, parse_slides
 from clm.slides.raw_cells import is_cell_boundary, reconstruct, split_cells
-from clm.workers.notebook.utils.prog_lang_utils import line_comment_for
 
 
 def deck(tok: str) -> str:

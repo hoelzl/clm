@@ -12,7 +12,7 @@ hot path:
 - ``TrackingExecutePreprocessor`` is created with **no ``kernel_name``**, so
   nbconvert resolves the kernel from the notebook's ``metadata.kernelspec.name``
   — the literal ``python3`` for Python decks
-  (``clm.workers.notebook.utils.prog_lang_utils.kernelspec_for``).
+  (``clm.core.utils.prog_lang_utils.kernelspec_for``).
 - ``jupyter_client`` resolves ``python3`` by scanning kernelspec directories,
   and the dirs named by ``JUPYTER_PATH`` are searched **before** the user /
   system data dirs.

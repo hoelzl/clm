@@ -17,13 +17,13 @@ from typing import Any
 from attrs import Factory, frozen
 
 from clm.core.course_spec import JupyterLiteConfig
+from clm.core.utils.jupyterlite_manifest import collect_notebook_trees, sha256_of_file
 from clm.infrastructure.messaging.correlation_ids import (
     new_correlation_id,
     note_correlation_id_dependency,
 )
 from clm.infrastructure.messaging.jupyterlite_classes import JupyterLitePayload
 from clm.infrastructure.operation import Operation
-from clm.workers.jupyterlite.lite_dir import collect_notebook_trees, sha256_of_file
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def _get_jupyterlite_core_version() -> str:
     the pin the tool env is built from (``builder.JUPYTERLITE_CORE_VERSION``).
     Bumping that pin invalidates previously-cached sites, which is what we want.
     """
-    from clm.workers.jupyterlite.builder import JUPYTERLITE_CORE_VERSION
+    from clm.core.utils.jupyterlite_manifest import JUPYTERLITE_CORE_VERSION
 
     return JUPYTERLITE_CORE_VERSION
 

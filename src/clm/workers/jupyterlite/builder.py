@@ -16,6 +16,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from clm.core.utils.jupyterlite_manifest import JUPYTERLITE_CORE_VERSION
 from clm.workers.jupyterlite.lite_dir import assemble_lite_dir, hash_manifest
 
 logger = logging.getLogger(__name__)
@@ -25,11 +26,10 @@ logger = logging.getLogger(__name__)
 # The site build no longer runs in clm's own venv: clm shells out to an
 # isolated ``uvx`` (``uv tool run``) environment so that jupyterlite-core's
 # transitive constraints — notably ``empack``'s ``click<8.2`` cap — can never
-# enter clm's dependency graph (issue #516 / Wave 2a). Because that tool env is
-# created on demand from these pins, they ARE the version truth: they define
-# both what ``uvx`` installs and the ``jupyterlite_core_version`` that feeds the
-# build cache key, so a bump here correctly invalidates previously-cached sites.
-JUPYTERLITE_CORE_VERSION = "0.7.6"
+# enter clm's dependency graph (issue #516 / Wave 2a). The jupyterlite-core
+# pin itself lives in ``clm.core.utils.jupyterlite_manifest`` (it also feeds
+# the build cache key host-side); the kernel-addon pins below are consumed
+# only by the ``uvx`` command assembled here.
 _JUPYTERLITE_PYODIDE_KERNEL_VERSION = "0.7.2"
 _JUPYTERLITE_XEUS_VERSION = "4.5.2"
 _JUPYTER_SERVER_SPEC = "jupyter-server>=2.12"
@@ -394,7 +394,6 @@ def build_result_to_summary(result: BuildResult) -> str:
 
 
 __all__ = [
-    "JUPYTERLITE_CORE_VERSION",
     "BuildArgs",
     "BuildResult",
     "build_site",

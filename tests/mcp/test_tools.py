@@ -1001,7 +1001,7 @@ class TestExtractVoiceover:
         return de, en
 
     async def test_extract_auto_pairs_split_half(self, course_tree):
-        from clm.slides.voiceover_tools import resolve_companion
+        from clm.core.voiceover_companions import resolve_companion
 
         de, en = self._split_pair(course_tree)
         result = await handle_extract_voiceover(str(de), course_tree)

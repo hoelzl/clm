@@ -18,7 +18,7 @@ where the ``clm`` package is absent. Like
 :mod:`clm.infrastructure.http_replay_mitm.cassette_format` it therefore imports
 **only the stdlib** so the addon can load it by bare path, and it emits the
 *same* JSONL record shape as
-:class:`clm.workers.notebook.http_replay_trace.TraceWriter` so
+:class:`clm.core.http_replay_trace.TraceWriter` so
 ``scripts/analyze_http_replay_trace.py`` reads every stream uniformly.
 """
 

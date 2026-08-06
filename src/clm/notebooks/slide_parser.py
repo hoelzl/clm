@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.core.utils.prog_lang_utils import comment_token_for_path
+
 
 @dataclass
 class CellMetadata:
@@ -346,22 +348,6 @@ def group_slides(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def comment_token_for_path(path: Path) -> str:
-    """Resolve a slide file's line-comment token from its extension.
-
-    ``.py``/``.rs``/``.md`` → ``"#"``; ``.cs``/``.cpp``/``.java``/``.ts`` → ``"//"``.
-    Falls back to ``"#"`` for unknown extensions. Imports are local to avoid a
-    module-load cycle (slide_parser is imported very early).
-    """
-    from clm.core.utils.path_utils import path_to_prog_lang
-    from clm.workers.notebook.utils.prog_lang_utils import line_comment_for
-
-    try:
-        return line_comment_for(path_to_prog_lang(path))
-    except (KeyError, ValueError):
-        return "#"
 
 
 def _is_cell_boundary(line: str, comment_token: str = "#") -> bool:
