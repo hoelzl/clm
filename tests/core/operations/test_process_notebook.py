@@ -11,8 +11,8 @@ from clm.core.operations.process_notebook import (
     _hash_template_dir,
     compute_template_fingerprint,
     compute_worker_image_identity,
-    worker_image_identity_for,
 )
+from clm.infrastructure.workers.image_identity import worker_image_identity_for
 
 
 class TestComputeTemplateFingerprint:
@@ -135,11 +135,11 @@ class TestWorkerImageIdentity:
         """#744 hole (b): the CLI override lives only in the config COPY —
         the identity must prefer what the build recorded over the
         singleton's stale view."""
-        from clm.infrastructure.workers import image_identity as ii
+        from clm.core import worker_identity as wi
 
-        ii.reset_effective_worker_identities()
+        wi.reset_effective_worker_identities()
         try:
-            ii._effective["notebook"] = "docker:ghcr.io/me/override:1"
+            wi.set_effective_worker_identities({"notebook": "docker:ghcr.io/me/override:1"})
             assert compute_worker_image_identity() == "docker:ghcr.io/me/override:1"
         finally:
-            ii.reset_effective_worker_identities()
+            wi.reset_effective_worker_identities()

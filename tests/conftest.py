@@ -231,11 +231,11 @@ def _reset_effective_worker_identities():
     a module-level registry; any test driving it (build-command tests, the
     config-loader tests) would otherwise leak the recording process-wide
     and change what later tests observe from the singleton-fallback path —
-    same reasoning as ``_isolate_db_path_env``.
+    same reasoning as ``_isolate_db_path_env``. The registry lives in core
+    since Phase 8 S4 (#802); resetting it does not touch the registered
+    fallback provider.
     """
-    from clm.infrastructure.workers.image_identity import (
-        reset_effective_worker_identities,
-    )
+    from clm.core.worker_identity import reset_effective_worker_identities
 
     reset_effective_worker_identities()
     yield

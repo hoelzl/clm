@@ -21,6 +21,30 @@ _LAZY_EXPORTS = {
     "Operation": ("clm.core.operation", "Operation"),
 }
 
+
+def _worker_identity_singleton_fallback(worker_type: str) -> str:
+    """Lazy-bodied fallback provider for the core identity registry (S4).
+
+    Registered at package import so ANY ``clm.infrastructure.*`` import
+    wires the singleton-config resolver into
+    :mod:`clm.core.worker_identity`. The body defers the (heavy) worker
+    package import until a payload is actually built outside a
+    build/cache-explain context — the same import cost the pre-S4 lazy
+    imports in the core operations paid.
+    """
+    from clm.infrastructure.workers.image_identity import singleton_worker_image_identity
+
+    return singleton_worker_image_identity(worker_type)
+
+
+def _register_worker_identity_fallback() -> None:
+    from clm.core.worker_identity import register_fallback_provider
+
+    register_fallback_provider(_worker_identity_singleton_fallback)
+
+
+_register_worker_identity_fallback()
+
 __all__ = [
     "Backend",
     "Operation",
