@@ -5,9 +5,9 @@ from pathlib import Path
 
 from watchdog.events import PatternMatchingEventHandler
 
+from clm.core.backend import Backend
 from clm.core.course import Course
 from clm.core.utils.path_utils import is_ignored_dir_for_course
-from clm.infrastructure.backend import Backend
 
 logger = logging.getLogger(__name__)
 

@@ -4,10 +4,10 @@ from typing import Any
 
 from attrs import frozen
 
+from clm.core.backend import Backend
 from clm.core.course_file import CourseFile
-from clm.infrastructure.backend import Backend
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_file_data import CopyFileData
+from clm.core.operation import Operation
+from clm.core.utils.copy_file_data import CopyFileData
 
 logger = logging.getLogger(__name__)
 

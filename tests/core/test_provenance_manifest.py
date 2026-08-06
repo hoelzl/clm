@@ -233,8 +233,8 @@ def test_manifest_records_shared_image_assets(tmp_path):
 
 def _collect_copy_output_files(op) -> set:
     """Flatten an Operation tree to the set of ``CopyFileOperation.output_file``."""
+    from clm.core.operation import Concurrently, Sequential
     from clm.core.operations.copy_file import CopyFileOperation
-    from clm.infrastructure.operation import Concurrently, Sequential
 
     paths: set = set()
     if isinstance(op, CopyFileOperation):

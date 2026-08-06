@@ -17,13 +17,10 @@ from typing import Any
 from attrs import Factory, frozen
 
 from clm.core.course_spec import JupyterLiteConfig
+from clm.core.messaging.correlation_ids import new_correlation_id, note_correlation_id_dependency
+from clm.core.messaging.jupyterlite_classes import JupyterLitePayload
+from clm.core.operation import Operation
 from clm.core.utils.jupyterlite_manifest import collect_notebook_trees, sha256_of_file
-from clm.infrastructure.messaging.correlation_ids import (
-    new_correlation_id,
-    note_correlation_id_dependency,
-)
-from clm.infrastructure.messaging.jupyterlite_classes import JupyterLitePayload
-from clm.infrastructure.operation import Operation
 
 logger = logging.getLogger(__name__)
 

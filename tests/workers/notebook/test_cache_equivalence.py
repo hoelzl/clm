@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook.notebook_processor import NotebookProcessor
 from clm.workers.notebook.output_spec import CompletedOutput, PartialOutput, SpeakerOutput
 

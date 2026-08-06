@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 # Convenience exports, resolved lazily (PEP 562) so that importing any
 # ``clm.core.*`` submodule does not eagerly construct the whole course
 # object model. Eager imports here also create a circular import:
-# ``clm.infrastructure.backend`` imports ``clm.core.image_registry``,
+# ``clm.core.backend`` imports ``clm.core.image_registry``,
 # which would execute this ``__init__`` and re-enter
 # ``clm.infrastructure`` via ``course_file`` before ``Backend`` exists.
 _LAZY_EXPORTS = {

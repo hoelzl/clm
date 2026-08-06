@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook.notebook_processor import NotebookProcessor
 from clm.workers.notebook.output_spec import SpeakerOutput
 

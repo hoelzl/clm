@@ -9,7 +9,7 @@ import json
 import re
 from typing import Any, Literal, cast
 
-from clm.infrastructure.build_data_classes import BuildError
+from clm.core.build_data_classes import BuildError
 from clm.infrastructure.utils.text_utils import strip_ansi
 
 

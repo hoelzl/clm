@@ -5,8 +5,8 @@ from pathlib import Path
 from attrs import field, frozen
 
 from clm.core.course_file import CourseFile
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 
 logger = logging.getLogger(__name__)
 

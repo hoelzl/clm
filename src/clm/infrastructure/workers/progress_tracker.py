@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from clm.infrastructure.build_data_classes import ProgressUpdate
+from clm.core.build_data_classes import ProgressUpdate
 
 logger = logging.getLogger(__name__)
 

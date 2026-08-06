@@ -2,12 +2,9 @@ import logging
 
 from attrs import frozen
 
+from clm.core.messaging.correlation_ids import new_correlation_id, note_correlation_id_dependency
+from clm.core.messaging.plantuml_classes import PlantUmlPayload
 from clm.core.operations.convert_source_output_file import ConvertSourceOutputFileOperation
-from clm.infrastructure.messaging.correlation_ids import (
-    new_correlation_id,
-    note_correlation_id_dependency,
-)
-from clm.infrastructure.messaging.plantuml_classes import PlantUmlPayload
 
 logger = logging.getLogger(__name__)
 

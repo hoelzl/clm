@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.operation import NoOperation
-from clm.infrastructure.utils.file import File
+from clm.core.operation import NoOperation
+from clm.core.utils.file import File
 
 
 class TestFile:

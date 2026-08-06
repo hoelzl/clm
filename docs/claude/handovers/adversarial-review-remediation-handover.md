@@ -1217,9 +1217,15 @@ one PR per step, golden suite green after each.
    slide-text model descent → S6 = A11 import-linter), with edge accounting,
    risks, and four maintainer questions. **Maintainer approved S5 as proposed
    2026-08-06** (slide-text model into core — wanted for future
-   generalization anyway). **S1 DONE 2026-08-06** — leaf vocabulary descents,
-   ratchet 31 → 19 edges over 17 files; the lazy-import canary now pins
-   process_notebook's core→slides entry (survives until S5).
+   generalization anyway). **S1 DONE 2026-08-06** (PR #808) — leaf vocabulary
+   descents, ratchet 31 → 19 edges over 17 files; the lazy-import canary now
+   pins process_notebook's core→slides entry (survives until S5).
+   **S2 DONE 2026-08-06** — contract seam (Operation, Backend ABC,
+   core.messaging payload package, File, copy-data, build_data_classes,
+   build_profiling) descended into core; ratchet 19 → 5 edges over 4 files
+   (exactly the S3/S4/S5 residue). `clm.infrastructure`'s lazy
+   Backend/Operation exports stay as a compatibility surface, now pointing
+   at core.
 4. **A11 — import-linter contract in CI.** Add it as soon as the first contract
    is true, not at the end — each subsequent step then cannot regress.
 5. **A4 — extract build orchestration** from `cli/commands/build.py` (2694 lines;

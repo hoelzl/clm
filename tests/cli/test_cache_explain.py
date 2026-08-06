@@ -132,8 +132,8 @@ class TestCacheExplainSeeded:
     explain and the storing machinery."""
 
     def test_processed_files_hit_reports_replay(self, tmp_path):
+        from clm.core.messaging.notebook_classes import NotebookResult
         from clm.infrastructure.database.db_operations import DatabaseManager
-        from clm.infrastructure.messaging.notebook_classes import NotebookResult
 
         cold = _explain_json(tmp_path)
         artifact = _artifact(cold, "completed:python:en:html")
@@ -165,8 +165,8 @@ class TestCacheExplainSeeded:
         """Mirrors SqliteBackend._can_replay_from_cache: a Recording HTML
         processed_files hit does NOT replay while executed_notebooks is
         cold — the worker runs to repopulate the Stage-4 producer cache."""
+        from clm.core.messaging.notebook_classes import NotebookResult
         from clm.infrastructure.database.db_operations import DatabaseManager
-        from clm.infrastructure.messaging.notebook_classes import NotebookResult
 
         cold = _explain_json(tmp_path)
         artifact = _artifact(cold, "recording:python:en:html")

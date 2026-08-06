@@ -2,7 +2,7 @@ from pathlib import Path
 
 from attrs import define
 
-from clm.infrastructure.operation import Operation
+from clm.core.operation import Operation
 
 
 @define
@@ -22,6 +22,6 @@ class File:
         Returns:
             An Operation (or Concurrently containing multiple operations).
         """
-        from clm.infrastructure.operation import NoOperation
+        from clm.core.operation import NoOperation
 
         return NoOperation()

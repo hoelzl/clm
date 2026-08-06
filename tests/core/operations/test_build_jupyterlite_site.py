@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from clm.core.course_spec import JupyterLiteConfig
+from clm.core.messaging.jupyterlite_classes import JupyterLitePayload
 from clm.core.operations.build_jupyterlite_site import BuildJupyterLiteSiteOperation
-from clm.infrastructure.messaging.jupyterlite_classes import JupyterLitePayload
 
 
 @pytest.fixture

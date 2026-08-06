@@ -9,10 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from clm.core.utils.copy_dir_group_data import CopyDirGroupData
+from clm.core.utils.copy_file_data import CopyFileData
+from clm.core.utils.file import File
 from clm.infrastructure.backends.dummy_backend import DummyBackend
-from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-from clm.infrastructure.utils.copy_file_data import CopyFileData
-from clm.infrastructure.utils.file import File
 
 
 class TestDummyBackend:

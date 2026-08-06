@@ -30,13 +30,13 @@ from unittest.mock import Mock
 import pytest
 from attrs import frozen
 
+from clm.core.messaging.base_classes import Payload, Result
+from clm.core.operation import Operation
+from clm.core.utils.copy_file_data import CopyFileData
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.base_classes import Payload, Result
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 
 class PytestLocalOpsBackend(LocalOpsBackend):
@@ -160,7 +160,7 @@ class TestCopyDirGroupRegistry:
     """PR 2.2c: <dir-group> writes register per-file post-copy."""
 
     async def test_recursive_copy_registers_each_file(self, tmp_path):
-        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+        from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
         src_root = tmp_path / "src"
         (src_root / "sub").mkdir(parents=True)
@@ -192,7 +192,7 @@ class TestCopyDirGroupRegistry:
             assert backend.output_write_registry.total_dedups == 0
 
     async def test_non_recursive_copy_registers_top_level_only(self, tmp_path):
-        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+        from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
         src_root = tmp_path / "src"
         (src_root / "sub").mkdir(parents=True)
@@ -220,7 +220,7 @@ class TestCopyDirGroupRegistry:
         # Image-path writes now go through both registries: ImageRegistry
         # for sweep tracking, OutputWriteRegistry for content-conflict
         # detection at the output destination.
-        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+        from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
         src_root = tmp_path / "src"
         (src_root / "img").mkdir(parents=True)
@@ -247,7 +247,7 @@ class TestCopyDirGroupRegistry:
             assert img_out in backend.image_registry.tracked_paths
 
     async def test_two_overlapping_dir_groups_detect_conflict(self, tmp_path):
-        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+        from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
         src_a = tmp_path / "src_a"
         src_b = tmp_path / "src_b"
@@ -292,7 +292,7 @@ class TestCopyDirGroupRegistry:
         # as if the dir-group had written it. The misattribution showed
         # up as "Multiple writers" warnings naming a phantom source path
         # under the dir-group that did not exist on disk.
-        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+        from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
         src_root = tmp_path / "src"
         src_root.mkdir()
@@ -336,7 +336,7 @@ class TestCopyDirGroupRegistry:
                 assert phantom_entry.last_writer_source != phantom_source
 
     async def test_base_path_files_registered(self, tmp_path):
-        from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+        from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
         base = tmp_path / "base"
         base.mkdir()

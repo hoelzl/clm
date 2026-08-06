@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 from clm.core.course_file import CourseFile
+from clm.core.operation import Concurrently, NoOperation, Operation
 from clm.core.topic import Topic
 from clm.core.utils.execution_utils import (
     FIRST_EXECUTION_STAGE,
@@ -15,7 +16,6 @@ from clm.core.utils.execution_utils import (
 from clm.core.utils.notebook_utils import find_notebook_titles
 from clm.core.utils.path_utils import ext_for, extension_to_prog_lang, output_specs
 from clm.core.utils.text_utils import Text, sanitize_file_name
-from clm.infrastructure.operation import Concurrently, NoOperation, Operation
 
 if TYPE_CHECKING:
     from clm.core.course import Course

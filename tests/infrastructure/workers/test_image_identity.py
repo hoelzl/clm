@@ -2,9 +2,9 @@
 
 import pytest
 
+from clm.core.messaging.drawio_classes import DrawioPayload
+from clm.core.messaging.plantuml_classes import PlantUmlPayload
 from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
-from clm.infrastructure.messaging.drawio_classes import DrawioPayload
-from clm.infrastructure.messaging.plantuml_classes import PlantUmlPayload
 from clm.infrastructure.workers.image_identity import (
     effective_worker_image_identity,
     reset_effective_worker_identities,

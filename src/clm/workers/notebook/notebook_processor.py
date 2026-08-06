@@ -31,8 +31,8 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from nbformat import NotebookNode
 from nbformat.validator import normalize
 
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
 from .output_spec import (
@@ -73,13 +73,13 @@ if TYPE_CHECKING:
         ) -> None: ...
 
 
+from clm.core.messaging.base_classes import ProcessingWarning
 from clm.core.utils.prog_lang_utils import (
     jinja_prefix_for,
     jupytext_format_for,
     kernelspec_for,
     language_info,
 )
-from clm.infrastructure.messaging.base_classes import ProcessingWarning
 from clm.workers.notebook.cpp_code_emitter import emit_cpp_translation_unit
 
 from .utils.jupyter_utils import (

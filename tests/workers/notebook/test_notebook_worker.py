@@ -943,7 +943,7 @@ class TestNotebookWorkerDockerPayloadData:
     )
 
     def _host_payload(self, input_file: Path, output_file: Path):
-        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.core.messaging.notebook_classes import NotebookPayload
 
         return NotebookPayload(
             data=self.MERGED_SLIDE,
@@ -1170,7 +1170,7 @@ class TestNotebookWorkerSourceDirectory:
 
     def test_payload_includes_source_topic_dir_field(self):
         """NotebookPayload should be able to hold source_topic_dir."""
-        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.core.messaging.notebook_classes import NotebookPayload
 
         payload = NotebookPayload(
             data="",
@@ -1189,7 +1189,7 @@ class TestNotebookWorkerSourceDirectory:
 
     def test_payload_source_topic_dir_defaults_to_empty(self):
         """source_topic_dir should default to empty string."""
-        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.core.messaging.notebook_classes import NotebookPayload
 
         payload = NotebookPayload(
             data="",

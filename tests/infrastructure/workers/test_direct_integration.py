@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.pool_manager import WorkerPoolManager
 from clm.infrastructure.workers.worker_executor import WorkerConfig
 

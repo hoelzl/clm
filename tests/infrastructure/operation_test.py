@@ -1,8 +1,8 @@
 import asyncio
 from time import time
 
+from clm.core.operation import Concurrently, Operation, Sequential
 from clm.infrastructure.backends.dummy_backend import DummyBackend
-from clm.infrastructure.operation import Concurrently, Operation, Sequential
 
 NUM_OPERATIONS = 100
 
@@ -99,7 +99,7 @@ def test_concurrency_default_limit():
     """Test that Concurrently uses default limit from environment."""
     import os
 
-    from clm.infrastructure.operation import DEFAULT_MAX_CONCURRENCY
+    from clm.core.operation import DEFAULT_MAX_CONCURRENCY
 
     # Verify default is set
     assert DEFAULT_MAX_CONCURRENCY > 0
@@ -134,7 +134,7 @@ def test_concurrency_unlimited():
 
 def test_no_operation():
     """Test NoOperation execute does nothing."""
-    from clm.infrastructure.operation import NoOperation
+    from clm.core.operation import NoOperation
 
     backend = DummyBackend()
     no_op = NoOperation()
@@ -154,7 +154,7 @@ def test_operation_service_name_default():
 
 def test_no_operation_service_name():
     """Test that NoOperation.service_name returns None."""
-    from clm.infrastructure.operation import NoOperation
+    from clm.core.operation import NoOperation
 
     no_op = NoOperation()
 

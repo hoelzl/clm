@@ -12,7 +12,7 @@ from clm.cli.output_formatter import (
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
-from clm.infrastructure.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clm.core.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.infrastructure.error_categorizer import ErrorCategorizer
 
 
@@ -1280,7 +1280,7 @@ class TestBuildReporterProgressIntegration:
 
     def test_on_progress_update_after_multiple_stages(self):
         """Test on_progress_update callback works across multiple stages."""
-        from clm.infrastructure.build_data_classes import ProgressUpdate
+        from clm.core.build_data_classes import ProgressUpdate
 
         formatter = DefaultOutputFormatter(show_progress=True, use_color=False)
         reporter = BuildReporter(output_formatter=formatter)

@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from attrs import frozen
 
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
 
 
 @frozen
@@ -343,7 +343,7 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         # Should timeout. The typed JobsPendingTimeoutError subclasses
         # TimeoutError, so this assertion keeps matching while the build
         # orchestration can detect the typed variant (issue #143).
-        from clm.infrastructure.backend import JobsPendingTimeoutError
+        from clm.core.backend import JobsPendingTimeoutError
 
         with pytest.raises(JobsPendingTimeoutError, match="did not complete within") as excinfo:
             await backend.wait_for_completion()
@@ -362,7 +362,7 @@ async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_wo
     timeout reaches the build summary instead of silently exiting 0."""
     from unittest.mock import MagicMock
 
-    from clm.infrastructure.backend import JobsPendingTimeoutError
+    from clm.core.backend import JobsPendingTimeoutError
 
     reporter = MagicMock()
     backend = SqliteBackend(
@@ -486,7 +486,7 @@ async def test_sqlite_cache_bypassed_when_ignore_db_true(temp_db, temp_workspace
 @pytest.mark.asyncio
 async def test_database_cache_hit(temp_db, temp_workspace):
     """Test that database manager cache prevents job submission."""
-    from clm.infrastructure.messaging.base_classes import Result
+    from clm.core.messaging.base_classes import Result
 
     # Mock result class
     class MockResult(Result):
@@ -686,8 +686,8 @@ async def test_job_not_found_in_database(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_copy_dir_group_reports_warnings_to_build_reporter(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output reports warnings to build_reporter."""
-    from clm.infrastructure.build_data_classes import BuildWarning
-    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.core.build_data_classes import BuildWarning
+    from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
     # Create mock build reporter
     mock_reporter = Mock()
@@ -729,7 +729,7 @@ async def test_copy_dir_group_reports_warnings_to_build_reporter(temp_db, temp_w
 @pytest.mark.asyncio
 async def test_copy_dir_group_without_build_reporter(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output works without build_reporter."""
-    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -760,7 +760,7 @@ async def test_copy_dir_group_without_build_reporter(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_copy_dir_group_successful_copy_no_warnings(temp_db, temp_workspace):
     """Test that copy_dir_group_to_output returns empty list on success."""
-    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
     # Create mock build reporter
     mock_reporter = Mock()
@@ -803,7 +803,7 @@ async def test_copy_dir_group_successful_copy_no_warnings(temp_db, temp_workspac
 @pytest.mark.asyncio
 async def test_incremental_mode_skips_writing_cached_results(temp_db, temp_workspace):
     """Test that incremental mode skips writing cached results to disk."""
-    from clm.infrastructure.messaging.base_classes import Result
+    from clm.core.messaging.base_classes import Result
 
     # Mock result class
     class MockResult(Result):
@@ -856,7 +856,7 @@ async def test_incremental_mode_skips_writing_cached_results(temp_db, temp_works
 @pytest.mark.asyncio
 async def test_non_incremental_mode_writes_cached_results(temp_db, temp_workspace):
     """Test that non-incremental mode writes cached results to disk (baseline)."""
-    from clm.infrastructure.messaging.base_classes import Result
+    from clm.core.messaging.base_classes import Result
 
     # Mock result class
     class MockResult(Result):
@@ -910,7 +910,7 @@ async def test_non_incremental_mode_writes_cached_results(temp_db, temp_workspac
 @pytest.mark.asyncio
 async def test_incremental_copy_file_skips_existing(temp_db, temp_workspace):
     """Test that incremental mode skips copying files that already exist."""
-    from clm.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.core.utils.copy_file_data import CopyFileData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -944,7 +944,7 @@ async def test_incremental_copy_file_skips_existing(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_incremental_copy_file_copies_missing(temp_db, temp_workspace):
     """Test that incremental mode copies files that don't exist yet."""
-    from clm.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.core.utils.copy_file_data import CopyFileData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -978,7 +978,7 @@ async def test_incremental_copy_file_copies_missing(temp_db, temp_workspace):
 @pytest.mark.asyncio
 async def test_non_incremental_copy_file_always_copies(temp_db, temp_workspace):
     """Test that non-incremental mode always copies files."""
-    from clm.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.core.utils.copy_file_data import CopyFileData
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -1047,7 +1047,7 @@ def temp_cache_db():
 
 def _make_recording_html_payload(input_file: str = "test.py") -> "object":
     """Build a minimal NotebookPayload for Recording HTML."""
-    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+    from clm.core.messaging.notebook_classes import NotebookPayload
 
     return NotebookPayload(
         data="x = 1",
@@ -1081,7 +1081,7 @@ async def test_recording_html_cache_replay_blocked_when_executed_notebooks_cold(
     forced to re-execute the notebook. The guard must detect the cold
     execution cache and skip the short-circuit.
     """
-    from clm.infrastructure.messaging.base_classes import Result
+    from clm.core.messaging.base_classes import Result
 
     class MockResult(Result):
         data: bytes = b"<html>cached</html>"
@@ -1216,7 +1216,7 @@ async def test_recording_html_cold_exec_cache_forces_worker_past_jobcache(
     re-executing), and the job-cache probe is suppressed rather than
     short-circuiting the run with ``jobcache_hit``.
     """
-    from clm.infrastructure.messaging.base_classes import Result
+    from clm.core.messaging.base_classes import Result
 
     class MockResult(Result):
         data: bytes = b"<html>cached</html>"
@@ -1275,8 +1275,8 @@ async def test_recording_html_cache_replay_proceeds_when_executed_notebooks_warm
     """Recording HTML must short-circuit when executed_notebooks has the entry."""
     from nbformat.v4 import new_code_cell, new_notebook
 
+    from clm.core.messaging.base_classes import Result
     from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
-    from clm.infrastructure.messaging.base_classes import Result
 
     class MockResult(Result):
         data: bytes = b"<html>cached</html>"
@@ -1340,8 +1340,8 @@ async def test_completed_html_cache_replay_proceeds_without_executed_notebooks_p
     Its processed_files entry already represents a finalized HTML output
     that is safe to replay regardless of executed_notebooks state.
     """
-    from clm.infrastructure.messaging.base_classes import Result
-    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+    from clm.core.messaging.base_classes import Result
+    from clm.core.messaging.notebook_classes import NotebookPayload
 
     class MockResult(Result):
         data: bytes = b"<html>completed</html>"
@@ -1400,7 +1400,7 @@ async def test_non_notebook_payload_cache_replay_proceeds(temp_db, temp_workspac
     The executed_notebooks invariant is a notebook-worker concern only;
     image converter payloads must keep using the existing fast path.
     """
-    from clm.infrastructure.messaging.base_classes import Result
+    from clm.core.messaging.base_classes import Result
 
     class MockResult(Result):
         data: bytes = b"<png-bytes>"
@@ -1457,8 +1457,8 @@ async def test_speaker_alias_triggers_executed_notebooks_check(
     spec parsing normalizes it to 'recording'. The guard handles both names
     so any code path that bypasses normalization still gets the invariant.
     """
-    from clm.infrastructure.messaging.base_classes import Result
-    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+    from clm.core.messaging.base_classes import Result
+    from clm.core.messaging.notebook_classes import NotebookPayload
 
     class MockResult(Result):
         data: bytes = b"<html>cached</html>"

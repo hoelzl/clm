@@ -6,6 +6,8 @@ import pytest
 
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Concurrently, NoOperation, Operation
 from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
@@ -15,8 +17,6 @@ from clm.core.utils.execution_utils import (
 )
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Concurrently, NoOperation, Operation
 
 # DATA_DIR is defined in tests/conftest.py and available as a fixture
 # For direct use, we compute it here

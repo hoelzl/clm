@@ -4,13 +4,13 @@ from pathlib import Path
 
 from attrs import define
 
-from clm.infrastructure.backend import Backend
-from clm.infrastructure.build_data_classes import BuildWarning
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-from clm.infrastructure.utils.copy_file_data import CopyFileData
-from clm.infrastructure.utils.file import File
+from clm.core.backend import Backend
+from clm.core.build_data_classes import BuildWarning
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
+from clm.core.utils.copy_dir_group_data import CopyDirGroupData
+from clm.core.utils.copy_file_data import CopyFileData
+from clm.core.utils.file import File
 
 logger = logging.getLogger(__name__)
 

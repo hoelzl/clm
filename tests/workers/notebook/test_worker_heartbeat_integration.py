@@ -25,9 +25,9 @@ from unittest.mock import MagicMock
 import pytest
 from nbformat.v4 import new_code_cell, new_notebook
 
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook.notebook_processor import (
     NotebookProcessor,
     TrackingExecutePreprocessor,

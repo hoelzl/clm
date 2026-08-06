@@ -16,27 +16,27 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from attrs import define, field
 
+from clm.core.backend import JobsPendingTimeoutError
+from clm.core.build_profiling import now as profiler_now
+from clm.core.build_profiling import profiler
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 from clm.core.output_write_registry import (
     WriteOutcome,
     is_image_path,
 )
-from clm.infrastructure.backend import JobsPendingTimeoutError
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clm.infrastructure.build_profiling import now as profiler_now
-from clm.infrastructure.build_profiling import profiler
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
 from clm.infrastructure.utils.path_utils import atomic_write_bytes
 from clm.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 if TYPE_CHECKING:
-    from clm.infrastructure.build_data_classes import BuildReporterProtocol, BuildWarning
+    from clm.core.build_data_classes import BuildReporterProtocol, BuildWarning
+    from clm.core.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.core.utils.copy_file_data import CopyFileData
     from clm.infrastructure.database.execution_telemetry import ExecutionTelemetryStore
-    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-    from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 logger = logging.getLogger(__name__)
 
@@ -601,7 +601,7 @@ class SqliteBackend(LocalOpsBackend):
         return ``True`` unconditionally — the existing fast path is
         preserved for them.
         """
-        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+        from clm.core.messaging.notebook_classes import NotebookPayload
 
         if not isinstance(payload, NotebookPayload):
             return True
@@ -1037,7 +1037,7 @@ class SqliteBackend(LocalOpsBackend):
         if not self.build_reporter:
             return
 
-        from clm.infrastructure.build_data_classes import BuildError
+        from clm.core.build_data_classes import BuildError
 
         for job_info in self.active_jobs.values():
             input_file = str(job_info.get("input_file", "unknown"))
@@ -1414,7 +1414,7 @@ class SqliteBackend(LocalOpsBackend):
             # ``"('completed', 'python', ...)"`` while lookups used
             # ``"completed:python:..."``, silently disabling cached-issue
             # replay for ALL notebook jobs (issue #321).
-            from clm.infrastructure.messaging.notebook_classes import (
+            from clm.core.messaging.notebook_classes import (
                 notebook_metadata,
                 notebook_metadata_tags_from_payload,
             )
@@ -1575,8 +1575,8 @@ class SqliteBackend(LocalOpsBackend):
             if not row:
                 return
 
-            from clm.infrastructure.messaging.base_classes import ImageResult, Result
-            from clm.infrastructure.messaging.notebook_classes import (
+            from clm.core.messaging.base_classes import ImageResult, Result
+            from clm.core.messaging.notebook_classes import (
                 NotebookResult,
                 notebook_metadata_tags_from_payload,
             )
@@ -1737,7 +1737,7 @@ class SqliteBackend(LocalOpsBackend):
             logger.debug(f"Job {job_id} completed with {len(warnings_data)} warning(s)")
 
             # Import required classes
-            from clm.infrastructure.build_data_classes import BuildWarning
+            from clm.core.build_data_classes import BuildWarning
 
             # Parse payload for output_metadata
             payload_dict = json.loads(payload_json) if payload_json else {}
@@ -1843,7 +1843,7 @@ class SqliteBackend(LocalOpsBackend):
         Returns:
             List of BuildWarning objects for any issues encountered.
         """
-        from clm.infrastructure.build_data_classes import BuildWarning
+        from clm.core.build_data_classes import BuildWarning
 
         warnings: list[BuildWarning] = await super().copy_dir_group_to_output(copy_data)
 

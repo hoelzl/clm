@@ -16,8 +16,8 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.course.renumber import renumber_cmd
+from clm.core.messaging.base_classes import Result
 from clm.infrastructure.database.db_operations import DatabaseManager
-from clm.infrastructure.messaging.base_classes import Result
 
 _META = "completed:python:en:html"
 

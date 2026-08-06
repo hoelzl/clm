@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 from clm.core.course_file import CourseFile
+from clm.core.operation import Concurrently, NoOperation, Operation
 from clm.core.utils.execution_utils import LAST_EXECUTION_STAGE
 from clm.core.utils.path_utils import is_ignored_file_for_output, output_specs
-from clm.infrastructure.operation import Concurrently, NoOperation, Operation
 
 if TYPE_CHECKING:
     from clm.core.output_target import OutputTarget

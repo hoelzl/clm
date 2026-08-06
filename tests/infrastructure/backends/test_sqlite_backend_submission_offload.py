@@ -23,14 +23,14 @@ from unittest.mock import patch
 
 import pytest
 
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 from clm.infrastructure.backends.sqlite_backend import (
     SUBMISSION_CONCURRENCY,
     SqliteBackend,
 )
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
 
 
 class _MockOperation(Operation):

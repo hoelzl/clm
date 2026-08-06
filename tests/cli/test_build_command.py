@@ -49,8 +49,8 @@ from clm.cli.output_formatter import (
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
+from clm.core.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.core.course_spec import CourseSpecError
-from clm.infrastructure.build_data_classes import BuildError, BuildSummary, BuildWarning
 
 # ---------------------------------------------------------------------------
 # Factories

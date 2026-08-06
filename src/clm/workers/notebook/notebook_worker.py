@@ -14,13 +14,13 @@ import logging
 import os
 from pathlib import Path
 
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.api.api_executed_notebook_cache import ApiExecutedNotebookCache
 from clm.infrastructure.api.client import WorkerApiClient
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.worker_base import Worker
 from clm.workers.notebook.notebook_processor import NotebookProcessor
 from clm.workers.notebook.output_spec import create_output_spec

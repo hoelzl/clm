@@ -2,12 +2,9 @@ import logging
 
 from attrs import frozen
 
+from clm.core.messaging.correlation_ids import new_correlation_id, note_correlation_id_dependency
+from clm.core.messaging.drawio_classes import DrawioPayload
 from clm.core.operations.convert_source_output_file import ConvertSourceOutputFileOperation
-from clm.infrastructure.messaging.correlation_ids import (
-    new_correlation_id,
-    note_correlation_id_dependency,
-)
-from clm.infrastructure.messaging.drawio_classes import DrawioPayload
 
 logger = logging.getLogger(__name__)
 
