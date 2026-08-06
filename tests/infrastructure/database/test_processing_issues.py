@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.build_data_classes import BuildError, BuildWarning
+from clm.core.build_data_classes import BuildError, BuildWarning
 from clm.infrastructure.database.db_operations import DatabaseManager
 
 

@@ -23,7 +23,7 @@ from rich.progress import (
 )
 
 from clm.cli.text_utils import format_error_path
-from clm.infrastructure.build_data_classes import BuildError, BuildSummary, BuildWarning
+from clm.core.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.infrastructure.utils.text_utils import strip_ansi
 
 

@@ -437,7 +437,7 @@ async def _render_speaker_cells(data: str) -> list[tuple[str, str]]:
     """Expand j2 + process a deck through SpeakerOutput WITHOUT a kernel, and
     return ``(cell_type, source)`` pairs — the rendered notebook the worker
     would produce (slide_id / for_slide stripped, macros expanded)."""
-    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+    from clm.core.messaging.notebook_classes import NotebookPayload
     from clm.workers.notebook.notebook_processor import NotebookProcessor
     from clm.workers.notebook.output_spec import SpeakerOutput
 

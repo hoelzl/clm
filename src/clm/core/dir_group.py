@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING
 from attrs import evolve, frozen
 
 from clm.core.course_spec import DirGroupSpec
+from clm.core.operation import Operation
 from clm.core.utils.path_utils import output_path_for
 from clm.core.utils.text_utils import Text
-from clm.infrastructure.operation import Operation
 
 if TYPE_CHECKING:
     from clm.core.course import Course
@@ -181,8 +181,8 @@ class DirGroup:
                            dir-groups that overlap in a single <subdir>
                            (issue #539).
         """
+        from clm.core.operation import Concurrently, NoOperation
         from clm.core.operations.copy_dir_group import CopyDirGroupOperation
-        from clm.infrastructure.operation import Concurrently, NoOperation
 
         # Default to all languages if not specified
         langs_to_copy = languages if languages is not None else frozenset({"de", "en"})

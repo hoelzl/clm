@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from attrs import define
 
 from clm.core.course_files.image_file import ImageFile
-from clm.infrastructure.operation import Operation
+from clm.core.operation import Operation
 
 if TYPE_CHECKING:
     from clm.core.output_target import OutputTarget
@@ -25,7 +25,7 @@ class DrawIoFile(ImageFile):
 
         # DrawIoFile runs in FIRST_EXECUTION_STAGE (default), return NoOperation for other stages
         if stage is not None and stage != self.execution_stage:
-            from clm.infrastructure.operation import NoOperation
+            from clm.core.operation import NoOperation
 
             return NoOperation()
 

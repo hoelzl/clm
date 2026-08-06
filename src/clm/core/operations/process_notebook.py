@@ -9,7 +9,12 @@ from typing import Any
 
 from attrs import frozen
 
+from clm.core.build_profiling import now as profiler_now
+from clm.core.build_profiling import profiler
 from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.messaging.correlation_ids import new_correlation_id, note_correlation_id_dependency
+from clm.core.messaging.notebook_classes import NotebookPayload
+from clm.core.operation import Operation
 from clm.core.utils.path_utils import (
     is_ignored_file_for_output,
     is_image_file,
@@ -17,14 +22,6 @@ from clm.core.utils.path_utils import (
     output_path_for,
     relative_path_to_course_img,
 )
-from clm.infrastructure.build_profiling import now as profiler_now
-from clm.infrastructure.build_profiling import profiler
-from clm.infrastructure.messaging.correlation_ids import (
-    new_correlation_id,
-    note_correlation_id_dependency,
-)
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
-from clm.infrastructure.operation import Operation
 
 # Re-exported for existing callers/tests; the canonical home is the
 # infrastructure module so the diagram operations and the build's
@@ -177,7 +174,7 @@ def report_voiceover_merge_issues(
     """
     if build_reporter is None or not unmatched:
         return
-    from clm.infrastructure.build_data_classes import BuildError
+    from clm.core.build_data_classes import BuildError
 
     for for_slide in unmatched:
         target = "(cell has no for_slide)" if for_slide == "<no for_slide>" else repr(for_slide)

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from clm.cli.output_formatter import OutputFormatter
-from clm.infrastructure.build_data_classes import (
+from clm.core.build_data_classes import (
     BuildError,
     BuildSummary,
     BuildWarning,

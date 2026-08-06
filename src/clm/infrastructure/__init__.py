@@ -7,17 +7,18 @@ including backend implementations, job queues, messaging, and worker management.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clm.infrastructure.backend import Backend
-    from clm.infrastructure.operation import Operation
+    from clm.core.backend import Backend
+    from clm.core.operation import Operation
 
 # Convenience exports, resolved lazily (PEP 562) so that importing
 # lightweight submodules (e.g. ``clm.infrastructure.logging``) does not
-# pull in the backend/job-queue stack — and so that the circular chain
-# backend -> clm.core -> course_file -> operation -> backend cannot
-# trigger at package-init time.
+# pull in the backend/job-queue stack. The Backend/Operation contracts
+# moved to clm.core (Phase 8 S2, #802); the names stay importable from
+# clm.infrastructure as a compatibility surface (pinned by
+# tests/cli/test_cli_startup.py::TestLazyExportsCompatibility).
 _LAZY_EXPORTS = {
-    "Backend": ("clm.infrastructure.backend", "Backend"),
-    "Operation": ("clm.infrastructure.operation", "Operation"),
+    "Backend": ("clm.core.backend", "Backend"),
+    "Operation": ("clm.core.operation", "Operation"),
 }
 
 __all__ = [

@@ -4,10 +4,10 @@ from typing import Any
 
 from attrs import frozen
 
+from clm.core.backend import Backend
 from clm.core.dir_group import DirGroup
-from clm.infrastructure.backend import Backend
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+from clm.core.operation import Operation
+from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
 logger = logging.getLogger(__name__)
 

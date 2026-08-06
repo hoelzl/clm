@@ -20,7 +20,7 @@ from clm.cli.output_formatter import (
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
-from clm.infrastructure.build_data_classes import BuildSummary
+from clm.core.build_data_classes import BuildSummary
 
 
 def _reporter() -> BuildReporter:

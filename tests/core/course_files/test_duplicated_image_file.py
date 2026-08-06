@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
+from clm.core.operation import Concurrently, NoOperation
 from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
 )
-from clm.infrastructure.operation import Concurrently, NoOperation
 
 
 class TestDuplicatedImageFile:

@@ -14,8 +14,8 @@ from pathlib import Path
 
 from clm.cli.build_reporter import BuildReporter
 from clm.cli.output_formatter import QuietOutputFormatter
+from clm.core.build_data_classes import BuildSummary
 from clm.core.output_write_registry import OutputWriteRegistry
-from clm.infrastructure.build_data_classes import BuildSummary
 
 
 def _make_reporter() -> BuildReporter:
@@ -190,7 +190,7 @@ class TestJsonFormatterIncludesOutputKeys:
 
     def test_json_formatter_emits_conflict_records(self, tmp_path, capsys):
         from clm.cli.output_formatter import JSONOutputFormatter
-        from clm.infrastructure.build_data_classes import OutputConflictInfo
+        from clm.core.build_data_classes import OutputConflictInfo
 
         formatter = JSONOutputFormatter()
         formatter.show_build_start("test", total_files=0, output_dirs=[])

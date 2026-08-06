@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
+from clm.core.messaging.base_classes import Result
 from clm.infrastructure.database.db_operations import DatabaseManager
-from clm.infrastructure.messaging.base_classes import Result
 
 
 # Assuming Result class structure. Adjust as necessary.

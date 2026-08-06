@@ -11,12 +11,12 @@ from clm.core.image_registry import ImageRegistry
 from clm.core.output_write_registry import OutputWriteRegistry
 
 if TYPE_CHECKING:
-    from clm.infrastructure.build_data_classes import BuildWarning
-    from clm.infrastructure.messaging.base_classes import Payload
-    from clm.infrastructure.operation import Operation
-    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-    from clm.infrastructure.utils.copy_file_data import CopyFileData
-    from clm.infrastructure.utils.file import File
+    from clm.core.build_data_classes import BuildWarning
+    from clm.core.messaging.base_classes import Payload
+    from clm.core.operation import Operation
+    from clm.core.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.core.utils.copy_file_data import CopyFileData
+    from clm.core.utils.file import File
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class JobsPendingTimeoutError(TimeoutError):
     the build orchestration a typed signal that the build did *not*
     complete and must exit non-zero (issue #143, sub-bug A). The pending
     job descriptors are attached so the orchestration can record one
-    infrastructure :class:`~clm.infrastructure.build_data_classes.BuildError` per
+    infrastructure :class:`~clm.core.build_data_classes.BuildError` per
     stuck job in the build summary.
     """
 

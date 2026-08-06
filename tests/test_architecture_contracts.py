@@ -100,25 +100,15 @@ def _current_violations() -> set[str]:
 #: vocabulary (prog-lang tables + comment tokens, tags, workshop scope,
 #: sidecar layout, deck markers, companion paths, replay trace, jupyterlite
 #: manifest, diagram-tool locators, C++ analysis/emission) → 19 edges over
-#: 17 files.
+#: 17 files. S2 descended the contract seam (Operation hierarchy, Backend
+#: ABC, the messaging/payload package, File, copy-data, build_data_classes,
+#: build_profiling) into clm.core → 5 edges over 4 files: the worker-image
+#: identity reads (S4), the payload-time voiceover merge (S5), and the
+#: cassette staging methods on Course (S3).
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
-        "core -> infrastructure: core/course.py",
-        "core -> infrastructure: core/course_file.py",
-        "core -> infrastructure: core/course_files/data_file.py",
-        "core -> infrastructure: core/course_files/drawio_file.py",
-        "core -> infrastructure: core/course_files/duplicated_image_file.py",
-        "core -> infrastructure: core/course_files/notebook_file.py",
-        "core -> infrastructure: core/course_files/plantuml_file.py",
-        "core -> infrastructure: core/course_files/shared_image_file.py",
-        "core -> infrastructure: core/dir_group.py",
-        "core -> infrastructure: core/operations/build_jupyterlite_site.py",
         "core -> infrastructure: core/operations/convert_drawio_file.py",
         "core -> infrastructure: core/operations/convert_plantuml_file.py",
-        "core -> infrastructure: core/operations/convert_source_output_file.py",
-        "core -> infrastructure: core/operations/copy_dir_group.py",
-        "core -> infrastructure: core/operations/copy_file.py",
-        "core -> infrastructure: core/operations/delete_file.py",
         "core -> infrastructure: core/operations/process_notebook.py",
         "core -> slides: core/operations/process_notebook.py",
         "core -> workers: core/course.py",
@@ -204,7 +194,7 @@ class TestBackendContract:
     )
 
     def test_abstract_surface_is_exactly_the_contract(self):
-        from clm.infrastructure.backend import Backend
+        from clm.core.backend import Backend
 
         assert frozenset(Backend.__abstractmethods__) == self.EXPECTED_ABSTRACT, (
             "the Backend contract changed — update every implementation AND "
@@ -217,7 +207,7 @@ class TestBackendContract:
         base that leaves exactly the dispatch pair abstract (the e2e tests
         subclass it to fill them in). Phase 8's A11 step flattens this —
         which will fail this pin, deliberately."""
-        from clm.infrastructure.backend import Backend
+        from clm.core.backend import Backend
         from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
         from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 
@@ -287,11 +277,11 @@ class TestWorkerPayloadContract:
     }
 
     def test_payload_schemas_are_pinned(self):
-        from clm.infrastructure.messaging.base_classes import ImagePayload, Payload
-        from clm.infrastructure.messaging.drawio_classes import DrawioPayload
-        from clm.infrastructure.messaging.jupyterlite_classes import JupyterLitePayload
-        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
-        from clm.infrastructure.messaging.plantuml_classes import PlantUmlPayload
+        from clm.core.messaging.base_classes import ImagePayload, Payload
+        from clm.core.messaging.drawio_classes import DrawioPayload
+        from clm.core.messaging.jupyterlite_classes import JupyterLitePayload
+        from clm.core.messaging.notebook_classes import NotebookPayload
+        from clm.core.messaging.plantuml_classes import PlantUmlPayload
 
         assert frozenset(Payload.model_fields) == self.BASE_FIELDS
         assert frozenset(ImagePayload.model_fields) == self.IMAGE_FIELDS

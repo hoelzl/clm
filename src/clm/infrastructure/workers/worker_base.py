@@ -25,8 +25,8 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
+from clm.core.messaging.base_classes import ProcessingWarning
 from clm.infrastructure.database.job_queue import Job, JobQueue
-from clm.infrastructure.messaging.base_classes import ProcessingWarning
 
 if TYPE_CHECKING:
     pass

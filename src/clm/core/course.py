@@ -36,11 +36,13 @@ from typing import TYPE_CHECKING
 
 from attrs import Factory, define, field
 
+from clm.core.backend import Backend
 from clm.core.course_file import CourseFile
 from clm.core.course_spec import CourseSpec, SectionSelection
 from clm.core.dir_group import DirGroup
 from clm.core.execution_dependencies import ExecutionDependencyResolver
 from clm.core.image_registry import ImageRegistry
+from clm.core.operation import NoOperation
 from clm.core.output_target import OutputTarget
 from clm.core.section import Section
 from clm.core.topic import ResolvedInclude, Topic
@@ -48,12 +50,10 @@ from clm.core.utils.execution_utils import (
     HTML_SPEAKER_STAGE,
     execution_stages,
 )
+from clm.core.utils.file import File
 from clm.core.utils.notebook_mixin import NotebookMixin
 from clm.core.utils.path_utils import is_image_file, is_in_dir
 from clm.core.utils.text_utils import Text
-from clm.infrastructure.backend import Backend
-from clm.infrastructure.operation import NoOperation
-from clm.infrastructure.utils.file import File
 
 if TYPE_CHECKING:
     from clm.core.cross_references import CrossReferenceResolver
@@ -751,7 +751,7 @@ class Course(NotebookMixin):
         Returns:
             Number of worker jobs that will be submitted for this stage
         """
-        from clm.infrastructure.operation import Concurrently, NoOperation
+        from clm.core.operation import Concurrently, NoOperation
 
         def count_worker_ops(op):
             """Count operations that will submit jobs to workers."""

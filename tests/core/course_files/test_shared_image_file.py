@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from clm.core.course_files.shared_image_file import SharedImageFile
+from clm.core.operation import Concurrently, NoOperation
 from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
 )
-from clm.infrastructure.operation import Concurrently, NoOperation
 
 
 class TestSharedImageFile:

@@ -15,7 +15,7 @@ from nbclient.exceptions import CellExecutionError, CellTimeoutError, DeadKernel
 from nbformat import NotebookNode
 
 import clm.workers.notebook.notebook_processor as np_module
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook.notebook_processor import (
     CellContext,
     NotebookProcessor,

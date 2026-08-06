@@ -24,8 +24,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from nbformat import NotebookNode
 
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.error_categorizer import ErrorCategorizer
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook.notebook_processor import (
     CellContext,
     NotebookProcessor,

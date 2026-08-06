@@ -2,7 +2,7 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from clm.infrastructure.messaging.base_classes import Payload, ProcessingError, Result
+from clm.core.messaging.base_classes import Payload, ProcessingError, Result
 
 # Version tag folded into every notebook cache hash. Bump whenever the
 # *composition* of ``content_hash()`` / ``execution_cache_hash()`` changes —

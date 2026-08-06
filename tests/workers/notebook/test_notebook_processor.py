@@ -22,7 +22,7 @@ import psutil
 import pytest
 from nbformat import NotebookNode
 
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook import notebook_processor as notebook_processor_module
 from clm.workers.notebook.notebook_processor import (
     CellIdGenerator,

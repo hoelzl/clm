@@ -113,10 +113,10 @@ for _color_var in ("FORCE_COLOR", "CLICOLOR_FORCE"):
     os.environ.pop(_color_var, None)
 
 from clm.core.course_spec import TopicSpec
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
 
 if TYPE_CHECKING:
     from clm.core.course import Course

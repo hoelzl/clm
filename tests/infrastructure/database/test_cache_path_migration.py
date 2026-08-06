@@ -15,7 +15,8 @@ import sqlite3
 import pytest
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
-from clm.infrastructure.build_data_classes import BuildError, BuildWarning
+from clm.core.build_data_classes import BuildError, BuildWarning
+from clm.core.messaging.base_classes import Result
 from clm.infrastructure.database.cache_path_migration import (
     PathMapping,
     migrate_cache_paths,
@@ -24,7 +25,6 @@ from clm.infrastructure.database.cache_path_migration import (
 )
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
-from clm.infrastructure.messaging.base_classes import Result
 
 _META = "completed:python:en:html"
 

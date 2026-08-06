@@ -18,7 +18,7 @@ _HEAVY_MODULES = (
     "clm.core.course",
     "clm.core.course_spec",
     "clm.infrastructure.backends.sqlite_backend",
-    "clm.infrastructure.messaging.base_classes",
+    "clm.core.messaging.base_classes",
     "clm.cli.commands.build",
     "clm.cli.commands.slides",
     "clm.slides",

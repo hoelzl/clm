@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from clm.infrastructure.messaging.base_classes import Payload, Result
+from clm.core.messaging.base_classes import Payload, Result
 
 
 class JupyterLitePayload(Payload):

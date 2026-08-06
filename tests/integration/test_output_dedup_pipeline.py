@@ -20,13 +20,13 @@ from pathlib import Path
 
 from clm.cli.build_reporter import BuildReporter
 from clm.cli.output_formatter import JSONOutputFormatter, QuietOutputFormatter
+from clm.core.build_data_classes import BuildSummary
 from clm.core.image_registry import ImageRegistry
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 from clm.core.output_write_registry import OutputWriteRegistry
+from clm.core.utils.copy_file_data import CopyFileData
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clm.infrastructure.build_data_classes import BuildSummary
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 
 class PytestLocalOpsBackend(LocalOpsBackend):

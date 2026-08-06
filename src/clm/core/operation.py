@@ -5,7 +5,7 @@ from collections.abc import Iterable
 
 from attrs import field, frozen
 
-from clm.infrastructure.backend import Backend
+from clm.core.backend import Backend
 
 # Default concurrency limit for Concurrently operations
 # This prevents resource exhaustion on Windows and other platforms

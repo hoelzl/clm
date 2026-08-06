@@ -6,7 +6,7 @@ from time import time
 
 from attrs import define, field
 
-from clm.infrastructure.messaging.notebook_classes import NotebookPayload, NotebookResult
+from clm.core.messaging.notebook_classes import NotebookPayload, NotebookResult
 
 logger = logging.getLogger(__name__)
 

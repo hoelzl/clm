@@ -34,12 +34,12 @@ from unittest.mock import Mock
 import pytest
 from attrs import frozen
 
+from clm.core.messaging.base_classes import Payload, Result
+from clm.core.operation import Operation
+from clm.core.utils.copy_file_data import CopyFileData
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.base_classes import Payload, Result
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 
 class _Backend(LocalOpsBackend):

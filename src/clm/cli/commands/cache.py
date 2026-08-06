@@ -203,8 +203,8 @@ def _verdict(artifact: dict[str, Any]) -> str:
 
 def _unwrap_operations(op) -> list:
     """Flatten the Operation tree get_processing_operation returns."""
+    from clm.core.operation import Concurrently
     from clm.core.operations.process_notebook import ProcessNotebookOperation
-    from clm.infrastructure.operation import Concurrently
 
     if isinstance(op, ProcessNotebookOperation):
         return [op]
@@ -317,9 +317,7 @@ def explain_cmd(
     from clm.core.course_files.notebook_file import NotebookFile
     from clm.core.course_paths import resolve_course_paths
     from clm.core.course_spec import CourseSpec, CourseSpecError
-    from clm.infrastructure.messaging.notebook_classes import (
-        CACHE_HASH_SCHEMA_VERSION,
-    )
+    from clm.core.messaging.notebook_classes import CACHE_HASH_SCHEMA_VERSION
 
     cache_db: Path = ctx.obj["CACHE_DB_PATH"]
     jobs_db: Path = ctx.obj["JOBS_DB_PATH"]

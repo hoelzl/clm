@@ -228,7 +228,7 @@ def _collect_operations(course: Course) -> list[_OpKey]:
     """Synchronously walk every NotebookFile and capture its operations."""
     import asyncio
 
-    from clm.infrastructure.operation import Concurrently, NoOperation
+    from clm.core.operation import Concurrently, NoOperation
 
     keys: list[_OpKey] = []
     for nbfile in (f for f in course.files if isinstance(f, NotebookFile)):
@@ -298,7 +298,7 @@ class TestOperationParity:
 
         import asyncio
 
-        from clm.infrastructure.operation import Concurrently
+        from clm.core.operation import Concurrently
 
         target = course.output_targets[0]
         de_op = asyncio.run(de_file.get_processing_operation(target.output_root, target=target))

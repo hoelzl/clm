@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
+from clm.core.utils.copy_dir_group_data import CopyDirGroupData
+from clm.core.utils.copy_file_data import CopyFileData
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
-from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
-from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 
 class ConcreteLocalOpsBackend(LocalOpsBackend):
@@ -464,7 +464,7 @@ class TestDeleteDependencies:
     @pytest.mark.asyncio
     async def test_delete_dependencies_non_course_file(self, tmp_path):
         """Should handle non-CourseFile gracefully."""
-        from clm.infrastructure.utils.file import File
+        from clm.core.utils.file import File
 
         # Create a simple File mock (not a CourseFile)
         mock_file = MagicMock(spec=File)

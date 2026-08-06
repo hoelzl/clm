@@ -5,7 +5,7 @@ from pathlib import Path
 from attrs import frozen
 
 from clm.core.course_file import CourseFile
-from clm.infrastructure.operation import Operation
+from clm.core.operation import Operation
 
 logger = logging.getLogger(__name__)
 

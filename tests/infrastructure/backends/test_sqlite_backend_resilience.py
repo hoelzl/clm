@@ -32,13 +32,13 @@ from unittest.mock import patch
 import pytest
 from attrs import frozen
 
+from clm.core.build_data_classes import BuildError
+from clm.core.messaging.base_classes import Payload
+from clm.core.operation import Operation
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
-from clm.infrastructure.build_data_classes import BuildError
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -874,7 +874,7 @@ async def test_report_cached_issues_reports_stored_errors_and_warnings(
     backend.db_manager = DatabaseManager(cache_db)
     backend.db_manager.__enter__()
     try:
-        from clm.infrastructure.build_data_classes import BuildWarning
+        from clm.core.build_data_classes import BuildWarning
 
         backend.db_manager.store_error(
             file_path="f.py",
@@ -917,7 +917,7 @@ async def test_copy_dir_group_forwards_warnings_to_reporter(temp_db, temp_worksp
 
     Exercised by pointing the dir group at a non-existent source dir.
     """
-    from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
+    from clm.core.utils.copy_dir_group_data import CopyDirGroupData
 
     backend = _backend(temp_db, temp_workspace, build_reporter=_StubReporter())
     try:
@@ -945,7 +945,7 @@ async def test_copy_dir_group_forwards_warnings_to_reporter(temp_db, temp_worksp
 
 @pytest.mark.asyncio
 async def test_incremental_copy_skips_existing_output(temp_db, temp_workspace, tmp_path):
-    from clm.infrastructure.utils.copy_file_data import CopyFileData
+    from clm.core.utils.copy_file_data import CopyFileData
 
     src = tmp_path / "src.txt"
     src.write_text("hello")
@@ -983,7 +983,7 @@ async def test_results_cache_hit_replays_stored_issues(temp_db, temp_workspace, 
     hit (e.g. after retention pruned the processed_files entry) returned
     early and the build went silently green.
     """
-    from clm.infrastructure.build_data_classes import BuildWarning
+    from clm.core.build_data_classes import BuildWarning
 
     cache_db = tmp_path / "cache.db"
     backend = _backend(temp_db, temp_workspace, build_reporter=_StubReporter())
@@ -1094,7 +1094,7 @@ async def test_stored_issue_keys_match_lookup_keys_for_notebook_jobs(
     different for notebook jobs (str(tuple) vs colon-joined), which disabled
     cached-issue replay entirely. Pin their agreement.
     """
-    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+    from clm.core.messaging.notebook_classes import NotebookPayload
 
     backend = _backend(temp_db, temp_workspace)
     try:
