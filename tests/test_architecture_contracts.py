@@ -105,13 +105,12 @@ def _current_violations() -> set[str]:
 #: build_profiling) into clm.core → 5 edges over 4 files. S3 relocated the
 #: cassette staging maintenance off Course into
 #: infrastructure.http_replay_mitm.cassette_staging (sweeping is the entry
-#: points' job now) → 4 edges over 3 files: the worker-image identity reads
-#: (S4) and the payload-time voiceover merge (S5).
+#: points' job now) → 4 edges over 3 files. S4 inverted the worker-image
+#: identity reads through the clm.core.worker_identity registry
+#: (infrastructure records + provides the singleton fallback) → 1 edge
+#: over 1 file: the payload-time voiceover merge, S5.
 KNOWN_LAYER_VIOLATIONS = frozenset(
     {
-        "core -> infrastructure: core/operations/convert_drawio_file.py",
-        "core -> infrastructure: core/operations/convert_plantuml_file.py",
-        "core -> infrastructure: core/operations/process_notebook.py",
         "core -> slides: core/operations/process_notebook.py",
     }
 )

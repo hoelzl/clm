@@ -22,13 +22,7 @@ from clm.core.utils.path_utils import (
     output_path_for,
     relative_path_to_course_img,
 )
-
-# Re-exported for existing callers/tests; the canonical home is the
-# infrastructure module so the diagram operations and the build's
-# effective-identity registry share one implementation (issue #744).
-from clm.infrastructure.workers.image_identity import (
-    worker_image_identity_for,  # noqa: F401
-)
+from clm.core.worker_identity import effective_worker_image_identity
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +113,14 @@ def compute_worker_image_identity() -> str:
     under one image must not be replayed under another (issue #321 class 5,
     the xeus-cling → xeus-cpp incident).
 
-    Since #744 this resolves through
-    :mod:`clm.infrastructure.workers.image_identity`, so a build's CLI
+    Since #744 this resolves through the effective-identity registry
+    (:mod:`clm.core.worker_identity` since Phase 8 S4; infrastructure
+    records into it and provides the singleton fallback), so a build's CLI
     image override (``--notebook-image``) is visible to the cache key —
     previously the singleton config was read and the override was not.
-    See that module for the mutable-tag limitation and the defensive
+    See the registry for the mutable-tag limitation and the defensive
     empty-identity contract.
     """
-    from clm.infrastructure.workers.image_identity import effective_worker_image_identity
-
     return effective_worker_image_identity("notebook")
 
 

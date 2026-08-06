@@ -1230,8 +1230,19 @@ one PR per step, golden suite green after each.
    (functions take `Course.http_replay_canonical_paths()`; sweeping is the
    entry points' job — build pre-stage hook + watch-mode FileEventHandler);
    `http_replay_cassette` moved workers → infrastructure. Ratchet 5 → 4
-   edges over 3 files. Remaining: S4 (identity inversion), S5 (slide-text
-   cone), S6 (import-linter).
+   edges over 3 files. **S4 DONE 2026-08-06** — worker-image identity
+   inverted through the `clm.core.worker_identity` registry;
+   infrastructure records identities and registers the singleton fallback
+   provider (eager at image_identity import + lazy via
+   `clm.infrastructure.__init__`). Ratchet 4 → 1 edge:
+   `core -> slides: core/operations/process_notebook.py` — S5's
+   slide-text-cone descent (maintainer-approved) is all that remains
+   before S6 (import-linter). LANDMINE learned on #809: the Phase 7
+   coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
+   suffix and runs only in CI's unit job — move the floor entry in the
+   same commit as any floored file, and check floors locally via
+   `pytest -m "not slow and not integration and not e2e and not docker"
+   --cov=src/clm --cov-report=xml` + the script.
 4. **A11 — import-linter contract in CI.** Add it as soon as the first contract
    is true, not at the end — each subsequent step then cannot regress.
 5. **A4 — extract build orchestration** from `cli/commands/build.py` (2694 lines;

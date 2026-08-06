@@ -5,6 +5,7 @@ from attrs import frozen
 from clm.core.messaging.correlation_ids import new_correlation_id, note_correlation_id_dependency
 from clm.core.messaging.drawio_classes import DrawioPayload
 from clm.core.operations.convert_source_output_file import ConvertSourceOutputFileOperation
+from clm.core.worker_identity import effective_worker_image_identity
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +22,6 @@ class ConvertDrawIoFileOperation(ConvertSourceOutputFileOperation):
     async def payload(self) -> DrawioPayload:
         data = self.input_file.source_path.read_text(encoding="utf-8")
         correlation_id = await new_correlation_id()
-        from clm.infrastructure.workers.image_identity import (
-            effective_worker_image_identity,
-        )
-
         payload = DrawioPayload(
             data=data,
             correlation_id=correlation_id,
