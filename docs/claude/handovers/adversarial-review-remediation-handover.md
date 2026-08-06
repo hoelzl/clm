@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A2 + A6 DONE 2026-08-06, ratchet 50 → 31 edges; next A1/A3 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A6/A10/A11 DONE 2026-08-06, ratchet 50 → 0 and import-linter enforced; next A4 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1244,12 +1244,12 @@ one PR per step, golden suite green after each.
    workers; constrained layers never import cli or extensions), wired
    into CI's lint job and pre-commit; the inventory ratchet is replaced,
    `tests/test_architecture_contracts.py` keeps the string-import guard
-   + Backend/payload pins. **A1/A2/A3/A6/A11 are complete.** Remaining
+   + Backend/payload pins. **A1/A2/A3/A6/A10/A11 are complete** (A10:
+   architecture.md rewritten 2026-08-06 — see item 10 below). Remaining
    Phase 8 items: A4 (build orchestration out of build.py — now
    unblocked by the S2 contract descent), A5 (voiceover CLI logic),
    A7 (config unification), A8 (jobs-DB path), A9 (residual private
-   cross-imports), A10 (architecture.md rewrite — now describable as
-   fact), A12 (extras/lazy imports + DummyBackend to tests).
+   cross-imports), A12 (extras/lazy imports + DummyBackend to tests).
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
@@ -1273,12 +1273,19 @@ one PR per step, golden suite green after each.
    worker-side).
 9. **A9** — remove the ~12 cross-module underscore-private imports, worst being
    `mcp/tools.py:391` → a CLI command's private helper.
-10. **A10 — rewrite `architecture.md`** to describe what now exists.
-    **Do this incrementally as each step lands**, not at the end. The doc is
-    currently wrong in ways that actively mislead agents (a "service registry"
-    directory holding one file, a layer diagram matching no import structure,
-    undocumented env vars, orchestration attributed to `Course.process()`), and
-    per `AGENTS.md` agents are told to trust it.
+10. ✔ **A10 — rewrite `architecture.md`** to describe what now exists —
+    **DONE 2026-08-06**. Full rewrite: the enforced three-constrained-layer
+    stack with cli/extensions unconstrained on top, the contract seam in
+    core, the import-linter + contract-test enforcement story, honest
+    orchestration attribution (`main_build` in `build.py`, A4 pending),
+    the WAL/network journal-mode policy, config pointed at
+    `configuration.md` with the A7/A8 non-uniformity named, and a "Known
+    Deviations and Pending Work" section listing A4/A5/A7/A8/A9/A12 so the
+    doc cannot silently describe an end state that hasn't arrived. Every
+    specific wrongness the review listed (fictional "service registry",
+    layer diagram matching no import structure, undocumented env vars,
+    orchestration attributed to `Course.process()`, "DELETE journal mode",
+    core↔infrastructure claims) is corrected or removed.
 11. **A12** — move `docker`, `fastapi`, `uvicorn`, `watchdog` behind extras with
     lazy imports; `DummyBackend` (`dummy_backend.py:19`, never instantiated in
     `src/`) moves to `tests/`.
@@ -1351,8 +1358,9 @@ so the maintainer can object:
 - `AGENTS.md` — branch/commit/PR conventions, changelog fragments, the info-topic
   maintenance rule.
 - `docs/developer-guide/releasing.md` — Phase 0's release procedure.
-- `docs/developer-guide/architecture.md` — **currently inaccurate**; Phase 8/A10
-  fixes it.
+- `docs/developer-guide/architecture.md` — rewritten 2026-08-06 (Phase 8/A10)
+  to describe the enforced post-#802 layering; keep its "Known Deviations"
+  list current as A4/A5/A7–A9/A12 land.
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
 

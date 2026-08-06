@@ -2,292 +2,324 @@
 
 This document describes the current architecture of the CLM system (v1.25.0).
 
+The layering described here is **enforced, not aspirational**: since the #802
+re-layering (2026-08-06, PRs #804–#813) the import graph matches this document,
+and import-linter contracts in CI and pre-commit keep it that way. See
+[How the layering is enforced](#how-the-layering-is-enforced).
+
 ## Overview
 
-CLM is a course content processing system that converts educational materials (Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output formats using a worker-based architecture orchestrated by an SQLite job queue.
+CLM is a course content processing system that converts educational materials
+(Jupyter notebooks, PlantUML diagrams, Draw.io diagrams) into multiple output
+formats using a worker-based architecture orchestrated by an SQLite job queue.
 
-**Key Characteristics**:
+**Key characteristics**:
+
 - Single unified Python package with integrated workers
 - SQLite-based job queue (no message broker)
-- Direct file system access (no serialization overhead)
-- Worker pools (Docker containers or direct processes)
-- Clean four-layer architecture
+- Direct file system access (no serialization overhead for file content)
+- Worker pools (Docker containers or direct host processes)
+- Three constrained layers (`core` ← `infrastructure` ← `workers`) with the
+  CLI and optional extension packages as unconstrained consumers on top
 
-## Four-Layer Architecture
+## The Layered Architecture
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│                     clm.core (Domain)                      │
-│                                                             │
-│  Course, Section, Topic, CourseFile, CourseSpec            │
-│  ├── course_files/ (NotebookFile, PlantUmlFile, etc.)     │
-│  ├── operations/ (process_notebook, convert_plantuml)     │
-│  └── utils/ (notebook_utils, text_utils, execution_utils) │
-│                                                             │
-│  NO infrastructure dependencies                             │
-└────────────────────────┬──────────────────────────────────┘
-                         │
-┌────────────────────────▼──────────────────────────────────┐
-│              clm.infrastructure (Runtime)                   │
-│                                                             │
-│  Backend, Operation, JobQueue, Worker Management           │
-│  ├── backends/ (SqliteBackend, LocalOpsBackend, DummyBackend) │
-│  ├── database/ (schema, job_queue, db_operations)         │
-│  ├── llm/ (client, prompts, summary cache)                │
-│  ├── messaging/ (payloads, results)                       │
-│  ├── workers/ (worker_base, pool_manager, executor)       │
-│  └── services/ (service registry)                         │
-│                                                             │
-└────────────────────────┬──────────────────────────────────┘
-                         │
-┌────────────────────────▼──────────────────────────────────┐
-│          clm.workers (Worker Implementations)              │
-│                                (v1.25.0)             │
-│  ├── notebook/ (NotebookWorker, templates, processors)    │
-│  ├── plantuml/ (PlantUmlWorker, converter)                │
-│  └── drawio/ (DrawioWorker, converter)                    │
-│                                                             │
-│  Optional dependencies: [notebook], [plantuml], [drawio]  │
-└────────────────────────┬──────────────────────────────────┘
-                         │
-┌────────────────────────▼──────────────────────────────────┐
-│      clm.notebooks / clm.voiceover (Extensions)           │
-│                                                             │
-│  ├── notebooks/ (slide_parser, slide_writer, polish)       │
-│  └── voiceover/ (transcribe, keyframes, matcher, aligner)  │
-│                                                             │
-│  Optional dependencies: [voiceover], [summarize]           │
-└────────────────────────┬──────────────────────────────────┘
-                         │
-┌────────────────────────▼──────────────────────────────────┐
-│                   clm.cli (Interface)                       │
-│                                                             │
-│  main.py (Click-based CLI)                                 │
-│  file_event_handler.py (watchdog for file monitoring)     │
-│  git_dir_mover.py (git directory utilities)               │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                    TOP OF THE STACK (unconstrained)                 │
+│                                                                    │
+│  clm.cli — Click command-line interface                            │
+│  Extensions — clm.notebooks, clm.slides, clm.snapshot, clm.mcp,    │
+│    clm.voiceover, clm.recordings, clm.release, clm.cohort_calendar,│
+│    clm.web                                                         │
+│                                                                    │
+│  May import anything below. Nothing below may import them.          │
+└──────────────────────────────┬─────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼─────────────────────────────────────┐
+│                 clm.workers (Worker Implementations)                │
+│                                                                    │
+│  notebook/   — notebook processing + execution (multi-kernel)      │
+│  plantuml/   — PlantUML → PNG/SVG                                  │
+│  drawio/     — Draw.io → PNG/SVG/PDF                               │
+│  jupyterlite/ — JupyterLite static-site bundling                   │
+│                                                                    │
+│  May import infrastructure and core.                                │
+└──────────────────────────────┬─────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼─────────────────────────────────────┐
+│                  clm.infrastructure (Engines)                       │
+│                                                                    │
+│  backends/  — SqliteBackend, LocalOpsBackend, DummyBackend         │
+│  database/  — schema + migrations, JobQueue, caches, heartbeats    │
+│  workers/   — pool manager, worker base/executor, lifecycle,       │
+│               image-identity fingerprinting                        │
+│  api/       — worker API server/client (Docker mode)               │
+│  http_replay_mitm/ — mitmproxy cassette record/replay + staging    │
+│  llm/       — LLM clients (OpenRouter, Ollama) + cache             │
+│  services/  — subprocess execution with retry (subprocess_tools)   │
+│  logging/, utils/, config, error_categorizer, …                    │
+│                                                                    │
+│  May import core only.                                              │
+└──────────────────────────────┬─────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼─────────────────────────────────────┐
+│                      clm.core (Domain + Contracts)                  │
+│                                                                    │
+│  Domain model — Course, Section, Topic, CourseFile, DirGroup,      │
+│    CourseSpec, OutputTarget, execution dependencies                │
+│  Contract seam — Operation, Backend ABC, messaging/ payloads,      │
+│    build_data_classes + BuildReporterProtocol, build_profiling     │
+│  operations/ — per-file-type processing operations                 │
+│  slide_text/ — percent-format slide-file model                     │
+│  utils/ + vocabulary — path/output naming, prog-lang tables, tags, │
+│    workshop scope, deck markers, sidecar layout, voiceover         │
+│    companion paths, worker-identity registry                       │
+│                                                                    │
+│  Imports NOTHING clm-internal above it.                             │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-### Layer 1: Core (Domain Logic)
+Two properties distinguish this from the usual layered-architecture diagram:
 
-**Purpose**: Course processing logic without any infrastructure dependencies
+1. **The bottom three layers are constrained; the top is not.** `clm.cli` and
+   the extension packages may import each other and anything below — there is
+   deliberately no ordering among them. The contracts only guarantee that
+   `core`, `infrastructure`, and `workers` never import upward.
+2. **The contract seam lives in core.** The `Operation` hierarchy, the
+   `Backend` ABC, and the Pydantic payload schemas that cross the worker
+   process boundary are *contracts and data*, so they live at the bottom of
+   the stack where every layer may import them (Phase 8 S2 of #802).
+   Infrastructure keeps the *engines* that implement them.
 
-**Key Classes**:
-- `Course` - Main course representation, manages sections and topics
-- `Section` - Course section, contains topics
-- `Topic` - Individual topic, contains files
-- `CourseFile` - Base class for all file types (abstract)
-- `NotebookFile`, `PlantUmlFile`, `DrawioFile` - Concrete file handlers
+### How the layering is enforced
 
-**File Types Supported**:
-- Jupyter notebooks (`.py` source → `.ipynb` output + HTML)
-- PlantUML diagrams (`.puml` → PNG/SVG)
-- Draw.io diagrams (`.drawio` → PNG/SVG/PDF)
+Three [import-linter](https://import-linter.readthedocs.io/) contracts, defined
+in `pyproject.toml` under `[tool.importlinter]`:
 
-**Design Principle**: The core layer has ZERO dependencies on infrastructure. It can be tested in complete isolation.
+1. **"Layered: core below infrastructure below workers"** — a `layers`
+   contract over `clm.workers` / `clm.infrastructure` / `clm.core`.
+2. **"Constrained layers never import the CLI"** — `core`, `infrastructure`,
+   and `workers` are forbidden from importing `clm.cli`.
+3. **"Constrained layers never import extension packages"** — the same three
+   layers are forbidden from importing `clm.cohort_calendar`, `clm.mcp`,
+   `clm.notebooks`, `clm.recordings`, `clm.release`, `clm.slides`,
+   `clm.snapshot`, `clm.voiceover`, and `clm.web`.
 
-### Layer 2: Infrastructure (Runtime Support)
+Run locally with `uv run lint-imports`; CI's lint job and the pre-commit hook
+both run it. import-linter's graph (grimp) sees function-body and
+`TYPE_CHECKING` imports, so lazy imports cannot dodge the contracts.
 
-**Purpose**: Job orchestration, worker management, backend implementations
+`tests/test_architecture_contracts.py` adds what import-linter cannot see:
 
-**Key Components**:
+- a **string-import guard** — `importlib.import_module("clm...")` /
+  `__import__("clm...")` in a constrained layer would be invisible to the
+  import graph, so the test forbids stringified clm imports there outright;
+- a **`Backend` surface pin** — the exact set of abstract methods, so the
+  contract changes only deliberately, in the same commit as every
+  implementation;
+- **worker payload schema pins** — every field each worker deserializes
+  (Docker images can lag the host, so a renamed field silently strands
+  lagging workers).
 
-#### SQLite Database
+**Compatibility surface**: `from clm.infrastructure import Backend, Operation`
+still works. `clm/infrastructure/__init__.py` lazily re-exports both names
+from their real home in `clm.core` (PEP 562), pinned by
+`tests/cli/test_cli_startup.py`. New code should import from
+`clm.core.backend` / `clm.core.operation` directly.
 
-**Tables**:
-```sql
--- Job queue (replaces message broker)
-CREATE TABLE jobs (
-    id INTEGER PRIMARY KEY,
-    job_type TEXT NOT NULL,              -- 'notebook', 'drawio', 'plantuml'
-    status TEXT NOT NULL,                 -- 'pending', 'processing', 'completed', 'failed'
-    input_file TEXT NOT NULL,
-    output_file TEXT NOT NULL,
-    content_hash TEXT NOT NULL,           -- For caching
-    payload TEXT NOT NULL,                -- JSON with job parameters
-    attempts INTEGER DEFAULT 0,
-    max_attempts INTEGER DEFAULT 3,
-    error TEXT,
-    created_at TIMESTAMP,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    worker_id INTEGER
-);
+### Layer 1: `clm.core` (Domain Model and Contracts)
 
--- Results cache (avoids re-processing unchanged files)
-CREATE TABLE results_cache (
-    id INTEGER PRIMARY KEY,
-    output_file TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    result_metadata TEXT,
-    created_at TIMESTAMP,
-    last_accessed TIMESTAMP,
-    access_count INTEGER DEFAULT 0,
-    UNIQUE(output_file, content_hash)
-);
+**Purpose**: the course domain model, the contracts every other layer programs
+against, and the shared vocabulary — importing nothing clm-internal above it.
 
--- Worker registration and health monitoring
-CREATE TABLE workers (
-    id INTEGER PRIMARY KEY,
-    worker_type TEXT NOT NULL,
-    container_id TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,                 -- 'created', 'idle', 'busy', 'hung', 'dead'
-    started_at TIMESTAMP,
-    last_heartbeat TIMESTAMP,
-    jobs_processed INTEGER DEFAULT 0,
-    jobs_failed INTEGER DEFAULT 0,
-    parent_pid INTEGER                    -- For orphan detection
-);
+**Domain model**:
 
--- Per-cell activity beacons (notebook workers in direct SQLite mode only).
--- One row per worker, REPLACE on update. Surfaced by `clm monitor` and
--- `clm status` so long-running ML cells become visible (current cell
--- index, in-cell elapsed, last stdout/stderr excerpt).
-CREATE TABLE worker_heartbeats (
-    worker_id INTEGER PRIMARY KEY,
-    job_id INTEGER,
-    current_cell_index INTEGER,
-    total_cells INTEGER,
-    current_cell_started_at TIMESTAMP,
-    last_output_excerpt TEXT,             -- ANSI-stripped, last line, ≤120 chars
-    last_output_at TIMESTAMP,
-    heartbeat_at TIMESTAMP                -- Always updated; detects stale rows
-);
-```
+- `Course` — course representation; owns sections, output targets, and the
+  stage-driven processing loop (`process_all` / `process_stage` /
+  `process_file`), each parameterized by a `Backend`
+- `Section`, `Topic` — course structure
+- `CourseFile` (abstract) with concrete subclasses in `core/course_files/`:
+  `NotebookFile`, `PlantUmlFile`, `DrawioFile`, `DataFile`, `ImageFile` and
+  friends
+- `CourseSpec` (`course_spec.py`) — XML spec parsing
+- `OutputTarget` / `execution_dependencies.py` — see
+  [Multiple Output Targets](#multiple-output-targets)
+- `core/operations/` — the per-file-type operations (`process_notebook`,
+  `convert_plantuml_file`, `convert_drawio_file`,
+  `convert_source_output_file`, `copy_file`, `copy_dir_group`, `delete_file`,
+  `build_jupyterlite_site`)
 
-**Journal Mode**: `DELETE` (not WAL) for cross-platform compatibility with Docker volume mounts
+**Contract seam** (descended from infrastructure in #802/S2):
 
-**Why SQLite?**:
-- No separate broker infrastructure required
-- Simple SQL queries for monitoring
-- Built-in, no external dependencies
-- Efficient for single-host use case
-- Direct file access (no serialization)
+- `operation.py` — the `Operation` hierarchy (`Operation`, `NoOperation`,
+  `Concurrently`)
+- `backend.py` — the abstract `Backend` a build executes against; its
+  abstract surface is pinned by `tests/test_architecture_contracts.py`
+- `messaging/` — the Pydantic payload/result schemas that cross the worker
+  process boundary (`base_classes`, `notebook_classes`, `plantuml_classes`,
+  `drawio_classes`, `jupyterlite_classes`, `correlation_ids`, `routing_keys`)
+- `build_data_classes.py` — build reporting data classes plus the structural
+  `BuildReporterProtocol` backends report against (the CLI's concrete
+  `BuildReporter` implements it)
+- `build_profiling.py`, `http_replay_trace.py` — dependency-free diagnostic
+  leaves consumed on both sides of the core/infrastructure seam
 
-#### Worker Management
+**Shared vocabulary** (mostly under `core/utils/` — descended in #802/A6/S1):
 
-**WorkerBase** - Abstract base class for all workers:
-```python
-class Worker(ABC):
-    def __init__(self, worker_id, worker_type, db_path):
-        self.worker_id = worker_id
-        self.worker_type = worker_type
-        self.job_queue = JobQueue(db_path)
+- `utils/path_utils.py` — `Lang`, `Format`, `Kind`, `OutputSpec`,
+  `output_specs()`, output-path construction, skip/ignore tables, slide-family
+  detection
+- `utils/prog_lang_utils.py` — programming-language tables and
+  comment-token resolution
+- `tags.py`, `workshop_scope.py`, `deck_markers.py` — slide tag sets, the
+  workshop detector, the `no-compile` header marker
+- `sidecar_layout.py` — where authoring sidecars (voiceover companions, HTTP
+  cassettes) live; reads `CLM_SIDECAR_LAYOUT` and `[tool.clm]` in
+  pyproject.toml
+- `voiceover_companions.py` — voiceover companion path family
+- `worker_identity.py` — see the inversion note below
 
-    @abstractmethod
-    def process_job(self, job: Job) -> None:
-        """Process a single job"""
-        pass
+**Slide-text model** (`core/slide_text/`, descended in #802/S5): the
+percent-format `.py` slide-file model shared by the build pipeline and the
+authoring extensions — `slide_parser`, `raw_cells` (lossless cell
+primitives), `anchor_primitives`, `pairing` (DE/EN adjacency), and
+`voiceover_merge`. The `clm.notebooks` and `clm.slides` extensions build on
+top of it.
 
-    def run(self):
-        """Main worker loop: poll, process, update"""
-        while self.running:
-            job = self.job_queue.get_next_job(self.worker_type)
-            if job:
-                self.process_job(job)
-                self.job_queue.update_job_status(job.id, 'completed')
-```
+**The worker-identity inversion** (#802/S4): core operations stamp the
+execution-environment identity into worker payloads at build time (it is a
+cache-key component), but *computing* an identity is infrastructure work
+(Docker image resolution, direct-mode binary fingerprinting).
+`core/worker_identity.py` is the seam: `clm build` / `clm cache explain`
+record post-override identities through
+`infrastructure/workers/image_identity.py`, which also registers itself as the
+fallback provider (eagerly at its own import, lazily via
+`clm.infrastructure.__init__`); core reads via
+`effective_worker_image_identity()` and never imports upward.
 
-**Worker Execution Modes**:
+### Layer 2: `clm.infrastructure` (Engines)
 
-1. **Docker Mode** (isolated, production):
-   - Workers run in Docker containers
-   - Isolated environments with specific dependencies
-   - Bind-mounted volumes for file access
-   - Started automatically by `clm build` via Docker SDK
+**Purpose**: the engines behind the core contracts — job orchestration,
+worker management, backend implementations, external-process machinery.
 
-2. **Direct Mode** (fast, development):
-   - Workers run as host processes (subprocesses)
-   - Faster startup, easier debugging
-   - Requires external tools installed (PlantUML, DrawIO)
-   - Managed by PoolManager
+**Backends** (`backends/`):
 
-**PoolManager** - Manages worker pools:
-- Starts/stops worker processes or containers
-- Monitors worker health (heartbeat, CPU, memory)
-- Auto-restarts hung or crashed workers
-- Load balancing across available workers
+- `SqliteBackend` — the one concrete production backend: turns operations
+  into jobs on the SQLite queue and waits for workers to complete them
+- `LocalOpsBackend` — a *partial* base handling local file operations
+  (copy/delete); it leaves the `execute_operation` / `wait_for_completion`
+  dispatch pair abstract, and e2e tests subclass it to fill them in
+- `DummyBackend` — test-only; never instantiated in `src/` (slated to move to
+  `tests/` under #802/A12)
 
-### Layer 3: Workers (Worker Implementations)
+**Database** (`database/`):
 
-**Purpose**: Concrete worker implementations for different file types (v1.25.0)
+- `schema.py` — table definitions, schema versioning, and migrations. The
+  canonical schema lives there, not in this document; the tables are `jobs`
+  (the queue), `results_cache` (job-level skip cache), `workers`
+  (registration + health), `worker_events` (lifecycle log), 
+  `worker_heartbeats` (per-cell activity beacons surfaced by `clm monitor` /
+  `clm status`), and `schema_version`
+- `job_queue.py` — claiming (mode-tagged, session-owned), status updates
+  with worker fencing, retry accounting
+- `executed_notebook_cache.py` and friends — see
+  [Caching Strategy](#caching-strategy)
+- `journal_mode.py` — the journal-mode policy (below)
 
-Workers are now integrated into the main `clm` package under `clm.workers/`. Previously they were separate packages in the `services/` directory.
+**Journal mode**: every connection to a CLM database must configure itself
+through `journal_mode.configure_connection()`. Local databases get **WAL**
+(readers and writers don't block each other — what makes concurrent workers
+viable) with relaxed synchronous settings; databases on **network shares get
+rollback journaling** with full fsync, because SQLite's WAL shared-memory
+index is not coherent across machines and can corrupt the database. The
+policy lives in one module because `journal_mode` is a persistent property of
+the database *file* — one stray connection choosing the wrong mode would undo
+the safe choice for everyone.
 
-**Worker Modules**:
+**Worker management** (`workers/`): `pool_manager` (start/stop/scale worker
+pools), `worker_base` (the worker loop: claim, heartbeat, process, report),
+`worker_executor` (spawning direct-mode processes with the right
+environment), `lifecycle_manager`, `process_reaper` / orphan detection,
+`image_identity` (worker-image identity fingerprinting), kernel-env
+provisioning, and Windows job-object handling.
 
-#### clm.workers.notebook - Notebook Processing
+**Worker API** (`api/`): the HTTP server/client pair used in Docker mode —
+loopback-bound, token-authenticated — through which containerized workers
+reach the job queue and the executed-notebook cache.
 
-**Location**: `src/clm/workers/notebook/`
+**HTTP replay** (`http_replay_mitm/`): mitmproxy-based record/replay of
+kernel HTTP traffic (`proxy_manager`, `http_replay_cassette`,
+`cassette_format` / `vcr_format`, `trace_log`), plus `cassette_staging` for
+merging worker-written staging files into canonical cassettes. **Sweeping
+orphaned `*.staging-*` files is the entry points' job, not `Course`'s**
+(#802/S3): `clm build` sweeps in its pre-stage hook and watch mode sweeps in
+`FileEventHandler`, before core processing runs.
 
-**Key Components**:
-- `NotebookWorker` - Worker implementation extending `WorkerBase`
-- `NotebookProcessor` - Core notebook processing logic
-- `OutputSpec` - Output format specifications
-- Language-specific templates (Python, C++, C#, Java, TypeScript)
+**Other engines**: `llm/` (OpenRouter/Ollama clients, prompt templates,
+summary cache), `services/subprocess_tools.py` (subprocess execution with
+timeout/crash retry — see [Subprocess crash retry](#subprocess-crash-retry)),
+`error_categorizer.py` (build-error classification), `config.py`
+(`ClmConfig`), `logging/`, `notebook_serialization.py`, `web_security.py`,
+and `utils/` (`find_project_root`, atomic file writes, ANSI stripping).
 
-**Dependencies** (optional, install with `[notebook]`):
-- IPython, nbconvert, jupytext
-- matplotlib, pandas, scikit-learn
-- And more (see pyproject.toml)
+**Why SQLite instead of a message broker?** No separate broker
+infrastructure, plain SQL for monitoring, built into Python, direct file
+access, easy debugging. The cost is a single-host design with lower write
+concurrency — the right trade for local course building; CLM removed its
+earlier RabbitMQ/FastStream architecture in v0.3.0 (see
+[Migration History](#migration-history)).
 
-**Entry Point**: `python -m clm.workers.notebook`
+### Layer 3: `clm.workers` (Worker Implementations)
 
-#### clm.workers.plantuml - PlantUML Conversion
+**Purpose**: the four worker implementations. Each extends the
+infrastructure worker base, deserializes its pinned payload schema, and runs
+as `python -m clm.workers.<name>`.
 
-**Location**: `src/clm/workers/plantuml/`
+| Worker | Converts | External requirements | Extra |
+|---|---|---|---|
+| `notebook/` | `.py` percent-format sources → executed notebooks, HTML, extracted code | Jupyter kernels for execution (see below) | `[notebook]` |
+| `plantuml/` | `.puml` → PNG/SVG | Java + PlantUML JAR (`PLANTUML_JAR`) | `[plantuml]` |
+| `drawio/` | `.drawio` → PNG/SVG/PDF | Draw.io desktop app (`DRAWIO_EXECUTABLE`); Xvfb when headless on Linux | `[drawio]` |
+| `jupyterlite/` | built notebook trees → deployable JupyterLite static site | `uv` on PATH (build runs in an isolated `uvx` tool env) | none (not an extra) |
 
-**Key Components**:
-- `PlantUmlWorker` - Worker implementation extending `WorkerBase`
-- `PlantUmlConverter` - PlantUML conversion logic
+**Notebook worker**: multi-kernel execution (Python, C++ via xeus; C#, Java,
+TypeScript templates exist but are converted unexecuted), language variants
+(de/en), output kinds (code-along, completed, speaker). The course-runtime
+ML/data-science stack is **not** a clm extra — it ships as
+`course-runtime-requirements.txt` and belongs in a separate course venv the
+Direct-mode kernel runs in (`clm provision kernel-env`), or in the Docker
+worker image.
 
-**Dependencies** (optional, install with `[plantuml]`):
-- aiofiles, tenacity
+**JupyterLite worker**: site-level bundler consuming already-built notebook
+output. `builder.build_site()` assembles a lite-dir
+(`lite_dir.assemble_lite_dir()`), shells out to `jupyter lite build` in a
+pinned `uvx` tool env, and emits a student launcher (`launch.py` or bundled
+miniserve binaries), `README-offline.md`, optional branding, and a
+deterministic `jupyterlite-manifest.json` for content-addressed caching.
+Jobs are barrier-scheduled after the notebook-format jobs for the same
+`(target, language, kind)` tuple. Opt-in per course via a `<jupyterlite>`
+spec block; preview with `clm jupyterlite preview`.
 
-**External Dependencies**:
-- Java Runtime Environment
-- PlantUML JAR file
+**Worker execution modes**:
 
-**Entry Point**: `python -m clm.workers.plantuml`
+1. **Direct mode** (default): workers run as host subprocesses managed by the
+   pool manager. Fast startup, easy debugging; requires the external tools
+   and worker extras installed on the host (`pip install -e ".[all-workers]"`).
+2. **Docker mode**: workers run in containers started by `clm build` via the
+   Docker SDK, reaching the queue through the worker API. No host tool
+   installs; better isolation; requires a Docker daemon. Build files live in
+   `docker/`.
 
-#### clm.workers.drawio - Draw.io Conversion
+Both modes share one jobs database; claiming is mode-tagged and
+session-owned so direct and Docker builds cannot steal each other's jobs.
 
-**Location**: `src/clm/workers/drawio/`
+### Top of the Stack: `clm.cli`
 
-**Key Components**:
-- `DrawioWorker` - Worker implementation extending `WorkerBase`
-- `DrawioConverter` - Draw.io conversion logic with automatic crash retry
-
-**Dependencies** (optional, install with `[drawio]`):
-- aiofiles, tenacity
-
-**External Dependencies**:
-- Draw.io desktop application
-- Xvfb (Linux only, for headless rendering)
-
-**Entry Point**: `python -m clm.workers.drawio`
-
-**Crash Recovery**: DrawIO uses Electron (Node.js + Chromium) which can experience transient V8 crashes. The converter automatically retries up to 3 times with a 2-second delay between attempts. See [Subprocess Crash Retry Logic](#subprocess-crash-retry-logic) for details.
-
-**Worker Execution Modes**:
-
-1. **Direct Execution Mode** (Default):
-   - Workers run as subprocesses
-   - Requires worker dependencies installed: `pip install -e ".[all-workers]"`
-   - Faster for development
-   - External tools required (PlantUML JAR, Draw.io app)
-
-2. **Docker Mode**:
-   - Workers run in Docker containers
-   - No worker dependencies needed on host
-   - Better isolation
-   - Requires Docker daemon
-   - Docker build files are in the `docker/` directory
-
-### Layer 4: CLI (User Interface)
-
-**Entry Point**: `clm` command (via `clm.cli.main:cli`)
+**Entry point**: the `clm` command (`clm.cli.main:cli`), a Click application.
+`main.py` is the single manifest assembling the top level; commands load
+lazily through `_lazy_group.py` (`LazyGroup`), which keeps CLI startup fast —
+never re-add eager command imports.
 
 **Command module layout** (issue #310): the file layout under
 `src/clm/cli/commands/` mirrors the command tree, so finding a command's
@@ -295,176 +327,172 @@ definition is mechanical:
 
 - `clm <cmd>` (flat) → `commands/<cmd>.py` (e.g. `clm build` → `build.py`)
 - `clm <group> <cmd>` → `commands/<group>/<cmd>.py` for package groups
-  (`slides/`, `course/`, `export/`; dashes become underscores), or
+  (`slides/`, `course/`, `export/`, `query/`; dashes become underscores), or
   `commands/<group>.py` when the whole group is one cohesive module
   (`calendar.py`, `db.py`, `git.py`, `harvest.py`, `voiceover.py`, ...)
 
-Each group registers its own subcommands where it is defined;
-`main.py` is the single manifest that assembles the top level.
+**Where build orchestration lives — honestly**: `clm build`'s engine is
+`main_build()` in `cli/commands/build.py` (~2,800 lines; the Click command
+itself starts near the end of the file). It resolves paths and options,
+initializes the databases, records worker identities, starts worker pools,
+sweeps orphaned cassette staging files, drives `Course.process_all()` against
+a backend, and applies exit-code policy from the returned `BuildSummary`.
+Extracting this into a callable core-level API — so MCP, the web studio, and
+tests can run builds without going through Click — is **#802/A4, still
+open**. Until it lands, programmatic builds go through the CLI layer.
 
-**Main Commands**:
-```bash
-clm build <course.xml>          # Build/convert course
-clm build --watch               # Watch for changes and auto-rebuild
+**Watch mode**: `file_event_handler.py` uses `watchdog` to monitor the course
+tree, debounces changes, sweeps cassette staging orphans, and triggers
+incremental rebuilds via `Course.process_file()`.
+
+**Version-accurate docs**: `cli/info_topics/*.md` back the `clm info`
+command; downstream course-repo agents rely on them (see the maintenance
+rule in `AGENTS.md`).
+
+### Top of the Stack: Extension Packages
+
+Optional, self-contained packages under `src/clm/<module>/`, installed via
+extras. They may import anything below them; the constrained layers never
+import them (enforced — contract 3). Entry points and purpose:
+
+#### `clm.notebooks` (slide utilities)
+
+Thin layer over `clm.core.slide_text` for percent-format `.py` slide files;
+used by the voiceover pipeline and the `clm.slides` tools. `slide_writer`
+inserts/updates notes cells in existing files; `polish` is LLM-powered notes
+cleanup (requires `[summarize]`). The parsing model itself
+(`slide_parser`, `raw_cells`, …) lives in `clm.core.slide_text` since
+#802/S5.
+
+#### `clm.slides` (authoring tools)
+
+CLI-facing tooling for AI-assisted slide authoring. Powers
+`clm course resolve-topic`, `clm slides search`, `clm validate`,
+`clm slides normalize`, `clm slides language-view`,
+`clm slides suggest-sync`, `clm slides assign-ids`, `clm slides coverage`,
+`clm slides split` / `unify`, `clm slides sync`, `clm slides tidy`,
+`clm voiceover extract` / `inline`, and `clm slides rules`.
+
+Key entry points: `search.search_slides`, `spec_validator.validate_spec`,
+`validator.validate_file`, `normalizer.normalize_file`,
+`language_tools.get_language_view` / `suggest_sync`,
+`voiceover_tools.extract_voiceover` / `inline_voiceover` /
+`merge_voiceover_text` (used by the build pipeline),
+`authoring_rules.get_authoring_rules`, `assign_ids.assign_ids_in_file` /
+`assign_ids_in_directory`, `coverage.check_coverage_in_file` /
+`check_coverage_in_directory` (LLM-driven, backed by `CoverageCache`),
+`split.split_file` / `unify.unify_files` (bidirectional bilingual ↔
+split-by-language converters with byte-identical round-trip),
+`sync.sync_pair` (cross-language LLM-driven proposal generator with
+`SyncCache` / `SyncSnapshotCache`), and `tidy.plan_tidy` / `apply_tidy`
+(bulk sidecar relocation between subdirectory and flat layouts).
+
+#### `clm.snapshot` (build-output verification harness)
+
+Byte-level compare of two CLM build trees, exposed as
+`clm build --snapshot DIR` (capture) and `clm build --verify-against DIR`
+(compare) — library-only, no `clm snapshot` subcommand. Entry points:
+`verify_against`, `verify_against_targets` (per-target compare for specs
+with `<output-targets>`), `VerifyReport`, `normalize_for_compare`. `.html`
+is skipped by default because rendered HTML contains live-kernel output;
+`--include-html` opts in with hex-address normalization, `--strict-verify`
+byte-compares everything. This harness underlies the golden e2e build suite
+(`tests/e2e/test_e2e_golden_build.py`).
+
+#### `clm.mcp` (Model Context Protocol server)
+
+Exposes the `clm.slides` tools over stdio MCP transport so AI agents can
+drive slide authoring. Entry points: `server.create_server(data_dir)` /
+`run_server(data_dir)` and the `tools.handle_*` async handlers. Started
+with `clm mcp`. Requires `[mcp]`.
+
+#### `clm.voiceover` (video → speaker notes)
+
+Video-to-speaker-notes pipeline used by the `clm harvest` command group
+(`report`/`task`/`accept`, `autopilot`, `transcribe`/`detect`/`identify`, …).
+The CLI surface moved from `clm voiceover` to `clm harvest` in the epic-#546
+cutover, but the Python package keeps its `clm.voiceover` name. Pluggable
+transcription backends (faster-whisper default, Cohere, Granite). Requires
+`[voiceover]`.
+
+- `transcribe` — Whisper ASR with backend Protocol
+- `keyframes` — frame extraction and transition detection
+- `matcher` — OCR + fuzzy matching for slide identification
+- `aligner` — transcript-to-slide assignment with backtracking
+
+#### `clm.recordings` (video recording management)
+
+Managed video recording workflow: five-step audio pipeline
+(extract → DeepFilterNet3 ONNX → FFmpeg filters → AAC → mux), pluggable
+processing backends (`OnnxAudioFirstBackend`, `ExternalAudioFirstBackend`,
+`AuphonicBackend` via `make_backend()`), watcher-driven automation,
+per-course JSON state with slide-version provenance stamping, and an HTMX
+web dashboard (`recordings.web.create_app`). `clm recordings drift`
+compares stamped `slide_digest`s against the build provenance manifest.
+Requires `[recordings]`.
+
+#### `clm.release` (per-topic solution release)
+
+Solution-release orchestration for promoting completed topics to student
+cohorts, each frozen against later course edits (issue #208). Pure stdlib +
+`attrs`, no extra. Cohorts are declared in the spec's `<release-channels>`
+block; per-topic release state lives in a plain-text ledger
+(`ledger`), per-cohort freeze records in `frozen_manifest`
+(`.clm-released.<stream>.json`), and `sync` promotes released topics into
+cohort repos located via the build **provenance manifest**
+(`.clm-manifest.json` — written by `clm build` at each output root by
+default; suppressed for `--snapshot`, `--verify-against`, `--only-sections`,
+and errored builds). Driven by `clm release` (`add`/`week`/`status`/`sync`)
+and `clm git --channel`.
+
+#### `clm.cohort_calendar` (cohort viewing calendar)
+
+Projects a course's certification schedule (the course-relative plan from
+`clm export schedule`) onto a cohort's real calendar dates (issue #283) —
+`projection`, `render`, `status`, and `google_sync` for Google Calendar
+push. Driven by the `clm calendar` command group.
+
+#### `clm.web` (web studio)
+
+FastAPI application behind `clm serve`: the `/studio/` deck editor
+(token-authenticated Studio API + WebSocket, watchdog-driven live reload)
+for browser- and mobile-based slide editing. Requires `[web]`.
+
+## Build Flow
+
+What actually happens on `clm build course.xml` (orchestrated by
+`main_build()` in `cli/commands/build.py` — see the CLI section):
+
+```
+clm build course.xml
+  │
+  ├─ parse spec → CourseSpec → Course.from_spec()   (core)
+  ├─ init jobs DB + cache DB, configure journal mode (infrastructure)
+  ├─ record worker-image identities                  (infrastructure → core registry)
+  ├─ start worker pools (direct subprocesses or Docker containers)
+  ├─ sweep orphaned cassette staging files           (entry point's job)
+  │
+  ├─ Course.process_all(backend)                     (core, against Backend)
+  │    for each execution stage:
+  │      for each output target:
+  │        for each file: get_processing_operation() → Operation
+  │          └─ operation.execute(backend)
+  │               ├─ SqliteBackend: enqueue job (SQLite, status=pending)
+  │               │    workers claim (mode-tagged, session-owned),
+  │               │    read input from disk, process, write output,
+  │               │    report completed/failed + results_cache entry
+  │               └─ local ops (copy/delete): LocalOpsBackend directly
+  │      wait_for_completion() barrier between stages
+  │
+  └─ BuildSummary → exit-code policy, provenance manifest, reports
 ```
 
-**File Watching**:
-- Uses `watchdog` library to monitor file changes
-- Automatically triggers rebuilds when files change
-- Debouncing to avoid duplicate builds
-
-## Job Processing Flow
-
-```
-┌─────────────┐
-│ User runs   │
-│ clm build   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────────┐
-│ Course.process()    │──────┐
-│ - Parse course spec │      │
-│ - Scan files        │      │
-│ - Create jobs       │      │
-└──────┬──────────────┘      │
-       │                     │
-       ▼                     ▼
-┌─────────────────┐    ┌──────────────┐
-│ Check cache     │───▶│ Cache hit?   │
-│ (content hash)  │    │ Skip job     │
-└─────┬───────────┘    └──────────────┘
-      │                       │
-      │ Cache miss            │
-      ▼                       │
-┌─────────────────┐           │
-│ Add job to      │           │
-│ SQLite queue    │           │
-│ (status: pending)          │
-└──────┬──────────┘           │
-       │                      │
-       │                      │
-┌──────▼─────────────────┐    │
-│ Worker polls queue     │    │
-│ SELECT * FROM jobs     │    │
-│ WHERE status='pending' │    │
-│ LIMIT 1                │    │
-└──────┬─────────────────┘    │
-       │                      │
-       ▼                      │
-┌─────────────────┐           │
-│ Read input file │           │
-│ from filesystem │           │
-└──────┬──────────┘           │
-       │                      │
-       ▼                      │
-┌─────────────────┐           │
-│ Process job     │           │
-│ (convert/execute)          │
-└──────┬──────────┘           │
-       │                      │
-       ▼                      │
-┌─────────────────┐           │
-│ Write output    │           │
-│ to filesystem   │           │
-└──────┬──────────┘           │
-       │                      │
-       ▼                      │
-┌─────────────────┐           │
-│ Update job:     │           │
-│ status=completed│           │
-│ Add to cache    │           │
-└──────┬──────────┘           │
-       │                      │
-       └──────────────────────┘
-              │
-              ▼
-       ┌───────────┐
-       │  Done!    │
-       └───────────┘
-```
-
-## Worker Services
-
-### Notebook Processor
-
-**Purpose**: Process Jupyter notebooks
-
-**Capabilities**:
-- Execute notebooks with multiple kernels (Python, C++, C#, Java, TypeScript)
-- Convert to formats: HTML slides, Jupyter notebooks, extracted code
-- Template support for different languages
-- Language variants (English, German)
-- Output modes (speaker notes, participant versions)
-
-**Dependencies**: Python, IPython, Jupyter, xeus kernels
-
-**Location**: `src/clm/workers/notebook/`
-
-### PlantUML Converter
-
-**Purpose**: Convert PlantUML diagrams to images
-
-**Output Formats**: PNG, SVG
-
-**Dependencies**:
-- Java Runtime Environment
-- PlantUML JAR file (plantuml-1.2024.6.jar)
-
-**Environment Variable**: `PLANTUML_JAR` - Path to PlantUML JAR
-
-**Location**: `src/clm/workers/plantuml/`
-
-### DrawIO Converter
-
-**Purpose**: Convert Draw.io diagrams to images
-
-**Output Formats**: PNG, SVG, PDF
-
-**Dependencies**:
-- Draw.io desktop application
-- Xvfb (X virtual framebuffer, for headless rendering)
-
-**Environment Variable**: `DRAWIO_EXECUTABLE` - Path to Draw.io executable
-
-**Location**: `src/clm/workers/drawio/`
-
-**Special Requirements**: Requires Xvfb running in headless environments
-
-### JupyterLite Builder
-
-**Purpose**: Build deployable JupyterLite static sites from course notebooks
-
-**Capabilities**:
-- Assemble a `lite-dir` from the already-built notebook output tree
-- Shell out to `jupyter lite build` (xeus-python or pyodide kernel)
-- Emit a student launcher (`launch.py` for Python; or bundled miniserve
-  binaries for Windows/macOS/Linux)
-- Write `README-offline.md` with IndexedDB persistence guidance
-- Apply optional branding via `overrides.json` (theme, logo, site name)
-- Write a deterministic `jupyterlite-manifest.json` for content-addressed caching
-
-**Dependencies** (not a clm extra): the build shells out to `jupyter lite build`
-in an isolated `uvx` tool env pinned in `builder.py` (jupyterlite-core,
-jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server). clm's env only
-needs `uv` on PATH — see `docs/claude/design/dependency-environment-isolation.md`.
-
-**Location**: `src/clm/workers/jupyterlite/`
-
-**Key Components**:
-- `JupyterLiteWorker` — queue-based worker extending `WorkerBase`
-- `builder.build_site()` — orchestrates lite-dir assembly, build, launcher
-- `lite_dir.assemble_lite_dir()` — pure-IO assembler (notebooks, wheels, env,
-  config, overrides)
-- `miniserve` — download, SHA-256-verify, cache, and emit prebuilt binaries
-- `BuildJupyterLiteSiteOperation` — operation that enqueues one job per
-  `(target, language, kind)` tuple
-
-**Scheduling**: barrier-scheduled after the notebook-format jobs for the same
-tuple complete. The CLI helper `enable_jupyterlite_workers_if_needed`
-auto-starts the worker when a course opts in.
-
-**Entry Point**: `python -m clm.workers.jupyterlite`
+Stages order execution so outputs that reuse cached execution run after the
+outputs that populate the cache (see
+[Multiple Output Targets](#multiple-output-targets)). Workers communicate
+results through the jobs DB (direct mode) or the worker API (Docker mode);
+file content itself always moves through the filesystem, never through the
+queue.
 
 ## Caching Strategy
 
@@ -473,753 +501,176 @@ auto-starts the worker when a course opts in.
 > what invalidates them, the retention policy, and the interactions that have
 > produced real bugs (#321, #577, #579, #580) — lives in the caching guide.
 
-**Content-Based Caching**:
-- Each file's content is hashed (SHA-256), folding in the template fingerprint
-  (incl. the clm version), the worker-image identity, and sibling files
-- Before processing, check if output file + content hash exists in cache
-- If cache hit: skip processing, use cached result
-- If cache miss: process file, store result in cache
+**Content-based caching**: each file's content is hashed (SHA-256), folding in
+the template fingerprint (incl. the clm version), the worker-image identity,
+and sibling files. Cache hit → skip processing; miss → process and store.
 
-**Benefits**:
-- Avoid re-processing unchanged files
-- Faster incremental builds
-- Especially important for slow operations (notebook execution, PlantUML rendering)
+**Three caches across two DB files**:
 
-**Three caches across two DB files** (see [`caching.md`](caching.md) for keys,
-readers/writers, and trim policies):
 - `results_cache` (`clm_jobs.db`) — the job-level scheduling short-circuit,
   keyed `(output_file, content_hash)`
 - `processed_files` (`clm_cache.db`) — the operation result cache, keyed
   `(file_path, content_hash, output_metadata)`
 - `executed_notebooks` (`clm_cache.db`) — the execution cache, keyed by the
-  kind-agnostic `execution_cache_hash()`; Recording/Speaker HTML is its producer
+  kind-agnostic `execution_cache_hash()`; Recording/Speaker HTML is its
+  producer
+
+Diagnose unexpected rebuilds with `clm cache explain <deck> --spec <course.xml>`.
 
 ## Configuration
 
-**Environment Variables**:
-- `DB_PATH` - Path to SQLite database (default: `clm_jobs.db`)
-- `PLANTUML_JAR` - Path to PlantUML JAR file
-- `DRAWIO_EXECUTABLE` - Path to Draw.io executable
-- `LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
-- `CLM_SKIP_DOWNLOADS` - Skip downloads in sessionStart hook
-- `CLM_WORKER_ID` - Pre-assigned worker ID (set by parent process for worker pre-registration)
+**Canonical reference: [`configuration.md`](../user-guide/configuration.md)**
+— the complete environment-variable and config-file reference. Do not trust
+ad-hoc env-var lists elsewhere (including in old revisions of this document).
 
-**Course Specification** (`course.xml`):
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<course>
-    <name>
-        <de>Kursname</de>
-        <en>Course Name</en>
-    </name>
-    <prog-lang>python</prog-lang>
-    <description>
-        <de>Beschreibung</de>
-        <en>Description</en>
-    </description>
-    <sections>
-        <section>
-            <name>
-                <de>Abschnitt 1</de>
-                <en>Section 1</en>
-            </name>
-            <topics>
-                <topic>topic_001</topic>
-            </topics>
-        </section>
-    </sections>
-</course>
-```
+Known non-uniformity, tracked in #802:
+
+- **Three parallel config mechanisms** (A7, open): the Pydantic `ClmConfig`
+  hierarchy (`infrastructure/config.py`), `core/sidecar_layout.py`'s own
+  `[tool.clm]` pyproject reader, and raw `os.environ` reads scattered through
+  the codebase (including `build.py`'s `_resolve_*` family).
+- **The jobs-DB path has two env names and two defaults** (A8, open): host
+  code uses `CLM_JOBS_DB_PATH` (default `clm_jobs.db`); worker code uses bare
+  `DB_PATH` with the container default `/db/jobs.db`. It works because the
+  worker executor always injects the value — any other spawn path would
+  silently poll an empty queue.
 
 ## Testing Strategy
 
-**Test Markers**:
-- **(no marker)** - Fast unit tests, mocked dependencies
-- `@pytest.mark.integration` - Real workers, requires external tools
-- `@pytest.mark.e2e` - Full course conversion
-- `@pytest.mark.slow` - Long-running tests
+**Canonical reference: [`testing.md`](testing.md)** — the full marker list and
+strategy. Quick orientation:
 
-**Test Organization**:
-```
-tests/
-├── core/              # Core domain logic tests
-├── infrastructure/    # Infrastructure tests
-├── cli/               # CLI tests
-└── e2e/               # End-to-end tests
-```
+- `pytest` — fast suite (~72s, runs on the pre-push hook); excludes `slow`,
+  `integration`, `e2e`, `db_only`, and `docker`
+- `pytest -m "not docker"` — pre-release local gate
+- `pytest -m ""` — everything (Docker tests are CI-validated only)
 
-**Default**: Skips slow, broker, integration, and e2e tests
+Architecture-relevant suites:
 
-**Running Tests**:
-```bash
-pytest              # Fast unit tests only
-pytest -m integration  # Include integration tests
-pytest -m e2e          # Include e2e tests
-pytest -m ""           # Run ALL tests
-```
+- `tests/test_architecture_contracts.py` — the string-import guard, the
+  `Backend` surface pin, and the worker payload schema pins (see
+  [enforcement](#how-the-layering-is-enforced))
+- `tests/e2e/test_e2e_golden_build.py` — golden double-build byte-identity
+  over the reference specs, on the `--snapshot`/`--verify-against` harness;
+  the refactor safety net for any pipeline change
+- `tests/build/test_pipeline_unmocked.py` — real `Course` + real
+  `SqliteBackend` + temp DB in the fast suite: stage flow and a real worker
+  round-tripping a job through the queue
 
-## Performance Characteristics
+## Multiple Output Targets
 
-**Startup Time**: ~1-2 seconds (SQLite initialization + worker pre-registration)
+Courses can define multiple output directories with selective content
+generation (delayed solution release, language-specific distributions,
+instructor packages).
 
-**Memory Usage**: ~500MB (workers only, no broker infrastructure)
+- `OutputTargetSpec` (`core/course_spec.py`) parses `<output-target>` XML
+  elements: name, path, and optional `kinds` / `formats` / `languages`
+  filters (`None` means "all" — backward compatible).
+- `OutputTarget` (`core/output_target.py`) is the runtime form: resolved
+  absolute root plus `frozenset` filters with `should_generate(lang, fmt,
+  kind)`.
+- `ExecutionDependencyResolver` (`core/execution_dependencies.py`) handles
+  outputs that depend on cached execution from *other* outputs: HTML
+  `completed` reuses the execution cache populated by HTML `speaker`, so a
+  target requesting only `completed` gets an **implicit** speaker execution
+  (cache-populating, output-suppressed). The `EXECUTION_REQUIREMENTS` /
+  `CACHE_PROVIDERS` tables in that module are the authoritative statement of
+  which `(format, kind)` pairs populate or reuse the cache.
 
-**Concurrency**:
-- SQLite handles concurrent access with DELETE journal mode
-- Multiple workers can process jobs in parallel
-- Worker pools configurable per job type
+The processing loop in `Course.process_all()` iterates stages × targets ×
+files, filtering each file's output specs through the target. CLI:
+`clm build course.xml --targets students,solutions` selects targets;
+`clm course targets course.xml` lists them; `--output-dir` overrides the
+spec's targets with a single default target.
 
-**Scalability**:
-- Single-host design (SQLite limitation)
-- Can scale workers up to CPU core count
-- Designed for local development and CI/CD, not large-scale distributed processing
+## Operational Lessons
+
+Hard-won constraints that shape the code; kept here because each one cost a
+real debugging session.
+
+### Signal handling and asyncio cleanup
+
+The CLI registers SIGINT/SIGTERM handlers that raise `KeyboardInterrupt`. A
+signal arriving *during* `asyncio.run()`'s cleanup — after handlers are
+restored but before the call returns — surfaces as a spurious
+`KeyboardInterrupt` after a successful build. `build.py` therefore tracks
+build completion and suppresses a late `KeyboardInterrupt` when the build
+already succeeded. Relatedly, **never log from a signal handler**: handlers
+can interrupt the logging system mid-write and trigger
+`RuntimeError: reentrant call inside <_io.BufferedWriter>`. Handlers set
+flags and raise; logging happens in the cleanup code that runs afterward.
+
+### Worker orphan detection
+
+Workers store their parent PID at startup, poll parent liveness (signal-0
+check, cross-platform), and exit gracefully when the parent dies; `atexit`
+handlers provide emergency cleanup, and the `workers` table tracks
+`parent_pid` for diagnostics. Without this, a crashed `clm build` left
+workers running indefinitely.
+
+### Subprocess crash retry
+
+Electron-based Draw.io can crash transiently (V8 garbage-collection races).
+`infrastructure/services/subprocess_tools.py` provides `RetryConfig` +
+`run_subprocess`: timeouts always retry with doubling timeout;
+non-zero exits retry only when `retry_on_crash=True` (the Draw.io converter
+enables it: 3 attempts, 2s delay); `FileNotFoundError`/`PermissionError`
+never retry. Default is `retry_on_crash=False`, preserving
+non-raising behavior for ordinary non-zero exits.
 
 ## Migration History
 
-CLM has evolved significantly:
-
-**v0.1.x - v0.2.x**: Message broker-based architecture
-- 4 separate packages
-- RabbitMQ message broker with FastStream framework
-- Prometheus + Grafana monitoring
-- Message serialization overhead
-
-**v0.3.0 - v0.3.1** (November 2025): Simplified architecture
-- Single unified package
-- SQLite job queue (RabbitMQ/FastStream removed)
-- Direct file system access
-- No message broker required
-- Reduced from 8 Docker services to 3
-
-**v0.6.2 → v1.25.0** (2025): Integrated workers
-- Workers integrated into main package (`clm.workers`)
-- Optional dependencies for each worker
-- Four-layer architecture (core, infrastructure, workers, cli)
-- No separate worker package installation needed
-- New `[all-workers]` and `[ml]` dependency groups
-
-For detailed migration history, see `docs/archive/migration-history/`.
-
-## Design Decisions
-
-### Why SQLite instead of a Message Broker?
-
-**Pros**:
-- ✅ No separate broker infrastructure
-- ✅ Simple SQL queries for monitoring
-- ✅ Built-in to Python (no external dependencies)
-- ✅ Direct file access (no serialization)
-- ✅ Easier debugging and testing
-- ✅ Simpler architecture
-
-**Cons**:
-- ❌ Single-host limitation (not distributed)
-- ❌ Lower write concurrency than message brokers
-
-**Decision**: For CLM's use case (local development, educational content processing), simplicity and ease of use outweigh the scalability limitations. The project has completely removed RabbitMQ/FastStream in favor of pure SQLite orchestration.
-
-### Why Direct Worker Execution?
-
-**Pros**:
-- ✅ Faster startup (no container overhead)
-- ✅ Easier debugging (direct process access)
-- ✅ Lower resource usage
-
-**Cons**:
-- ❌ Requires external tools installed
-- ❌ Less isolation than containers
-
-**Decision**: Support both modes - Docker for production/CI, direct for development.
-
-### Why DELETE Journal Mode instead of WAL?
-
-**Problem**: WAL mode doesn't work reliably across Docker volume mounts on Windows
-
-**Solution**: Use DELETE journal mode for cross-platform compatibility
-
-**Tradeoff**: Slightly lower write concurrency, but reliable everywhere
-
-## Known Issues and Solutions
-
-### Signal Handling and asyncio Cleanup
-
-**Problem**: Spurious "Aborted!" messages after successful builds
-
-**Root Cause**: When using signal handlers with `asyncio.run()`, there's a timing-sensitive interaction:
-
-1. The CLI registers custom signal handlers (SIGINT, SIGTERM) that raise `KeyboardInterrupt`
-2. When the build completes, signal handlers are restored in a `finally` block
-3. `asyncio.run()` performs its own cleanup (canceling tasks, closing the loop)
-4. If a signal arrives during asyncio cleanup (after handlers are restored but before `asyncio.run()` returns), Python's default handler raises `KeyboardInterrupt`
-5. Click catches this exception and prints "Aborted!" even though the build succeeded
-
-**Solution**: Track build completion status and suppress late `KeyboardInterrupt`:
-
-```python
-# In the async main() function:
-build_completed = False
-try:
-    # ... build logic ...
-    build_completed = True  # Set AFTER successful completion
-finally:
-    signal.signal(signal.SIGINT, original_sigint)  # Restore handlers
-return build_completed
-
-# In the sync build() command:
-try:
-    build_completed = asyncio.run(main(...))
-except KeyboardInterrupt:
-    if not build_completed:
-        raise  # Real interruption - propagate
-    # Build completed - ignore late signal
-    pass
-```
-
-**Key Insight**: Signal handlers in Python can be called at almost any point during execution. When raising exceptions in signal handlers, you must account for the exception being raised during cleanup code, not just during the main execution.
-
-### Worker Orphan Processes
-
-**Problem**: Worker processes becoming orphaned when parent CLM process crashes
-
-**Root Cause**: Workers had no mechanism to detect when their parent process died. They would continue running indefinitely, consuming resources.
-
-**Solution**: Workers now monitor their parent process:
-
-1. Store parent PID at worker initialization
-2. Periodically check if parent is alive (every 5 seconds)
-3. Use `os.kill(pid, 0)` - sends signal 0 (no-op) to check process existence
-4. If parent dies, worker logs a warning and exits gracefully
-5. Additionally, `atexit` handlers provide emergency cleanup on normal exit
-
-**Implementation Details**:
-- `os.kill(pid, 0)` raises `OSError` if process doesn't exist
-- Works cross-platform (Windows/Linux/macOS)
-- Database schema tracks `parent_pid` for diagnostics
-- Worker events include `parent_died` event type
-
-### Subprocess Crash Retry Logic
-
-**Problem**: External tools like DrawIO (which uses Electron/Node.js) can experience transient crashes due to V8 JavaScript engine issues, such as "Invoke in DisallowJavascriptExecutionScope" errors caused by garbage collection race conditions.
-
-**Root Cause**: Electron-based applications can crash transiently when:
-- V8 garbage collection interrupts JavaScript execution at an invalid point
-- Multiple instances compete for system resources
-- Memory pressure causes instability
-
-**Solution**: The subprocess execution system (`subprocess_tools.py`) now supports configurable retry logic for crash recovery:
-
-```python
-from clm.infrastructure.services.subprocess_tools import RetryConfig, run_subprocess
-
-# Configure retry behavior
-config = RetryConfig(
-    max_retries=3,          # Number of retry attempts
-    base_timeout=60,        # Base timeout (doubles with each retry)
-    retry_on_crash=True,    # Enable retry on non-zero exit codes
-    retry_delay=2.0         # Delay between crash retries (seconds)
-)
-
-# Use with run_subprocess
-process, stdout, stderr = await run_subprocess(
-    cmd=["drawio", "--export", "file.drawio"],
-    correlation_id="job-123",
-    retry_config=config,
-    env=custom_env
-)
-```
-
-**Key Components**:
-
-1. **RetryConfig** - Dataclass for configuring retry behavior:
-   - `max_retries`: Total attempts before failing (default: 3)
-   - `base_timeout`: Initial timeout, doubles each retry (default: 60s)
-   - `retry_on_crash`: Enable retry on non-zero exit (default: False)
-   - `retry_delay`: Wait time between crash retries (default: 1.0s)
-
-2. **SubprocessCrashError** - Exception for crash failures:
-   - Subclass of `SubprocessError`
-   - Contains `return_code`, `stderr`, and `stdout` attributes
-   - Raised when all crash retries are exhausted
-
-3. **DrawIO Integration** - DrawIO converter uses crash retry by default:
-   ```python
-   # In drawio_converter.py
-   DRAWIO_RETRY_CONFIG = RetryConfig(
-       max_retries=3,
-       base_timeout=60,
-       retry_on_crash=True,   # Enabled for DrawIO
-       retry_delay=2.0        # 2-second delay for resource recovery
-   )
-   ```
-
-**Retry Behavior**:
-- Timeout errors: Always retried (with exponential backoff)
-- Non-zero exit codes: Only retried if `retry_on_crash=True`
-- FileNotFoundError/PermissionError: Never retried (fail immediately)
-
-**Backward Compatibility**: By default, `retry_on_crash=False`, preserving the original behavior where non-zero exit codes return normally without raising exceptions.
-
-**Platform-Specific Handling**: The DrawIO converter only sets `DISPLAY=":99"` on non-Windows platforms, since Windows DrawIO uses native GUI and doesn't require X11.
-
-### Signal Handler Reentrancy with Logging
-
-**Problem**: `RuntimeError: reentrant call inside <_io.BufferedWriter>` when receiving signals
-
-**Root Cause**: Signal handlers can interrupt Python code at almost any point, including while the logging system is writing to a file. If the signal handler then calls `logger.info()` or similar, this causes a reentrant call to the logging system, which is not thread-safe.
-
-**Example Error**:
-```
-RuntimeError: reentrant call inside <_io.BufferedWriter name='...clm.log'>
-```
-
-**Solution**: Never call logging functions from signal handlers:
-
-```python
-def shutdown_handler(signum, frame):
-    # NOTE: Do not log here - signal handlers can interrupt logging
-    # and cause reentrant call errors
-    nonlocal shutdown_requested
-    shutdown_requested = True
-    raise KeyboardInterrupt(f"Shutdown signal {signum} received")
-```
-
-**Key Rules for Signal Handlers**:
-1. Do minimal work - just set flags and/or raise exceptions
-2. Never call `logger.info()`, `logger.warning()`, etc.
-3. Never call `print()` to files (only `sys.stderr` is somewhat safe)
-4. Defer logging to exception handlers or cleanup code that runs after the signal handler returns
-
-## Multiple Output Targets Architecture
-
-**Added in v0.4.x**: Support for defining multiple output directories with selective content generation. This enables scenarios like delayed solution release, language-specific distributions, and separate instructor packages.
-
-### Design Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         XML Course Spec                                  │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │  <output-targets>                                                │   │
-│  │    <output-target name="students">...</output-target>            │   │
-│  │    <output-target name="solutions">...</output-target>           │   │
-│  │  </output-targets>                                               │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────┬───────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      CourseSpec.output_targets                          │
-│                      list[OutputTargetSpec]                             │
-└─────────────────────────────────────┬───────────────────────────────────┘
-                                      │ Course.from_spec()
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Course.output_targets                           │
-│                         list[OutputTarget]                              │
-│                                                                         │
-│  For each file, for each target:                                       │
-│    → Generate only the kinds/formats/languages in target config        │
-└─────────────────────────────────────┬───────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Output Generation                                     │
-│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
-│  │ Target: students │ │ Target: solutions│ │ Target: instructor│       │
-│  │ Path: ./students │ │ Path: ./solutions│ │ Path: ./private   │       │
-│  │ Kinds: code-along│ │ Kinds: completed │ │ Kinds: speaker    │       │
-│  └────────┬─────────┘ └────────┬─────────┘ └────────┬─────────┘        │
-│           ▼                    ▼                    ▼                   │
-│    ./students/            ./solutions/         ./private/               │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Key Components
-
-#### OutputTargetSpec (course_spec.py)
-
-Parses `<output-target>` XML elements and stores the specification:
-
-```python
-@frozen
-class OutputTargetSpec:
-    name: str                      # Unique identifier
-    path: str                      # Output directory path
-    kinds: list[str] | None        # Filter: code-along, completed, speaker
-    formats: list[str] | None      # Filter: html, notebook, code
-    languages: list[str] | None    # Filter: de, en
-```
-
-**Design Decision**: `None` means "all values" for any filter. This provides backward compatibility - targets without explicit filters generate everything.
-
-#### OutputTarget (output_target.py)
-
-Runtime representation with resolved paths and efficient filtering:
-
-```python
-@define
-class OutputTarget:
-    name: str
-    output_root: Path              # Resolved absolute path
-    kinds: frozenset[str]          # Immutable set for O(1) lookup
-    formats: frozenset[str]
-    languages: frozenset[str]
-
-    def should_generate(self, lang: str, fmt: str, kind: str) -> bool:
-        """Check if this combination should be generated."""
-        return (lang in self.languages and
-                fmt in self.formats and
-                kind in self.kinds)
-```
-
-**Design Decision**: Use `frozenset` instead of `list` for filters. This enables O(1) membership testing and makes targets immutable/hashable.
-
-#### ExecutionDependencyResolver (execution_dependencies.py)
-
-Handles the critical requirement that some outputs depend on cached execution results from other outputs.
-
-**The Problem**: HTML `completed` output reuses cached execution from HTML `speaker`. If a user configures a target with only `completed` (no `speaker`), we must still execute notebooks to populate the cache.
-
-**Solution**: Explicit dependency resolution:
-
-```python
-class ExecutionRequirement(Enum):
-    NONE = auto()           # No execution needed
-    POPULATES_CACHE = auto() # Executes and caches results
-    REUSES_CACHE = auto()    # Depends on cached results
-
-EXECUTION_REQUIREMENTS = {
-    ("html", "code-along"): ExecutionRequirement.NONE,
-    ("html", "speaker"): ExecutionRequirement.POPULATES_CACHE,
-    ("html", "completed"): ExecutionRequirement.REUSES_CACHE,
-    # notebook and code formats don't need execution
-}
-
-class ExecutionDependencyResolver:
-    CACHE_PROVIDERS = {
-        ("html", "completed"): ("html", "speaker"),
-    }
-
-    def resolve_implicit_executions(self, requested_outputs):
-        """Return additional executions needed for cache."""
-        implicit = set()
-        for lang, fmt, kind in requested_outputs:
-            if get_execution_requirement(fmt, kind) == ExecutionRequirement.REUSES_CACHE:
-                provider = self.CACHE_PROVIDERS.get((fmt, kind))
-                if provider and (lang, *provider) not in requested_outputs:
-                    implicit.add((lang, *provider))
-        return implicit
-```
-
-**Why This Design**:
-1. **Explicit Dependencies**: The `EXECUTION_REQUIREMENTS` table documents which outputs need execution
-2. **Extensible**: New formats can be added by extending the tables
-3. **Testable**: Dependency resolution can be unit tested in isolation
-4. **Clear Logging**: When implicit executions are added, it's logged for debugging
-
-### Processing Flow
-
-```
-1. Course.from_spec() creates OutputTarget objects
-   │
-2. Course.process_all() collects all requested outputs
-   │
-3. ExecutionDependencyResolver.resolve_implicit_executions()
-   │  └── Returns additional speaker HTML executions if needed
-   │
-4. For each execution stage:
-   │  For each target:
-   │    For each file:
-   │      → output_specs(target=target) filters outputs
-   │      → Operations created only for matching combinations
-   │
-5. Implicit executions run but don't write outputs
-```
-
-### Integration with Existing Code
-
-#### output_specs() Function
-
-Extended to accept an `OutputTarget` parameter:
-
-```python
-def output_specs(
-    course: Course,
-    root_dir: Path,
-    skip_html: bool = False,
-    languages: list[str] | None = None,
-    kinds: list[str] | None = None,
-    target: OutputTarget | None = None,  # NEW
-) -> Iterator[OutputSpec]:
-```
-
-When `target` is provided, its filters take precedence over explicit `languages`/`kinds` parameters.
-
-#### NotebookFile.get_processing_operation()
-
-Extended to pass target and handle implicit executions:
-
-```python
-async def get_processing_operation(
-    self,
-    target_dir: Path,
-    stage: int | None = None,
-    target: OutputTarget | None = None,
-    implicit_executions: set[tuple[str, str, str]] | None = None,
-) -> Operation:
-```
-
-The `implicit_executions` parameter contains (lang, format, kind) tuples that should be executed for cache population but whose outputs should not be saved.
-
-### CLI Integration
-
-**New `--targets` option**:
-```bash
-clm build course.xml --targets students,solutions
-```
-
-**New `targets` command**:
-```bash
-clm course targets course.xml
-```
-
-### Backward Compatibility
-
-The feature is fully backward compatible:
-
-1. **No `<output-targets>`**: Uses default single target with all kinds/formats/languages
-2. **`--output-dir` CLI flag**: Overrides all spec targets with a single default target
-3. **Existing code paths**: Continue to work unchanged when `target=None`
-
-### Testing Strategy
-
-**Unit Tests** (tests/core/test_output_target*.py, test_execution_dependencies.py):
-- OutputTargetSpec XML parsing and validation
-- OutputTarget creation and filtering
-- ExecutionDependencyResolver implicit execution resolution
-
-**Integration Tests** (tests/core/test_multi_target_course.py):
-- Course.from_spec() with multiple targets
-- CLI override behavior
-- Target selection and filtering
-- Implicit execution handling
-
-### Design Decisions Summary
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Filter representation | `frozenset` | O(1) lookup, immutable |
-| None semantics | Means "all" | Backward compatible defaults |
-| Implicit executions | Explicit resolver | Testable, extensible, documented |
-| Code format restriction | Only for `completed` | Maintains existing semantic |
-| Path resolution | At Course creation | Fail fast, single resolution point |
-
-### Future Enhancements
-
-Potential improvements:
-
-- Parallel target processing (currently sequential within each stage)
-- Per-target progress reporting in TUI
-- Target-specific configuration (e.g., different templates)
-- Conditional targets based on environment variables
-
----
-
-## Extended Modules (Optional Dependencies)
-
-Beyond the core four-layer architecture, CLM ships several self-contained
-modules that are installed via optional extras. Each is a normal Python package
-under `src/clm/<module>/`; read the code for full details. This section gives
-the entry points and purpose of each so AI assistants and new contributors can
-orient quickly.
-
-### `clm.notebooks` (shared slide utilities)
-
-Percent-format `.py` slide-file parsing/writing/polishing. Used by the
-voiceover pipeline, the build pipeline (for companion voiceover files), and
-the `clm.slides` CLI tools.
-
-- `slide_parser` — parse slide files into `SlideGroup`/`CellMetadata` objects.
-  `CellMetadata` carries `slide_id` and `for_slide` for companion-file linkage.
-- `slide_writer` — insert/update notes cells in existing `.py` files.
-- `polish` — LLM-powered notes cleanup via the openai SDK (requires `[summarize]`).
-
-### `clm.slides` (authoring tools)
-
-CLI-facing tooling for AI-assisted slide authoring. Powers `clm course resolve-topic`,
-`clm slides search`, `clm validate` (spec + slide validation),
-`clm slides normalize`, `clm slides language-view`, `clm slides suggest-sync`,
-`clm slides assign-ids`, `clm slides coverage`, `clm slides split` /
-`clm slides unify`, `clm slides sync`, `clm slides tidy`,
-`clm voiceover extract` / `clm voiceover inline`, and `clm slides rules`.
-(The flat-form aliases — `clm resolve-topic`, `clm search-slides`, etc. — were
-removed in CLM 1.8; use the verb-grouped invocations above.)
-
-Key entry points: `tags` (canonical tag sets), `search.search_slides`,
-`spec_validator.validate_spec`, `validator.validate_file`,
-`normalizer.normalize_file`, `language_tools.get_language_view` /
-`suggest_sync`, `voiceover_tools.extract_voiceover` / `inline_voiceover` /
-`merge_voiceover_text` (used by the build pipeline),
-`authoring_rules.get_authoring_rules`,
-`assign_ids.assign_ids_in_file` / `assign_ids_in_directory` (slide-id
-generator with EN-derived slug + preserve marker + optional LLM
-suggester), `pairing.build_slide_groups` / `build_slide_pairs` (shared
-DE/EN adjacency + title-macro helpers used by validator + Phase 6
-split-source parity check), `coverage.check_coverage_in_file` /
-`check_coverage_in_directory` (LLM-driven voiceover coverage check
-backed by `CoverageCache` in the LLM cache database),
-`split.split_file` / `unify.unify_files` (bidirectional
-bilingual ↔ split-by-language `.py` converters with byte-identical
-round-trip), `sync.sync_pair` (cross-language LLM-driven proposal
-generator with `SyncCache` content-addressed proposal memoization
-and `SyncSnapshotCache` location-addressed last-known-synced
-anchors), and `raw_cells` (the shared lossless cell-primitive
-module — `RawCell`, `split_cells`, `reconstruct`,
-`is_cell_boundary` — that `assign-ids` / `normalize` / `split` /
-`sync` all share). Two more modules manage where authoring **sidecars**
-(voiceover companions and HTTP-replay cassettes) live:
-`sidecar_layout.resolve_course_sidecar_default` / `effective_write_layout`
-(per-operation and course-wide layout precedence, driven by the
-`CLM_SIDECAR_LAYOUT` env var and the `[tool.clm] sidecar-layout` pyproject
-key) and `tidy.plan_tidy` / `apply_tidy` (bulk relocation between the
-`voiceover/` + `cassettes/` subdirectory layout and the flat sibling layout,
-exposed at the CLI as `clm slides tidy PATH`).
-
-### `clm.snapshot` (build-output verification harness)
-
-Byte-level compare of two CLM build trees, exposed at the CLI as
-`clm build --snapshot DIR` (capture) and `clm build --verify-against DIR`
-(compare). Library-only — there is no `clm snapshot` subcommand; the
-build command drives both flags. Entry points:
-`verify_against(snapshot_dir, output_dir, *, include_html, strict)`
-(flat single-tree compare), `verify_against_targets(snapshot_dir,
-targets, *, include_html, strict)` (per-target compare for specs with
-`<output-targets>` — diffs prefixed by target name), `VerifyReport`
-(pass/fail signal via `has_diffs`, human-readable rollup via
-`format_text()`), and `normalize_for_compare` (HTML hex-address
-normalization used under `--include-html`). `.html` is skipped by
-default because rendered HTML contains live-kernel output;
-`--include-html` opts in with hex-address normalization, and
-`--strict-verify` byte-compares everything with no skipping.
-
-### `clm.mcp` (Model Context Protocol server)
-
-Exposes 11 of the `clm.slides` tools over stdio MCP transport so AI agents can
-drive slide authoring. Entry points: `server.create_server(data_dir)` /
-`run_server(data_dir)` and the `tools.handle_*` async handlers. Started with
-`clm mcp`. Requires `[mcp]`.
-
-### `clm.voiceover` (video → speaker notes)
-
-Video-to-speaker-notes pipeline used by the `clm harvest` group
-(`report`/`task`/`accept`, `autopilot`, `transcribe`/`detect`/`identify`, …).
-The CLI surface moved from `clm voiceover` to `clm harvest` in the epic-#546
-cutover, but the Python package keeps its `clm.voiceover` name and layout.
-Pluggable transcription backends (faster-whisper default, Cohere, Granite).
-Requires `[voiceover]`.
-
-- `transcribe` — Whisper ASR with backend Protocol.
-- `keyframes` — frame extraction and transition detection.
-- `matcher` — OCR + fuzzy matching for slide identification.
-- `aligner` — transcript-to-slide assignment with backtracking.
-
-### `clm.recordings` (video recording management)
-
-Managed video recording workflow: five-step audio pipeline
-(extract → DeepFilterNet3 ONNX → FFmpeg filters → AAC → mux), pluggable
-processing backends, watcher-driven automation, per-course JSON state, and an
-HTMX web dashboard. Requires `[recordings]`.
-
-**Sub-packages**:
-- `recordings.processing` — audio pipeline (`ProcessingPipeline`,
-  `run_onnx_denoise`, `PipelineConfig`/`AudioFilterConfig`, batch utilities).
-- `recordings.state` — per-course `CourseRecordingState` with JSON CRUD,
-  `LectureState`/`RecordingPart`/`TakeRecord` models. Parts and takes stamp
-  slide-version provenance (`section_id`, `topic_id`, `slide_digest`) at
-  record time (issue #208; optional/default `None` for backward-compatible
-  state files).
-- `recordings.provenance` — drift query comparing a part's stamped
-  `slide_digest` against the topic's current digest in the build provenance
-  manifest, classifying each part `current` / `changed` / `unknown`.
-- `recordings.workflow` — naming conventions, directory management, assembler
-  (mux video+audio, archive originals), OBS WebSocket client, recording
-  session state machine, watchdog-based file watcher, processing backends,
-  job manager, job store, event bus.
-- `recordings.workflow.backends` — `ProcessingBackend` Protocol,
-  `AudioFirstBackend` Template Method ABC, `OnnxAudioFirstBackend` (local),
-  `ExternalAudioFirstBackend` (iZotope RX 11 / similar), `AuphonicBackend`
-  (cloud video-in/video-out), and `make_backend()` factory.
-- `recordings.web` — FastAPI + HTMX + SSE dashboard (`create_app`).
-- `recordings.git_info` — captures git commit at recording assignment time.
-
-CLI: `clm recordings drift COURSE_ID` reports which recordings are stale after
-slide edits (stamped `slide_digest` vs the build provenance manifest).
-
-### `clm.release` (per-topic solution release)
-
-Solution-release orchestration for promoting completed topics to student
-cohorts one at a time, each frozen against later course edits (issue #208).
-No optional extras — pure stdlib + `attrs`. Cohorts are declared in the spec's
-`<release-channels>` block; the volatile per-topic release state lives in a
-plain-text ledger, never in the spec.
-
-- `ledger` — read/append the per-channel released-topic ledger.
-- `frozen_manifest` — the per-cohort, per-stream freeze record
-  (`.clm-released.<stream>.json`; legacy `.clm-released.json` for a single
-  unnamed stream).
-- `sync` — promote released-but-not-frozen topics' bytes into a cohort repo
-  (located via the build provenance manifest) and freeze them.
-
-Driven by the `clm release` CLI group (`add` / `week` / `status` / `sync`)
-and `clm git --channel` (init/commit/push the cohort repos).
-
-The enabling build artifact is the **provenance manifest**
-(`.clm-manifest.json`), written by `clm build` at each output root **by
-default** (`clm.core` build pipeline; suppressed for `--snapshot`,
-`--verify-against`, `--only-sections`, and errored builds). It maps every
-output file to its owning `{section, topic, source_commit, content hash}` —
-information the output path alone cannot recover — and is consumed by both
-`clm release` and `clm recordings drift`. `clm git` keeps it out of every
-distributed repo.
-
-### `clm.workers.jupyterlite` (JupyterLite site builder)
-
-Site-level bundler that consumes already-built notebook output and produces
-a deployable JupyterLite static site. Opt-in only via `<jupyterlite>` config
-block + `<format>jupyterlite</format>` per target. Not a clm extra — the build
-runs in an isolated `uvx` tool env (needs only `uv` on PATH).
-
-- `builder` — `build_site(BuildArgs)` orchestrator: assembles lite-dir,
-  shells out to `jupyter lite build` in a pinned `uvx` tool env, emits launcher
-  + README + manifest.
-- `lite_dir` — pure-IO assembler: `assemble_lite_dir()`, `write_overrides()`,
-  `hash_manifest()`.
-- `miniserve` — download/cache/verify prebuilt binaries, emit per-OS launcher
-  scripts.
-- `jupyterlite_worker` — `JupyterLiteWorker` queue worker.
-
-CLI: `clm jupyterlite preview --target <name> <spec.xml>`.
-
-## Future Enhancements
-
-Potential improvements (not currently planned):
-
-- Web UI for monitoring job queue
-- Job priorities
-- Remote workers (distributed processing)
-- Prometheus metrics exporter
-- Auto-scaling worker pools based on queue depth
+CLM has evolved through three architectures:
+
+- **v0.1.x–v0.2.x**: four separate packages, RabbitMQ + FastStream broker,
+  Prometheus/Grafana monitoring, message serialization overhead.
+- **v0.3.x** (Nov 2025): single unified package, SQLite job queue, direct
+  file access, no broker; 8 Docker services reduced to 3.
+- **v0.6.x onward**: workers integrated into the main package
+  (`clm.workers`) behind optional extras. The `[ml]` extra that once pulled
+  the course-runtime stack was removed (Wave 2b) in favor of
+  `course-runtime-requirements.txt` + a separate course venv.
+- **v1.25.x / #802** (Aug 2026): the four-layer import structure made real —
+  contract seam descended into `clm.core`, cassette sweeping moved to the
+  entry points, worker identity inverted, slide-text model descended, and the
+  whole stack put under import-linter contracts (PRs #804–#813).
+
+Details: `docs/archive/migration-history/`.
+
+## Known Deviations and Pending Work
+
+The layering above is fully enforced, but #802 tracks remaining structural
+work. Keep this list honest — update it when an item lands:
+
+- **A4** — build orchestration still lives in `cli/commands/build.py`;
+  extraction into a callable core API is the next step (unblocked by the
+  contract descent)
+- **A5** — voiceover merge/propagation logic still in
+  `cli/commands/voiceover.py` (with private-symbol imports) instead of
+  `clm.voiceover`
+- **A7 / A8** — config unification and the jobs-DB path split (see
+  [Configuration](#configuration))
+- **A9** — ~12 cross-module underscore-private imports remain among the
+  unconstrained top-of-stack modules
+- **A12** — `docker`, `fastapi`, `uvicorn`, `watchdog` are unconditional
+  dependencies; `DummyBackend` ships in the package though only tests use it
 
 ## References
 
-- **AGENTS.md** (imported by `CLAUDE.md`) — lean session-start orientation for AI assistants
-- **`clm info commands`** — version-accurate CLI reference
-- **`clm info spec-files`** — version-accurate spec file format reference
+- **AGENTS.md** (imported by `CLAUDE.md`) — session-start orientation for AI
+  assistants
+- **`clm info commands`** / **`clm info spec-files`** — version-accurate CLI
+  and spec references
+- `pyproject.toml` `[tool.importlinter]` — the enforced layer contracts
+- `docs/claude/design/phase8-a1-a3-core-decoupling.md` — the re-layering
+  design the moves followed
+- `docs/claude/adversarial-review-2026-07-24.md` — the review that found the
+  previous revision of this document describing an architecture that did not
+  exist
 - **Migration History** — `docs/archive/migration-history/`
-- **Phase Summaries** — `docs/archive/phases/`
 - **Source Code** — `src/clm/`
 
 ---
 
-**Last Updated**: 2026-02-13
+**Last Updated**: 2026-08-06
 **Version**: 1.25.0
