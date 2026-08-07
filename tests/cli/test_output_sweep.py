@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.cli.output_sweep import (
+from clm.build.output_sweep import (
     DEFAULT_KEEP_PATTERNS,
     SweepReport,
     sweep_stray_files,
@@ -383,7 +383,7 @@ def test_module_does_not_pull_in_build_command() -> None:
     """Importing the sweep module must not transitively import
     ``clm.cli.commands.build`` — the dependency goes build → sweep,
     never the reverse."""
-    sweep_module = sys.modules["clm.cli.output_sweep"]
+    sweep_module = sys.modules["clm.build.output_sweep"]
     assert sweep_module is not None
     assert "clm.cli.commands.build" not in (
         getattr(attr, "__module__", "") for attr in vars(sweep_module).values()

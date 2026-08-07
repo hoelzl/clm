@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.build import _compute_section_dirs_for_cleanup
+from clm.build.engine import _compute_section_dirs_for_cleanup
 from clm.cli.main import cli
 from clm.core.course import Course
 from clm.core.course_spec import CourseSpec
@@ -156,7 +156,7 @@ class TestOnlySectionsRepeatedFlags:
             raise SystemExit(0)
 
         monkeypatch.setattr(
-            "clm.cli.commands.build.initialize_paths_and_course",
+            "clm.build.engine.initialize_paths_and_course",
             fake_initialize,
         )
         runner = CliRunner()
@@ -357,7 +357,7 @@ class TestSectionLevelCleanupSemantics:
         sentinel file inside. Returns the list of sentinel paths."""
         # Use the full (unfiltered) Course to build every section dir so
         # we can assert that unselected ones survive.
-        from clm.cli.commands.build import _compute_section_dirs_for_cleanup
+        from clm.build.engine import _compute_section_dirs_for_cleanup
 
         sentinels: list[Path] = []
         for section_dir in _compute_section_dirs_for_cleanup(course):

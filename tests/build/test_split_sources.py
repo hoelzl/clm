@@ -448,7 +448,7 @@ class _StubBackend:
 
 
 def _build_config(tmp_path: Path):
-    from clm.cli.commands.build import BuildConfig
+    from clm.build.config import BuildConfig
 
     return BuildConfig(
         spec_file=tmp_path / "spec.xml",
@@ -492,7 +492,7 @@ class TestBuildRefuses:
         """
         import asyncio
 
-        from clm.cli.commands.build import process_course_with_backend
+        from clm.build.engine import process_course_with_backend
 
         course_root, topic_dir = _scaffold_course(tmp_path)
         if scenario == "dual-format":

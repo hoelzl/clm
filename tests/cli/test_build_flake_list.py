@@ -3,8 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
-from clm.cli.build_reporter import BuildReporter
-from clm.cli.output_formatter import DefaultOutputFormatter, JSONOutputFormatter
+from clm.build.output_formatter import DefaultOutputFormatter, JSONOutputFormatter
+from clm.build.reporter import BuildReporter
 from clm.core.build_data_classes import BuildSummary, FlakyFileInfo
 
 

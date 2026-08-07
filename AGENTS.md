@@ -22,15 +22,17 @@ speaker notes).
 
 ## Architecture
 
-Four-layer architecture with an SQLite job queue and Direct/Docker worker
-execution. Full details in `docs/developer-guide/architecture.md`.
+Layered architecture with an SQLite job queue and Direct/Docker worker
+execution, enforced by import-linter. Full details in
+`docs/developer-guide/architecture.md`.
 
 ```
 clm/
 ├── core/           # Domain logic (Course, Section, Topic, CourseFile)
 ├── infrastructure/ # Job queue, worker management, backends, LLM client
 ├── workers/        # Worker implementations (notebook, plantuml, drawio)
-└── cli/            # Command-line interface
+├── build/          # Build engine: programmatic `clm build` (run_build)
+└── cli/            # Command-line interface (thin adapters)
 ```
 
 Optional extensions live alongside this core: `clm.notebooks` (slide
@@ -156,7 +158,7 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
   pre-push split landed.
 - Manual checks: `uv run ruff check src/ tests/`,
   `uv run ruff format src/ tests/`, and `uv run lint-imports` (the
-  four-layer import contracts — config in pyproject `[tool.importlinter]`;
+  layer import contracts — config in pyproject `[tool.importlinter]`;
   also enforced by pre-commit and CI's lint job).
 - Commits that fail a hook did **not** happen — fix the issue, re-stage, and
   create a **new** commit. Never `--amend` a commit the hook rejected.

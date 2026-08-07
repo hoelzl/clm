@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.cli.text_utils import (
+from clm.build.text_utils import (
     format_error_path,
     make_relative_path,
     truncate_path,

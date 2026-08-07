@@ -5,13 +5,13 @@ from datetime import datetime
 
 import pytest
 
-from clm.cli.build_reporter import BuildReporter
-from clm.cli.output_formatter import (
+from clm.build.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
+from clm.build.reporter import BuildReporter
 from clm.core.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.infrastructure.error_categorizer import ErrorCategorizer
 
@@ -1639,7 +1639,7 @@ class TestQuietFormatter:
     """QuietOutputFormatter has large no-op surface — cover every method."""
 
     def test_all_noop_methods_run(self):
-        from clm.cli.output_formatter import QuietOutputFormatter
+        from clm.build.output_formatter import QuietOutputFormatter
 
         formatter = QuietOutputFormatter()
         # These should all be silent and not raise.
@@ -1654,7 +1654,7 @@ class TestQuietFormatter:
         formatter.cleanup()
 
     def test_show_error_only_for_error_and_fatal(self, capsys):
-        from clm.cli.output_formatter import QuietOutputFormatter
+        from clm.build.output_formatter import QuietOutputFormatter
 
         formatter = QuietOutputFormatter()
         err = _make_error(severity="error", file_path="q.py", message="die")
@@ -1665,14 +1665,14 @@ class TestQuietFormatter:
         assert "die" in out
 
     def test_show_error_skipped_for_warning_severity(self):
-        from clm.cli.output_formatter import QuietOutputFormatter
+        from clm.build.output_formatter import QuietOutputFormatter
 
         formatter = QuietOutputFormatter()
         err = _make_error(severity="warning")
         assert not formatter.should_show_error(err)
 
     def test_summary_with_errors_prints_red_line_and_log_dir(self, capsys):
-        from clm.cli.output_formatter import QuietOutputFormatter
+        from clm.build.output_formatter import QuietOutputFormatter
 
         formatter = QuietOutputFormatter()
         summary = BuildSummary(duration=1.5, total_files=1, errors=[_make_error()])
@@ -1682,7 +1682,7 @@ class TestQuietFormatter:
         assert "logs" in out.lower()
 
     def test_summary_without_errors(self, capsys):
-        from clm.cli.output_formatter import QuietOutputFormatter
+        from clm.build.output_formatter import QuietOutputFormatter
 
         formatter = QuietOutputFormatter()
         summary = BuildSummary(duration=0.5, total_files=0)

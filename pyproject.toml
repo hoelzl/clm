@@ -574,20 +574,20 @@ torchvision = [
 root_package = "clm"
 
 [[tool.importlinter.contracts]]
-name = "Layered: core below infrastructure below workers"
+name = "Layered: core below infrastructure below workers below build"
 type = "layers"
-layers = ["clm.workers", "clm.infrastructure", "clm.core"]
+layers = ["clm.build", "clm.workers", "clm.infrastructure", "clm.core"]
 
 [[tool.importlinter.contracts]]
 name = "Constrained layers never import the CLI"
 type = "forbidden"
-source_modules = ["clm.core", "clm.infrastructure", "clm.workers"]
+source_modules = ["clm.core", "clm.infrastructure", "clm.workers", "clm.build"]
 forbidden_modules = ["clm.cli"]
 
 [[tool.importlinter.contracts]]
 name = "Constrained layers never import extension packages"
 type = "forbidden"
-source_modules = ["clm.core", "clm.infrastructure", "clm.workers"]
+source_modules = ["clm.core", "clm.infrastructure", "clm.workers", "clm.build"]
 forbidden_modules = [
     "clm.cohort_calendar",
     "clm.mcp",

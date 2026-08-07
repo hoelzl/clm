@@ -20,20 +20,15 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands import build as build_module
-from clm.cli.commands.build import (
-    BuildConfig,
+from clm.build import SpecValidationFailure
+from clm.build import engine as engine_module
+from clm.build.config import BuildConfig
+from clm.build.engine import (
     _compute_section_dirs_for_cleanup,
     _failed_topic_ids,
-    _find_env_file,
     _report_duplicate_file_warnings,
     _report_image_collisions,
     _report_loading_issues,
-    _resolve_fail_on_missing_xref,
-    _resolve_http_replay_mode,
-    _resolve_http_replay_transport,
-    _resolve_log_level,
-    _resolve_write_provenance_manifest,
     _should_emit_provenance_manifest,
     configure_workers,
     create_output_formatter,
@@ -42,13 +37,22 @@ from clm.cli.commands.build import (
     report_validation_errors,
     start_managed_workers,
 )
-from clm.cli.commands.course.targets import list_targets
-from clm.cli.output_formatter import (
+from clm.build.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
     QuietOutputFormatter,
     VerboseOutputFormatter,
 )
+from clm.cli.commands import build as build_module
+from clm.cli.commands.build import (
+    _find_env_file,
+    _resolve_fail_on_missing_xref,
+    _resolve_http_replay_mode,
+    _resolve_http_replay_transport,
+    _resolve_log_level,
+    _resolve_write_provenance_manifest,
+)
+from clm.cli.commands.course.targets import list_targets
 from clm.core.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.core.course_spec import CourseSpecError
 
@@ -323,7 +327,7 @@ class TestReportValidationErrors:
 
         buf = StringIO()
         fake_console = Console(file=buf, force_terminal=False, no_color=True, width=200)
-        monkeypatch.setattr(build_module, "cli_console", fake_console)
+        monkeypatch.setattr(engine_module, "_console", fake_console)
 
         report_validation_errors(
             ["err1"],
@@ -792,11 +796,14 @@ class TestInitializePathsAndCourse:
         with pytest.raises(SystemExit):
             initialize_paths_and_course(config)
 
-    def test_spec_validation_errors_raise_click_exception(
+    def test_spec_validation_errors_raise_typed_failure(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """The engine raises its typed failure (A4); ``main_build``
+        converts it to ``click.ClickException`` at the CLI boundary —
+        see ``test_spec_validation_failure_becomes_click_exception``."""
         config = self._config(tmp_path, output_mode="default")
         config.spec_file.write_text("<course/>", encoding="utf-8")
 
@@ -808,8 +815,65 @@ class TestInitializePathsAndCourse:
             lambda *args, **kwargs: fake_spec,
         )
 
-        with pytest.raises(click.ClickException, match="Course spec validation failed"):
+        with pytest.raises(SpecValidationFailure, match="Course spec validation failed"):
             initialize_paths_and_course(config)
+
+    def test_spec_validation_failure_becomes_click_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``main_build`` converts the engine's typed spec-validation
+        failure into ``click.ClickException`` so ``clm build`` renders it
+        exactly as before the A4 extraction."""
+        import asyncio
+
+        async def fake_run_build(config, **kwargs):
+            raise SpecValidationFailure("Course spec validation failed with 2 error(s).")
+
+        monkeypatch.setattr(build_module, "run_build", fake_run_build)
+        config_kwargs = self._config(tmp_path)
+
+        with pytest.raises(click.ClickException, match="Course spec validation failed"):
+            asyncio.run(
+                build_module.main_build(
+                    None,
+                    config_kwargs.spec_file,
+                    config_kwargs.data_dir,
+                    config_kwargs.output_dir,
+                    False,  # watch
+                    "fast",  # watch_mode
+                    0.3,  # debounce
+                    False,  # print_correlation_ids
+                    "INFO",  # log_level
+                    config_kwargs.cache_db_path,
+                    config_kwargs.jobs_db_path,
+                    False,  # ignore_cache
+                    False,  # clear_cache
+                    False,  # clean
+                    False,  # incremental
+                    False,  # no_sweep
+                    (),  # only_sections
+                    None,  # workers
+                    None,  # notebook_workers
+                    None,  # plantuml_workers
+                    None,  # drawio_workers
+                    None,  # max_workers
+                    None,  # notebook_image
+                    None,  # plantuml_image
+                    None,  # drawio_image
+                    "default",  # output_mode
+                    False,  # no_progress
+                    False,  # no_color
+                    False,  # verbose_logging
+                    None,  # language
+                    False,  # speaker_only
+                    None,  # targets
+                    False,  # force_execute
+                    "disabled",  # http_replay
+                    "duplicated",  # image_mode
+                    "png",  # image_format
+                    False,  # inline_images
+                )
+            )
 
     def test_spec_validation_errors_json_mode_exits(
         self,
@@ -1072,7 +1136,7 @@ class TestBuildCliWrapper:
         fake_course.process_jupyterlite_for_targets = MagicMock(side_effect=_noop_async_method)
 
         monkeypatch.setattr(
-            build_module,
+            engine_module,
             "initialize_paths_and_course",
             lambda config: (fake_course, [tmp_path / "out" / "En"], data_dir),
         )
@@ -1117,8 +1181,8 @@ class TestBuildCliWrapper:
             async def shutdown(self):
                 pass
 
-        monkeypatch.setattr(build_module, "DatabaseManager", FakeDbManager)
-        monkeypatch.setattr(build_module, "SqliteBackend", FakeBackend)
+        monkeypatch.setattr(engine_module, "DatabaseManager", FakeDbManager)
+        monkeypatch.setattr(engine_module, "SqliteBackend", FakeBackend)
 
         # Avoid real git_dir_mover context manager side effects.
         from contextlib import contextmanager
@@ -1127,7 +1191,7 @@ class TestBuildCliWrapper:
         def fake_mover(root_dirs, *args, **kwargs):
             yield
 
-        monkeypatch.setattr(build_module, "git_dir_mover", fake_mover)
+        monkeypatch.setattr(engine_module, "git_dir_mover", fake_mover)
 
         # BuildReporter: trivial stub. finish_build must return a real
         # BuildSummary (not a MagicMock) so the entry-point exit policy —
@@ -1137,7 +1201,7 @@ class TestBuildCliWrapper:
         _stub_reporter.finish_build.return_value = BuildSummary(
             duration=0.0, total_files=0, errors=[], warnings=[]
         )
-        monkeypatch.setattr(build_module, "BuildReporter", lambda formatter: _stub_reporter)
+        monkeypatch.setattr(engine_module, "BuildReporter", lambda formatter: _stub_reporter)
 
         # Avoid real execution stages (already mocked on fake_course).
         monkeypatch.setattr(
@@ -1228,7 +1292,7 @@ def _setup_mocked_build_pipeline(
     fake_course.process_jupyterlite_for_targets = MagicMock(side_effect=_noop_async_method)
 
     monkeypatch.setattr(
-        build_module,
+        engine_module,
         "initialize_paths_and_course",
         lambda config: (fake_course, [tmp_path / "out" / "En"], data_dir),
     )
@@ -1270,14 +1334,14 @@ def _setup_mocked_build_pipeline(
         async def shutdown(self):
             pass
 
-    monkeypatch.setattr(build_module, "DatabaseManager", FakeDbManager)
-    monkeypatch.setattr(build_module, "SqliteBackend", FakeBackend)
+    monkeypatch.setattr(engine_module, "DatabaseManager", FakeDbManager)
+    monkeypatch.setattr(engine_module, "SqliteBackend", FakeBackend)
 
     @contextmanager
     def fake_mover(root_dirs, *args, **kwargs):
         yield
 
-    monkeypatch.setattr(build_module, "git_dir_mover", fake_mover)
+    monkeypatch.setattr(engine_module, "git_dir_mover", fake_mover)
 
     # BuildReporter stub whose ``finish_build()`` returns a BuildSummary
     # carrying the synthetic errors the test wants the build to surface.
@@ -1291,7 +1355,7 @@ def _setup_mocked_build_pipeline(
     fake_reporter = MagicMock()
     fake_reporter.errors = list(summary_errors or [])
     fake_reporter.finish_build.return_value = fake_summary
-    monkeypatch.setattr(build_module, "BuildReporter", lambda formatter: fake_reporter)
+    monkeypatch.setattr(engine_module, "BuildReporter", lambda formatter: fake_reporter)
 
     monkeypatch.setattr(
         "clm.core.utils.execution_utils.execution_stages",
@@ -1822,7 +1886,7 @@ class TestMaybeRunSweepSkipReasons:
     def _spy_sweep(self, monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         """Replace ``sweep_stray_files`` with a recorder so the test can
         inspect the ``skip_reason`` argument the orchestrator passes."""
-        from clm.cli import output_sweep as sweep_module
+        from clm.build import output_sweep as sweep_module
 
         calls: list[dict] = []
 
@@ -1842,7 +1906,7 @@ class TestMaybeRunSweepSkipReasons:
         return calls
 
     def test_skips_when_sweep_disabled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         calls = self._spy_sweep(monkeypatch)
         config = _make_config(sweep=False, output_dir=tmp_path)
@@ -1857,7 +1921,7 @@ class TestMaybeRunSweepSkipReasons:
         assert calls == []
 
     def test_skips_when_clean_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         calls = self._spy_sweep(monkeypatch)
         config = _make_config(sweep=True, clean=True, output_dir=tmp_path)
@@ -1872,7 +1936,7 @@ class TestMaybeRunSweepSkipReasons:
         assert "--clean" in calls[0]["skip_reason"]
 
     def test_skips_when_only_sections(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         calls = self._spy_sweep(monkeypatch)
         config = _make_config(sweep=True, output_dir=tmp_path)
@@ -1887,7 +1951,7 @@ class TestMaybeRunSweepSkipReasons:
         assert "--only-sections" in calls[0]["skip_reason"]
 
     def test_skips_when_watch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         calls = self._spy_sweep(monkeypatch)
         config = _make_config(sweep=True, watch=True, output_dir=tmp_path)
@@ -1902,7 +1966,7 @@ class TestMaybeRunSweepSkipReasons:
         assert "watch mode" in calls[0]["skip_reason"]
 
     def test_skips_when_reporter_has_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         calls = self._spy_sweep(monkeypatch)
         config = _make_config(sweep=True, output_dir=tmp_path)
@@ -1918,7 +1982,7 @@ class TestMaybeRunSweepSkipReasons:
 
     def test_runs_under_default_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """No skip reasons → ``sweep_stray_files`` runs with ``skip_reason=None``."""
-        from clm.cli.commands.build import _maybe_run_sweep
+        from clm.build.engine import _maybe_run_sweep
 
         calls = self._spy_sweep(monkeypatch)
         config = _make_config(sweep=True, output_dir=tmp_path)
@@ -1950,7 +2014,7 @@ class TestProcessCourseInvokesCassetteSweep:
     def test_sweep_call_present_in_run_stages(self) -> None:
         import inspect
 
-        from clm.cli.commands.build import process_course_with_backend
+        from clm.build.engine import process_course_with_backend
 
         source = inspect.getsource(process_course_with_backend)
         assert "sweep_orphan_cassette_staging_files" in source, (
@@ -1970,11 +2034,11 @@ class TestMaybeStartMitmproxyTransport:
     def test_returns_none_when_mode_disabled(self, tmp_path) -> None:
         # A disabled replay mode means no proxy is needed. Returns before
         # locating mitmdump, so no external dependency is needed.
-        result = build_module._maybe_start_mitmproxy_transport("disabled", tmp_path / "jobs.db")
+        result = engine_module._maybe_start_mitmproxy_transport("disabled", tmp_path / "jobs.db")
         assert result is None
 
     def test_returns_none_when_mode_missing(self, tmp_path) -> None:
-        result = build_module._maybe_start_mitmproxy_transport(None, tmp_path / "jobs.db")
+        result = engine_module._maybe_start_mitmproxy_transport(None, tmp_path / "jobs.db")
         assert result is None
 
 
@@ -1992,17 +2056,17 @@ class TestBuildHasDockerNotebookWorker:
     worker using the replay proxy) — decides the wildcard bind (issue #165 P4)."""
 
     def test_none_config_is_direct_only(self) -> None:
-        assert build_module._build_has_docker_notebook_worker(None) is False
+        assert engine_module._build_has_docker_notebook_worker(None) is False
 
     def test_all_direct_is_false(self) -> None:
         wc = _fake_worker_config(
             [("notebook", "direct", 4), ("plantuml", "direct", 1), ("drawio", "direct", 1)]
         )
-        assert build_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc) is False
 
     def test_docker_notebook_is_true(self) -> None:
         wc = _fake_worker_config([("notebook", "docker", 2), ("plantuml", "direct", 1)])
-        assert build_module._build_has_docker_notebook_worker(wc) is True
+        assert engine_module._build_has_docker_notebook_worker(wc) is True
 
     def test_docker_only_for_non_notebook_is_false(self) -> None:
         # Diagram converters never use the replay proxy, so a docker plantuml/
@@ -2010,18 +2074,18 @@ class TestBuildHasDockerNotebookWorker:
         wc = _fake_worker_config(
             [("notebook", "direct", 4), ("plantuml", "docker", 1), ("drawio", "docker", 1)]
         )
-        assert build_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc) is False
 
     def test_docker_notebook_with_zero_count_is_false(self) -> None:
         wc = _fake_worker_config([("notebook", "docker", 0), ("plantuml", "direct", 1)])
-        assert build_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc) is False
 
     def test_resolution_error_is_treated_as_direct_only(self) -> None:
         def _boom():
             raise RuntimeError("cannot resolve")
 
         wc = SimpleNamespace(get_all_worker_configs=_boom)
-        assert build_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc) is False
 
 
 class _FakeMitmManager:
@@ -2066,7 +2130,7 @@ class TestMitmproxyTransportBindHost:
         _FakeMitmManager.last_listen_host = None
         saved = dict(os.environ)
         try:
-            mgr = build_module._maybe_start_mitmproxy_transport(
+            mgr = engine_module._maybe_start_mitmproxy_transport(
                 "replay", tmp_path / "jobs.db", worker_config=worker_config
             )
             assert mgr is not None

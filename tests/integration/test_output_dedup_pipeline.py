@@ -18,8 +18,8 @@ build-pipeline level:
 import json as _json
 from pathlib import Path
 
-from clm.cli.build_reporter import BuildReporter
-from clm.cli.output_formatter import JSONOutputFormatter, QuietOutputFormatter
+from clm.build.output_formatter import JSONOutputFormatter, QuietOutputFormatter
+from clm.build.reporter import BuildReporter
 from clm.core.build_data_classes import BuildSummary
 from clm.core.image_registry import ImageRegistry
 from clm.core.messaging.base_classes import Payload

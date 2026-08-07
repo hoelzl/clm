@@ -22,7 +22,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from clm.cli.text_utils import format_error_path
+from clm.build.text_utils import format_error_path
 from clm.core.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.infrastructure.utils.text_utils import strip_ansi
 

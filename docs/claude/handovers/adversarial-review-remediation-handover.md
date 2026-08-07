@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A6/A10/A11 DONE 2026-08-06, ratchet 50 → 0 and import-linter enforced; next A4 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A6/A10/A11 DONE 2026-08-06, ratchet 50 → 0 and import-linter enforced; remaining A5/A7–A9/A12 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1258,10 +1258,23 @@ one PR per step, golden suite green after each.
    --cov=src/clm --cov-report=xml` + the script.
 4. **A11 — import-linter contract in CI.** Add it as soon as the first contract
    is true, not at the end — each subsequent step then cannot regress.
-5. **A4 — extract build orchestration** from `cli/commands/build.py` (2694 lines;
-   the Click command starts at :2071 — everything before it is the engine) into a
-   callable core API. This is what unlocks programmatic builds for MCP, the web
-   studio and tests. Highest risk step; do it last and lean on the golden suite.
+5. ✔ **A4 — extract build orchestration** from `cli/commands/build.py` into a
+   callable API — **DONE 2026-08-06**. New constrained layer `clm.build`
+   (above `clm.workers` in the layers contract; forbidden from cli/extensions
+   like the other constrained layers): `config` (BuildConfig + the
+   `resolve_*` option family, raising typed `BuildOptionError`), `engine`
+   (`run_build(config) -> BuildSummary | None` — the ex-`main_build`
+   orchestration), plus `reporter`, `output_formatter`, `output_sweep`,
+   `git_dir_mover`, `text_utils` moved from `clm.cli`. The Click command is
+   now a thin adapter (~980 lines from 2,808): flag parsing/resolution,
+   `.env` loading, signal handlers, `setup_logging` (the engine never
+   configures logging), typed-error → Click-error conversion, exit-code
+   policy, snapshot/verify, and the injected watchdog `watch_runner`
+   (watch mode is CLI-only). `clm.cli.main`'s compat exports retarget to
+   `clm.build`. Coverage floors added for `build/engine.py` (75) and
+   `build/config.py` (88); `cli/commands/build.py` re-floored at 74
+   (measured 78.6 post-split). Golden suite byte-identical; fast suite
+   9,517 green.
 6. **A5** — move voiceover merge/propagation logic out of
    `cli/commands/voiceover.py` into `clm.voiceover`, removing the private-symbol
    imports (`_langfuse_configured`, `_decode_alignment`).
