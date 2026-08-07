@@ -20,6 +20,25 @@ def _clean_registry():
     reset_effective_worker_identities()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_config_singleton(monkeypatch):
+    """Start every test from an uninitialized ClmConfig singleton.
+
+    The direct-mode fingerprint resolves the tool path through
+    ``get_config()``, and the top-level conftest sets ``PLANTUML_JAR`` to the
+    vendored jar process-wide at import time. A singleton first created by
+    *any* earlier test on the same xdist worker therefore carries that jar
+    forever (``_restore_worker_global_state`` faithfully restores it), and
+    would shadow the env values these tests monkeypatch. Resetting the
+    singleton makes each test fold its OWN environment — the same lazy-init
+    behavior the tests were (implicitly) relying on before A7 added more
+    production ``get_config()`` call sites.
+    """
+    from clm.infrastructure import config as config_module
+
+    monkeypatch.setattr(config_module, "_config", None)
+
+
 class TestPerTypeIdentity:
     def test_bare_defaults_resolve_per_service(self):
         """The docker default expands against each service's OWN repo."""
