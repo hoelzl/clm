@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A6/A10/A11 DONE 2026-08-06, ratchet 50 → 0 and import-linter enforced; remaining A5/A7–A9/A12 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A10/A11 DONE (A5 2026-08-07), ratchet 50 → 0 and import-linter enforced; remaining A7–A9/A12 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1244,12 +1244,11 @@ one PR per step, golden suite green after each.
    workers; constrained layers never import cli or extensions), wired
    into CI's lint job and pre-commit; the inventory ratchet is replaced,
    `tests/test_architecture_contracts.py` keeps the string-import guard
-   + Backend/payload pins. **A1/A2/A3/A6/A10/A11 are complete** (A10:
-   architecture.md rewritten 2026-08-06 — see item 10 below). Remaining
-   Phase 8 items: A4 (build orchestration out of build.py — now
-   unblocked by the S2 contract descent), A5 (voiceover CLI logic),
-   A7 (config unification), A8 (jobs-DB path), A9 (residual private
-   cross-imports), A12 (extras/lazy imports + DummyBackend to tests).
+   + Backend/payload pins. **A1/A2/A3/A4/A5/A6/A10/A11 are complete** (A10:
+   architecture.md rewritten 2026-08-06 — see item 10 below; A4/A5: see
+   items 5 and 6). Remaining Phase 8 items: A7 (config unification),
+   A8 (jobs-DB path), A9 (residual private cross-imports), A12
+   (extras/lazy imports + DummyBackend to tests).
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
@@ -1275,9 +1274,22 @@ one PR per step, golden suite green after each.
    `build/config.py` (88); `cli/commands/build.py` re-floored at 74
    (measured 78.6 post-split). Golden suite byte-identical; fast suite
    9,517 green.
-6. **A5** — move voiceover merge/propagation logic out of
-   `cli/commands/voiceover.py` into `clm.voiceover`, removing the private-symbol
-   imports (`_langfuse_configured`, `_decode_alignment`).
+6. ✔ **A5** — move voiceover merge/propagation logic out of
+   `cli/commands/voiceover.py` into `clm.voiceover` — **DONE 2026-08-07**.
+   New `clm.voiceover.autopilot` (the `merge_notes`/propagation apply flow,
+   `polish_notes`, `require_slide_ids` raising `MissingSlideIdError`, display
+   helpers — rich-console printing kept in the extracted layer per the A4
+   precedent) and `clm.voiceover.overrides`
+   (`load_transcript_override`/`load_alignment_override` raising
+   `OverrideError`; callers convert to their own error surface). Private
+   seams replaced with public ones: `langfuse_configured`
+   (`infrastructure.llm.client`) and `decode_alignment` (`voiceover.cache`).
+   `mcp/tools.py` now imports `clm.voiceover.overrides` instead of a CLI
+   command's private helpers (shrinks A9), and `_expand_video_args` moved to
+   the shared `cli/commands/_video_args.py` (`expand_video_args`) so
+   `harvest.py` no longer privately imports from `voiceover.py`.
+   `cli/commands/voiceover.py` is a thin adapter for these paths
+   (~2,780 lines from 3,606); no re-export shims, all importers retargeted.
 7. **A7** — unify the three config mechanisms (`ClmConfig`, `sidecar_layout`'s
    `[tool.clm]` pyproject reader, and raw `os.environ` in 36 files including
    `build.py`'s `_resolve_*` family).
@@ -1373,7 +1385,7 @@ so the maintainer can object:
 - `docs/developer-guide/releasing.md` — Phase 0's release procedure.
 - `docs/developer-guide/architecture.md` — rewritten 2026-08-06 (Phase 8/A10)
   to describe the enforced post-#802 layering; keep its "Known Deviations"
-  list current as A4/A5/A7–A9/A12 land.
+  list current as A7–A9/A12 land (A4/A5 already removed from it).
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
 

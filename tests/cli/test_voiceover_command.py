@@ -16,17 +16,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands import voiceover as voiceover_module
 from clm.cli.commands.harvest import harvest_group
-from clm.cli.commands.voiceover import (
+from clm.cli.commands.voiceover import _parse_range
+from clm.voiceover.autopilot import (
     _display_merge_summary,
-    _display_notes_summary,
     _emit_dry_run_diff,
     _extract_baseline,
     _get_git_user_name,
     _has_boundary,
-    _parse_range,
-    _polish_notes,
+    display_notes_summary,
+    polish_notes,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,7 +95,6 @@ class TestGetGitUserName:
         fake_result.returncode = 0
         fake_result.stdout = "Jane Doe\n"
         fake_run = MagicMock(return_value=fake_result)
-        monkeypatch.setattr(voiceover_module, "__name__", voiceover_module.__name__)
         # The helper imports subprocess locally — patch globally.
         import subprocess
 
@@ -141,13 +139,13 @@ class TestDisplaySummaries:
     """Smoke tests for the display helpers — they should not raise."""
 
     def test_display_notes_summary_empty_map(self):
-        _display_notes_summary({}, [])
+        display_notes_summary({}, [])
 
     def test_display_notes_summary_with_data(self):
         sg = MagicMock()
         sg.index = 1
         sg.title = "Intro"
-        _display_notes_summary({1: "body"}, [sg])
+        display_notes_summary({1: "body"}, [sg])
 
     def test_display_merge_summary_empty(self):
         _display_merge_summary([], [])
@@ -188,7 +186,7 @@ class TestPolishNotes:
         monkeypatch.setitem(sys.modules, "clm.notebooks.polish", fake_polish_module)
 
         notes = {1: "alpha", 2: "beta"}
-        result = await _polish_notes(notes, [sg1, sg2], lang="de")
+        result = await polish_notes(notes, [sg1, sg2], lang="de")
 
         assert result == {1: "ALPHA", 2: "BETA"}
 
@@ -208,7 +206,7 @@ class TestPolishNotes:
         fake_polish_module.polish_text = fake_polish
         monkeypatch.setitem(sys.modules, "clm.notebooks.polish", fake_polish_module)
 
-        await _polish_notes({1: "hello"}, [sg], model="my-model", lang="en")
+        await polish_notes({1: "hello"}, [sg], model="my-model", lang="en")
         # polish_level is always forwarded (defaulting to standard when not given)
         from clm.notebooks.polish_levels import PolishLevel
 

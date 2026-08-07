@@ -26,9 +26,9 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.harvest import harvest_group
-from clm.cli.commands.voiceover import _merge_notes
 from clm.core.slide_text.slide_parser import parse_slides
 from clm.voiceover.aligner import AlignmentResult, SlideNotes
+from clm.voiceover.autopilot import merge_notes
 from clm.voiceover.merge import MergeResult, PropagationResult
 
 # Bilingual slide file with de + en slides, each carrying a baseline
@@ -98,11 +98,11 @@ def _fake_alignment_for(slide_indices: list[int]) -> AlignmentResult:
 
 
 def _run_merge(**kwargs) -> None:
-    asyncio.run(_merge_notes(**kwargs))
+    asyncio.run(merge_notes(**kwargs))
 
 
 # ---------------------------------------------------------------------------
-# _run_propagation via _merge_notes (happy path)
+# _run_propagation via merge_notes (happy path)
 # ---------------------------------------------------------------------------
 
 
@@ -247,7 +247,7 @@ class TestPropagationHappyPath:
         slide_file, slide_groups, notes_map, alignment = self._setup(tmp_path)
         # Return the exact baseline text (extracted from the slide cells)
         content_groups = [sg for sg in slide_groups if sg.slide_type != "header"]
-        from clm.cli.commands.voiceover import _extract_baseline
+        from clm.voiceover.autopilot import _extract_baseline
 
         fake_merge = [
             MergeResult(

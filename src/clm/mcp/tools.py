@@ -1315,16 +1315,15 @@ def _assemble_harvest_report(
     Returns:
         ``(bundle, report)`` — the loaded v3 bundle and the report envelope.
     """
-    import click
-
-    from clm.cli.commands.voiceover import (
-        _load_alignment_override,
-        _load_transcript_override,
-    )
     from clm.core.slide_text.slide_parser import parse_slides
     from clm.slides.doc_lenses import DocLensError, load_bundle
     from clm.voiceover.cache import CachePolicy
     from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline
+    from clm.voiceover.overrides import (
+        OverrideError,
+        load_alignment_override,
+        load_transcript_override,
+    )
 
     slides_path = _resolve_under(data_dir, slides)
     video_paths = [_resolve_under(data_dir, v) for v in videos]
@@ -1353,10 +1352,10 @@ def _assemble_harvest_report(
 
     try:
         transcript_override = (
-            _load_transcript_override(_resolve_under(data_dir, transcript)) if transcript else None
+            load_transcript_override(_resolve_under(data_dir, transcript)) if transcript else None
         )
         alignment_override = (
-            _load_alignment_override(_resolve_under(data_dir, alignment)) if alignment else None
+            load_alignment_override(_resolve_under(data_dir, alignment)) if alignment else None
         )
         artifacts = run_pipeline(
             slides_path,
@@ -1370,7 +1369,7 @@ def _assemble_harvest_report(
             transcript_override=transcript_override,
             alignment_override=alignment_override,
         )
-    except (click.UsageError, HarvestUsageError) as exc:
+    except (OverrideError, HarvestUsageError) as exc:
         raise _HarvestInputError(str(exc)) from exc
 
     report = build_report(bundle, slide_groups, artifacts, lang=lang, video_paths=video_paths)

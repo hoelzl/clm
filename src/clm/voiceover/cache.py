@@ -61,7 +61,10 @@ import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from clm.voiceover.aligner import AlignmentResult
 
 logger = logging.getLogger(__name__)
 
@@ -445,7 +448,7 @@ class AlignmentsCache(_JsonCache):
         super().__init__(
             cache_root,
             encoder=_encode_alignment,
-            decoder=_decode_alignment,
+            decoder=decode_alignment,
         )
 
     @staticmethod
@@ -639,7 +642,8 @@ def _encode_alignment(alignment) -> dict:
     }
 
 
-def _decode_alignment(data: dict):
+def decode_alignment(data: dict) -> AlignmentResult:
+    """Rebuild an :class:`AlignmentResult` from its cache/JSON encoding."""
     from clm.voiceover.aligner import AlignmentResult, SlideNotes
     from clm.voiceover.transcribe import TranscriptSegment
 

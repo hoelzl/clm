@@ -464,6 +464,11 @@ transcription backends (faster-whisper default, Cohere, Granite). Requires
 - `keyframes` — frame extraction and transition detection
 - `matcher` — OCR + fuzzy matching for slide identification
 - `aligner` — transcript-to-slide assignment with backtracking
+- `merge` — LLM batch merge/propagation primitives
+- `autopilot` — the merge/propagation apply flow behind `clm harvest
+  autopilot` (the Click command is a thin flag-parsing adapter)
+- `overrides` — loaders for user-supplied `--transcript`/`--alignment`
+  artifacts, shared by the CLI and the MCP harvest tools
 
 #### `clm.recordings` (video recording management)
 
@@ -687,9 +692,6 @@ Details: `docs/archive/migration-history/`.
 The layering above is fully enforced, but #802 tracks remaining structural
 work. Keep this list honest — update it when an item lands:
 
-- **A5** — voiceover merge/propagation logic still in
-  `cli/commands/voiceover.py` (with private-symbol imports) instead of
-  `clm.voiceover`
 - **A7 / A8** — config unification and the jobs-DB path split (see
   [Configuration](#configuration))
 - **A9** — ~12 cross-module underscore-private imports remain among the
