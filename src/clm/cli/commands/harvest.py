@@ -209,23 +209,27 @@ def _build_report_data(
     backend_name: str,
     device: str,
 ) -> dict:
-    from clm.cli.commands.voiceover import (
-        _expand_video_args,
-        _load_alignment_override,
-        _load_transcript_override,
-    )
+    from clm.cli.commands._video_args import expand_video_args
     from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.cache import CachePolicy
     from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline
+    from clm.voiceover.overrides import (
+        OverrideError,
+        load_alignment_override,
+        load_transcript_override,
+    )
 
     policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
-    video_paths = _expand_video_args(videos)
+    video_paths = expand_video_args(videos)
 
     # The recorded-language view the OCR matcher and aligner key on.
     slide_groups = parse_slides(slides, lang)
 
-    transcript = _load_transcript_override(transcript_override) if transcript_override else None
-    alignment = _load_alignment_override(alignment_override) if alignment_override else None
+    try:
+        transcript = load_transcript_override(transcript_override) if transcript_override else None
+        alignment = load_alignment_override(alignment_override) if alignment_override else None
+    except OverrideError as exc:
+        raise click.UsageError(str(exc)) from exc
     try:
         artifacts = run_pipeline(
             slides,

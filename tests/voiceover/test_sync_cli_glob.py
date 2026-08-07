@@ -13,12 +13,12 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from clm.cli.commands._video_args import expand_video_args
 from clm.cli.commands.harvest import harvest_group
-from clm.cli.commands.voiceover import _expand_video_args
 
 
 class TestExpandVideoArgs:
-    """Unit tests for _expand_video_args — the glob + literal expansion helper."""
+    """Unit tests for expand_video_args — the glob + literal expansion helper."""
 
     def test_expands_single_glob(self, tmp_path, monkeypatch):
         (tmp_path / "Teil 1.mp4").write_text("x")
@@ -27,7 +27,7 @@ class TestExpandVideoArgs:
         (tmp_path / "other.mp4").write_text("x")
         monkeypatch.chdir(tmp_path)
 
-        result = _expand_video_args(("Teil *.mp4",))
+        result = expand_video_args(("Teil *.mp4",))
 
         assert [p.name for p in result] == ["Teil 1.mp4", "Teil 2.mp4", "Teil 3.mp4"]
 
@@ -38,7 +38,7 @@ class TestExpandVideoArgs:
         (tmp_path / "Teil 2.mp4").write_text("x")
         monkeypatch.chdir(tmp_path)
 
-        result = _expand_video_args(("Teil *.mp4",))
+        result = expand_video_args(("Teil *.mp4",))
 
         assert [p.name for p in result] == ["Teil 1.mp4", "Teil 2.mp4", "Teil 10.mp4"]
 
@@ -49,7 +49,7 @@ class TestExpandVideoArgs:
         (tmp_path / "outro.mp4").write_text("x")
         monkeypatch.chdir(tmp_path)
 
-        result = _expand_video_args(("intro.mp4", "Teil *.mp4", "outro.mp4"))
+        result = expand_video_args(("intro.mp4", "Teil *.mp4", "outro.mp4"))
 
         assert [p.name for p in result] == [
             "intro.mp4",
@@ -64,7 +64,7 @@ class TestExpandVideoArgs:
         import click
 
         with pytest.raises(click.BadParameter) as excinfo:
-            _expand_video_args(("missing*.mp4",))
+            expand_video_args(("missing*.mp4",))
 
         assert "missing*.mp4" in str(excinfo.value)
 
@@ -74,7 +74,7 @@ class TestExpandVideoArgs:
         import click
 
         with pytest.raises(click.BadParameter) as excinfo:
-            _expand_video_args(("nonexistent.mp4",))
+            expand_video_args(("nonexistent.mp4",))
 
         assert "nonexistent.mp4" in str(excinfo.value)
 
@@ -83,7 +83,7 @@ class TestExpandVideoArgs:
         (tmp_path / "b.mp4").write_text("x")
         monkeypatch.chdir(tmp_path)
 
-        result = _expand_video_args(("?.mp4",))
+        result = expand_video_args(("?.mp4",))
 
         assert sorted(p.name for p in result) == ["a.mp4", "b.mp4"]
 
@@ -93,7 +93,7 @@ class TestExpandVideoArgs:
         (tmp_path / "part3.mp4").write_text("x")
         monkeypatch.chdir(tmp_path)
 
-        result = _expand_video_args(("part[12].mp4",))
+        result = expand_video_args(("part[12].mp4",))
 
         assert [p.name for p in result] == ["part1.mp4", "part2.mp4"]
 
@@ -101,7 +101,7 @@ class TestExpandVideoArgs:
         video = tmp_path / "video.mp4"
         video.write_text("x")
 
-        result = _expand_video_args((str(video),))
+        result = expand_video_args((str(video),))
 
         assert result == [video]
 
@@ -110,7 +110,7 @@ class TestExpandVideoArgs:
         (tmp_path / "b.mp4").write_text("x")
 
         pattern = str(tmp_path / "*.mp4")
-        result = _expand_video_args((pattern,))
+        result = expand_video_args((pattern,))
 
         assert sorted(p.name for p in result) == ["a.mp4", "b.mp4"]
 

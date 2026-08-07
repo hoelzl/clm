@@ -10,7 +10,7 @@ Covers:
 - Dry-run diff scoping to the companion file.
 - Byte-exact preservation of the slide file under companion mode.
 
-The tests bypass transcription/alignment by invoking ``_merge_notes``
+The tests bypass transcription/alignment by invoking ``merge_notes``
 directly with pre-built fakes, and by patching ``merge_batch`` to return
 deterministic results. Pipeline integration paths are exercised in
 existing voiceover tests.
@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from clm.cli.commands.voiceover import _merge_notes, _require_slide_ids
 from clm.core.slide_text.slide_parser import parse_slides
 from clm.voiceover.aligner import AlignmentResult
+from clm.voiceover.autopilot import MissingSlideIdError, merge_notes, require_slide_ids
 from clm.voiceover.merge import MergeResult
 
 SLIDES_WITH_IDS = """\
@@ -74,12 +74,12 @@ def _fake_merge_results(slide_ids: list[str]) -> list[MergeResult]:
 
 
 def _run_merge(**kwargs) -> None:
-    """Helper to run ``_merge_notes`` synchronously."""
-    asyncio.run(_merge_notes(**kwargs))
+    """Helper to run ``merge_notes`` synchronously."""
+    asyncio.run(merge_notes(**kwargs))
 
 
 # ---------------------------------------------------------------------------
-# _require_slide_ids — pure helper
+# require_slide_ids — pure helper
 # ---------------------------------------------------------------------------
 
 
@@ -90,20 +90,18 @@ class TestRequireSlideIds:
         slide_groups = parse_slides(slide_file, "de")
         notes_map = {sg.index: "text" for sg in slide_groups if sg.slide_type != "header"}
 
-        result = _require_slide_ids(slide_groups, notes_map, slide_file)
+        result = require_slide_ids(slide_groups, notes_map, slide_file)
 
         assert set(result.values()) == {"intro", "details"}
 
-    def test_raises_usage_error_with_fix_hint(self, tmp_path: Path):
+    def test_raises_missing_slide_id_error_with_fix_hint(self, tmp_path: Path):
         slide_file = tmp_path / "slides_test.py"
         slide_file.write_text(SLIDES_WITHOUT_IDS, encoding="utf-8")
         slide_groups = parse_slides(slide_file, "de")
         notes_map = {sg.index: "text" for sg in slide_groups if sg.slide_type != "header"}
 
-        import click
-
-        with pytest.raises(click.UsageError) as excinfo:
-            _require_slide_ids(slide_groups, notes_map, slide_file)
+        with pytest.raises(MissingSlideIdError) as excinfo:
+            require_slide_ids(slide_groups, notes_map, slide_file)
 
         msg = str(excinfo.value)
         assert "slide_id" in msg
@@ -126,13 +124,13 @@ class TestRequireSlideIds:
         good_idx = next(sg.index for sg in slide_groups if sg.cells[0].metadata.slide_id == "good")
         notes_map = {good_idx: "text"}
 
-        result = _require_slide_ids(slide_groups, notes_map, slide_file)
+        result = require_slide_ids(slide_groups, notes_map, slide_file)
 
         assert result == {good_idx: "good"}
 
 
 # ---------------------------------------------------------------------------
-# _merge_notes with companion mode active
+# merge_notes with companion mode active
 # ---------------------------------------------------------------------------
 
 
@@ -306,9 +304,7 @@ class TestMergeNotesCompanionMode:
         notes_map = {sg.index: "text" for sg in content_groups}
         alignment = _fake_alignment_for(list(notes_map.keys()))
 
-        import click
-
-        with pytest.raises(click.UsageError) as excinfo:
+        with pytest.raises(MissingSlideIdError) as excinfo:
             _run_merge(
                 slides=slide_file,
                 notes_map=notes_map,
@@ -352,8 +348,8 @@ class TestSyncCliCompanionFlag:
             captured.update(kwargs)
             raise SystemExit(99)
 
-        with patch("clm.cli.commands.voiceover._merge_notes", side_effect=fake_merge_notes):
-            # Minimal stubs for expensive pipeline steps — just enough to reach _merge_notes.
+        with patch("clm.voiceover.autopilot.merge_notes", side_effect=fake_merge_notes):
+            # Minimal stubs for expensive pipeline steps — just enough to reach merge_notes.
             with patch("clm.voiceover.timeline.build_parts", side_effect=SystemExit(77)):
                 runner = CliRunner()
                 result = runner.invoke(

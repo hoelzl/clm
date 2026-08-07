@@ -16,15 +16,15 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# _langfuse_configured
+# langfuse_configured
 # ---------------------------------------------------------------------------
 class TestLangfuseConfigured:
     """Env-var gating for Langfuse integration."""
 
     def _configured(self) -> bool:
-        from clm.infrastructure.llm.client import _langfuse_configured
+        from clm.infrastructure.llm.client import langfuse_configured
 
-        return _langfuse_configured()
+        return langfuse_configured()
 
     def test_all_vars_set(self, monkeypatch):
         monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")

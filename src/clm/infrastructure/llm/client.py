@@ -3,7 +3,7 @@
 When Langfuse environment variables are set and the ``langfuse`` package is
 installed, :func:`_build_client` returns a Langfuse-observed
 ``openai.AsyncOpenAI`` that automatically traces all LLM calls.  Otherwise
-it returns a plain ``openai.AsyncOpenAI``.  See :func:`_langfuse_configured`.
+it returns a plain ``openai.AsyncOpenAI``.  See :func:`langfuse_configured`.
 """
 
 import asyncio
@@ -23,7 +23,7 @@ def _get_semaphore(max_concurrent: int) -> asyncio.Semaphore:
     return _semaphore
 
 
-def _langfuse_configured() -> bool:
+def langfuse_configured() -> bool:
     """Return True when all required Langfuse env vars are set.
 
     Checks ``LANGFUSE_HOST`` (or ``LANGFUSE_BASE_URL``),
@@ -42,7 +42,7 @@ def _build_client(
 ):
     """Build an AsyncOpenAI client with the given configuration.
 
-    When :func:`_langfuse_configured` is True and the ``langfuse`` package
+    When :func:`langfuse_configured` is True and the ``langfuse`` package
     is importable, returns a Langfuse-wrapped client whose LLM calls are
     traced automatically.  Callers can pass extra Langfuse kwargs (``name``,
     ``trace_id``, ``metadata`` with ``langfuse_*`` keys) to
@@ -58,7 +58,7 @@ def _build_client(
     if api_key:
         kwargs["api_key"] = api_key
 
-    if _langfuse_configured():
+    if langfuse_configured():
         try:
             from langfuse.openai import AsyncOpenAI  # type: ignore[import-not-found, unused-ignore]
 
@@ -79,7 +79,7 @@ def _build_client(
 
 def flush_langfuse() -> None:
     """Flush pending Langfuse traces.  No-op when Langfuse is not active."""
-    if not _langfuse_configured():
+    if not langfuse_configured():
         return
     try:
         from langfuse import get_client  # type: ignore[import-not-found, unused-ignore]
