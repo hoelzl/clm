@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A7/A10/A11 DONE (A7 2026-08-07), ratchet 50 → 0 and import-linter enforced; remaining A8/A9/A12 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A7/A8/A10/A11 DONE (A8 2026-08-07), ratchet 50 → 0 and import-linter enforced; remaining A9/A12 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1247,8 +1247,9 @@ one PR per step, golden suite green after each.
    + Backend/payload pins. **A1/A2/A3/A4/A5/A6/A10/A11 are complete** (A10:
    architecture.md rewritten 2026-08-06 — see item 10 below; A4/A5: see
    items 5 and 6). **A7 DONE 2026-08-07** — see item 7 below.
-   Remaining Phase 8 items: A8 (jobs-DB path), A9 (residual private
-   cross-imports), A12 (extras/lazy imports + DummyBackend to tests).
+   Remaining Phase 8 items: A9 (residual private cross-imports), A12
+   (extras/lazy imports + DummyBackend to tests). A8 DONE 2026-08-07 —
+   see item 8 below.
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
@@ -1314,9 +1315,23 @@ one PR per step, golden suite green after each.
    (env-only), core-layer escape hatches (`CLM_MAX_CONCURRENCY`,
    `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB`), worker-API bind vars (A8 territory),
    and the settled `CLM_MAX_WORKERS` short spelling.
-8. **A8** — one name and one default for the jobs-DB path (`CLM_JOBS_DB_PATH`
-   host-side vs bare `DB_PATH` defaulting to the container path `/db/jobs.db`
-   worker-side).
+8. ✔ **A8** — one name and one default for the jobs-DB path — **DONE
+   2026-08-07**. The env-name contract lives in `worker_base`
+   (`JOBS_DB_PATH_ENV_VAR` = `CLM_JOBS_DB_PATH`, `resolve_jobs_db_path()`,
+   `missing_jobs_db_error()`): the executor injects the host-resolved
+   absolute path under the host's own name, and the four worker modules
+   resolve it with **no default** — the container default `/db/jobs.db` is
+   gone, and a SQLite-mode worker without the variable exits with a clear
+   error instead of silently polling a freshly created empty queue (Docker
+   workers get `CLM_API_URL` and never open the DB; the Dockerfiles never
+   set `DB_PATH`, so the old default was dead weight in production).
+   Ride-along: `CACHE_DB_PATH` → `CLM_CACHE_DB_PATH` (same two-name
+   pattern, notebook worker only; default `clm_cache.db` kept — a wrong
+   cache path degrades to cache misses, not silent no-work).
+   `process_reaper._read_worker_env` reads the new name with a legacy
+   `DB_PATH` fallback so `clm workers reap` still matches workers that
+   survived an upgrade; bare `DB_PATH` added to the conftest env-isolation
+   fixture.
 9. **A9** — remove the ~12 cross-module underscore-private imports, worst being
    `mcp/tools.py:391` → a CLI command's private helper.
 10. ✔ **A10 — rewrite `architecture.md`** to describe what now exists —
@@ -1406,7 +1421,7 @@ so the maintainer can object:
 - `docs/developer-guide/releasing.md` — Phase 0's release procedure.
 - `docs/developer-guide/architecture.md` — rewritten 2026-08-06 (Phase 8/A10)
   to describe the enforced post-#802 layering; keep its "Known Deviations"
-  list current as A8/A9/A12 land (A4/A5/A7 already removed from it).
+  list current as A9/A12 land (A4/A5/A7/A8 already removed from it).
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
 

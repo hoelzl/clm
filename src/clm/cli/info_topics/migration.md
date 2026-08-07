@@ -438,6 +438,8 @@ no longer work.
 | `CLM_E2E_LONG_JOB_THRESHOLD` | `CLM_PROGRESS__LONG_JOB_THRESHOLD` | `[progress] long_job_threshold`. |
 | `CLM_E2E_SHOW_WORKER_DETAILS` | `CLM_PROGRESS__SHOW_WORKER_DETAILS` | `[progress] show_worker_details`. |
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | `CLM_WORKER_MANAGEMENT__STARTUP_PARALLEL` | `[worker_management] startup_parallel` — pool-manager startup parallelism. The removed env var duplicated the config field with a divergent default (10 vs the documented 5). |
+| `DB_PATH` (worker-side) | `CLM_JOBS_DB_PATH` | The bare spelling the worker executor injected and `python -m clm.workers.*` read. Workers also lost their container default `/db/jobs.db`: a SQLite-mode worker without `CLM_JOBS_DB_PATH` now refuses to start instead of silently polling a freshly created empty queue. Only affects launching worker modules by hand — clm-managed workers get the value injected. |
+| `CACHE_DB_PATH` (worker-side) | `CLM_CACHE_DB_PATH` | Same rename for the notebook worker's executed-notebook cache path; the `clm_cache.db` default is unchanged. |
 
 The worker-count cap keeps its friendly short env var: **`CLM_MAX_WORKERS`** is
 the canonical spelling (the env form of the `[worker_management] max_workers_cap`

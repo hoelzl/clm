@@ -199,6 +199,14 @@ default is):
 > pre-1.19 `[paths]` config section and its `CLM_PATHS__*` variables never
 > actually relocated the databases a command opened and have been removed.)
 
+Worker processes see the **same names**: the host resolves the effective
+jobs-DB (and cache-DB) path and injects it into every direct worker's
+environment as `CLM_JOBS_DB_PATH` / `CLM_CACHE_DB_PATH` (pre-A8 versions
+used a bare `DB_PATH` / `CACHE_DB_PATH` spelling with a container default).
+A worker launched in SQLite mode without `CLM_JOBS_DB_PATH` refuses to start
+instead of guessing a path and polling an empty queue; Docker workers get
+`CLM_API_URL` instead and never open the jobs DB directly.
+
 #### Databases on network shares
 
 Pointing any of the `CLM_*_DB_PATH` variables at a network location — a UNC

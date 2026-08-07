@@ -20,6 +20,7 @@ import psutil  # type: ignore[import-untyped]
 
 from clm.infrastructure.api.binding import DOCKER_HOST_ALIAS
 from clm.infrastructure.workers.windows_job_object import WorkerJobObject
+from clm.infrastructure.workers.worker_base import JOBS_DB_PATH_ENV_VAR
 
 # Note: docker package is optional - may not be installed
 # Type annotations use string literals to avoid import errors
@@ -705,7 +706,11 @@ class DirectWorkerExecutor(WorkerExecutor):
                 {
                     "WORKER_TYPE": worker_type,
                     "WORKER_ID": worker_id,  # Explicit ID for direct execution
-                    "DB_PATH": str(self.db_path.absolute()),
+                    # Same env name as the host-side --jobs-db-path option;
+                    # workers have no default of their own (A8), so this
+                    # injection is what puts them on our queue. Overrides any
+                    # inherited shell value with the resolved absolute path.
+                    JOBS_DB_PATH_ENV_VAR: str(self.db_path.absolute()),
                     "WORKSPACE_PATH": str(self.workspace_path.absolute()),
                     "LOG_LEVEL": self.log_level,
                 }
@@ -717,8 +722,8 @@ class DirectWorkerExecutor(WorkerExecutor):
 
             # Pass cache database path for notebook workers
             if self.cache_db_path is not None:
-                env["CACHE_DB_PATH"] = str(self.cache_db_path.absolute())
-                logger.debug(f"Passing CACHE_DB_PATH={env['CACHE_DB_PATH']} to worker")
+                env["CLM_CACHE_DB_PATH"] = str(self.cache_db_path.absolute())
+                logger.debug(f"Passing CLM_CACHE_DB_PATH={env['CLM_CACHE_DB_PATH']} to worker")
 
             # Converter-specific paths (PlantUML jar / Draw.io executable) needed
             # by the plantuml and drawio Direct workers, which read these env

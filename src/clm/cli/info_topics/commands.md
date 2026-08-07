@@ -3435,8 +3435,10 @@ running. It:
 
 1. Marks in-flight job rows as failed (same as a clean pool shutdown would).
 2. Scans for surviving worker processes via `psutil`.
-3. Matches each one against `--jobs-db-path` (via the worker's `DB_PATH`
-   env var) and kills its whole process tree.
+3. Matches each one against `--jobs-db-path` (via the worker's
+   `CLM_JOBS_DB_PATH` env var; workers launched by a pre-{version} clm
+   carried the legacy `DB_PATH` spelling, which is still recognized) and
+   kills its whole process tree.
 4. Cleans up stale worker rows (same as `workers cleanup`).
 
 | Option | Description |
@@ -3444,7 +3446,7 @@ running. It:
 | `--jobs-db-path PATH` | Path to the job queue DB (default: `clm_jobs.db`) |
 | `--dry-run` | Show what would be reaped without killing anything |
 | `--force` | Skip the confirmation prompt |
-| `--all` | Also reap processes whose env is unreadable or `DB_PATH` does not match (dangerous across worktrees) |
+| `--all` | Also reap processes whose env is unreadable or `CLM_JOBS_DB_PATH` does not match (dangerous across worktrees) |
 
 Unmatched processes are listed but not killed by default, so running
 `reap` from one worktree cannot accidentally kill workers from another.

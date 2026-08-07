@@ -596,7 +596,7 @@ class TestPlantUmlWorkerMain:
         db_path = tmp_path / "new_db.db"
         assert not db_path.exists()
 
-        with patch.object(plantuml_worker, "DB_PATH", db_path):
+        with patch.object(plantuml_worker, "JOBS_DB_PATH", db_path):
             with patch.object(plantuml_worker, "init_database") as mock_init:
                 with patch.object(
                     plantuml_worker.Worker, "register_worker_with_retry", return_value=1
@@ -617,7 +617,7 @@ class TestPlantUmlWorkerMain:
         db_path = tmp_path / "test.db"
         init_database(db_path)
 
-        with patch.object(plantuml_worker, "DB_PATH", db_path):
+        with patch.object(plantuml_worker, "JOBS_DB_PATH", db_path):
             with patch.object(
                 plantuml_worker.Worker, "register_worker_with_retry", return_value=1
             ) as mock_register:
@@ -640,7 +640,7 @@ class TestPlantUmlWorkerMain:
         db_path = tmp_path / "test.db"
         init_database(db_path)
 
-        with patch.object(plantuml_worker, "DB_PATH", db_path):
+        with patch.object(plantuml_worker, "JOBS_DB_PATH", db_path):
             with patch.object(plantuml_worker.Worker, "register_worker_with_retry", return_value=1):
                 with patch.object(plantuml_worker, "PlantUmlWorker") as mock_worker_class:
                     mock_worker = MagicMock()
@@ -659,7 +659,7 @@ class TestPlantUmlWorkerMain:
         db_path = tmp_path / "test.db"
         init_database(db_path)
 
-        with patch.object(plantuml_worker, "DB_PATH", db_path):
+        with patch.object(plantuml_worker, "JOBS_DB_PATH", db_path):
             with patch.object(plantuml_worker.Worker, "register_worker_with_retry", return_value=1):
                 with patch.object(plantuml_worker, "PlantUmlWorker") as mock_worker_class:
                     mock_worker = MagicMock()
@@ -670,6 +670,15 @@ class TestPlantUmlWorkerMain:
                         plantuml_worker.main()
 
                     mock_worker.cleanup.assert_called_once()
+
+    def test_main_refuses_to_start_without_jobs_db(self):
+        """SQLite mode without CLM_JOBS_DB_PATH fails fast — no guessed DB path (A8)."""
+        from clm.workers.plantuml import plantuml_worker
+
+        with patch.object(plantuml_worker, "API_URL", None):
+            with patch.object(plantuml_worker, "JOBS_DB_PATH", None):
+                with pytest.raises(SystemExit, match="CLM_JOBS_DB_PATH"):
+                    plantuml_worker.main()
 
 
 @pytest.mark.skipif(not HAS_PLANTUML, reason="PlantUML JAR not available")
@@ -790,9 +799,11 @@ class TestPlantUmlWorkerConfiguration:
 
         assert hasattr(plantuml_worker, "LOG_LEVEL")
 
-    def test_db_path_from_environment(self):
-        """DB_PATH should be read from environment."""
+    def test_jobs_db_path_has_no_default(self):
+        """JOBS_DB_PATH comes only from CLM_JOBS_DB_PATH — no baked-in default (A8)."""
         from clm.workers.plantuml import plantuml_worker
 
-        assert hasattr(plantuml_worker, "DB_PATH")
-        assert isinstance(plantuml_worker.DB_PATH, Path)
+        assert hasattr(plantuml_worker, "JOBS_DB_PATH")
+        assert plantuml_worker.JOBS_DB_PATH is None or isinstance(
+            plantuml_worker.JOBS_DB_PATH, Path
+        )

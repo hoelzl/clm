@@ -287,7 +287,7 @@ class TestScanWorkerProcesses:
     def test_detects_notebook_worker(self):
         """Canonical notebook worker cmdline lights up the scanner."""
         env = {
-            "DB_PATH": "/tmp/clm_jobs.db",
+            "CLM_JOBS_DB_PATH": "/tmp/clm_jobs.db",
             "WORKER_ID": "direct-notebook-0-abc123",
             "WORKER_TYPE": "notebook",
         }
@@ -319,12 +319,12 @@ class TestScanWorkerProcesses:
             _fake_iter_proc(
                 100,
                 ["python", "-m", "clm.workers.drawio"],
-                environ={"DB_PATH": "/x.db"},
+                environ={"CLM_JOBS_DB_PATH": "/x.db"},
             ),
             _fake_iter_proc(
                 200,
                 ["python", "-m", "clm.workers.plantuml"],
-                environ={"DB_PATH": "/x.db"},
+                environ={"CLM_JOBS_DB_PATH": "/x.db"},
             ),
         ]
         with patch(
@@ -341,7 +341,7 @@ class TestScanWorkerProcesses:
         proc = _fake_iter_proc(
             1,
             ["python", "-m", "clm.workers.notebook.subrunner"],
-            environ={"DB_PATH": "/x.db"},
+            environ={"CLM_JOBS_DB_PATH": "/x.db"},
         )
         with patch(
             "clm.infrastructure.workers.process_reaper.psutil.process_iter",
@@ -389,7 +389,7 @@ class TestScanWorkerProcesses:
         good = _fake_iter_proc(
             8,
             ["python", "-m", "clm.workers.notebook"],
-            environ={"DB_PATH": "/x.db"},
+            environ={"CLM_JOBS_DB_PATH": "/x.db"},
         )
         with patch(
             "clm.infrastructure.workers.process_reaper.psutil.process_iter",
@@ -412,11 +412,11 @@ class TestScanWorkerProcesses:
             assert scan_worker_processes() == []
 
     def test_empty_db_path_env_maps_to_none(self):
-        """``DB_PATH=""`` must become ``None``, not ``Path("")``."""
+        """``CLM_JOBS_DB_PATH=""`` must become ``None``, not ``Path("")``."""
         proc = _fake_iter_proc(
             5,
             ["python", "-m", "clm.workers.notebook"],
-            environ={"DB_PATH": "", "WORKER_ID": ""},
+            environ={"CLM_JOBS_DB_PATH": "", "WORKER_ID": ""},
         )
         with patch(
             "clm.infrastructure.workers.process_reaper.psutil.process_iter",
@@ -426,6 +426,40 @@ class TestScanWorkerProcesses:
         assert len(found) == 1
         assert found[0].db_path is None
         assert found[0].worker_id is None
+
+    def test_legacy_bare_db_path_env_still_recognized(self):
+        """A worker launched by a pre-A8 clm carries only bare ``DB_PATH``.
+
+        Such workers can survive across a clm upgrade; without the legacy
+        fallback they would all read as "unknown provenance" and ``clm
+        workers reap`` would refuse to touch them by default.
+        """
+        proc = _fake_iter_proc(
+            6,
+            ["python", "-m", "clm.workers.notebook"],
+            environ={"DB_PATH": "/tmp/legacy_jobs.db"},
+        )
+        with patch(
+            "clm.infrastructure.workers.process_reaper.psutil.process_iter",
+            return_value=iter([proc]),
+        ):
+            found = scan_worker_processes()
+        assert len(found) == 1
+        assert found[0].db_path == Path("/tmp/legacy_jobs.db")
+
+    def test_new_env_name_wins_over_legacy(self):
+        """When both spellings are present, ``CLM_JOBS_DB_PATH`` wins."""
+        proc = _fake_iter_proc(
+            7,
+            ["python", "-m", "clm.workers.notebook"],
+            environ={"CLM_JOBS_DB_PATH": "/tmp/new.db", "DB_PATH": "/tmp/old.db"},
+        )
+        with patch(
+            "clm.infrastructure.workers.process_reaper.psutil.process_iter",
+            return_value=iter([proc]),
+        ):
+            found = scan_worker_processes()
+        assert found[0].db_path == Path("/tmp/new.db")
 
 
 # ---------------------------------------------------------------------------

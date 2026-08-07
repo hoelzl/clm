@@ -482,7 +482,7 @@ class TestDrawioWorkerMain:
         db_path = tmp_path / "new_db.db"
         assert not db_path.exists()
 
-        with patch.object(drawio_worker, "DB_PATH", db_path):
+        with patch.object(drawio_worker, "JOBS_DB_PATH", db_path):
             with patch.object(drawio_worker, "init_database") as mock_init:
                 with patch.object(
                     drawio_worker.Worker, "register_worker_with_retry", return_value=1
@@ -504,7 +504,7 @@ class TestDrawioWorkerMain:
         db_path = tmp_path / "test.db"
         init_database(db_path)
 
-        with patch.object(drawio_worker, "DB_PATH", db_path):
+        with patch.object(drawio_worker, "JOBS_DB_PATH", db_path):
             with patch.object(
                 drawio_worker.Worker, "register_worker_with_retry", return_value=1
             ) as mock_register:
@@ -527,7 +527,7 @@ class TestDrawioWorkerMain:
         db_path = tmp_path / "test.db"
         init_database(db_path)
 
-        with patch.object(drawio_worker, "DB_PATH", db_path):
+        with patch.object(drawio_worker, "JOBS_DB_PATH", db_path):
             with patch.object(drawio_worker.Worker, "register_worker_with_retry", return_value=1):
                 with patch.object(drawio_worker, "DrawioWorker") as mock_worker_class:
                     mock_worker = MagicMock()
@@ -548,7 +548,7 @@ class TestDrawioWorkerMain:
         db_path = tmp_path / "test.db"
         init_database(db_path)
 
-        with patch.object(drawio_worker, "DB_PATH", db_path):
+        with patch.object(drawio_worker, "JOBS_DB_PATH", db_path):
             with patch.object(drawio_worker.Worker, "register_worker_with_retry", return_value=1):
                 with patch.object(drawio_worker, "DrawioWorker") as mock_worker_class:
                     mock_worker = MagicMock()
@@ -560,6 +560,15 @@ class TestDrawioWorkerMain:
 
                     # Cleanup should still be called
                     mock_worker.cleanup.assert_called_once()
+
+    def test_main_refuses_to_start_without_jobs_db(self):
+        """SQLite mode without CLM_JOBS_DB_PATH fails fast — no guessed DB path (A8)."""
+        from clm.workers.drawio import drawio_worker
+
+        with patch.object(drawio_worker, "API_URL", None):
+            with patch.object(drawio_worker, "JOBS_DB_PATH", None):
+                with pytest.raises(SystemExit, match="CLM_JOBS_DB_PATH"):
+                    drawio_worker.main()
 
 
 class TestDrawioWorkerIntegration:
@@ -679,9 +688,9 @@ class TestDrawioWorkerConfiguration:
 
         assert hasattr(drawio_worker, "LOG_LEVEL")
 
-    def test_db_path_from_environment(self):
-        """DB_PATH should be read from environment."""
+    def test_jobs_db_path_has_no_default(self):
+        """JOBS_DB_PATH comes only from CLM_JOBS_DB_PATH — no baked-in default (A8)."""
         from clm.workers.drawio import drawio_worker
 
-        assert hasattr(drawio_worker, "DB_PATH")
-        assert isinstance(drawio_worker.DB_PATH, Path)
+        assert hasattr(drawio_worker, "JOBS_DB_PATH")
+        assert drawio_worker.JOBS_DB_PATH is None or isinstance(drawio_worker.JOBS_DB_PATH, Path)

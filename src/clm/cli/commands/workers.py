@@ -238,8 +238,8 @@ def workers_cleanup(jobs_db_path, force, cleanup_all):
     is_flag=True,
     help=(
         "Also reap worker processes whose environment is unreadable or whose "
-        "DB_PATH does not match --jobs-db-path. Default is to leave those alone "
-        "so you cannot accidentally kill workers from another worktree."
+        "CLM_JOBS_DB_PATH does not match --jobs-db-path. Default is to leave those "
+        "alone so you cannot accidentally kill workers from another worktree."
     ),
 )
 @click.pass_context
@@ -260,15 +260,15 @@ def workers_reap(ctx, jobs_db_path, dry_run, force, reap_all):
     2. Scans for surviving ``python -m clm.workers.*`` processes via
        psutil.
     3. Matches each surviving process against the DB at --jobs-db-path
-       (via the DB_PATH env var the worker was launched with).
+       (via the CLM_JOBS_DB_PATH env var the worker was launched with).
     4. Terminate-then-kill each matched process *tree* (including its
        descendants — kernels and converters).
     5. Deletes the now-stale worker rows from the DB (same shape as
        ``cleanup``).
 
     Processes whose environment cannot be read (usually cross-session
-    on Windows) or whose DB_PATH does not match are *listed* but not
-    reaped by default. Pass ``--all`` to reap them too.
+    on Windows) or whose CLM_JOBS_DB_PATH does not match are *listed* but
+    not reaped by default. Pass ``--all`` to reap them too.
 
     \b
     Examples:
