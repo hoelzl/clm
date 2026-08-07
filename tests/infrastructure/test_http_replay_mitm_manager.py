@@ -167,6 +167,47 @@ class TestClientHostAndProxyUrl:
         assert mgr.proxy_url == "http://192.168.1.5:8080"
 
 
+class TestLocateMitmdump:
+    """The explicit-override tiers of ``_locate_mitmdump`` (A7, #802)."""
+
+    @staticmethod
+    def _fake_cfg(mitmdump: str):
+        from unittest.mock import MagicMock
+
+        fake_cfg = MagicMock()
+        fake_cfg.external_tools.mitmdump = mitmdump
+        return fake_cfg
+
+    def test_env_override_wins_over_config(self, tmp_path: Path, monkeypatch):
+        env_path = tmp_path / "env-mitmdump.exe"
+        env_path.write_text("", encoding="utf-8")
+        monkeypatch.setenv("CLM_MITMDUMP", str(env_path))
+        monkeypatch.setattr(
+            "clm.infrastructure.config.get_config",
+            lambda: self._fake_cfg("should-not-be-consulted"),
+        )
+        assert proxy_manager._locate_mitmdump() == str(env_path)
+
+    def test_config_field_is_the_file_tier(self, tmp_path: Path, monkeypatch):
+        """[external_tools] mitmdump works without the env var set."""
+        cfg_path = tmp_path / "cfg-mitmdump.exe"
+        cfg_path.write_text("", encoding="utf-8")
+        monkeypatch.delenv("CLM_MITMDUMP", raising=False)
+        monkeypatch.setattr(
+            "clm.infrastructure.config.get_config", lambda: self._fake_cfg(str(cfg_path))
+        )
+        assert proxy_manager._locate_mitmdump() == str(cfg_path)
+
+    def test_missing_override_path_raises(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("CLM_MITMDUMP", raising=False)
+        monkeypatch.setattr(
+            "clm.infrastructure.config.get_config",
+            lambda: self._fake_cfg(str(tmp_path / "nope.exe")),
+        )
+        with pytest.raises(proxy_manager.MitmproxyError, match="does not exist"):
+            proxy_manager._locate_mitmdump()
+
+
 class TestStartCommandTraceDir:
     """The forensic trace dir (issue #165 P5) reaches the addon via a
     ``--set clm_trace_dir=`` option only when configured."""

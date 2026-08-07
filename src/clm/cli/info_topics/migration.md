@@ -437,6 +437,7 @@ no longer work.
 | `CLM_E2E_PROGRESS_INTERVAL` | `CLM_PROGRESS__UPDATE_INTERVAL` | Build progress-log interval (drives real builds, not just E2E tests). Also `[progress] update_interval` in `clm.toml`. |
 | `CLM_E2E_LONG_JOB_THRESHOLD` | `CLM_PROGRESS__LONG_JOB_THRESHOLD` | `[progress] long_job_threshold`. |
 | `CLM_E2E_SHOW_WORKER_DETAILS` | `CLM_PROGRESS__SHOW_WORKER_DETAILS` | `[progress] show_worker_details`. |
+| `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | `CLM_WORKER_MANAGEMENT__STARTUP_PARALLEL` | `[worker_management] startup_parallel` — pool-manager startup parallelism. The removed env var duplicated the config field with a divergent default (10 vs the documented 5). |
 
 The worker-count cap keeps its friendly short env var: **`CLM_MAX_WORKERS`** is
 the canonical spelling (the env form of the `[worker_management] max_workers_cap`

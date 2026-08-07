@@ -413,20 +413,28 @@ class MitmproxyManager:
 def _locate_mitmdump() -> str:
     """Find the mitmdump executable for the current Python environment.
 
-    Preference order: explicit ``CLM_MITMDUMP`` env override, then
+    Preference order: explicit override (``CLM_MITMDUMP`` env var, folding
+    over ``[external_tools] mitmdump`` in the config file — A7, #802), then
     ``shutil.which`` (honors PATH), then the scripts directory of the
     running interpreter. Raises ``MitmproxyError`` if none find it.
 
-    The ``CLM_MITMDUMP`` override is the recommended hook for the settled
-    ``uv tool install mitmproxy`` model (and CI provisioning), where
-    ``mitmdump`` lives in its own isolated environment rather than the
-    worker venv's scripts directory.
+    The override is the recommended hook for the settled ``uv tool install
+    mitmproxy`` model (and CI provisioning), where ``mitmdump`` lives in its
+    own isolated environment rather than the worker venv's scripts directory.
+    Because it names a program CLM executes on the host, the key is stripped
+    from repo-local (project-tier) config files like the other
+    ``PROJECT_FORBIDDEN_KEYS``; the env var still wins over any config file.
     """
-    override = os.environ.get("CLM_MITMDUMP")
+    from clm.infrastructure.config import get_config
+
+    override = os.environ.get("CLM_MITMDUMP") or get_config().external_tools.mitmdump
     if override:
         if Path(override).exists():
             return override
-        raise MitmproxyError(f"CLM_MITMDUMP={override!r} does not exist")
+        raise MitmproxyError(
+            f"Configured mitmdump path {override!r} does not exist "
+            f"(from CLM_MITMDUMP or [external_tools] mitmdump)"
+        )
 
     found = shutil.which("mitmdump")
     if found:

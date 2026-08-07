@@ -35,6 +35,21 @@ TOKEN_AUTH_ENV_VAR = "CLM_GIT_TOKEN_AUTH"
 _TRUTHY = ("1", "true", "yes", "on")
 
 
+def _token_auth_enabled() -> bool:
+    """Whether token-authenticated HTTPS transport is opted in (A7, #802).
+
+    The env var is checked directly (a set value always decides, truthy or
+    not) so the toggle stays robust against the cached ``get_config()``
+    instance predating an env change; when unset, ``[git] token_auth`` from
+    the config file decides — the same env-first shape as
+    ``kernel_env.resolve_kernel_python``.
+    """
+    raw = os.environ.get(TOKEN_AUTH_ENV_VAR, "").strip()
+    if raw:
+        return raw.lower() in _TRUTHY
+    return get_config().git.token_auth
+
+
 def _transport_safety_config_args() -> list[str]:
     """``git -c`` options that stop a URL from being an execution vector (S5).
 
@@ -73,7 +88,7 @@ def _token_auth_config_args() -> list[str]:
     only consulted when a command needs authentication, so they are passed
     to every git invocation. Returns ``[]`` when disabled or no token is set.
     """
-    if os.environ.get(TOKEN_AUTH_ENV_VAR, "").strip().lower() not in _TRUTHY:
+    if not _token_auth_enabled():
         return []
     from clm.infrastructure.gitlab_api import TOKEN_ENV_VARS
 

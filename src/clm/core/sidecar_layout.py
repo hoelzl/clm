@@ -34,7 +34,10 @@ This module owns only step 3, which is itself (see :func:`resolve_layout`):
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+
+from clm.core.utils.pyproject_settings import find_nearest_pyproject, read_tool_clm_key
 
 SIDECAR_LAYOUTS = ("subdir", "sibling")
 
@@ -47,30 +50,20 @@ def _coerce(value: str | None) -> str | None:
     return normalized if normalized in SIDECAR_LAYOUTS else None
 
 
-def _read_pyproject_layout(start: Path) -> str | None:
-    """Return ``[tool.clm] sidecar-layout`` from the nearest ancestor pyproject.
+@dataclass(frozen=True)
+class SidecarLayoutResolution:
+    """The resolved course-wide sidecar-layout default, and *why*.
 
-    Walks upward from ``start`` (or its parent, if it is a file) to the first
-    ``pyproject.toml`` and stops there — a project root that does not set the key
-    yields ``None`` rather than leaking into an unrelated parent project.
+    Mirrors ``CacheDirResolution`` in ``clm.infrastructure.llm.cache``: the
+    provenance fields let ``clm config show`` / ``locate`` explain the
+    resolution without re-deriving it. ``layout`` is ``None`` when nothing is
+    configured (source ``"unset"``), leaving per-topic auto-detection in
+    charge.
     """
-    try:
-        import tomllib
-    except ImportError:  # pragma: no cover — Python <3.11 not supported
-        return None
 
-    base = start if start.is_dir() else start.parent
-    for directory in (base, *base.parents):
-        pyproject = directory / "pyproject.toml"
-        if not pyproject.is_file():
-            continue
-        try:
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        value = data.get("tool", {}).get("clm", {}).get("sidecar-layout")
-        return _coerce(value) if isinstance(value, str) else None
-    return None
+    layout: str | None
+    source: str  # "env" | "spec" | "pyproject" | "unset"
+    pyproject_path: Path | None = None
 
 
 def resolve_course_sidecar_default(path: Path) -> str | None:
@@ -95,13 +88,29 @@ def resolve_layout(spec_default: str | None, path: Path) -> str | None:
     unrecognised value falls through to the next. Returns ``None`` when nothing
     is configured, leaving the caller's per-topic auto-detection in charge.
     """
+    return describe_layout(spec_default, path).layout
+
+
+def describe_layout(spec_default: str | None, path: Path) -> SidecarLayoutResolution:
+    """Resolve like :func:`resolve_layout`, but report the winning source too.
+
+    The resolution logic lives here so ``resolve_layout`` and the
+    ``clm config show`` / ``locate`` provenance display cannot drift apart.
+    """
     env = _coerce(os.environ.get("CLM_SIDECAR_LAYOUT"))
     if env is not None:
-        return env
+        return SidecarLayoutResolution(layout=env, source="env")
     spec = _coerce(spec_default)
     if spec is not None:
-        return spec
-    return _read_pyproject_layout(path)
+        return SidecarLayoutResolution(layout=spec, source="spec")
+    pyproject = find_nearest_pyproject(path)
+    if pyproject is not None:
+        from_file = _coerce(read_tool_clm_key(pyproject, "sidecar-layout"))
+        if from_file is not None:
+            return SidecarLayoutResolution(
+                layout=from_file, source="pyproject", pyproject_path=pyproject
+            )
+    return SidecarLayoutResolution(layout=None, source="unset")
 
 
 def effective_write_layout(path: Path, flag: str | None) -> str | None:

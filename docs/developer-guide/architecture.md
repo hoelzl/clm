@@ -573,12 +573,30 @@ Diagnose unexpected rebuilds with `clm cache explain <deck> --spec <course.xml>`
 — the complete environment-variable and config-file reference. Do not trust
 ad-hoc env-var lists elsewhere (including in old revisions of this document).
 
+The config model (unified by A7 of #802 — see the "How the pieces fit
+together" section of `configuration.md`) has three deliberate channels:
+
+- **Persistent operator settings** — the Pydantic `ClmConfig` hierarchy
+  (`infrastructure/config.py`): env > project > user > system > defaults,
+  with `resolve_setting` layering a CLI flag on top. A repo-local (project
+  tier) config may not set executable paths (`PROJECT_FORBIDDEN_KEYS`, S5).
+- **Per-invocation build options** — no config-file tier by design; resolved
+  as flag > dedicated `CLM_*` env var > default by the public `resolve_*`
+  family in `build/config.py` and the DB-path global options in `cli/main.py`.
+- **Course-repo-scoped settings** — course-spec elements plus the two-key
+  `[tool.clm]` pyproject table (`cache_dir`, `sidecar-layout`), parsed by the
+  single shared reader `core/utils/pyproject_settings.py` and interleaved as
+  env > spec > file. `[tool.clm]` stays in core (rather than folding into
+  `ClmConfig`) because its consumers include `clm.core`, which the layer
+  contracts forbid from importing infrastructure.
+
+Worker processes never read config files: the host resolves each effective
+value and injects it into the worker environment (`worker_executor`), for
+Direct and Docker workers alike. `clm config show` displays the effective
+value and source of all of the above.
+
 Known non-uniformity, tracked in #802:
 
-- **Three parallel config mechanisms** (A7, open): the Pydantic `ClmConfig`
-  hierarchy (`infrastructure/config.py`), `core/sidecar_layout.py`'s own
-  `[tool.clm]` pyproject reader, and raw `os.environ` reads scattered through
-  the codebase (including `build.py`'s `_resolve_*` family).
 - **The jobs-DB path has two env names and two defaults** (A8, open): host
   code uses `CLM_JOBS_DB_PATH` (default `clm_jobs.db`); worker code uses bare
   `DB_PATH` with the container default `/db/jobs.db`. It works because the
@@ -692,8 +710,9 @@ Details: `docs/archive/migration-history/`.
 The layering above is fully enforced, but #802 tracks remaining structural
 work. Keep this list honest — update it when an item lands:
 
-- **A7 / A8** — config unification and the jobs-DB path split (see
-  [Configuration](#configuration))
+- **A8** — the jobs-DB path split (see [Configuration](#configuration));
+  A7 (config unification) landed Aug 2026 — the three-channel model in
+  [Configuration](#configuration) is now the designed, documented state
 - **A9** — ~12 cross-module underscore-private imports remain among the
   unconstrained top-of-stack modules
 - **A12** — `docker`, `fastapi`, `uvicorn`, `watchdog` are unconditional

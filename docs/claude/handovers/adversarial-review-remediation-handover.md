@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A10/A11 DONE (A5 2026-08-07), ratchet 50 → 0 and import-linter enforced; remaining A7–A9/A12 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A7/A10/A11 DONE (A7 2026-08-07), ratchet 50 → 0 and import-linter enforced; remaining A8/A9/A12 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1246,9 +1246,9 @@ one PR per step, golden suite green after each.
    `tests/test_architecture_contracts.py` keeps the string-import guard
    + Backend/payload pins. **A1/A2/A3/A4/A5/A6/A10/A11 are complete** (A10:
    architecture.md rewritten 2026-08-06 — see item 10 below; A4/A5: see
-   items 5 and 6). Remaining Phase 8 items: A7 (config unification),
-   A8 (jobs-DB path), A9 (residual private cross-imports), A12
-   (extras/lazy imports + DummyBackend to tests).
+   items 5 and 6). **A7 DONE 2026-08-07** — see item 7 below.
+   Remaining Phase 8 items: A8 (jobs-DB path), A9 (residual private
+   cross-imports), A12 (extras/lazy imports + DummyBackend to tests).
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
@@ -1290,9 +1290,30 @@ one PR per step, golden suite green after each.
    `harvest.py` no longer privately imports from `voiceover.py`.
    `cli/commands/voiceover.py` is a thin adapter for these paths
    (~2,780 lines from 3,606); no re-export shims, all importers retargeted.
-7. **A7** — unify the three config mechanisms (`ClmConfig`, `sidecar_layout`'s
-   `[tool.clm]` pyproject reader, and raw `os.environ` in 36 files including
-   `build.py`'s `_resolve_*` family).
+7. ✔ **A7 — unify the three config mechanisms** — **DONE 2026-08-07**. Most
+   of the finding had already been retired by the config/CLI/env-unification
+   proposal (`docs/proposals/config-cli-precedence-unification.md`, PRs
+   #498–#509: `resolve_setting`, the inert `ClmConfig` sections wired to
+   real consumers via host-resolve-and-inject, duplicate spellings hard-cut)
+   and by A4 (the `_resolve_*` family became the public, documented
+   flag > env > default resolvers in `clm.build.config`). The close-out PR:
+   ONE shared `[tool.clm]` reader (`core/utils/pyproject_settings.py`, used
+   by both `sidecar_layout` and the LLM cache-dir resolver — `[tool.clm]`
+   stays core-side because layering forbids core → infrastructure);
+   sidecar-layout surfaced in `clm config show`/`locate` with provenance
+   (`describe_layout`); a full audit of every raw `os.environ` read with the
+   residual bypasses wired through `ClmConfig` (`[external_tools] mitmdump`
+   — also added to `PROJECT_FORBIDDEN_KEYS`; `[jupyter]
+   cell_timeout_seconds`/`replay_cell_timeout_seconds` — injected into BOTH
+   worker modes, fixing the Direct/Docker asymmetry; `[git] token_auth`;
+   `CLM_MAX_WORKER_STARTUP_CONCURRENCY` hard-cut in favour of
+   `startup_parallel`); and the three-channel config model documented in
+   `configuration.md` ("How the pieces fit together") + `architecture.md`.
+   Deliberately NOT changed: worker-side reads of host-injected vars,
+   per-invocation build options (no config-file tier by design), secrets
+   (env-only), core-layer escape hatches (`CLM_MAX_CONCURRENCY`,
+   `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB`), worker-API bind vars (A8 territory),
+   and the settled `CLM_MAX_WORKERS` short spelling.
 8. **A8** — one name and one default for the jobs-DB path (`CLM_JOBS_DB_PATH`
    host-side vs bare `DB_PATH` defaulting to the container path `/db/jobs.db`
    worker-side).
@@ -1385,7 +1406,7 @@ so the maintainer can object:
 - `docs/developer-guide/releasing.md` — Phase 0's release procedure.
 - `docs/developer-guide/architecture.md` — rewritten 2026-08-06 (Phase 8/A10)
   to describe the enforced post-#802 layering; keep its "Known Deviations"
-  list current as A7–A9/A12 land (A4/A5 already removed from it).
+  list current as A8/A9/A12 land (A4/A5/A7 already removed from it).
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
 

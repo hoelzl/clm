@@ -72,6 +72,7 @@ DEFAULT_WORKER_IMAGES = {
 PROJECT_FORBIDDEN_KEYS: tuple[tuple[str, str], ...] = (
     ("external_tools", "plantuml_jar"),
     ("external_tools", "drawio_executable"),
+    ("external_tools", "mitmdump"),
 )
 
 #: Set to ``1``/``true``/``yes`` to let the repo-local config set the keys above
@@ -80,6 +81,20 @@ PROJECT_FORBIDDEN_KEYS: tuple[tuple[str, str], ...] = (
 ALLOW_PROJECT_TOOL_PATHS_ENV_VAR = "CLM_ALLOW_PROJECT_TOOL_PATHS"
 
 _TRUTHY = ("1", "true", "yes", "on")
+
+
+def _nonneg_float_env(env_value: str) -> float | None:
+    """Tolerant float coercion: junk reads as unset, negatives clamp to 0.
+
+    The raw-env readers the legacy timeout variables replace never raised on a
+    bad value (a junk ``CLM_CELL_TIMEOUT_SECONDS`` fell back to the default),
+    so feeding the string straight into the pydantic float field would turn a
+    long-tolerated typo into a hard config-load failure.
+    """
+    try:
+        return max(float(env_value), 0.0)
+    except ValueError:
+        return None
 
 
 def project_tool_paths_allowed() -> bool:
@@ -147,11 +162,24 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
     LEGACY_ENV_VARS = {
         ("external_tools", "plantuml_jar"): "PLANTUML_JAR",
         ("external_tools", "drawio_executable"): "DRAWIO_EXECUTABLE",
+        ("external_tools", "mitmdump"): "CLM_MITMDUMP",
         ("jupyter", "jinja_line_statement_prefix"): "JINJA_LINE_STATEMENT_PREFIX",
         ("jupyter", "jinja_templates_path"): "JINJA_TEMPLATES_PATH",
         ("jupyter", "log_cell_processing"): "LOG_CELL_PROCESSING",
+        ("jupyter", "cell_timeout_seconds"): "CLM_CELL_TIMEOUT_SECONDS",
+        ("jupyter", "replay_cell_timeout_seconds"): "CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS",
+        ("git", "token_auth"): "CLM_GIT_TOKEN_AUTH",
         ("workers", "worker_type"): "WORKER_TYPE",
         ("workers", "worker_id"): "WORKER_ID",
+    }
+
+    # Per-variable value converters; unlisted variables pass through as strings.
+    # A converter returning ``None`` drops the variable (reads as unset).
+    LEGACY_CONVERTERS: dict[str, Any] = {
+        "LOG_CELL_PROCESSING": lambda v: v.lower() in ("true", "1", "yes"),
+        "CLM_GIT_TOKEN_AUTH": lambda v: v.lower() in _TRUTHY,
+        "CLM_CELL_TIMEOUT_SECONDS": _nonneg_float_env,
+        "CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS": _nonneg_float_env,
     }
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
@@ -167,21 +195,20 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
         for field_path, env_var in self.LEGACY_ENV_VARS.items():
             env_value = os.getenv(env_var)
 
-            if env_value is not None:
-                # Build nested dict structure
-                current = data
-                for part in field_path[:-1]:
-                    if part not in current:
-                        current[part] = {}
-                    current = current[part]
+            if env_value is None:
+                continue
+            converter = self.LEGACY_CONVERTERS.get(env_var)
+            value: Any = env_value if converter is None else converter(env_value)
+            if value is None:
+                continue
 
-                # Set the value, converting booleans
-                final_key = field_path[-1]
-                if env_var == "LOG_CELL_PROCESSING":
-                    # Boolean conversion
-                    current[final_key] = env_value.lower() in ("true", "1", "yes")
-                else:
-                    current[final_key] = env_value
+            # Build nested dict structure
+            current = data
+            for part in field_path[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            current[field_path[-1]] = value
 
         return data
 
@@ -267,6 +294,17 @@ class ExternalToolsConfig(BaseModel):
         description="Path to Draw.io executable",
     )
 
+    mitmdump: str = Field(
+        default="",
+        description=(
+            "Path to the mitmdump executable used by the HTTP-replay proxy. "
+            "Empty = auto-locate (PATH, then the interpreter's scripts "
+            "directory). The recommended hook for the `uv tool install "
+            "mitmproxy` model, where mitmdump lives in its own environment. "
+            "Env var: CLM_MITMDUMP."
+        ),
+    )
+
 
 class ProgressConfig(BaseModel):
     """Build progress-reporting configuration.
@@ -346,6 +384,31 @@ class JupyterConfig(BaseModel):
             "(clm.toml) tier; the env var CLM_NOTEBOOK_KERNEL_PYTHON and a "
             "course-spec <kernel-python> element override it. See docs/claude/"
             "design/dependency-environment-isolation.md."
+        ),
+    )
+
+    cell_timeout_seconds: float = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Per-cell nbclient execution timeout in seconds for the notebook "
+            "worker. 0 (default) = no per-cell limit (a stuck cell runs until "
+            "the build-level job timeout). A positive value surfaces a stuck "
+            "cell as a CellTimeoutError instead of hanging the worker (issue "
+            "#143). Env var: CLM_CELL_TIMEOUT_SECONDS. The host resolves this "
+            "and injects it into Direct AND Docker workers."
+        ),
+    )
+
+    replay_cell_timeout_seconds: float = Field(
+        default=600,
+        ge=0,
+        description=(
+            "Per-cell timeout applied only to HTTP-replay-engaged notebook "
+            "jobs when cell_timeout_seconds is unset — the backstop that "
+            "turns a replay-layer hang into a clean CellTimeoutError (issues "
+            "#143/#165). 0 opts out. Env var: "
+            "CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS."
         ),
     )
 
@@ -626,6 +689,17 @@ class GitConfig(BaseModel):
         description="Default remote path (e.g., GitLab group) between repository base "
         "and repo name. Overrides course-level <remote-path> from spec file. "
         "Does not override per-target <remote-path> values.",
+    )
+    token_auth: bool = Field(
+        default=False,
+        description=(
+            "Authenticate git HTTPS transport with the GitLab token from "
+            "CLM_GITLAB_TOKEN/GITLAB_TOKEN via an ephemeral credential helper "
+            "(issue #341) — for headless environments without a credential "
+            "manager. The token itself stays env-only (a secret never belongs "
+            "in a config file); this is just the opt-in toggle. Env var: "
+            "CLM_GIT_TOKEN_AUTH."
+        ),
     )
 
 
@@ -1190,6 +1264,11 @@ plantuml_jar = ""
 # Example: drawio_executable = "/usr/local/bin/drawio"
 drawio_executable = ""
 
+# Path to the mitmdump executable for the HTTP-replay proxy (empty = auto-locate)
+# Environment variable: CLM_MITMDUMP
+# Example: mitmdump = "C:/Users/me/.local/bin/mitmdump.exe"
+mitmdump = ""
+
 [logging]
 # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 # Environment variable: CLM_LOGGING__LOG_LEVEL
@@ -1224,6 +1303,14 @@ jinja_templates_path = "templates"
 # Log cell processing in notebook processor
 # Environment variable: LOG_CELL_PROCESSING (no CLM_ prefix)
 log_cell_processing = false
+
+# Per-cell notebook execution timeout in seconds (0 = no per-cell limit)
+# Environment variable: CLM_CELL_TIMEOUT_SECONDS
+cell_timeout_seconds = 0
+
+# Per-cell timeout for HTTP-replay-engaged jobs when the above is 0 (0 = opt out)
+# Environment variable: CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS
+replay_cell_timeout_seconds = 600
 
 [workers]
 # Worker type (notebook, plantuml, drawio)

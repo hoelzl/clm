@@ -588,17 +588,6 @@ def _ensure_dir(path: Path) -> Path:
 
 
 def _read_pyproject_cache_dir(pyproject: Path) -> str | None:
-    try:
-        import tomllib
-    except ImportError:  # pragma: no cover — Python <3.11 not supported
-        return None
-    try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    tool = data.get("tool", {})
-    clm = tool.get("clm", {})
-    value = clm.get("cache_dir")
-    if isinstance(value, str) and value:
-        return value
-    return None
+    from clm.core.utils.pyproject_settings import read_tool_clm_key
+
+    return read_tool_clm_key(pyproject, "cache_dir")
