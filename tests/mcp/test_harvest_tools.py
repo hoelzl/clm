@@ -225,7 +225,7 @@ class TestHandleHarvestCompare:
         )
 
         with patch(
-            "clm.infrastructure.llm.client._build_client",
+            "clm.infrastructure.llm.client.build_client",
             return_value=mock_client,
         ):
             out = await handle_harvest_compare(str(src), str(tgt), tmp_path, lang="en")

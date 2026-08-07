@@ -95,10 +95,10 @@ class TestPolishTextWithLevels:
         return mock_response
 
     def _patch_client(self, mock_create):
-        """Patch _build_client to return a mock AsyncOpenAI client."""
+        """Patch build_client to return a mock AsyncOpenAI client."""
         mock_client = MagicMock()
         mock_client.chat.completions.create = mock_create
-        return patch("clm.infrastructure.llm.client._build_client", return_value=mock_client)
+        return patch("clm.infrastructure.llm.client.build_client", return_value=mock_client)
 
     @pytest.mark.parametrize(
         "level",

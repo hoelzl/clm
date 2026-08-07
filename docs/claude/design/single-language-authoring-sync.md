@@ -321,7 +321,7 @@ used and why it found 0 changes (in sync vs no baseline).
 | `slides/sync_direction.py` | Source per-cell direction from the watermark; keep global inference as the cold-start fallback. |
 | `slides/sync_writeback.py` | `FileState` grows `insert` / `delete` / `move` alongside `replace_body`; watermark recording replaces/augments `record_snapshot`. |
 | `slides/assign_ids.py` | Expose the EN-slug-from-translation minting path for reuse by sync (stamp both siblings, sticky). |
-| New: translation path | Whole-new-slide translation prompts (distinct from the edit judge), routed through the OpenAI-compatible `_build_client` (`infrastructure/llm/client.py`) exactly like the voiceover `propagate_*` path. **Model fixed to Claude Sonnet (`anthropic/claude-sonnet-4-6`) via OpenRouter** (decided 2026-05-31), exposed as a `--translation-model` + `CLM_LLM__*` / `[tool.clm]` override so it is never hardcoded-only. Generalizing per-purpose model selection across CLM is a separate investigation (#167; `docs/claude/TODO.md` → *Uniform, per-purpose model configurability*). |
+| New: translation path | Whole-new-slide translation prompts (distinct from the edit judge), routed through the OpenAI-compatible `build_client` (`infrastructure/llm/client.py`) exactly like the voiceover `propagate_*` path. **Model fixed to Claude Sonnet (`anthropic/claude-sonnet-4-6`) via OpenRouter** (decided 2026-05-31), exposed as a `--translation-model` + `CLM_LLM__*` / `[tool.clm]` override so it is never hardcoded-only. Generalizing per-purpose model selection across CLM is a separate investigation (#167; `docs/claude/TODO.md` → *Uniform, per-purpose model configurability*). |
 | `cli/commands/slides_sync.py` | Flip default to write-to-tree; `--dry-run` preview; extend `--interactive` walker to render ADD/REMOVE/MOVE/CONFLICT; new summary lines; exit codes account for conflicts. |
 | `cli/info_topics/commands.md` | Update `clm slides sync` docs (default-flip, new behaviors) per the Info Topics Maintenance Rule. |
 
@@ -498,7 +498,7 @@ translator leading-newline strip + `max_tokens`. Deferred follow-up:
 id-carrying "missing counterpart" adds. Live `clm slides sync` still unchanged.
 
 - Translate a new source cell → target counterpart. New prompt suite (distinct
-  from the edit judge); routed through `_build_client` like the voiceover
+  from the edit judge); routed through `build_client` like the voiceover
   `propagate_*` path (structured JSON). **Model fixed: Claude Sonnet
   (`anthropic/claude-sonnet-4-6`) via OpenRouter**, with a `--translation-model`
   / `CLM_LLM__*` override. Memoize via `SyncCache`

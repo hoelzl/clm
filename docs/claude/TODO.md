@@ -11,7 +11,7 @@ This file tracks known issues and planned improvements for the CLM project.
 **Context**: CLM selects LLMs ad hoc per feature, across two backends:
 
 - The OpenAI-compatible async client
-  (`infrastructure/llm/client.py` `_build_client`) — used by `summarize` and
+  (`infrastructure/llm/client.py` `build_client`) — used by `summarize` and
   voiceover `merge`/`propagate`. Model is passed per call; OpenRouter via
   `api_base`; key from `OPENAI_API_KEY` / `CLM_LLM__API_KEY`.
 - The local Ollama client (`infrastructure/llm/ollama_client.py`) — used by the
@@ -31,7 +31,7 @@ sane per-purpose default and provider-agnostic resolution.
 - **Internal registry over the existing OpenAI-compatible client** — lightest.
   OpenRouter already exposes many providers through the OpenAI API shape, and
   Ollama speaks an OpenAI-compatible endpoint too, so a per-purpose model map +
-  the existing `_build_client` may suffice without a new framework.
+  the existing `build_client` may suffice without a new framework.
 - **LiteLLM** — a thin unified multi-provider proxy; less churn than LangChain.
 - **LangChain** — broadest abstraction but heavy and fast-moving; weigh the
   dependency cost.

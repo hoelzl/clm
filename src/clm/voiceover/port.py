@@ -114,7 +114,7 @@ async def polish_and_port(
     Returns:
         PortResult with merged bullets and per-bullet outcomes.
     """
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     # No LLM call needed when both sides are empty.
     if not prior_voiceover.strip() and not baseline_bullets.strip():
@@ -136,7 +136,7 @@ async def polish_and_port(
     system_prompt = _load_system_prompt(language)
     user_message = pack.build_user_message()
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     logger.debug(
         "polish_and_port slide=%s baseline=%d chars prior=%d chars changed=%s",

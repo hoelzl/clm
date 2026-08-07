@@ -27,10 +27,10 @@ from clm.core.slide_text.raw_cells import split_cells as split_raw_cells
 from clm.core.slide_text.slide_parser import Cell, parse_cells
 from clm.core.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.core.topic_resolver import (
-    _group_paths_into_units,
     build_topic_map,
     find_slide_files,
     find_slide_files_recursive,
+    group_paths_into_units,
     matches_for_binding,
 )
 from clm.core.utils.path_utils import split_lang_suffix
@@ -41,7 +41,7 @@ from clm.slides.slug import (
     is_valid_slug,
     strip_preserve_marker,
 )
-from clm.slides.split import _is_shared
+from clm.slides.split import is_shared_cell
 from clm.slides.sync_verify import tag_parity_violations
 from clm.workers.notebook.cpp_code_analysis import (
     DEFINITION_CATEGORIES,
@@ -1276,7 +1276,7 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
     between the two shared-cell streams produces silently divergent
     DE and EN output — exactly what the split format is meant to prevent.
 
-    Reuses :func:`clm.slides.split._is_shared` to classify cells (so the
+    Reuses :func:`clm.slides.split.is_shared_cell` to classify cells (so the
     rule stays aligned with Phase 5's split semantics) and compares the
     raw cell bytes via :class:`~clm.core.slide_text.raw_cells.RawCell`. The check
     is positional within the shared-cell stream: shared cell *i* in the
@@ -1292,8 +1292,8 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
     _, de_cells = split_raw_cells(de_text, comment_token_for_path(de_path))
     _, en_cells = split_raw_cells(en_text, comment_token_for_path(en_path))
 
-    de_shared = [c for c in de_cells if _is_shared(c)]
-    en_shared = [c for c in en_cells if _is_shared(c)]
+    de_shared = [c for c in de_cells if is_shared_cell(c)]
+    en_shared = [c for c in en_cells if is_shared_cell(c)]
 
     if len(de_shared) != len(en_shared):
         findings.append(
@@ -1556,7 +1556,7 @@ def _check_split_untranslated_text(de_path: Path, en_path: Path) -> list[Finding
 
     for cell in de_cells:
         meta = cell.metadata
-        if meta.cell_type != "code" or meta.is_j2 or not _is_shared(cell):
+        if meta.cell_type != "code" or meta.is_j2 or not is_shared_cell(cell):
             continue
         if _UNTRANSLATED_ALLOW_TAG in meta.tags:
             continue
@@ -1932,14 +1932,14 @@ def _check_companion_for_slide_resolves(path: Path) -> list[Finding]:
 def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
     """Return every detected ``(de_path, en_path)`` pair in ``slide_files``.
 
-    Reuses :func:`clm.core.topic_resolver._group_paths_into_units` so the
+    Reuses :func:`clm.core.topic_resolver.group_paths_into_units` so the
     grouping rule stays in lock-step with the build-time routing. Only
     units classified as ``split`` produce pairs; dual-format and
     half-pair units are surfaced as routing errors at build time and are
     skipped here.
     """
     pairs: list[tuple[Path, Path]] = []
-    for unit in _group_paths_into_units(slide_files):
+    for unit in group_paths_into_units(slide_files):
         if unit.kind != "split":
             continue
         assert unit.de_path is not None and unit.en_path is not None

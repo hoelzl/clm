@@ -202,7 +202,7 @@ class ArmedDeck:
 - the **build output root** holding `.clm-manifest.json`.
 
 These DO exist, but only in the web layer at `/arm` time: the `Course` is built
-and stored at `app.state.course` (`recordings/web/app.py` `_build_course`), and
+and stored at `app.state.course` (`recordings/web/app.py` `build_course`), and
 `RecordingsCourseConfig` (`infrastructure/config.py`) carries `spec_file` and
 `course_repo`. The session manager is never handed any of them.
 

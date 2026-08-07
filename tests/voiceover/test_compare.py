@@ -62,7 +62,7 @@ class TestJudgeSlidePair:
         )
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_llm)
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             outcomes, notes, err = await judge_slide_pair(
                 prior_bullets="- a\n- b old",
                 baseline_bullets="- a\n- b",
@@ -83,7 +83,7 @@ class TestJudgeSlidePair:
     async def test_non_llmerror_exception_reported_as_error(self):
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("network"))
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             outcomes, notes, err = await judge_slide_pair(
                 prior_bullets="- a",
                 baseline_bullets="- b",
@@ -107,7 +107,7 @@ class TestJudgeSlidePair:
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=capture_create)
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             await judge_slide_pair(
                 prior_bullets="- a",
                 baseline_bullets="- b",
@@ -133,7 +133,7 @@ class TestJudgeSlidePair:
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=capture_create)
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             await judge_slide_pair(
                 prior_bullets="- a",
                 baseline_bullets="- b",
@@ -278,7 +278,7 @@ class TestCompareCLI:
         mock_client.chat.completions.create = AsyncMock(return_value=_mock_response(llm_payload))
 
         runner = CliRunner()
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = runner.invoke(
                 harvest_group,
                 [
@@ -316,7 +316,7 @@ class TestCompareCLI:
         mock_client.chat.completions.create = AsyncMock(return_value=_mock_response(llm_payload))
 
         runner = CliRunner()
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = runner.invoke(
                 harvest_group,
                 [

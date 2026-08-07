@@ -217,7 +217,7 @@ def collapse_runs(metrics: list[CommitMetrics]) -> list[NarrativeRun]:
     return runs
 
 
-def _git_toplevel(path: Path) -> Path:
+def git_toplevel(path: Path) -> Path:
     target = path.resolve()
     cwd = target.parent if target.is_file() else target
     out = subprocess.check_output(
@@ -235,7 +235,7 @@ def walk_file_history(
     limit: int | None = None,
 ) -> list[CommitInfo]:
     """Return commits touching ``path``, chronological (oldest → newest)."""
-    repo_root = _git_toplevel(path)
+    repo_root = git_toplevel(path)
     rel = path.resolve().relative_to(repo_root)
 
     cmd = [
@@ -274,7 +274,7 @@ def walk_file_history(
 
 def get_file_at_rev(rev: str, path: Path) -> str | None:
     """Return the file's content at ``rev``, or None if it doesn't exist there."""
-    repo_root = _git_toplevel(path)
+    repo_root = git_toplevel(path)
     rel = path.resolve().relative_to(repo_root)
     result = subprocess.run(
         ["git", "-C", str(repo_root), "show", f"{rev}:{rel.as_posix()}"],

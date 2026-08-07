@@ -31,6 +31,7 @@ from clm.core.slide_text.anchor_primitives import (
     find_predecessor_index as _find_predecessor_index,
 )
 from clm.core.slide_text.pairing import TITLE_SLIDE_ID, is_title_macro_cell, order_split_pair
+from clm.core.slide_text.raw_cells import RawCell, reconstruct, split_cells
 from clm.core.slide_text.slide_parser import comment_token_for_path, parse_cell_header, parse_cells
 from clm.core.slide_text.voiceover_merge import (
     VO_ANCHOR_RE as _VO_ANCHOR_RE,
@@ -58,12 +59,7 @@ from clm.core.voiceover_companions import (
     resolve_companion,
 )
 from clm.infrastructure.utils.path_utils import atomic_write_all
-from clm.slides.normalizer import (
-    _apply_slide_ids,
-    _RawCell,
-    _reconstruct,
-    _split_raw_cells,
-)
+from clm.slides.normalizer import apply_slide_ids
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -219,7 +215,7 @@ class InlineTextResult:
     remaining_companion_text: str
     """Reconstructed text of the unmatched companion cells (``""`` when none).
     These keep their ``for_slide`` / ``vo_anchor`` so a retry can re-place them."""
-    unmatched: list[_RawCell] = field(default_factory=list)
+    unmatched: list[RawCell] = field(default_factory=list)
     placements: list[Placement] = field(default_factory=list)
     cells_inlined: int = 0
     relocated_cells: int = 0
@@ -251,16 +247,16 @@ def inline_pair_text(
     """
     result = InlineTextResult(inlined_text=slide_text, remaining_companion_text="")
 
-    preamble, slide_cells = _split_raw_cells(slide_text, comment_token)
-    _, companion_cells = _split_raw_cells(companion_text, comment_token)
+    preamble, slide_cells = split_cells(slide_text, comment_token)
+    _, companion_cells = split_cells(companion_text, comment_token)
     if not companion_cells:
         return result
     result.had_companion_cells = True
 
     id_map = _build_slide_id_to_cell_map(slide_cells)
 
-    insertions: list[tuple[int, _RawCell]] = []  # (insert_after_idx, cell), companion order
-    unmatched: list[_RawCell] = []
+    insertions: list[tuple[int, RawCell]] = []  # (insert_after_idx, cell), companion order
+    unmatched: list[RawCell] = []
     for vo_cell in companion_cells:
         anchor = _parse_vo_anchor(vo_cell.header)
         for_slide = vo_cell.metadata.for_slide
@@ -298,9 +294,9 @@ def inline_pair_text(
 
     if insertions:
         new_cells = _apply_insertions(slide_cells, insertions, [])
-        result.inlined_text = _reconstruct(preamble, new_cells)
+        result.inlined_text = reconstruct(preamble, new_cells)
     if unmatched:
-        result.remaining_companion_text = _reconstruct("", unmatched)
+        result.remaining_companion_text = reconstruct("", unmatched)
     return result
 
 
@@ -330,7 +326,7 @@ def _prune_other_companions(slide_path: Path, keep: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _is_extractable_cell(cell: _RawCell, *, include_notes: bool) -> bool:
+def _is_extractable_cell(cell: RawCell, *, include_notes: bool) -> bool:
     """Cells that ``extract`` pulls into the voiceover companion.
 
     By default only ``voiceover``-tagged cells are extracted; ``notes``
@@ -362,7 +358,7 @@ _TWIN_FROM_DISK: Final = object()
 
 
 def _ensure_slide_ids(
-    cells: list[_RawCell],
+    cells: list[RawCell],
     path: Path,
     text: str,
     *,
@@ -389,13 +385,13 @@ def _ensure_slide_ids(
     the already-loaded in-memory twin ids instead, so a text-only extract mints
     twin-consistently with no hidden disk read.
     """
-    from clm.slides.assign_ids import _twin_ids_for
+    from clm.slides.assign_ids import twin_ids_for
 
     if twin_ids is _TWIN_FROM_DISK:
-        resolved = _twin_ids_for(path, text)
+        resolved = twin_ids_for(path, text)
     else:
         resolved = cast("list[str | None] | None", twin_ids)
-    changes, _refusals = _apply_slide_ids(cells, path, twin_ids=resolved)
+    changes, _refusals = apply_slide_ids(cells, path, twin_ids=resolved)
     return len(changes)
 
 
@@ -409,7 +405,7 @@ _FOR_SLIDE_RE = re.compile(r'\s*for_slide="[^"]*"')
 
 
 def _build_voiceover_header(
-    voiceover_cell: _RawCell,
+    voiceover_cell: RawCell,
     slide_id: str,
     anchor: str | None,
 ) -> str:
@@ -435,7 +431,7 @@ def _strip_author_attrs(header: str) -> str:
     return header
 
 
-def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | None:
+def _find_owning_slide_id(cells: list[RawCell], voiceover_idx: int) -> str | None:
     """Find the slide_id of the content cell that owns a voiceover cell.
 
     Walks backward from the voiceover cell to find the most recent
@@ -488,7 +484,7 @@ def has_voiceover_cells_text(
     steady state (inline ``notes`` beside a voiceover companion, post-#387), so the
     predicate must never count ``notes``.
     """
-    _preamble, cells = _split_raw_cells(text, comment_token)
+    _preamble, cells = split_cells(text, comment_token)
     return any(_is_extractable_cell(c, include_notes=include_notes) for c in cells)
 
 
@@ -572,7 +568,7 @@ def _plan_extraction_from_text(
         dry_run=dry_run,
     )
 
-    preamble, cells = _split_raw_cells(text, comment_token_for_path(path))
+    preamble, cells = split_cells(text, comment_token_for_path(path))
 
     # Indices of the cells we will pull into the companion (voiceover by
     # default; notes too when include_notes is set). Notes left behind stay
@@ -591,7 +587,7 @@ def _plan_extraction_from_text(
     # vo_anchor (immediate predecessor, occurrence-qualified) so inline can
     # restore the exact position rather than the slide-group end.
     id_map = _build_slide_id_to_cell_map(cells)
-    companion_cells: list[_RawCell] = []
+    companion_cells: list[RawCell] = []
     for idx in vo_indices:
         vo_cell = cells[idx]
         vo_lang = vo_cell.metadata.lang
@@ -632,10 +628,10 @@ def _plan_extraction_from_text(
 
     # Remove voiceover cells from the slide file
     remaining_cells = [c for i, c in enumerate(cells) if i not in set(vo_indices)]
-    new_slide_text = _reconstruct(preamble, remaining_cells)
+    new_slide_text = reconstruct(preamble, remaining_cells)
     # Clean up double blank lines left by removal
     new_slide_text = re.sub(r"\n{3,}", "\n\n", new_slide_text)
-    companion_text = _reconstruct("", companion_cells)
+    companion_text = reconstruct("", companion_cells)
     return result, [(path, new_slide_text), (comp, companion_text)]
 
 
@@ -988,16 +984,16 @@ def inline_notes(path: Path, *, dry_run: bool = False) -> InlineResult:
         return result
 
     comment_token = comment_token_for_path(path)
-    preamble, slide_cells = _split_raw_cells(path.read_text(encoding="utf-8"), comment_token)
-    _, companion_cells = _split_raw_cells(comp.read_text(encoding="utf-8"), comment_token)
+    preamble, slide_cells = split_cells(path.read_text(encoding="utf-8"), comment_token)
+    _, companion_cells = split_cells(comp.read_text(encoding="utf-8"), comment_token)
     if not companion_cells:
         return result
 
     id_map = _build_slide_id_to_cell_map(slide_cells)
-    insertions: list[tuple[int, _RawCell]] = []
+    insertions: list[tuple[int, RawCell]] = []
     # ``retained`` keeps companion order: voiceover (and other non-notes) cells
     # are passed through untouched; unplaceable notes are kept for a retry.
-    retained: list[_RawCell] = []
+    retained: list[RawCell] = []
 
     for cell in companion_cells:
         if "notes" not in cell.metadata.tags:
@@ -1038,9 +1034,9 @@ def inline_notes(path: Path, *, dry_run: bool = False) -> InlineResult:
 
     if not dry_run:
         new_cells = _apply_insertions(slide_cells, insertions, [])
-        path.write_text(_reconstruct(preamble, new_cells), encoding="utf-8", newline="\n")
+        path.write_text(reconstruct(preamble, new_cells), encoding="utf-8", newline="\n")
         if retained:
-            comp.write_text(_reconstruct("", retained), encoding="utf-8", newline="\n")
+            comp.write_text(reconstruct("", retained), encoding="utf-8", newline="\n")
             result.companion_retained = True
         else:
             comp.unlink()
@@ -1128,7 +1124,7 @@ def render_companion_update(
     if not notes_by_slide_id:
         return companion_text
 
-    preamble, cells = _split_raw_cells(companion_text, comment_token)
+    preamble, cells = split_cells(companion_text, comment_token)
 
     existing: dict[str, int] = {}
     for i, cell in enumerate(cells):
@@ -1153,14 +1149,14 @@ def render_companion_update(
             )
             new_lines = [header, *body]
             cells.append(
-                _RawCell(
+                RawCell(
                     lines=new_lines,
                     line_number=0,
                     metadata=parse_cell_header(header),
                 )
             )
 
-    new_text = _reconstruct(preamble, cells)
+    new_text = reconstruct(preamble, cells)
     if new_text and not new_text.endswith("\n"):
         new_text += "\n"
     return new_text

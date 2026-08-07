@@ -376,9 +376,9 @@ class Topic(NotebookMixin, ABC):
         build refuses (``clm build`` propagates these to a non-zero exit
         before any worker runs).
         """
-        from clm.core.topic_resolver import _group_paths_into_units
+        from clm.core.topic_resolver import group_paths_into_units
 
-        for unit in _group_paths_into_units(slide_paths):
+        for unit in group_paths_into_units(slide_paths):
             if unit.kind == "bilingual":
                 assert unit.bilingual_path is not None
                 self.add_file(unit.bilingual_path)

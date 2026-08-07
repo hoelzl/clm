@@ -31,7 +31,7 @@ from clm.build import (
     resolve_write_provenance_manifest,
     run_build,
 )
-from clm.build.engine import _format_exit_failure
+from clm.build.engine import format_exit_failure
 from clm.cli.commands.shared import LOG_LEVELS, get_logger, setup_logging
 from clm.cli.file_event_handler import FileEventHandler
 from clm.core.build_data_classes import BuildSummary
@@ -899,10 +899,10 @@ def build(
     # incomplete, so the build must never look successful. This is checked
     # before the --fail-on-error gate because it is unconditional.
     # Teardown orphans reuse the timed_out flag as their exit-forcing
-    # mechanism but need a different message — _format_exit_failure
+    # mechanism but need a different message — format_exit_failure
     # distinguishes the two cases (issue #617 follow-up).
     if summary is not None and summary.timed_out:
-        click.echo(_format_exit_failure(summary), err=True)
+        click.echo(format_exit_failure(summary), err=True)
         sys.exit(1)
 
     resolved_fail_on_error = _resolve_fail_on_error(fail_on_error, resolved_http_replay_mode)

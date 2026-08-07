@@ -261,9 +261,9 @@ def _synth_commit_info(sha: str, slide_path: Path) -> CommitInfo:
     """
     import subprocess
 
-    from clm.voiceover.narrative_commits import _git_toplevel
+    from clm.voiceover.narrative_commits import git_toplevel
 
-    repo_root = _git_toplevel(slide_path)
+    repo_root = git_toplevel(slide_path)
     try:
         out = subprocess.check_output(
             ["git", "-C", str(repo_root), "show", "-s", "--format=%P|%aI|%s", sha],

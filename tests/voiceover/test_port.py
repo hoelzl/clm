@@ -71,7 +71,7 @@ class TestPolishAndPortLLM:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_llm)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_port(
                 baseline_bullets="- existing",
                 prior_voiceover="- new from prior",
@@ -94,7 +94,7 @@ class TestPolishAndPortLLM:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_llm)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_port(
                 baseline_bullets="- baseline",
                 prior_voiceover="- prior",
@@ -113,7 +113,7 @@ class TestPolishAndPortLLM:
     async def test_llm_client_failure_non_llmerror_returns_fallback(self):
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("network down"))
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_port(
                 baseline_bullets="- baseline",
                 prior_voiceover="- prior",
@@ -139,7 +139,7 @@ class TestPolishAndPortLLM:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=capture_create)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             await polish_and_port(
                 baseline_bullets="",
                 prior_voiceover="- prior",
@@ -165,7 +165,7 @@ class TestPolishAndPortLLM:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=capture_create)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             await polish_and_port(
                 baseline_bullets="",
                 prior_voiceover="- prior",

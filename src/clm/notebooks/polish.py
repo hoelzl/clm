@@ -68,10 +68,10 @@ async def polish_text(
     if polish_level == PolishLevel.verbatim:
         return notes_text
 
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     system_prompt = load_prompt(polish_level)
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     user_message = _build_user_prompt(notes_text, slide_content)
 

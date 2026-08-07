@@ -714,8 +714,11 @@ work. Keep this list honest — update it when an item lands:
   default) landed Aug 2026 — the three-channel model and the worker-env
   contract in [Configuration](#configuration) are the designed, documented
   state
-- **A9** — ~12 cross-module underscore-private imports remain among the
-  unconstrained top-of-stack modules
+- A9 (cross-module underscore-private imports) landed Aug 2026 — every
+  shared seam now has a public name in its defining module, and
+  `tests/test_architecture_contracts.py::TestPrivateImportGuard` keeps the
+  count at zero (a leading-underscore module remains importable within its
+  own package's subtree, e.g. `cli/commands/_export_shared.py`)
 - **A12** — `docker`, `fastapi`, `uvicorn`, `watchdog` are unconditional
   dependencies; `DummyBackend` ships in the package though only tests use it
 
@@ -736,5 +739,5 @@ work. Keep this list honest — update it when an item lands:
 
 ---
 
-**Last Updated**: 2026-08-06
+**Last Updated**: 2026-08-07
 **Version**: 1.25.0

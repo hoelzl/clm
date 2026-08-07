@@ -26,7 +26,7 @@ from clm.infrastructure.web_security import install_web_security
 from .routes import router
 
 
-def _build_course(spec_file: Path) -> object | None:
+def build_course(spec_file: Path) -> object | None:
     """Build a :class:`Course` from *spec_file*, or ``None`` on failure.
 
     Returns the Course object (typed as ``object`` to avoid importing
@@ -382,7 +382,7 @@ def create_app(
     )
 
     # Build Course from spec file (if provided) for the lectures page
-    course = _build_course(spec_file) if spec_file is not None else None
+    course = build_course(spec_file) if spec_file is not None else None
 
     # Store in app state for route handlers
     app.state.recordings_root = recordings_root

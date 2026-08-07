@@ -843,7 +843,7 @@ def _similarity_suggestion(de_cell: _RawCell, en_cell: _RawCell, failed: list[st
 # ---------------------------------------------------------------------------
 
 
-def _apply_slide_ids(
+def apply_slide_ids(
     cells: list[_RawCell],
     path: Path,
     options: AssignOptions | None = None,
@@ -1075,7 +1075,7 @@ def normalize_file(
             )
 
     if "slide_ids" in op_set:
-        slide_id_changes, slide_id_reviews = _apply_slide_ids(cells, path, assign_options)
+        slide_id_changes, slide_id_reviews = apply_slide_ids(cells, path, assign_options)
         all_changes.extend(slide_id_changes)
         all_review.extend(slide_id_reviews)
 

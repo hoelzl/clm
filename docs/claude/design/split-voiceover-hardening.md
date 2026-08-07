@@ -421,7 +421,7 @@ within one bilingual file.
   `TestSplitTwinAware` tests. Run-order decides the winning slug when both halves are
   id-less (parity holds either way); true EN-authority is the generative step / `sync`.
   **`extract-voiceover` twin-awareness ✅ DONE 2026-06-03**: `extract`'s `_ensure_slide_ids`
-  now threads `twin_ids` (via `assign_ids._twin_ids_for`) into `_apply_slide_ids`, so an id-less
+  now threads `twin_ids` (via `assign_ids.twin_ids_for`) into `apply_slide_ids`, so an id-less
   slide on a split half adopts the sibling's id before extraction rather than minting a divergent
   slug — extracting `.de`/`.en` separately keeps `de_id == en_id` and the two companions'
   `for_slide` sets agree. Twin is read-only (mismatched slide counts mint normally); bilingual
@@ -774,7 +774,7 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
      harness row `commit-companion-divergence` = break-loud; `TestSplitCompanionForSlideParity`
      (9 tests). Harness now 14 preserve / 2 break-loud / 1 break-silent.
    - **`extract-voiceover` twin-awareness ✅ DONE 2026-06-03** (§7 defensive) — `_ensure_slide_ids`
-     threads `twin_ids` into `_apply_slide_ids`, so a per-language extract adopts the sibling's id
+     threads `twin_ids` into `apply_slide_ids`, so a per-language extract adopts the sibling's id
      instead of minting a divergent slug (keeps `de_id == en_id`; the companions' `for_slide` sets
      agree). Harness `extract-per-language-twin-aware` = preserve; `TestExtractTwinAware` (4 tests).
      Harness now 15 preserve / 2 break-loud / 1 break-silent.

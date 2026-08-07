@@ -21,18 +21,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clm.core.slide_text.slide_parser import CellMetadata, _is_cell_boundary, parse_cell_header
+from clm.core.slide_text.slide_parser import (
+    CellMetadata,
+    is_cell_boundary,
+    parse_cell_header,
+)
 
-
-def is_cell_boundary(line: str, comment_token: str = "#") -> bool:
-    """Return True iff ``line`` opens a new percent-format cell.
-
-    Delegates to the single canonical predicate in
-    :mod:`clm.core.slide_text.slide_parser` so the boundary rule can never drift between
-    the two. ``comment_token`` is the source language's line-comment token
-    (``"#"`` python/rust, ``"//"`` cpp/csharp/java/typescript).
-    """
-    return _is_cell_boundary(line, comment_token)
+__all__ = ["RawCell", "is_cell_boundary", "reconstruct", "split_cells"]
 
 
 @dataclass

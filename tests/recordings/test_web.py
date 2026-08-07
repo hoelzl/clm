@@ -552,7 +552,7 @@ class TestLanguageSelection:
 class TestLecturesRefresh:
     def test_refresh_rebuilds_course(self, app, client: TestClient, tmp_path: Path):
         app.state.spec_file = tmp_path / "course.xml"
-        with patch("clm.recordings.web.app._build_course") as mock_build:
+        with patch("clm.recordings.web.app.build_course") as mock_build:
             mock_build.return_value = MagicMock()
             resp = client.post("/lectures/refresh", follow_redirects=False)
         assert resp.status_code == 200

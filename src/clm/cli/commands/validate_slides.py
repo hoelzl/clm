@@ -97,21 +97,21 @@ def validate_slides_cmd(
             raise click.ClickException("--quick requires a single file path")
         result = validate_quick(path)
     else:
-        check_list = _parse_checks(checks)
+        check_list = parse_checks(checks)
         # The per-deck `clm: voiceover-coverage` header marker (#178) applies
         # on the default run only; an explicit --checks list is honored
         # verbatim.
         result = _dispatch_validation(path, check_list, data_dir, marker_opt_in=checks is None)
 
     if as_json:
-        click.echo(json.dumps(_result_to_dict(result), indent=2))
+        click.echo(json.dumps(result_to_dict(result), indent=2))
     else:
-        _print_human_readable(result)
+        print_human_readable(result)
 
-    _raise_on_findings(result.findings, fail_on, as_json)
+    raise_on_findings(result.findings, fail_on, as_json)
 
 
-def _raise_on_findings(findings: list[Finding], fail_on: str | None, as_json: bool) -> None:
+def raise_on_findings(findings: list[Finding], fail_on: str | None, as_json: bool) -> None:
     """Exit non-zero according to the ``--fail-on`` threshold.
 
     ``--fail-on`` unset (``None``) keeps the legacy behavior: human output
@@ -131,7 +131,7 @@ def _raise_on_findings(findings: list[Finding], fail_on: str | None, as_json: bo
         raise SystemExit(1)
 
 
-def _parse_checks(checks_str: str | None) -> list[str] | None:
+def parse_checks(checks_str: str | None) -> list[str] | None:
     """Parse the --checks option into a list, or None for defaults."""
     if checks_str is None:
         # Default: deterministic checks only (CLI doesn't do LLM review)
@@ -173,7 +173,7 @@ def _resolve_slides_dir(data_dir: Path | None, spec_file: Path) -> Path:
     return spec_file.parent.parent / "slides"
 
 
-def _print_human_readable(result: ValidationResult) -> None:
+def print_human_readable(result: ValidationResult) -> None:
     """Print validation results in human-readable format."""
     if not result.findings:
         click.echo(f"OK — {result.summary}.")
@@ -190,7 +190,7 @@ def _print_human_readable(result: ValidationResult) -> None:
     click.echo(result.summary + ".")
 
 
-def _result_to_dict(result: ValidationResult) -> dict:
+def result_to_dict(result: ValidationResult) -> dict:
     """Convert a ValidationResult to a JSON-serializable dict."""
     d: dict = {
         "files_checked": result.files_checked,

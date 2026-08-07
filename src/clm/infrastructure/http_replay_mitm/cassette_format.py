@@ -412,7 +412,7 @@ def write_cassette(path: Path, interactions: Iterable[Interaction]) -> None:
     """Serialize and atomically write a cassette with LF line endings.
 
     LF-only writes are required (see
-    :func:`clm.infrastructure.http_replay_mitm.http_replay_cassette._atomic_write_text`):
+    :func:`clm.infrastructure.http_replay_mitm.http_replay_cassette.atomic_write_text`):
     the repo's ``eol=lf`` gitattributes would otherwise flap the cassette
     CRLF↔LF between builds and checkouts and perturb its bytes.
     """
@@ -450,7 +450,7 @@ def response_dict_to_reply_parts(response: dict) -> tuple[int, list[tuple[str, s
 def atomic_write_lf(target: Path, text: str) -> None:
     """Write ``text`` to ``target`` atomically with LF line endings.
 
-    Self-contained reimplementation of CLM's ``_atomic_write_text`` (the
+    Self-contained reimplementation of CLM's ``atomic_write_text`` (the
     mitmdump interpreter cannot import the ``clm`` package): writes to a
     sibling temp file with ``newline="\\n"`` then ``os.replace``.
     """

@@ -201,10 +201,10 @@ def find_slide_units(topic_path: Path) -> list[SlideUnit]:
     in the returned list under the same :class:`SlideUnit`.
     """
     slide_paths = find_slide_files(topic_path)
-    return _group_paths_into_units(slide_paths)
+    return group_paths_into_units(slide_paths)
 
 
-def _group_paths_into_units(slide_paths: list[Path]) -> list[SlideUnit]:
+def group_paths_into_units(slide_paths: list[Path]) -> list[SlideUnit]:
     """Group a flat list of resolved slide paths into :class:`SlideUnit`s.
 
     Order is preserved: the first path in ``slide_paths`` to reference a

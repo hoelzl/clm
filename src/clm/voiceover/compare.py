@@ -351,7 +351,7 @@ async def judge_slide_pair(
     populated on non-raising failures (network, malformed JSON); the
     caller should surface it in the final report rather than abort.
     """
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     if not prior_bullets.strip() and not baseline_bullets.strip():
         return [], None, None
@@ -368,7 +368,7 @@ async def judge_slide_pair(
     system_prompt = _load_compare_prompt(language)
     user_message = pack.build_user_message()
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     logger.debug(
         "judge_slide_pair slide=%s baseline=%d chars prior=%d chars changed=%s",

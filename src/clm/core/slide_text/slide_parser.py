@@ -209,7 +209,7 @@ def parse_cells(text: str, comment_token: str = "#") -> list[Cell]:
     current_line_number = 0
 
     for i, line in enumerate(lines, 1):
-        if _is_cell_boundary(line, comment_token):
+        if is_cell_boundary(line, comment_token):
             if current_header is not None:
                 content = "\n".join(current_lines).strip()
                 metadata = parse_cell_header(current_header, comment_token)
@@ -345,18 +345,25 @@ def group_slides(
     return groups
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+def is_cell_boundary(line: str, comment_token: str = "#") -> bool:
+    """Return True iff ``line`` opens a new percent-format cell.
 
-
-def _is_cell_boundary(line: str, comment_token: str = "#") -> bool:
-    """Check if a line starts a new cell (boundary / j2 statement / j2 expression)."""
+    The single canonical boundary predicate (cell boundary / j2 statement /
+    j2 expression) — :mod:`clm.core.slide_text.raw_cells` re-exports it so
+    the rule can never drift between the two parsers. ``comment_token`` is
+    the source language's line-comment token (``"#"`` python/rust, ``"//"``
+    cpp/csharp/java/typescript).
+    """
     return (
         line.startswith(comment_token + " %%")
         or line.startswith(comment_token + " j2 ")
         or line.startswith(comment_token + " {{ ")
     )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def _strip_comment_prefix(line: str, comment_token: str) -> str:

@@ -391,7 +391,7 @@ def merge_staging_into_canonical(
                 payload = serialize_cassette(
                     {"requests": merged_requests, "responses": merged_responses}
                 )
-                _atomic_write_text(canonical, payload)
+                atomic_write_text(canonical, payload)
 
             for staging_path in markered:
                 _delete_quietly(staging_path)
@@ -493,7 +493,7 @@ def write_completion_marker(paths: CassettePaths) -> None:
     its entries are discarded by the pre-build sweep on the next build.
 
     Idempotent: re-writing the marker on a retry path is safe. Atomic:
-    written via :func:`_atomic_write_text` so a partially-written
+    written via :func:`atomic_write_text` so a partially-written
     marker is never observable. Best-effort: an :class:`OSError` while
     writing degrades the session to "aborted" semantics (recordings
     lost on next build), which is correctness-preserving — we log a
@@ -507,7 +507,7 @@ def write_completion_marker(paths: CassettePaths) -> None:
         "host_pid": os.getpid(),
     }
     try:
-        _atomic_write_text(target, json.dumps(payload, sort_keys=True) + "\n")
+        atomic_write_text(target, json.dumps(payload, sort_keys=True) + "\n")
         _trace(
             "cassette.completion_marker.write",
             {"staging": str(paths.staging), "marker": str(target)},
@@ -609,7 +609,7 @@ def _response_body_bytes(response) -> bytes:
     return str(raw).encode("utf-8", errors="replace")
 
 
-def _atomic_write_text(target: Path, text: str) -> None:
+def atomic_write_text(target: Path, text: str) -> None:
     """Write ``text`` to ``target`` atomically.
 
     Writes to a temporary file in the same directory and then calls
