@@ -213,6 +213,10 @@ def _isolate_db_path_env():
         "CLM_JOBS_DB_PATH",
         "CLM_TELEMETRY_DB_PATH",
         "CLM_DB_PATH",
+        # Retired worker-side spelling (A8): no clm code sets it any more,
+        # but a value lingering in a dev shell would leak into the env dicts
+        # the worker-executor tests inspect.
+        "DB_PATH",
     )
     saved = {k: os.environ.pop(k, None) for k in keys}
     try:

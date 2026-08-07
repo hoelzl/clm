@@ -21,14 +21,18 @@ from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebook
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
-from clm.infrastructure.workers.worker_base import Worker
+from clm.infrastructure.workers.worker_base import (
+    Worker,
+    missing_jobs_db_error,
+    resolve_jobs_db_path,
+)
 from clm.workers.notebook.notebook_processor import NotebookProcessor
 from clm.workers.notebook.output_spec import create_output_spec
 
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
-CACHE_DB_PATH = Path(os.environ.get("CACHE_DB_PATH", "clm_cache.db"))
+JOBS_DB_PATH = resolve_jobs_db_path()  # None unless CLM_JOBS_DB_PATH was injected
+CACHE_DB_PATH = Path(os.environ.get("CLM_CACHE_DB_PATH", "clm_cache.db"))
 API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
 # Logging setup
@@ -340,19 +344,23 @@ def main():
     else:
         logger.info("Starting notebook worker in SQLite mode")
 
+        jobs_db_path = JOBS_DB_PATH
+        if jobs_db_path is None:
+            raise SystemExit(missing_jobs_db_error("notebook"))
+
         # Ensure database exists
-        if not DB_PATH.exists():
-            logger.info(f"Initializing database at {DB_PATH}")
-            init_database(DB_PATH)
+        if not jobs_db_path.exists():
+            logger.info(f"Initializing database at {jobs_db_path}")
+            init_database(jobs_db_path)
 
         # Get pre-assigned worker ID or register with retry logic
         # This handles both pre-registration (CLM_WORKER_ID set) and legacy registration
         worker_id = Worker.get_or_register_worker(
-            db_path=DB_PATH, api_url=None, worker_type="notebook"
+            db_path=jobs_db_path, api_url=None, worker_type="notebook"
         )
 
         # Create and run worker with cache support
-        worker = NotebookWorker(worker_id, db_path=DB_PATH, cache_db_path=CACHE_DB_PATH)
+        worker = NotebookWorker(worker_id, db_path=jobs_db_path, cache_db_path=CACHE_DB_PATH)
 
     try:
         worker.run()

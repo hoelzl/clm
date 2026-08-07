@@ -12,7 +12,11 @@ import pytest
 
 from clm.infrastructure.database.job_queue import Job, JobQueue
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.workers.worker_base import Worker
+from clm.infrastructure.workers.worker_base import (
+    Worker,
+    missing_jobs_db_error,
+    resolve_jobs_db_path,
+)
 
 # Several tests here start a real worker thread and poll committed SQLite state
 # for a transition. The waits are event-driven / gated where possible, but the
@@ -809,3 +813,41 @@ class TestWorkerPreRegistration:
         with patch.dict(os.environ, {"CLM_WORKER_ID": "1"}):
             with pytest.raises(ValueError, match="Neither db_path nor api_url provided"):
                 Worker.get_or_register_worker(None, None, "notebook")
+
+
+class TestResolveJobsDbPath:
+    """The one-name-one-default jobs-DB contract (A8).
+
+    Workers resolve their jobs DB exclusively from ``CLM_JOBS_DB_PATH`` —
+    the same name the host CLI uses — and have no baked-in fallback path:
+    a worker that guessed one would silently poll an empty queue.
+    """
+
+    def test_resolves_path_when_set(self, monkeypatch):
+        monkeypatch.setenv("CLM_JOBS_DB_PATH", str(Path("some") / "jobs.db"))
+
+        assert resolve_jobs_db_path() == Path("some") / "jobs.db"
+
+    def test_returns_none_when_unset(self, monkeypatch):
+        monkeypatch.delenv("CLM_JOBS_DB_PATH", raising=False)
+
+        assert resolve_jobs_db_path() is None
+
+    def test_returns_none_for_blank_value(self, monkeypatch):
+        monkeypatch.setenv("CLM_JOBS_DB_PATH", "   ")
+
+        assert resolve_jobs_db_path() is None
+
+    def test_ignores_legacy_bare_db_path(self, monkeypatch):
+        """The retired bare ``DB_PATH`` spelling must not resurrect a default."""
+        monkeypatch.delenv("CLM_JOBS_DB_PATH", raising=False)
+        monkeypatch.setenv("DB_PATH", "/db/jobs.db")
+
+        assert resolve_jobs_db_path() is None
+
+    def test_error_message_names_var_and_worker(self):
+        msg = missing_jobs_db_error("notebook")
+
+        assert "CLM_JOBS_DB_PATH" in msg
+        assert "notebook" in msg
+        assert "CLM_API_URL" in msg

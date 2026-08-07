@@ -218,7 +218,11 @@ class TestDirectWorkerExecutor:
         env = call_args[1]["env"]
         assert env["WORKER_TYPE"] == "notebook"
         assert env["WORKER_ID"] == worker_id
-        assert env["DB_PATH"] == str(db_path.absolute())
+        # One env name on both sides of the worker boundary (A8): the
+        # executor injects the same CLM_JOBS_DB_PATH the host CLI resolves,
+        # and never the retired bare DB_PATH spelling.
+        assert env["CLM_JOBS_DB_PATH"] == str(db_path.absolute())
+        assert "DB_PATH" not in env
         assert env["WORKSPACE_PATH"] == str(workspace_path.absolute())
 
         # Verify worker is tracked

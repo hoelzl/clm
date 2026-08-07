@@ -411,7 +411,7 @@ class TestMainEntryPoint:
 
         monkeypatch.setattr(worker_module, "init_database", fake_init_database)
         monkeypatch.setattr(worker_module, "API_URL", None, raising=True)
-        monkeypatch.setattr(worker_module, "DB_PATH", db_path, raising=True)
+        monkeypatch.setattr(worker_module, "JOBS_DB_PATH", db_path, raising=True)
         monkeypatch.setattr(
             "clm.infrastructure.workers.worker_base.Worker.get_or_register_worker",
             staticmethod(fake_register),
@@ -483,7 +483,7 @@ class TestMainEntryPoint:
             cleanup_calls.append(self)
 
         monkeypatch.setattr(worker_module, "API_URL", None, raising=True)
-        monkeypatch.setattr(worker_module, "DB_PATH", db_path, raising=True)
+        monkeypatch.setattr(worker_module, "JOBS_DB_PATH", db_path, raising=True)
         monkeypatch.setattr(
             "clm.infrastructure.workers.worker_base.Worker.get_or_register_worker",
             staticmethod(fake_register),
@@ -513,7 +513,7 @@ class TestMainEntryPoint:
         cleanup_calls: list[JupyterLiteWorker] = []
 
         monkeypatch.setattr(worker_module, "API_URL", None, raising=True)
-        monkeypatch.setattr(worker_module, "DB_PATH", db_path, raising=True)
+        monkeypatch.setattr(worker_module, "JOBS_DB_PATH", db_path, raising=True)
         monkeypatch.setattr(
             "clm.infrastructure.workers.worker_base.Worker.get_or_register_worker",
             staticmethod(fake_register),
@@ -531,3 +531,11 @@ class TestMainEntryPoint:
 
         # Cleanup still runs via the `finally` block.
         assert len(cleanup_calls) == 1
+
+    def test_main_refuses_to_start_without_jobs_db(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SQLite mode without CLM_JOBS_DB_PATH fails fast — no guessed DB path (A8)."""
+        monkeypatch.setattr(worker_module, "API_URL", None, raising=True)
+        monkeypatch.setattr(worker_module, "JOBS_DB_PATH", None, raising=True)
+
+        with pytest.raises(SystemExit, match="CLM_JOBS_DB_PATH"):
+            worker_module.main()

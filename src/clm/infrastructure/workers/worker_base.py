@@ -37,6 +37,41 @@ logger = logging.getLogger(__name__)
 CONTAINER_WORKSPACE = "/workspace"  # Output directory (read-write)
 CONTAINER_SOURCE = "/source"  # Source data directory (read-only)
 
+# The one env var naming the jobs database, on both sides of the worker
+# boundary: the host CLI resolves it (``--jobs-db-path`` / this var, default
+# ``clm_jobs.db``) and ``DirectWorkerExecutor`` injects the resolved absolute
+# path into every direct worker's environment under the same name. Workers
+# deliberately have NO default of their own — a worker that guessed a path
+# would poll an empty queue forever (see ``resolve_jobs_db_path``).
+JOBS_DB_PATH_ENV_VAR = "CLM_JOBS_DB_PATH"
+
+
+def resolve_jobs_db_path() -> Path | None:
+    """Return the jobs-DB path this worker process was launched with.
+
+    Reads :data:`JOBS_DB_PATH_ENV_VAR` and returns ``None`` when it is unset
+    or empty. There is intentionally no fallback path: every supported spawn
+    path injects the value (``DirectWorkerExecutor`` for direct workers;
+    Docker workers get ``CLM_API_URL`` instead and never open the DB), so a
+    missing value means the worker was started outside CLM's control and must
+    refuse to run rather than silently poll a freshly created empty queue.
+    """
+    raw = os.environ.get(JOBS_DB_PATH_ENV_VAR, "").strip()
+    return Path(raw) if raw else None
+
+
+def missing_jobs_db_error(worker_type: str) -> str:
+    """Startup error for a SQLite-mode worker launched without a jobs DB."""
+    return (
+        f"{worker_type} worker: neither {JOBS_DB_PATH_ENV_VAR} nor CLM_API_URL "
+        "is set. Workers are launched by clm itself, which injects "
+        f"{JOBS_DB_PATH_ENV_VAR} (direct mode) or CLM_API_URL (Docker mode); "
+        "without either, this worker would create and poll an empty job queue "
+        "forever, so it refuses to start. To run a worker by hand, point "
+        f"{JOBS_DB_PATH_ENV_VAR} at the jobs database of the clm invocation "
+        "it should serve."
+    )
+
 
 def _convert_path_to_container(host_path: str, host_base: str, container_base: str) -> Path:
     """Convert a host file path to a container path.

@@ -16,11 +16,15 @@ from pathlib import Path
 
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.workers.worker_base import Worker
+from clm.infrastructure.workers.worker_base import (
+    Worker,
+    missing_jobs_db_error,
+    resolve_jobs_db_path,
+)
 
 # Configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
+JOBS_DB_PATH = resolve_jobs_db_path()  # None unless CLM_JOBS_DB_PATH was injected
 API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
 # Logging setup
@@ -221,19 +225,23 @@ def main():
     else:
         logger.info("Starting DrawIO worker in SQLite mode")
 
+        jobs_db_path = JOBS_DB_PATH
+        if jobs_db_path is None:
+            raise SystemExit(missing_jobs_db_error("drawio"))
+
         # Ensure database exists
-        if not DB_PATH.exists():
-            logger.info(f"Initializing database at {DB_PATH}")
-            init_database(DB_PATH)
+        if not jobs_db_path.exists():
+            logger.info(f"Initializing database at {jobs_db_path}")
+            init_database(jobs_db_path)
 
         # Get pre-assigned worker ID or register with retry logic
         # This handles both pre-registration (CLM_WORKER_ID set) and legacy registration
         worker_id = Worker.get_or_register_worker(
-            db_path=DB_PATH, api_url=None, worker_type="drawio"
+            db_path=jobs_db_path, api_url=None, worker_type="drawio"
         )
 
         # Create and run worker
-        worker = DrawioWorker(worker_id, db_path=DB_PATH)
+        worker = DrawioWorker(worker_id, db_path=jobs_db_path)
 
     try:
         worker.run()

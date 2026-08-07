@@ -17,10 +17,14 @@ from pathlib import Path
 
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
-from clm.infrastructure.workers.worker_base import Worker
+from clm.infrastructure.workers.worker_base import (
+    Worker,
+    missing_jobs_db_error,
+    resolve_jobs_db_path,
+)
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-DB_PATH = Path(os.environ.get("DB_PATH", "/db/jobs.db"))
+JOBS_DB_PATH = resolve_jobs_db_path()  # None unless CLM_JOBS_DB_PATH was injected
 API_URL = os.environ.get("CLM_API_URL")
 
 logging.basicConfig(
@@ -118,13 +122,16 @@ def main() -> None:
         worker = JupyterLiteWorker(worker_id, api_url=API_URL)
     else:
         logger.info("Starting JupyterLite worker in SQLite mode")
-        if not DB_PATH.exists():
-            logger.info(f"Initializing database at {DB_PATH}")
-            init_database(DB_PATH)
+        jobs_db_path = JOBS_DB_PATH
+        if jobs_db_path is None:
+            raise SystemExit(missing_jobs_db_error("jupyterlite"))
+        if not jobs_db_path.exists():
+            logger.info(f"Initializing database at {jobs_db_path}")
+            init_database(jobs_db_path)
         worker_id = Worker.get_or_register_worker(
-            db_path=DB_PATH, api_url=None, worker_type="jupyterlite"
+            db_path=jobs_db_path, api_url=None, worker_type="jupyterlite"
         )
-        worker = JupyterLiteWorker(worker_id, db_path=DB_PATH)
+        worker = JupyterLiteWorker(worker_id, db_path=jobs_db_path)
 
     try:
         worker.run()

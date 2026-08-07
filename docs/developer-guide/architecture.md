@@ -595,13 +595,13 @@ value and injects it into the worker environment (`worker_executor`), for
 Direct and Docker workers alike. `clm config show` displays the effective
 value and source of all of the above.
 
-Known non-uniformity, tracked in #802:
-
-- **The jobs-DB path has two env names and two defaults** (A8, open): host
-  code uses `CLM_JOBS_DB_PATH` (default `clm_jobs.db`); worker code uses bare
-  `DB_PATH` with the container default `/db/jobs.db`. It works because the
-  worker executor always injects the value — any other spawn path would
-  silently poll an empty queue.
+The jobs-DB path uses one env name on both sides of that boundary (A8,
+landed Aug 2026): the host resolves `--jobs-db-path` / `CLM_JOBS_DB_PATH`
+(default `clm_jobs.db`) and the executor injects the resolved absolute path
+into direct workers under the same name. Workers have **no** default of
+their own — launched in SQLite mode without the variable they refuse to
+start rather than silently poll a freshly created empty queue (Docker
+workers instead receive `CLM_API_URL` and never open the DB).
 
 ## Testing Strategy
 
@@ -710,9 +710,10 @@ Details: `docs/archive/migration-history/`.
 The layering above is fully enforced, but #802 tracks remaining structural
 work. Keep this list honest — update it when an item lands:
 
-- **A8** — the jobs-DB path split (see [Configuration](#configuration));
-  A7 (config unification) landed Aug 2026 — the three-channel model in
-  [Configuration](#configuration) is now the designed, documented state
+- A7 (config unification) and A8 (one jobs-DB env name, no worker-side
+  default) landed Aug 2026 — the three-channel model and the worker-env
+  contract in [Configuration](#configuration) are the designed, documented
+  state
 - **A9** — ~12 cross-module underscore-private imports remain among the
   unconstrained top-of-stack modules
 - **A12** — `docker`, `fastapi`, `uvicorn`, `watchdog` are unconditional

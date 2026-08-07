@@ -38,6 +38,8 @@ from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
 
+from clm.infrastructure.workers.worker_base import JOBS_DB_PATH_ENV_VAR
+
 logger = logging.getLogger(__name__)
 
 
@@ -192,8 +194,9 @@ def reap_process_tree(pid: int, log_prefix: str = "") -> int:
 class DiscoveredWorkerProcess:
     """A surviving ``python -m clm.workers.*`` process found by scanning.
 
-    ``DB_PATH`` and ``worker_id`` come from the worker's environment
-    (see ``DirectWorkerExecutor.start_worker``) and are best-effort:
+    ``db_path`` and ``worker_id`` come from the worker's environment
+    (``CLM_JOBS_DB_PATH`` and ``WORKER_ID``, set by
+    ``DirectWorkerExecutor.start_worker``) and are best-effort:
     psutil cannot always read a process's environment on Windows, in
     which case these fields are ``None``. Callers must be prepared for
     that and decide whether to skip, warn, or reap anyway.
@@ -237,7 +240,7 @@ def scan_worker_processes() -> list[DiscoveredWorkerProcess]:
     environment and working directory via :meth:`psutil.Process.environ`
     and :meth:`psutil.Process.cwd`. These are the signals the CLI needs
     to decide whether a given surviving worker belongs to the operator's
-    current worktree (``DB_PATH`` match) or a different one. On Windows
+    current worktree (``CLM_JOBS_DB_PATH`` match) or a different one. On Windows
     these calls can raise ``psutil.AccessDenied`` — the helper catches
     that and reports the process with ``db_path=None`` so the CLI can
     surface it as "unknown provenance" rather than silently skipping
@@ -298,7 +301,7 @@ def _match_worker_module(cmdline: list[str]) -> str | None:
 
 
 def _read_worker_env(proc: psutil.Process) -> tuple[Path | None, str | None]:
-    """Best-effort read of ``DB_PATH`` and ``WORKER_ID`` env vars.
+    """Best-effort read of ``CLM_JOBS_DB_PATH`` and ``WORKER_ID`` env vars.
 
     Both are set by ``DirectWorkerExecutor.start_worker``. On Windows
     the call can fail with ``AccessDenied`` (e.g., for a process owned
@@ -313,7 +316,11 @@ def _read_worker_env(proc: psutil.Process) -> tuple[Path | None, str | None]:
         logger.debug(f"Failed to read environ for pid={proc.pid}: {exc}")
         return None, None
 
-    raw_db = environ.get("DB_PATH")
+    # Legacy fallback: workers launched by a pre-A8 clm (which injected the
+    # bare ``DB_PATH`` name) may still be running when this clm scans for
+    # them — without the fallback they would all read as "unknown
+    # provenance" right after an upgrade.
+    raw_db = environ.get(JOBS_DB_PATH_ENV_VAR) or environ.get("DB_PATH")
     db_path = Path(raw_db) if raw_db else None
     # Normalise empty-string env var to None so callers only need to
     # check for a single "no info" sentinel.
