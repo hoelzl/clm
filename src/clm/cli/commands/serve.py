@@ -109,7 +109,8 @@ def serve(
         from clm.web.app import create_app
     except ImportError as e:
         click.echo(
-            "Error: Web dependencies not installed. Install with: pip install clm[web]",
+            "Error: Web dependencies not installed. Install with: "
+            'pip install "coding-academy-lecture-manager[web]"',
             err=True,
         )
         logger.error(f"Failed to import web dependencies: {e}", exc_info=True)

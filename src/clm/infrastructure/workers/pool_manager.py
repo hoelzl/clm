@@ -18,13 +18,8 @@ import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-# Note: docker package is optional - may not be installed
-from clm.infrastructure.api.server import (
-    WorkerApiServer,
-    start_worker_api_server,
-)
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.workers.discovery import (
     MANAGED_BY_BUILD,
@@ -35,7 +30,13 @@ from clm.infrastructure.workers.worker_executor import (
     DockerWorkerExecutor,
     WorkerConfig,
     WorkerExecutor,
+    ensure_docker_worker_deps,
 )
+
+if TYPE_CHECKING:
+    # The server module needs fastapi/uvicorn from the [docker] extra, so it
+    # is only imported lazily at runtime (in _start_worker_api_server).
+    from clm.infrastructure.api.server import WorkerApiServer
 
 # Global registry of pool managers for atexit cleanup
 # Uses weak references to avoid preventing garbage collection
@@ -206,7 +207,7 @@ class WorkerPoolManager:
 
         if mode not in self.executors:
             if mode == "docker":
-                # Import docker only when needed
+                ensure_docker_worker_deps()
                 import docker
 
                 # Validate data_dir is set for Docker mode
@@ -501,6 +502,11 @@ class WorkerPoolManager:
             logger.debug("Worker API server already running")
             return
 
+        # Lazy: the server stack (fastapi/uvicorn) comes from the [docker]
+        # extra; ensure_docker_worker_deps() in start_pools reports a missing
+        # install with the pip hint before this import can fail.
+        from clm.infrastructure.api.server import start_worker_api_server
+
         try:
             self._api_server = start_worker_api_server(
                 self.db_path, cache_db_path=self.cache_db_path
@@ -533,6 +539,7 @@ class WorkerPoolManager:
         # Check if we need Docker and ensure network exists
         needs_docker = any(c.execution_mode == "docker" for c in self.worker_configs)
         if needs_docker:
+            ensure_docker_worker_deps()
             # Only create custom network if explicitly specified
             # Default (None) uses Docker's default bridge for better host.docker.internal support
             if self.network_name:

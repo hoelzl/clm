@@ -27,8 +27,10 @@ def mock_worker_api_server():
     ``PytestUnhandledThreadExceptionWarning: SystemExit: 1`` and, under
     worse timing, can fail tests outright. These tests don't need a real
     HTTP server — they just want ``start_pools`` to run — so stub it out.
+    Patched at its home in ``api.server``: pool_manager resolves the name
+    lazily at call time since #802 A12.
     """
-    with patch("clm.infrastructure.workers.pool_manager.start_worker_api_server") as mock_start:
+    with patch("clm.infrastructure.api.server.start_worker_api_server") as mock_start:
         mock_server = MagicMock()
         mock_server.is_running = True
         mock_server.docker_url = FAKE_API_URL

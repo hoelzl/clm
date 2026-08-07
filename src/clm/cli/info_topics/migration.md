@@ -2,6 +2,27 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Docker mode, `--watch`, and the web servers need extras ({version})
+
+**Breaking for installs that relied on the bare package carrying server
+dependencies.** `docker`, `fastapi`, `uvicorn`, and `watchdog` are no longer
+core dependencies of `coding-academy-lecture-manager` — a bare
+`pip install` now covers Direct-mode builds only. Affected features fail
+fast with a message naming the missing extra:
+
+- **Docker worker mode** (any `<worker mode="docker">` build) needs the new
+  `[docker]` extra on the host — the Docker SDK plus the loopback Worker API
+  server the containers talk to. The containers themselves are unaffected.
+- **`clm build --watch`** needs the new `[watch]` extra (watchdog).
+- **`clm serve`** needs `[web]` and **`clm recordings serve`** needs
+  `[recordings]`, which now carry their own fastapi/uvicorn (and watchdog
+  for the recordings directory watcher).
+
+To migrate, add the extras your workflow uses, e.g.
+`pip install "coding-academy-lecture-manager[docker,watch]"`. Installs using
+`[all]` (or `uv sync --extra all`) are unaffected — it includes the new
+extras.
+
 ## Sync decision documents must carry `report_id`; schema 3 retired ({version})
 
 **Breaking for scripted sync drivers only.** A decision document for

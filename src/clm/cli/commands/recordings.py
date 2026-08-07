@@ -663,12 +663,16 @@ def serve_recordings(
     """
     try:
         import uvicorn
+
+        from clm.recordings.web.app import create_app
     except ImportError as exc:
-        console.print("[red]uvicorn is required. It should be a core CLM dependency.[/red]")
+        console.print(
+            "[red]The recordings dashboard requires the \\[recordings] extra: "
+            'pip install "coding-academy-lecture-manager\\[recordings]"[/red]'
+        )
         raise SystemExit(1) from exc
 
     from clm.infrastructure.web_security import remote_access_warning
-    from clm.recordings.web.app import create_app
 
     # Resolve OBS settings from CLI args or CLM config
     cfg_obs_host, cfg_obs_port, cfg_obs_password = _get_obs_config()

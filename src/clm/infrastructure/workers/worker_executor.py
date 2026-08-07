@@ -4,6 +4,7 @@ This module provides abstract and concrete implementations for executing workers
 in different modes (Docker containers or direct processes).
 """
 
+import importlib.util
 import logging
 import os
 import signal
@@ -40,6 +41,28 @@ _DOCKER_HOST_ALIAS = DOCKER_HOST_ALIAS
 # only path. A single read-only file mount works on Docker Desktop (Windows/
 # WSL2) and native Linux alike.
 _MITM_CA_CONTAINER_PATH = "/clm/mitmproxy-ca-bundle.pem"
+
+DOCKER_EXTRA_HINT = (
+    "Docker worker mode requires the [docker] extra: "
+    'pip install "coding-academy-lecture-manager[docker]"'
+)
+
+
+def ensure_docker_worker_deps() -> None:
+    """Fail fast with an install hint when the ``[docker]`` extra is missing.
+
+    Docker worker mode needs the Docker SDK plus the host-side Worker API
+    server stack (fastapi/uvicorn), none of which are core dependencies
+    (#802 A12). ``find_spec`` keeps the probe import-free.
+    """
+    missing = [
+        name for name in ("docker", "fastapi", "uvicorn") if importlib.util.find_spec(name) is None
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Docker worker mode is unavailable — missing package(s): {', '.join(missing)}. "
+            f"{DOCKER_EXTRA_HINT}"
+        )
 
 
 def _notebook_worker_jupyter_env() -> dict[str, str]:

@@ -1,3 +1,10 @@
+"""A no-op :class:`~clm.core.backend.Backend` that logs instead of executing.
+
+Test-only: lives in ``tests/`` rather than the package because nothing in
+``src/`` ever instantiates it (#802 A12). Import as
+``from tests.dummy_backend import DummyBackend``.
+"""
+
 import asyncio
 import logging
 from pathlib import Path

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.backends.dummy_backend import DummyBackend
+from tests.dummy_backend import DummyBackend
 
 
 class TestBackend:

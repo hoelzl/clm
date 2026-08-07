@@ -147,7 +147,8 @@ jobs:
         # `replay` keeps the HTTP-replay cassette tests running instead of
         # importorskip-skipping. ML/jupyterlite stay out by design.
         uv sync --locked --python ${{ matrix.python-version }} --no-default-groups \
-          --extra all-workers --extra summarize --extra recordings --extra slides \
+          --extra all-workers --extra docker --extra watch --extra summarize \
+          --extra recordings --extra slides \
           --extra mcp --extra replay --extra dev --extra tui --extra web
 
     - name: Start Xvfb
@@ -270,7 +271,7 @@ jobs:
         # give mypy the imports to resolve.
         uv sync --locked --python 3.12 --no-default-groups \
           --extra dev --extra tui --extra web --extra notebook --extra summarize \
-          --extra recordings --extra slides --extra mcp
+          --extra recordings --extra slides --extra mcp --extra docker --extra watch
 
     - name: Run ruff check
       if: needs.changes.outputs.code == 'true'
@@ -397,7 +398,8 @@ jobs:
         # From the lockfile (see the test job; `--locked` for the same reason),
         # same extra set as before.
         uv sync --locked --python 3.12 --no-default-groups \
-          --extra all-workers --extra recordings --extra dev --extra tui --extra web
+          --extra all-workers --extra docker --extra watch --extra recordings \
+          --extra dev --extra tui --extra web
 
     - name: Run Docker integration tests
       run: |
