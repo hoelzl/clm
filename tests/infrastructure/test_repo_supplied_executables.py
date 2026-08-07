@@ -47,7 +47,12 @@ plantuml_jar = "./payload.jar"
 
 
 def _clear_tool_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("PLANTUML_JAR", "DRAWIO_EXECUTABLE", ALLOW_PROJECT_TOOL_PATHS_ENV_VAR):
+    for var in (
+        "PLANTUML_JAR",
+        "DRAWIO_EXECUTABLE",
+        "CLM_MITMDUMP",
+        ALLOW_PROJECT_TOOL_PATHS_ENV_VAR,
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -72,6 +77,18 @@ class TestProjectConfigMayNotChooseExecutables:
         assert len(warnings) == 2, caplog.text
         assert any("drawio_executable" in m and "clm.toml" in m for m in warnings)
         assert all(ALLOW_PROJECT_TOOL_PATHS_ENV_VAR in m for m in warnings)
+
+    def test_repo_local_clm_toml_cannot_set_mitmdump(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The replay proxy's mitmdump path is an executable too (A7, #802)."""
+        _clear_tool_env(monkeypatch)
+        (tmp_path / "clm.toml").write_text(
+            '[external_tools]\nmitmdump = "./payload.exe"\n', encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert ClmConfig().external_tools.mitmdump == ""
 
     def test_dotclm_config_is_filtered_too(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

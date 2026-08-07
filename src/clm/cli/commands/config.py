@@ -107,9 +107,13 @@ def config_show(ctx, as_json):
         "telemetry_db_path": _obj_str(obj, "TELEMETRY_DB_PATH"),
     }
 
+    from clm.core.sidecar_layout import describe_layout
     from clm.infrastructure.llm.cache import CACHE_DB_NAME, describe_cache_dir
 
     llm = describe_cache_dir()
+    # No spec context here, so the spec tier (<sidecar-layout>) is not
+    # consulted — the display says so rather than pretending it doesn't exist.
+    sidecar = describe_layout(None, Path.cwd())
 
     if as_json:
         import json
@@ -117,14 +121,19 @@ def config_show(ctx, as_json):
         # ``model_dump`` carries every ClmConfig section (external_tools,
         # logging, jupyter, workers, retention, worker_management, git, llm,
         # recordings) as the effective env/file/default-folded values; the
-        # databases and LLM-cache location are resolved outside ClmConfig, so
-        # they are added explicitly.
+        # databases, LLM-cache location, and authoring sidecar-layout are
+        # resolved outside ClmConfig, so they are added explicitly.
         payload = {
             "databases": databases,
             "llm_cache": {
                 "dir": str(llm.path),
                 "source": llm.source,
                 "db": str(llm.path / CACHE_DB_NAME),
+            },
+            "authoring": {
+                "sidecar_layout": sidecar.layout,
+                "source": sidecar.source,
+                "pyproject": str(sidecar.pyproject_path) if sidecar.pyproject_path else None,
             },
             **cfg.model_dump(mode="json"),
         }
@@ -145,9 +154,17 @@ def config_show(ctx, as_json):
     click.echo(f"  llm_cache_dir: {llm.path}  (from {llm.source})")
     click.echo(f"  llm_cache_db: {llm.path / CACHE_DB_NAME}")
 
+    click.echo("\n[Authoring]  (where newly created sidecars land)")
+    if sidecar.layout is not None:
+        click.echo(f"  sidecar_layout: {sidecar.layout}  (from {sidecar.source})")
+    else:
+        click.echo("  sidecar_layout: (not set — per-deck auto-detection)")
+    click.echo("  Note: a course spec's <sidecar-layout> overrides this during a build.")
+
     click.echo("\n[External Tools]")
     click.echo(f"  plantuml_jar: {cfg.external_tools.plantuml_jar or '(not set)'}")
     click.echo(f"  drawio_executable: {cfg.external_tools.drawio_executable or '(not set)'}")
+    click.echo(f"  mitmdump: {cfg.external_tools.mitmdump or '(not set — auto-locate)'}")
 
     click.echo("\n[Logging]")
     click.echo(f"  log_level: {cfg.logging.log_level}")
@@ -166,6 +183,11 @@ def config_show(ctx, as_json):
     click.echo("\n[Workers]")
     click.echo(f"  worker_type: {cfg.workers.worker_type or '(not set)'}")
     click.echo(f"  worker_id: {cfg.workers.worker_id or '(not set)'}")
+
+    click.echo("\n[Git]")
+    click.echo(f"  remote_template: {cfg.git.remote_template or '(not set)'}")
+    click.echo(f"  remote_path: {cfg.git.remote_path or '(not set)'}")
+    click.echo(f"  token_auth: {cfg.git.token_auth}")
 
 
 @config.command(name="locate")
@@ -247,3 +269,20 @@ def config_locate():
     click.echo(f"  SQLite DB: {db_path}")
     click.echo(f"  Status: {'Exists' if db_path.exists() else 'Not found'}")
     click.echo("\n  Override with --cache-dir <path> or $CLM_CACHE_DIR.")
+
+    # Authoring sidecar layout: the other [tool.clm] pyproject key. Shown here
+    # because, like cache_dir, it resolves outside the config files above.
+    from clm.core.sidecar_layout import describe_layout
+
+    sidecar = describe_layout(None, Path.cwd())
+    _sidecar_source_labels = {
+        "env": "$CLM_SIDECAR_LAYOUT",
+        "pyproject": "pyproject.toml [tool.clm] sidecar-layout",
+        "unset": "not set (per-deck auto-detection)",
+    }
+    click.echo("\nAuthoring sidecar layout (where newly created sidecars land):")
+    click.echo(f"  Value: {sidecar.layout or '(unset)'}")
+    click.echo(f"  Source: {_sidecar_source_labels.get(sidecar.source, sidecar.source)}")
+    if sidecar.pyproject_path is not None:
+        click.echo(f"  From: {sidecar.pyproject_path}")
+    click.echo("  Note: a course spec's <sidecar-layout> overrides this during a build.")

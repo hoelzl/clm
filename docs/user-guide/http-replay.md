@@ -24,7 +24,9 @@ requires **Python 3.12+** (mitmproxy's floor).
 
 If `mitmdump` runs from an isolated tool environment, it needs PyYAML there
 too: `uv tool install mitmproxy --with pyyaml`. Point CLM at the executable
-with `CLM_MITMDUMP` if it is not on `PATH`.
+with `CLM_MITMDUMP` — or `[external_tools] mitmdump` in your user config
+(ignored in a repo-local config, like the other executable paths) — if it is
+not on `PATH`.
 
 ## How it works
 

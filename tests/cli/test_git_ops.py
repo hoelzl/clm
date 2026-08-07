@@ -732,10 +732,22 @@ class TestGitHelpers:
             assert result.returncode == 0
             mock_run.assert_called_once()
 
+    @staticmethod
+    def _fake_cfg(token_auth: bool) -> MagicMock:
+        # Hermetic stand-in for get_config(): with the env var unset the
+        # toggle falls back to [git] token_auth (A7, #802), and the real
+        # get_config() would read the developer's actual user config file.
+        fake_cfg = MagicMock()
+        fake_cfg.git.token_auth = token_auth
+        return fake_cfg
+
     def test_token_auth_disabled_by_default(self, monkeypatch, tmp_path: Path):
         """Without CLM_GIT_TOKEN_AUTH the command line is unchanged (#341)."""
         monkeypatch.delenv("CLM_GIT_TOKEN_AUTH", raising=False)
         monkeypatch.setenv("CLM_GITLAB_TOKEN", "secret-token")
+        monkeypatch.setattr(
+            "clm.cli.commands.git.get_config", lambda: self._fake_cfg(token_auth=False)
+        )
         with patch("clm.cli.commands.git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             run_git(tmp_path, "push", "-u", "origin", "master")
@@ -785,6 +797,33 @@ class TestGitHelpers:
         monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "1")
         monkeypatch.delenv("CLM_GITLAB_TOKEN", raising=False)
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        with patch("clm.cli.commands.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(tmp_path, "fetch", "origin")
+            cmd = mock_run.call_args[0][0]
+        assert cmd == ["git", *_SAFE_TRANSPORT, "-C", str(tmp_path), "fetch", "origin"]
+
+    def test_token_auth_config_file_tier(self, monkeypatch, tmp_path: Path):
+        """[git] token_auth = true enables the helper when the env var is unset (A7)."""
+        monkeypatch.delenv("CLM_GIT_TOKEN_AUTH", raising=False)
+        monkeypatch.setenv("CLM_GITLAB_TOKEN", "secret-token")
+        monkeypatch.setattr(
+            "clm.cli.commands.git.get_config", lambda: self._fake_cfg(token_auth=True)
+        )
+        with patch("clm.cli.commands.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(tmp_path, "push", "-u", "origin", "master")
+            cmd = mock_run.call_args[0][0]
+        assert cmd[3:5] == ["-c", "credential.helper="]
+        assert "$CLM_GITLAB_TOKEN" in cmd[6]
+
+    def test_token_auth_env_off_beats_config_on(self, monkeypatch, tmp_path: Path):
+        """A set env var always decides — CLM_GIT_TOKEN_AUTH=0 disables (A7)."""
+        monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "0")
+        monkeypatch.setenv("CLM_GITLAB_TOKEN", "secret-token")
+        monkeypatch.setattr(
+            "clm.cli.commands.git.get_config", lambda: self._fake_cfg(token_auth=True)
+        )
         with patch("clm.cli.commands.git.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             run_git(tmp_path, "fetch", "origin")

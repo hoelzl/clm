@@ -137,7 +137,8 @@ class WorkerPoolManager:
                 for better host.docker.internal support on Windows/WSL2
             log_level: Logging level for workers
             max_startup_concurrency: Maximum number of workers to start concurrently.
-                Defaults to CLM_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
+                Defaults to ``[worker_management] startup_parallel`` from the
+                config system (env: CLM_WORKER_MANAGEMENT__STARTUP_PARALLEL).
             cache_db_path: Path to executed notebook cache database
             data_dir: Path to source data directory (for Docker workers to mount)
             notebook_kernel_python: Resolved interpreter for the Direct notebook
@@ -162,9 +163,15 @@ class WorkerPoolManager:
         self.session_id = session_id
         self.workers_shareable = workers_shareable
 
-        # Determine max startup concurrency
+        # Determine max startup concurrency. The former env-only
+        # CLM_MAX_WORKER_STARTUP_CONCURRENCY knob duplicated the existing
+        # [worker_management] startup_parallel config field (with a divergent
+        # default of 10 vs the documented 5); hard-cut in favour of the config
+        # field (A7, #802 — see `clm info migration`).
         if max_startup_concurrency is None:
-            max_startup_concurrency = int(os.getenv("CLM_MAX_WORKER_STARTUP_CONCURRENCY", "10"))
+            from clm.infrastructure.config import get_config
+
+            max_startup_concurrency = get_config().worker_management.startup_parallel
         self.max_startup_concurrency = max_startup_concurrency
 
         self.docker_client: Any = None  # docker.DockerClient, lazily initialized

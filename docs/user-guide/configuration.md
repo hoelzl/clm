@@ -88,6 +88,37 @@ For complete XML reference, see **[Spec File Reference](spec-file-reference.md)*
 
 CLM can be configured using configuration files or environment variables.
 
+### How the pieces fit together
+
+CLM settings arrive through three deliberate channels, each with one documented
+precedence order (unified in the 2026 config work — proposal
+`docs/proposals/config-cli-precedence-unification.md`, completed by A7 of #802):
+
+1. **Persistent operator settings** live in the config-file system below
+   (`ClmConfig`): resolution is `environment variable > project config > user
+   config > system config > built-in default`, and a CLI flag, where one
+   exists, beats them all (`resolve_setting`). Sections: `[retention]`,
+   `[external_tools]`, `[logging]`, `[progress]`, `[jupyter]`,
+   `[worker_management]`, `[git]`, `[llm]`, `[recordings]`.
+2. **Per-invocation build options** have no config-file tier by design — they
+   are one-shot choices, resolved as `CLI flag > dedicated CLM_* env var >
+   default`: the HTTP-replay mode/`CLM_FAIL_ON_ERROR`/`CLM_EXPLAIN_REBUILDS`
+   family, and the database paths (`--cache-db-path` / `--jobs-db-path` /
+   `--telemetry-db-path` with their `CLM_*_DB_PATH` env forms).
+3. **Course-repo-scoped settings** travel with the course repository: elements
+   in the course spec (e.g. `<kernel-python>`, `<sidecar-layout>`) and the
+   two-key `[tool.clm]` table in `pyproject.toml` (`cache_dir`,
+   `sidecar-layout`). Where a setting exists in several channels the order is
+   `env var > spec element > config file` — the spec wedges *between* the
+   operator's environment and the file tiers.
+
+Two invariants hold everywhere: **worker processes never read config files**
+(the host resolves each effective value and injects it into the worker's
+environment, for Direct and Docker workers alike), and **a repo-local config
+file may not choose which program CLM runs** (see External Tools below).
+`clm config show` (or `--json`) displays the effective value of everything
+above, with its source.
+
 ### Configuration Files
 
 CLM looks for configuration files in these locations (priority order):
@@ -127,12 +158,13 @@ drawio_executable = "/usr/local/bin/drawio"
 log_level = "INFO"
 enable_test_logging = false
 
-[logging.testing]
-e2e_progress_interval = 10
-e2e_long_job_threshold = 60
+[progress]
+update_interval = 5
+long_job_threshold = 30
 
 [git]
 remote_template = "git@github.com-cam:Coding-Academy-Munich/{repo}.git"
+# token_auth = true      # Headless HTTPS pushes via CLM_GITLAB_TOKEN (issue #341)
 
 [llm]
 model = "anthropic/claude-sonnet-4-6"
@@ -204,17 +236,19 @@ close it and retry, or point the variable at a local path.
 |----------|-------------|
 | `PLANTUML_JAR` | Path to PlantUML JAR file |
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
+| `CLM_MITMDUMP` | Path to the `mitmdump` executable used by the HTTP-replay proxy (empty = auto-locate on `PATH`, then the interpreter's scripts directory). The recommended hook for the `uv tool install mitmproxy` model. |
 
-These can equivalently be set in the config file, which now takes effect for
+These can equivalently be set in the config file, which takes effect for
 **Direct** workers (the env var still wins if both are set):
 
 ```toml
 [external_tools]
 plantuml_jar = "/usr/local/share/plantuml.jar"
 drawio_executable = "/usr/bin/drawio"
+mitmdump = "/home/me/.local/bin/mitmdump"
 ```
 
-> **These two keys are ignored in a *project* config file.** `clm.toml` /
+> **These keys are ignored in a *project* config file.** `clm.toml` /
 > `.clm/config.toml` are found by walking up from the working directory, so they
 > are found **inside a cloned course repo** — and CLM then runs whatever program
 > they name, on the host, before any of that repo's content is executed. A
@@ -305,7 +339,7 @@ tidy` to move *existing* sidecars between layouts in bulk.
 | `CLM_GIT__REMOTE_TEMPLATE` | URL template for git remotes | `{repository_base}/{repo}` |
 | `CLM_GIT__REMOTE_PATH` | Path segment between base URL and repo name (e.g., GitLab group). Per-target `<remote-path>` overrides still win. | (unset) |
 | `CLM_GITLAB_TOKEN` | GitLab API token (`api` scope) used by `clm release provision` to share channel repos into access groups (issue #294), and — with `CLM_GIT_TOKEN_AUTH=1` — for git HTTPS transport. `GITLAB_TOKEN` is accepted as a fallback. | (unset) |
-| `CLM_GIT_TOKEN_AUTH` | Set to `1` to authenticate the git operations run by `clm git` / `clm release sync --push` against HTTPS remotes with `CLM_GITLAB_TOKEN`, via an ephemeral credential helper (issue #341 — headless/CI pushes where no credential helper exists). The token never appears in URLs, `.git/config`, or the command line. Opt-in: without it, git's own credential machinery (e.g. Git Credential Manager) is used. | (unset) |
+| `CLM_GIT_TOKEN_AUTH` | Set to `1` to authenticate the git operations run by `clm git` / `clm release sync --push` against HTTPS remotes with `CLM_GITLAB_TOKEN`, via an ephemeral credential helper (issue #341 — headless/CI pushes where no credential helper exists). The token never appears in URLs, `.git/config`, or the command line. Opt-in: without it, git's own credential machinery (e.g. Git Credential Manager) is used. The toggle is also settable as `[git] token_auth` in the config file (a set env var always wins, `0` included); the token itself stays env-only — a secret never belongs in a config file. | (unset) |
 
 The remote template supports placeholders: `{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}` — plus, for release-channel repos, `{stream}` (the release stream name, issue #291).
 This is useful for SSH access with custom host aliases:
@@ -419,8 +453,8 @@ These help diagnose builds that hang on a single notebook (see issue #143).
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_CELL_TIMEOUT_SECONDS` | Per-cell execution timeout (seconds) passed to nbclient. When set to a positive integer, a cell that does not return to idle within this window raises a cell timeout error (surfaced as a normal cell error) instead of blocking the worker until the build-level job timeout fires. Always takes precedence over the replay-mode default below. Unset / non-positive keeps the historical no-timeout behavior for non-replay builds. | (unset → no per-cell timeout, except replay builds — see next row) |
-| `CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS` | Default per-cell timeout (seconds) applied **only to HTTP-replay-engaged jobs** (any `--http-replay` mode but `disabled`), so a replay-layer hang surfaces as a clean cell timeout instead of stalling to the build-level job timeout (issue #143). Real cells in replay decks finish in seconds, so only a genuine hang reaches this ceiling. `CLM_CELL_TIMEOUT_SECONDS` overrides it; set to `0` to opt out. | `600` |
+| `CLM_CELL_TIMEOUT_SECONDS` | Per-cell execution timeout (seconds) passed to nbclient. When set to a positive integer, a cell that does not return to idle within this window raises a cell timeout error (surfaced as a normal cell error) instead of blocking the worker until the build-level job timeout fires. Always takes precedence over the replay-mode default below. Unset / non-positive keeps the historical no-timeout behavior for non-replay builds. Also settable as `[jupyter] cell_timeout_seconds` in the config file; the host resolves the effective value and injects it into Direct **and** Docker workers (A7 of #802 — before that, Docker workers never saw it). | (unset → no per-cell timeout, except replay builds — see next row) |
+| `CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS` | Default per-cell timeout (seconds) applied **only to HTTP-replay-engaged jobs** (any `--http-replay` mode but `disabled`), so a replay-layer hang surfaces as a clean cell timeout instead of stalling to the build-level job timeout (issue #143). Real cells in replay decks finish in seconds, so only a genuine hang reaches this ceiling. `CLM_CELL_TIMEOUT_SECONDS` overrides it; set to `0` to opt out. Also settable as `[jupyter] replay_cell_timeout_seconds`, injected into both worker modes like the row above. | `600` |
 | `CLM_HTTP_REPLAY_TRANSPORT` | HTTP-replay transport. `mitmproxy` (the only transport) is the default and the only accepted value; setting `vcrpy` **fails the build** with a migration pointer (the in-process transport was removed in issue #355 — re-record vcrpy-era cassettes (pre-1.10, or any course that kept the opt-out) with `--http-replay=refresh`). | `mitmproxy` |
 | `CLM_SLOW_CELL_LOG_THRESHOLD_SECONDS` | Cells slower than this are logged at INFO (`slow cell N/total took Xs`) so a stalling notebook is visible without enabling DEBUG. | `60` |
 

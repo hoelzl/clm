@@ -143,6 +143,34 @@ class TestEnvironmentVariables:
         assert config.jupyter.jinja_templates_path == "/custom/templates"
         assert config.jupyter.log_cell_processing is True
 
+    def test_a7_legacy_env_vars(self, monkeypatch):
+        """The A7 wire-ups: CLM_MITMDUMP / CLM_GIT_TOKEN_AUTH / cell timeouts (#802)."""
+        monkeypatch.setenv("CLM_MITMDUMP", "C:/tools/mitmdump.exe")
+        monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "on")
+        monkeypatch.setenv("CLM_CELL_TIMEOUT_SECONDS", "90")
+        monkeypatch.setenv("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "0")
+
+        config = ClmConfig()
+        assert config.external_tools.mitmdump == "C:/tools/mitmdump.exe"
+        assert config.git.token_auth is True
+        assert config.jupyter.cell_timeout_seconds == 90.0
+        assert config.jupyter.replay_cell_timeout_seconds == 0.0
+
+    def test_legacy_timeout_junk_and_negatives_are_tolerated(self, monkeypatch):
+        """Junk reads as unset, negatives clamp to 0 — never a config-load crash.
+
+        The raw-env readers these variables replace never raised on a bad
+        value, so a long-tolerated typo must not start failing every command.
+        """
+        monkeypatch.setenv("CLM_CELL_TIMEOUT_SECONDS", "not-a-number")
+        monkeypatch.setenv("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "-5")
+
+        config = ClmConfig()
+        # Junk → field default (0 = no per-cell limit).
+        assert config.jupyter.cell_timeout_seconds == 0.0
+        # Negative → clamped to 0 (= opt out), matching the old "> 0" check.
+        assert config.jupyter.replay_cell_timeout_seconds == 0.0
+
     def test_case_insensitive_env_vars(self, monkeypatch):
         """Test that environment variables are case-insensitive."""
         monkeypatch.setenv("clm_logging__log_level", "warning")

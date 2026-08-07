@@ -64,6 +64,13 @@ def _notebook_worker_jupyter_env() -> dict[str, str]:
         # notebook_processor reads this as an exact ``== "True"`` match, so emit
         # that canonical form rather than a lowercase ``"true"``.
         "LOG_CELL_PROCESSING": "True" if jupyter.log_cell_processing else "False",
+        # Per-cell timeouts (A7, #802): before these were config-resolved and
+        # injected, only Direct workers saw a host CLM_CELL_TIMEOUT_SECONDS
+        # (inherited via os.environ.copy()) while Docker workers silently ran
+        # without one. The worker parses "0" as "unset", so always injecting
+        # the resolved value preserves the historical defaults.
+        "CLM_CELL_TIMEOUT_SECONDS": str(jupyter.cell_timeout_seconds),
+        "CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS": str(jupyter.replay_cell_timeout_seconds),
     }
 
 

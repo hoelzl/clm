@@ -126,29 +126,51 @@ class TestWorkerConfig:
 class TestNotebookWorkerJupyterEnv:
     """The config → worker-env mapping for Jupyter settings (Phase 4)."""
 
-    def test_maps_config_values(self):
+    @staticmethod
+    def _fake_cfg(**overrides):
         fake_cfg = MagicMock()
         fake_cfg.jupyter.jinja_line_statement_prefix = "# j2"
         fake_cfg.jupyter.jinja_templates_path = "templates"
         fake_cfg.jupyter.log_cell_processing = False
-        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+        fake_cfg.jupyter.cell_timeout_seconds = 0.0
+        fake_cfg.jupyter.replay_cell_timeout_seconds = 600.0
+        for key, value in overrides.items():
+            setattr(fake_cfg.jupyter, key, value)
+        return fake_cfg
+
+    def test_maps_config_values(self):
+        with patch("clm.infrastructure.config.get_config", return_value=self._fake_cfg()):
             env = _notebook_worker_jupyter_env()
         assert env == {
             "JINJA_LINE_STATEMENT_PREFIX": "# j2",
             "JINJA_TEMPLATES_PATH": "templates",
             # False must serialize to the exact "False" the worker compares against.
             "LOG_CELL_PROCESSING": "False",
+            # The defaults parse back to "no per-cell limit" / the 600s replay
+            # backstop in the worker's import-time reads.
+            "CLM_CELL_TIMEOUT_SECONDS": "0.0",
+            "CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS": "600.0",
         }
 
     def test_log_cell_processing_true_serializes_to_capital_true(self):
         # The worker reads LOG_CELL_PROCESSING with an exact `== "True"` match.
-        fake_cfg = MagicMock()
-        fake_cfg.jupyter.jinja_line_statement_prefix = "# j2"
-        fake_cfg.jupyter.jinja_templates_path = "templates"
-        fake_cfg.jupyter.log_cell_processing = True
+        fake_cfg = self._fake_cfg(log_cell_processing=True)
         with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
             env = _notebook_worker_jupyter_env()
         assert env["LOG_CELL_PROCESSING"] == "True"
+
+    def test_cell_timeouts_reach_the_worker_env(self):
+        """A config-file [jupyter] timeout reaches Direct AND Docker workers (A7).
+
+        Before the injection, only Direct workers saw a host
+        CLM_CELL_TIMEOUT_SECONDS (inherited via os.environ.copy()); Docker
+        workers silently ran without one.
+        """
+        fake_cfg = self._fake_cfg(cell_timeout_seconds=90.0, replay_cell_timeout_seconds=0.0)
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+            env = _notebook_worker_jupyter_env()
+        assert env["CLM_CELL_TIMEOUT_SECONDS"] == "90.0"
+        assert env["CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS"] == "0.0"
 
 
 class TestDirectWorkerExecutor:

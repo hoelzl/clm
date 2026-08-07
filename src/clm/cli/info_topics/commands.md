@@ -3249,6 +3249,8 @@ performs authenticates HTTPS remotes via an ephemeral credential helper
 (`oauth2:<token>` basic auth). The token never appears in the URL, in
 `.git/config`, or on the command line. Opt-in by design: without the switch, a
 workstation keeps using its stored credentials (e.g. Git Credential Manager).
+The toggle can also live in the config file as `[git] token_auth = true` (a
+set env var always wins); the token itself is env-only.
 
 Examples:
 
@@ -4647,7 +4649,7 @@ Create and manage ZIP archives of course output.
 | `CLM_HTTP_REPLAY_MODE` | Default HTTP replay record mode for `clm build` (one of `replay`, `once`, `new-episodes`, `refresh`, `disabled`). Overridden by `--http-replay`. Defaults to `replay` when `CI=true`, else `new-episodes`. |
 | `CLM_HTTP_REPLAY_TRANSPORT` | HTTP-replay transport. `mitmproxy` (out-of-process proxy) is the only transport; setting `vcrpy` **fails the build** with a migration pointer (the in-process transport was removed in {version} — re-record vcrpy-era cassettes with `--http-replay=refresh`). |
 | `CLM_HTTP_REPLAY_IGNORE_HOSTS` | Comma-separated list of request hosts that should pass through to the real network instead of being recorded into the cassette. Defaults to `api.smith.langchain.com` (LangSmith telemetry). Set to an empty string to disable the default. |
-| `CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS` | Default per-cell execution timeout (seconds) applied to HTTP-replay-engaged jobs only (any `--http-replay` mode but `disabled`), so a replay-layer hang fails as a clean cell timeout instead of stalling to the build-level job timeout (issue #143). `CLM_CELL_TIMEOUT_SECONDS` overrides it; set to `0` to opt out. Default `600`. |
+| `CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS` | Default per-cell execution timeout (seconds) applied to HTTP-replay-engaged jobs only (any `--http-replay` mode but `disabled`), so a replay-layer hang fails as a clean cell timeout instead of stalling to the build-level job timeout (issue #143). `CLM_CELL_TIMEOUT_SECONDS` overrides it; set to `0` to opt out. Default `600`. Also settable as `[jupyter] replay_cell_timeout_seconds` / `[jupyter] cell_timeout_seconds` in the config file; the host injects the resolved values into Direct and Docker workers alike (CLM {version}). |
 | `CLM_HTTP_REPLAY_TRACE` | Set to `1` to enable the forensic trace harness for HTTP-replay diagnostics. Off by default; writes per-invocation trace bundles under `$CLM_HTTP_REPLAY_TRACE_DIR`. See `docs/claude/design/http-replay-trace.md`. |
 | `CLM_HTTP_REPLAY_TRACE_DIR` | Root directory for trace bundles when `CLM_HTTP_REPLAY_TRACE=1`. Defaults to `./clm-http-replay-traces`. |
 | `CLM_HTTP_REPLAY_TRACE_VERBOSE` | When tracing is on, include extra per-event detail (default off). Accepts `1`/`true`/`yes`. |

@@ -1005,6 +1005,36 @@ def test_pool_manager_parallel_error_handling(db_path, workspace_path):
         assert total_started == 3, f"Expected 3 workers, got {total_started}"
 
 
+class TestStartupConcurrencyDefault:
+    """The config-file default for startup parallelism (A7, #802).
+
+    The former env-only ``CLM_MAX_WORKER_STARTUP_CONCURRENCY`` knob was
+    hard-cut in favour of the existing ``[worker_management]
+    startup_parallel`` field (it duplicated the same behavior with a
+    divergent default of 10 vs the documented 5).
+    """
+
+    def test_defaults_to_startup_parallel_from_config(self, db_path, workspace_path, monkeypatch):
+        from unittest.mock import MagicMock
+
+        fake_cfg = MagicMock()
+        fake_cfg.worker_management.startup_parallel = 7
+        monkeypatch.setattr("clm.infrastructure.config.get_config", lambda: fake_cfg)
+        manager = WorkerPoolManager(
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[]
+        )
+        assert manager.max_startup_concurrency == 7
+
+    def test_explicit_argument_wins(self, db_path, workspace_path):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=[],
+            max_startup_concurrency=3,
+        )
+        assert manager.max_startup_concurrency == 3
+
+
 class TestPoolManagerRegistry:
     """Tests for the global pool manager registry and atexit cleanup."""
 

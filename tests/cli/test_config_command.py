@@ -120,10 +120,12 @@ class TestConfigShow:
         assert "Current CLM Configuration" in result.output
         for header in (
             "[Databases]",
+            "[Authoring]",
             "[External Tools]",
             "[Logging]",
             "[Jupyter]",
             "[Workers]",
+            "[Git]",
         ):
             assert header in result.output
 
@@ -159,6 +161,22 @@ class TestConfigShow:
         assert "logging" in data
         # use_sqlite_queue was removed — it must not resurface anywhere.
         assert "use_sqlite_queue" not in data.get("workers", {})
+        # The authoring sidecar-layout is resolved outside ClmConfig too (A7).
+        assert set(data["authoring"]) == {"sidecar_layout", "source", "pyproject"}
+
+    def test_show_reports_pyproject_sidecar_layout(
+        self, isolated_config_dirs, tmp_path, monkeypatch
+    ):
+        """A [tool.clm] sidecar-layout is visible with its source (A7, #802)."""
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.clm]\nsidecar-layout = "subdir"\n', encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["config", "show"])
+        assert result.exit_code == 0, result.output
+        assert "sidecar_layout: subdir  (from pyproject)" in result.output
 
 
 class TestConfigLocate:
@@ -209,6 +227,20 @@ class TestConfigLocate:
         section = result.output.split("LLM cache directory")[1]
         assert "pyproject.toml [tool.clm] cache_dir" in section
         assert "my-llm-cache" in section
+
+    def test_locate_shows_sidecar_layout(self, isolated_config_dirs, monkeypatch):
+        """The authoring sidecar layout is reported with its source (A7, #802)."""
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
+        project_dir = isolated_config_dirs["project_dir"]
+        (project_dir / "pyproject.toml").write_text(
+            '[tool.clm]\nsidecar-layout = "sibling"\n', encoding="utf-8"
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["config", "locate"])
+        assert result.exit_code == 0, result.output
+        section = result.output.split("Authoring sidecar layout")[1]
+        assert "sibling" in section
+        assert "pyproject.toml [tool.clm] sidecar-layout" in section
 
     def test_locate_shows_discovered_project_root_from_subdir(self, tmp_path, monkeypatch):
         # Issue #477: from a subdir, `config locate` reports the discovered root
