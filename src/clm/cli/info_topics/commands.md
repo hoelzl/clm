@@ -47,7 +47,7 @@ Key options:
 | `--verify-against DIR` | Build, then byte-compare the output tree against the snapshot at DIR. Exits non-zero on any diff. `.html` is skipped by default (kernel-execution noise). See "Snapshot / verify" below. |
 | `--include-html` | With `--verify-against`: include `.html` files using hex-address normalization. |
 | `--strict-verify` | With `--verify-against`: byte-compare every file, no normalization or skipping. |
-| `-w, --watch` | Watch for changes and auto-rebuild |
+| `-w, --watch` | Watch for changes and auto-rebuild. Requires the `[watch]` extra (since CLM {version}). |
 | `--watch-mode [fast\|normal]` | `fast` = notebooks only; `normal` = all formats |
 | `--ignore-cache` | Reprocess all files (still updates cache) |
 | `--clear-cache` | Clear cache before building |
@@ -4375,7 +4375,8 @@ clm recordings assemble ~/Recordings --dry-run
 
 Start the recordings web dashboard (HTMX + SSE). Provides file watcher
 controls, job status, lecture assignment, and OBS integration.
-Requires `clm[web]` extra.
+Requires the `[recordings]` extra (which carries the dashboard's own
+fastapi/uvicorn/watchdog since CLM {version}).
 
 ```
 clm recordings serve ROOT_DIR [OPTIONS]

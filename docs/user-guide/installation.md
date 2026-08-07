@@ -116,6 +116,15 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[drawio]"`
 - **[all-workers]**: All worker dependencies combined
   - Install: `pip install -e ".[all-workers]"`
+- **[docker]**: docker, fastapi, uvicorn
+  - Required for **Docker worker mode on the host**: the Docker SDK plus the
+    loopback Worker API server that containers use to reach the job queue.
+    As of CLM 1.26 these are no longer core dependencies — a bare install
+    covers Direct-mode builds only.
+  - Install: `pip install -e ".[docker]"`
+- **[watch]**: watchdog
+  - Required for: `clm build --watch` (rebuild on file changes)
+  - Install: `pip install -e ".[watch]"`
 
 > **The ML / data-science stack is no longer a clm extra.** As of CLM 1.19 the
 > old `[ml]` extra (PyTorch, FastAI, transformers, pandas, the LangGraph
@@ -130,7 +139,7 @@ CLM has several optional dependency groups for different features:
 - **[tui]**: textual, rich
   - Required for: `clm monitor` command
   - Install: `pip install -e ".[tui]"`
-- **[web]**: wsproto, httptools, watchfiles, segno, nh3
+- **[web]**: fastapi, uvicorn, wsproto, httptools, watchfiles, segno, nh3
   - Required for: `clm serve` command
   - Install: `pip install -e ".[web]"`
   - `segno` renders the Mobile Deck Studio pairing QR code; `nh3` sanitizes the
@@ -151,8 +160,10 @@ CLM has several optional dependency groups for different features:
     backends (heavier, require torch) and are **not** included in `[all]`
 
 **Recordings**:
-- **[recordings]**: jinja2, python-multipart, onnxruntime, soundfile, numpy, obsws-python
-  - Required for: `clm recordings` commands (recording workflow and audio processing)
+- **[recordings]**: jinja2, python-multipart, onnxruntime, soundfile, numpy,
+  obsws-python, fastapi, uvicorn, watchdog
+  - Required for: `clm recordings` commands (recording workflow, audio
+    processing, and the dashboard's web server + directory watcher)
   - Install: `pip install -e ".[recordings]"`
 
 **Slide Authoring**:
@@ -191,8 +202,8 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[dev]"`
 
 **Everything (for clm development)**:
-- **[all]**: all-workers, summarize, voiceover, recordings, slides, gcal, mcp,
-  replay, dev, tui, web
+- **[all]**: all-workers, docker, watch, summarize, voiceover, recordings,
+  slides, gcal, mcp, replay, dev, tui, web
   - Required for: Full clm development and testing
   - Install: `pip install -e ".[all]"`
   - **Carries no ML / data-science stack.** It is not imported by clm itself:
@@ -206,7 +217,8 @@ CLM has several optional dependency groups for different features:
     runs in an isolated `uvx` tool env.)
 
 **Notes**:
-- Core package works without worker dependencies (can use Docker mode)
+- Core package works without worker dependencies (use Docker mode with the
+  `[docker]` extra)
 - For direct execution mode, install worker-specific dependencies
 - For clm development and testing, install with `[all]` (or just `uv sync`)
 - To run **ML course decks** in Direct mode, install the course-runtime stack
@@ -417,6 +429,11 @@ left clm's env), see
 
 CLM can use Docker containers for notebook processing, PlantUML, and Draw.io conversion.
 Docker workers are started automatically by `clm build` when needed.
+
+Docker worker mode requires the `[docker]` extra on the host
+(`pip install "coding-academy-lecture-manager[docker]"`): the Docker SDK plus
+the loopback Worker API server the containers talk to. The containers
+themselves need nothing extra.
 
 See [Building Guide](../developer-guide/building.md) for details on building Docker images.
 

@@ -264,3 +264,75 @@ class TestWorkerPayloadContract:
         assert frozenset(PlantUmlPayload.model_fields) == self.DIAGRAM_FIELDS
         assert frozenset(DrawioPayload.model_fields) == self.DIAGRAM_FIELDS
         assert frozenset(JupyterLitePayload.model_fields) == self.JUPYTERLITE_FIELDS
+
+
+#: Python executed in a subprocess with every optional server-side package
+#: blocked. The core surface — CLI entry point, build engine, worker
+#: management, backends, the API *client* — must import cleanly anyway,
+#: because a plain `pip install coding-academy-lecture-manager` no longer
+#: carries docker/fastapi/uvicorn/watchdog (#802 A12). ``starlette`` is
+#: blocked too: it only ever arrives as a fastapi transitive, so an eager
+#: ``clm.infrastructure.web_security`` import would break a core install
+#: the same way.
+_CORE_IMPORTS_WITHOUT_EXTRAS = """\
+import sys
+
+BLOCKED = ("docker", "fastapi", "uvicorn", "watchdog", "starlette")
+
+
+class _BlockOptionalDeps:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in BLOCKED:
+            raise ModuleNotFoundError(
+                f"blocked optional dependency: {fullname}", name=fullname
+            )
+        return None
+
+
+sys.meta_path.insert(0, _BlockOptionalDeps())
+
+import clm.cli.main
+import clm.cli.commands.build
+import clm.cli.commands.docker
+import clm.cli.commands.recordings
+import clm.cli.commands.serve
+import clm.cli.commands.status
+import clm.cli.commands.workers
+import clm.build
+import clm.core.course
+import clm.infrastructure.api
+import clm.infrastructure.backends
+import clm.infrastructure.workers.lifecycle_manager
+import clm.infrastructure.workers.pool_manager
+import clm.infrastructure.workers.worker_base
+import clm.infrastructure.workers.worker_executor
+
+print("CORE-IMPORTS-OK")
+"""
+
+
+class TestOptionalServerDependencyContract:
+    """#802 A12: ``docker``, ``fastapi``, ``uvicorn``, ``watchdog`` left the
+    core install. Docker worker mode carries them via the ``[docker]`` extra,
+    ``clm build --watch`` via ``[watch]``, and the web surfaces via ``[web]``
+    / ``[recordings]``; every import site is a lazy seam. This is the teeth:
+    an eager import creeping back into the core surface fails this test even
+    though the dev venv has all four installed.
+    """
+
+    def test_core_surface_imports_without_optional_server_deps(self):
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-c", _CORE_IMPORTS_WITHOUT_EXTRAS],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0 and "CORE-IMPORTS-OK" in result.stdout, (
+            "core surface no longer imports without the optional server "
+            "deps (docker/fastapi/uvicorn/watchdog left the core install "
+            "in #802 A12 — the import that pulls them in must become "
+            f"lazy):\n{result.stderr}"
+        )

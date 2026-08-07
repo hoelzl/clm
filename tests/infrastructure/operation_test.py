@@ -2,7 +2,7 @@ import asyncio
 from time import time
 
 from clm.core.operation import Concurrently, Operation, Sequential
-from clm.infrastructure.backends.dummy_backend import DummyBackend
+from tests.dummy_backend import DummyBackend
 
 NUM_OPERATIONS = 100
 

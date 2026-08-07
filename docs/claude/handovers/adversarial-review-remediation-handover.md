@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A7/A8/A9/A10/A11 DONE (A9 2026-08-07), ratchet 50 → 0, import-linter + private-import guard enforced; remaining A12 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: **COMPLETE** — A1–A12 all DONE (A12 2026-08-07), ratchet 50 → 0, import-linter + private-import + optional-dependency guards enforced ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1248,8 +1248,8 @@ one PR per step, golden suite green after each.
    architecture.md rewritten 2026-08-06 — see item 10 below; A4/A5: see
    items 5 and 6). **A7 DONE 2026-08-07** — see item 7 below.
    A8 DONE 2026-08-07 — see item 8 below. **A9 DONE 2026-08-07** — see
-   item 9 below. Remaining Phase 8 item: A12
-   (extras/lazy imports + DummyBackend to tests).
+   item 9 below. **A12 DONE 2026-08-07** — see item 11 below; Phase 8 is
+   complete.
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
@@ -1375,9 +1375,25 @@ one PR per step, golden suite green after each.
     layer diagram matching no import structure, undocumented env vars,
     orchestration attributed to `Course.process()`, "DELETE journal mode",
     core↔infrastructure claims) is corrected or removed.
-11. **A12** — move `docker`, `fastapi`, `uvicorn`, `watchdog` behind extras with
-    lazy imports; `DummyBackend` (`dummy_backend.py:19`, never instantiated in
-    `src/`) moves to `tests/`.
+11. ✔ **A12** — move `docker`, `fastapi`, `uvicorn`, `watchdog` behind extras
+    with lazy imports; `DummyBackend` moves to `tests/` — **DONE 2026-08-07**.
+    New extras `[docker]` (SDK + fastapi/uvicorn for the host-side Worker API
+    server — one extra because Docker mode needs all three) and `[watch]`
+    (watchdog for `clm build --watch`); `[web]` and `[recordings]` carry their
+    own server stacks; `[all]` includes the new extras. Lazy seams:
+    `pool_manager` imports `api.server` only in `_start_worker_api_server`
+    (with `ensure_docker_worker_deps()` gates in `start_pools` /
+    `_get_or_create_executor` raising the pip hint), the build command
+    pre-flights watchdog on `--watch` as a UsageError, and `clm serve` /
+    `clm recordings serve` name their extras on ImportError.
+    `DummyBackend` → `tests/dummy_backend.py` (`from tests.dummy_backend
+    import DummyBackend`). Teeth:
+    `TestOptionalServerDependencyContract` in
+    `tests/test_architecture_contracts.py` imports the core surface in a
+    subprocess with docker/fastapi/uvicorn/watchdog **and starlette**
+    blocked (starlette because `infrastructure/web_security.py` would
+    otherwise leak a fastapi transitive into a core chain). CI/nightly
+    `uv sync` lines gained `--extra docker --extra watch`.
 
 **Landmine**: if Phase 8 stalls partway — a real risk for a project this size —
 the *docs must not* describe the end state as if it arrived. Update A10
@@ -1448,8 +1464,9 @@ so the maintainer can object:
   maintenance rule.
 - `docs/developer-guide/releasing.md` — Phase 0's release procedure.
 - `docs/developer-guide/architecture.md` — rewritten 2026-08-06 (Phase 8/A10)
-  to describe the enforced post-#802 layering; keep its "Known Deviations"
-  list current as A12 lands (A4/A5/A7/A8/A9 already resolved in it).
+  to describe the enforced post-#802 layering; its "Known Deviations" list is
+  fully resolved (A12 landed 2026-08-07) and stays as the home for future
+  deviations.
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
 

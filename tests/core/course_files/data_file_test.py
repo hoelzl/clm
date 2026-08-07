@@ -8,7 +8,7 @@ from clm.core.course_files.data_file import DataFile
 from clm.core.operation import Concurrently, NoOperation
 from clm.core.operations.copy_file import CopyFileOperation
 from clm.core.utils.path_utils import output_specs
-from clm.infrastructure.backends.dummy_backend import DummyBackend
+from tests.dummy_backend import DummyBackend
 
 DATA_FILE = "data/test.data"
 

@@ -40,11 +40,11 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.backends.dummy_backend import DummyBackend
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.pool_manager import WorkerPoolManager
 from clm.infrastructure.workers.worker_executor import WorkerConfig
+from tests.dummy_backend import DummyBackend
 
 logger = logging.getLogger(__name__)
 

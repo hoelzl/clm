@@ -100,7 +100,8 @@ jobs:
         # Same lockfile-pinned install as the PR test job; see ci.yml for why
         # `--locked` and this exact extra set.
         uv sync --locked --python ${{ matrix.python-version }} --no-default-groups \
-          --extra all-workers --extra summarize --extra recordings --extra slides \
+          --extra all-workers --extra docker --extra watch --extra summarize \
+          --extra recordings --extra slides \
           --extra mcp --extra replay --extra dev --extra tui --extra web
 
     - name: Start Xvfb
@@ -199,7 +200,8 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --locked --python 3.12 --no-default-groups \
-          --extra all-workers --extra recordings --extra dev --extra tui --extra web
+          --extra all-workers --extra docker --extra watch --extra recordings \
+          --extra dev --extra tui --extra web
 
     - name: Run Docker integration tests
       run: |

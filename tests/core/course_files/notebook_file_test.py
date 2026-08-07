@@ -12,7 +12,7 @@ from clm.core.section import Section
 from clm.core.topic import Topic
 from clm.core.utils.path_utils import output_specs
 from clm.core.utils.text_utils import Text
-from clm.infrastructure.backends.dummy_backend import DummyBackend
+from tests.dummy_backend import DummyBackend
 
 NOTEBOOK_FILE = "slides_some_topic_from_test_1.py"
 

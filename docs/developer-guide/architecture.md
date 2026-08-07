@@ -61,7 +61,7 @@ formats using a worker-based architecture orchestrated by an SQLite job queue.
 ┌──────────────────────────────▼─────────────────────────────────────┐
 │                  clm.infrastructure (Engines)                       │
 │                                                                    │
-│  backends/  — SqliteBackend, LocalOpsBackend, DummyBackend         │
+│  backends/  — SqliteBackend, LocalOpsBackend                       │
 │  database/  — schema + migrations, JobQueue, caches, heartbeats    │
 │  workers/   — pool manager, worker base/executor, lifecycle,       │
 │               image-identity fingerprinting                        │
@@ -222,8 +222,8 @@ worker management, backend implementations, external-process machinery.
 - `LocalOpsBackend` — a *partial* base handling local file operations
   (copy/delete); it leaves the `execute_operation` / `wait_for_completion`
   dispatch pair abstract, and e2e tests subclass it to fill them in
-- `DummyBackend` — test-only; never instantiated in `src/` (slated to move to
-  `tests/` under #802/A12)
+- The no-op `DummyBackend` lives in `tests/dummy_backend.py`, not the
+  package — nothing in `src/` ever instantiated it (#802 A12)
 
 **Database** (`database/`):
 
@@ -707,8 +707,9 @@ Details: `docs/archive/migration-history/`.
 
 ## Known Deviations and Pending Work
 
-The layering above is fully enforced, but #802 tracks remaining structural
-work. Keep this list honest — update it when an item lands:
+The layering above is fully enforced. #802's remediation list is complete —
+this section stays as the designated home for future deviations (keep it
+honest — record a deviation when one appears, update it when an item lands):
 
 - A7 (config unification) and A8 (one jobs-DB env name, no worker-side
   default) landed Aug 2026 — the three-channel model and the worker-env
@@ -719,8 +720,12 @@ work. Keep this list honest — update it when an item lands:
   `tests/test_architecture_contracts.py::TestPrivateImportGuard` keeps the
   count at zero (a leading-underscore module remains importable within its
   own package's subtree, e.g. `cli/commands/_export_shared.py`)
-- **A12** — `docker`, `fastapi`, `uvicorn`, `watchdog` are unconditional
-  dependencies; `DummyBackend` ships in the package though only tests use it
+- A12 (optional server deps) landed Aug 2026 — `docker`, `fastapi`,
+  `uvicorn`, `watchdog` moved behind the `[docker]` / `[watch]` / `[web]` /
+  `[recordings]` extras with lazy import seams, `DummyBackend` moved to
+  `tests/`, and
+  `tests/test_architecture_contracts.py::TestOptionalServerDependencyContract`
+  proves the core surface imports without them
 
 ## References
 

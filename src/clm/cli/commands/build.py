@@ -10,6 +10,7 @@ the watchdog-based watch runner, exit-code policy, and the
 """
 
 import asyncio
+import importlib.util
 import signal
 import sys
 from pathlib import Path
@@ -33,7 +34,6 @@ from clm.build import (
 )
 from clm.build.engine import format_exit_failure
 from clm.cli.commands.shared import LOG_LEVELS, get_logger, setup_logging
-from clm.cli.file_event_handler import FileEventHandler
 from clm.core.build_data_classes import BuildSummary
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
@@ -119,7 +119,12 @@ def _find_env_file(start_dir: Path) -> Path | None:
 
 async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
     """Watch for file changes and automatically rebuild course."""
+    # Lazy: watchdog comes from the [watch] extra (#802 A12); main_build
+    # pre-flights its availability so --watch fails with the pip hint
+    # before any build work starts.
     from watchdog.observers import Observer
+
+    from clm.cli.file_event_handler import FileEventHandler
 
     if config.watch_mode == "fast":
         logger.info("Watch mode enabled with fast processing (notebooks only, no HTML)")
@@ -319,6 +324,14 @@ async def main_build(
         telemetry_db_path=telemetry_db_path,
         explain_rebuilds=explain_rebuilds,
     )
+
+    # Fail fast, before any build work, when --watch is requested without
+    # watchdog installed (it left the core install in #802 A12).
+    if config.watch and importlib.util.find_spec("watchdog") is None:
+        raise click.UsageError(
+            "--watch requires the [watch] extra: "
+            'pip install "coding-academy-lecture-manager[watch]"'
+        )
 
     # Logging is the CLI's concern — the engine never configures logging
     # (programmatic callers bring their own configuration).

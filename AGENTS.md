@@ -56,9 +56,11 @@ install it into a course venv, then `clm provision kernel-env --python <path>`
 shells out to `jupyter lite build`, which runs in an isolated `uvx` tool env
 (pinned in `src/clm/workers/jupyterlite/builder.py`), so it needs no install
 step beyond having `uv` on PATH. For the full list of optional extras
-(`[notebook]`, `[plantuml]`, `[drawio]`, `[all-workers]`, `[recordings]`,
-`[summarize]`, `[voiceover]`, `[slides]`, `[gcal]`, `[mcp]`, `[dev]`, `[tui]`,
-`[web]`) see `docs/user-guide/installation.md`.
+(`[notebook]`, `[plantuml]`, `[drawio]`, `[all-workers]`, `[docker]`,
+`[watch]`, `[recordings]`, `[summarize]`, `[voiceover]`, `[slides]`, `[gcal]`,
+`[mcp]`, `[dev]`, `[tui]`, `[web]`) see `docs/user-guide/installation.md`.
+Since #802 A12 a bare install covers Direct-mode builds only: Docker worker
+mode needs `[docker]` and `clm build --watch` needs `[watch]`.
 
 ## Testing
 

@@ -44,11 +44,12 @@ FAKE_API_URL = "http://host.docker.internal:54321"
 def _mock_worker_api_server(request, monkeypatch):
     """Prevent pool_manager tests from binding the real Worker API port.
 
-    We patch the symbol imported into ``pool_manager`` (not the one in
-    ``clm.infrastructure.api.server``) because pool_manager binds the
-    name at import time via ``from ... import start_worker_api_server``.
-    The returned mock satisfies the attributes the pool manager touches
-    (``is_running``, ``docker_url``, ``stop()``).
+    We patch the name in ``clm.infrastructure.api.server``: since #802 A12
+    pool_manager imports ``start_worker_api_server`` lazily at *call* time
+    (the server stack lives in the ``[docker]`` extra), so the patched
+    module attribute is exactly what it resolves. The returned mock
+    satisfies the attributes the pool manager touches (``is_running``,
+    ``docker_url``, ``stop()``).
 
     Tests marked ``@pytest.mark.docker`` opt out: they run real
     containers that call back into a real uvicorn server, so swapping it
@@ -68,7 +69,7 @@ def _mock_worker_api_server(request, monkeypatch):
         return fake_server
 
     monkeypatch.setattr(
-        "clm.infrastructure.workers.pool_manager.start_worker_api_server",
+        "clm.infrastructure.api.server.start_worker_api_server",
         _fake_start,
     )
     # ``DockerWorkerExecutor.start_worker`` imports this at call time from

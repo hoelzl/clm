@@ -5,7 +5,7 @@ import pytest
 from clm.core.course_file import CourseFile
 from clm.core.course_files.plantuml_file import PlantUmlFile
 from clm.core.operations.convert_plantuml_file import ConvertPlantUmlFileOperation
-from clm.infrastructure.backends.dummy_backend import DummyBackend
+from tests.dummy_backend import DummyBackend
 
 PLANTUML_FILE = "pu/my_diag.pu"
 
