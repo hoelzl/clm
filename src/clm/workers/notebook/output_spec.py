@@ -90,10 +90,6 @@ def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
     return _canonical([_NotebookCellView(cell) for cell in cells])
 
 
-def _is_in_workshop(idx: int, ranges: Iterable[tuple[int, int]]) -> bool:
-    return any(start <= idx < end for start, end in ranges)
-
-
 @define
 class OutputSpec(ABC):
     """Description of the kind of output that should be created.

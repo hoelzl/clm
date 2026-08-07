@@ -1,7 +1,7 @@
 """Thin async wrapper around the OpenAI SDK for LLM summarization calls.
 
 When Langfuse environment variables are set and the ``langfuse`` package is
-installed, :func:`_build_client` returns a Langfuse-observed
+installed, :func:`build_client` returns a Langfuse-observed
 ``openai.AsyncOpenAI`` that automatically traces all LLM calls.  Otherwise
 it returns a plain ``openai.AsyncOpenAI``.  See :func:`langfuse_configured`.
 """
@@ -36,7 +36,7 @@ def langfuse_configured() -> bool:
     return bool(host and public_key and secret_key)
 
 
-def _build_client(
+def build_client(
     api_base: str | None = None,
     api_key: str | None = None,
 ):
@@ -201,7 +201,7 @@ async def summarize_notebook(
         style=style,
     )
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     sem = _get_semaphore(max_concurrent)
     async with sem:

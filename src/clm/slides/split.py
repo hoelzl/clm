@@ -541,8 +541,8 @@ def unify_texts(de_text: str, en_text: str, comment_token: str = "#") -> str:
         if (
             de_cell is not None
             and en_cell is not None
-            and _is_shared(de_cell)
-            and _is_shared(en_cell)
+            and is_shared_cell(de_cell)
+            and is_shared_cell(en_cell)
         ):
             if de_cell.lines != en_cell.lines:
                 raise UnifyError(
@@ -601,7 +601,7 @@ def _slide_ids_pair(de_cell: RawCell, en_cell: RawCell) -> bool:
     return de_id == en_id
 
 
-def _is_shared(cell: RawCell) -> bool:
+def is_shared_cell(cell: RawCell) -> bool:
     """Return True iff ``cell`` is a no-lang cell that is not a header macro.
 
     Header import lines and bilingual/split header macros are handled by

@@ -178,7 +178,7 @@ class _DeckSeg:
 _SLIDE_ID_ATTR_RE = re.compile(r'\s*slide_id="[^"]*"')
 
 
-def _lines_sans_id(cell: SideCell) -> tuple[str, ...]:
+def lines_sans_id(cell: SideCell) -> tuple[str, ...]:
     """The cell's verbatim lines with the header's slide_id attribute removed.
 
     Shared-member byte parity is judged modulo the id attribute: a shared
@@ -756,7 +756,7 @@ class _Parser:
             member.langness == "shared"
             and de_cell is not None
             and en_cell is not None
-            and _lines_sans_id(de_cell) != _lines_sans_id(en_cell)
+            and lines_sans_id(de_cell) != lines_sans_id(en_cell)
         ):
             self.observe_member(
                 "shared_divergence",

@@ -1364,7 +1364,7 @@ def _record_teardown_orphans(summary: BuildSummary, orphans: list[dict[str, Any]
     summary.timed_out = True
 
 
-def _format_exit_failure(summary: BuildSummary) -> str:
+def format_exit_failure(summary: BuildSummary) -> str:
     """Compose the exit-time failure message for a ``timed_out`` summary.
 
     ``summary.timed_out`` is set by two distinct paths: a genuine per-stage

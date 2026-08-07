@@ -389,14 +389,14 @@ async def _course_context_summaries(
     data_dir: Path,
 ) -> dict[str, str]:
     """Run (cache-or-LLM) agent summaries for the MCP context tool."""
-    from clm.cli.commands.export.context import _summaries_by_hash
+    from clm.cli.commands.export.context import summaries_by_hash
     from clm.infrastructure.config import get_config
     from clm.infrastructure.llm.cache import SummaryCache
 
     llm_config = get_config().llm
     cache = None if no_cache else SummaryCache(data_dir / "clm_summaries.db")
     try:
-        return await _summaries_by_hash(
+        return await summaries_by_hash(
             units,
             course,
             language,

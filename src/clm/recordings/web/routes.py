@@ -1098,11 +1098,11 @@ async def set_lang(request: Request, lang: str = Form(...)):
 @router.post("/lectures/refresh", response_class=HTMLResponse)
 async def refresh_lectures(request: Request):
     """Rebuild the Course object from disk (picks up title changes, new slides)."""
-    from .app import _build_course
+    from .app import build_course
 
     spec_file = request.app.state.spec_file
     if spec_file is not None:
-        request.app.state.course = _build_course(spec_file)
+        request.app.state.course = build_course(spec_file)
     return _lectures_refresh_response()
 
 

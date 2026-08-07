@@ -297,7 +297,7 @@ async def polish_and_merge(
     Raises:
         LLMError: On LLM call failure.
     """
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     slide_input = SlideInput(
         slide_id=slide_id,
@@ -310,7 +310,7 @@ async def polish_and_merge(
     system_prompt = _load_system_prompt(language)
     user_message = _build_user_prompt(slide_input)
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     logger.debug(
         "polish_and_merge slide=%s baseline=%d chars, transcript=%d chars",
@@ -377,7 +377,7 @@ async def merge_batch(
     Returns:
         List of MergeResult, one per input slide, in order.
     """
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     if len(slides) == 1:
         result = await polish_and_merge(
@@ -399,7 +399,7 @@ async def merge_batch(
     user_message = _build_batch_user_prompt(slides)
     slide_ids = [s.slide_id for s in slides]
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     logger.debug("Batch merge: %d slides", len(slides))
 
@@ -660,12 +660,12 @@ async def propagate_one(
     langfuse_context: dict | None = None,
 ) -> PropagationResult:
     """Propagate one slide's merge deltas to the target language."""
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     system_prompt = _load_propagate_prompt(slide.source_lang, slide.target_lang)
     user_message = _build_propagate_user_prompt(slide)
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     logger.debug(
         "propagate slide=%s %s->%s",
@@ -731,7 +731,7 @@ async def propagate_batch(
     Returns:
         List of PropagationResult in input order.
     """
-    from clm.infrastructure.llm.client import LLMError, _build_client
+    from clm.infrastructure.llm.client import LLMError, build_client
 
     if not slides:
         return []
@@ -755,7 +755,7 @@ async def propagate_batch(
     user_message = _build_propagate_batch_user_prompt(slides)
     slide_ids = [s.slide_id for s in slides]
 
-    client = _build_client(api_base=api_base, api_key=api_key)
+    client = build_client(api_base=api_base, api_key=api_key)
 
     logger.debug("Batch propagate: %d slides %s->%s", len(slides), source_lang, target_lang)
 

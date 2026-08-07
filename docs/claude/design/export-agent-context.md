@@ -82,7 +82,7 @@ disk via `disabled_topic_files`, tagged `disabled=True`). `apply_scope()` trims
 them. `load_scoped_units()` ties loading + scoping together and is shared by the
 CLI and the MCP handler. Renderers (`render_titles_markdown`,
 `render_full_markdown`, `render_summary_markdown`, `render_json`) consume the
-scoped units; `_summaries_by_hash()` computes cache-or-LLM agent summaries keyed
+scoped units; `summaries_by_hash()` computes cache-or-LLM agent summaries keyed
 by content hash (identical decks summarized once).
 
 `--include-disabled` is honored (bare/`=marked` only — disabled sections tagged

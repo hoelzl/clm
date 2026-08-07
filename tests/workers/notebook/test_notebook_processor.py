@@ -2430,7 +2430,7 @@ class TestCassetteMerge:
         raw = canonical.read_bytes()
         assert b"\r\n" not in raw, (
             "Canonical cassette contains CRLF line endings on this platform. "
-            "_atomic_write_text must pass newline='\\n' to Path.write_text "
+            "atomic_write_text must pass newline='\\n' to Path.write_text "
             "so cassettes are LF-only regardless of os.linesep."
         )
 

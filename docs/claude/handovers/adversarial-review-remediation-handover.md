@@ -1185,7 +1185,7 @@ unchanged code (proving determinism) before it is trusted as a refactor gate.
 
 ---
 
-### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A7/A8/A10/A11 DONE (A8 2026-08-07), ratchet 50 → 0 and import-linter enforced; remaining A9/A12 ▸ TRACKED: #802
+### Phase 8 — Full re-layering (D10)  ▸ STATUS: in progress — A1/A2/A3/A4/A5/A6/A7/A8/A9/A10/A11 DONE (A9 2026-08-07), ratchet 50 → 0, import-linter + private-import guard enforced; remaining A12 ▸ TRACKED: #802
 
 **Goal**: the architecture the docs describe. Work strictly in dependency order,
 one PR per step, golden suite green after each.
@@ -1247,9 +1247,9 @@ one PR per step, golden suite green after each.
    + Backend/payload pins. **A1/A2/A3/A4/A5/A6/A10/A11 are complete** (A10:
    architecture.md rewritten 2026-08-06 — see item 10 below; A4/A5: see
    items 5 and 6). **A7 DONE 2026-08-07** — see item 7 below.
-   Remaining Phase 8 items: A9 (residual private cross-imports), A12
-   (extras/lazy imports + DummyBackend to tests). A8 DONE 2026-08-07 —
-   see item 8 below.
+   A8 DONE 2026-08-07 — see item 8 below. **A9 DONE 2026-08-07** — see
+   item 9 below. Remaining Phase 8 item: A12
+   (extras/lazy imports + DummyBackend to tests).
    LANDMINE learned on #809: the Phase 7
    coverage-floor list (`scripts/check_coverage_floor.py`) keys by path
    suffix and runs only in CI's unit job — move the floor entry in the
@@ -1332,8 +1332,36 @@ one PR per step, golden suite green after each.
    `DB_PATH` fallback so `clm workers reap` still matches workers that
    survived an upgrade; bare `DB_PATH` added to the conftest env-isolation
    fixture.
-9. **A9** — remove the ~12 cross-module underscore-private imports, worst being
-   `mcp/tools.py:391` → a CLI command's private helper.
+9. ✔ **A9 — remove the cross-module underscore-private imports** — **DONE
+   2026-08-07**. An AST scan (not grep — multiline parenthesized imports)
+   found 30 offender import-sites across 18 files, vs the review's ~12.
+   Every shared seam got a public name in its defining module, no
+   underscore aliases kept (A5 precedent): `build_client`
+   (infrastructure.llm.client — 6 importing modules + 7 patching test
+   files), `summaries_by_hash` (export/context — the review's worst item,
+   `mcp/tools.py` → CLI private; made a documented public seam rather
+   than relocated, since `mcp/tools.py` already imports the module's
+   public renderers), `atomic_write_text` (http_replay_cassette — the
+   `cassette_format.atomic_write_lf` twin stays self-contained because
+   the mitmdump interpreter cannot import clm), `git_toplevel`,
+   `group_paths_into_units`, `twin_ids_for`, `lines_sans_id`,
+   `is_shared_cell`, `apply_slide_ids`, `format_exit_failure`,
+   `parse_checks`/`print_human_readable`/`raise_on_findings`/
+   `result_to_dict` (validate_slides + validate_spec), `build_course`
+   (recordings web). Two imports dissolved into dedups instead:
+   `raw_cells.is_cell_boundary`'s delegating wrapper became a re-export
+   of the now-public canonical predicate in `slide_parser` (kills the
+   two-copies drift risk the multi-language investigation flagged), and
+   `output_spec._is_in_workshop` (a verbatim copy of
+   `core.workshop_scope.is_in_workshop`, unused in its own module) was
+   deleted with `notebook_processor` retargeted to core. Normalizer's
+   `_RawCell`/`_reconstruct`/`_split_raw_cells` "privates" were private
+   *aliases* of public `raw_cells` names — `voiceover_tools` now imports
+   the real home. Enforcement:
+   `tests/test_architecture_contracts.py::TestPrivateImportGuard` AST-scans
+   src/clm and fails on any `from clm.x import _name` (dunders exempt;
+   a private *module* stays importable within its own package subtree,
+   e.g. `cli/commands/_export_shared.py`).
 10. ✔ **A10 — rewrite `architecture.md`** to describe what now exists —
     **DONE 2026-08-06**. Full rewrite: the enforced three-constrained-layer
     stack with cli/extensions unconstrained on top, the contract seam in
@@ -1421,7 +1449,7 @@ so the maintainer can object:
 - `docs/developer-guide/releasing.md` — Phase 0's release procedure.
 - `docs/developer-guide/architecture.md` — rewritten 2026-08-06 (Phase 8/A10)
   to describe the enforced post-#802 layering; keep its "Known Deviations"
-  list current as A9/A12 land (A4/A5/A7/A8 already removed from it).
+  list current as A12 lands (A4/A5/A7/A8/A9 already resolved in it).
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
 

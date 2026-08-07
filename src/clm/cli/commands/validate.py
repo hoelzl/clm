@@ -26,16 +26,16 @@ from pathlib import Path
 import click
 
 from clm.cli.commands.validate_slides import (
-    _parse_checks,
-    _print_human_readable,
-    _raise_on_findings,
+    parse_checks,
+    print_human_readable,
+    raise_on_findings,
     validate_slides_cmd,
 )
 from clm.cli.commands.validate_slides import (
-    _result_to_dict as _slides_result_to_dict,
+    result_to_dict as _slides_result_to_dict,
 )
 from clm.cli.commands.validate_spec import (
-    _result_to_dict as _spec_result_to_dict,
+    result_to_dict as _spec_result_to_dict,
 )
 from clm.cli.commands.validate_spec import (
     validate_spec_cmd,
@@ -304,7 +304,7 @@ def _run_deep_spec(
     from clm.slides.validator import validate_course
 
     slides_dir = _slides_dir_for_spec(data_dir, spec_file)
-    check_list = _parse_checks(checks)
+    check_list = parse_checks(checks)
 
     try:
         spec_result = validate_spec(
@@ -335,12 +335,12 @@ def _run_deep_spec(
         if summary:
             _print_summary(slides_result)
         else:
-            _print_human_readable(slides_result)
+            print_human_readable(slides_result)
 
     spec_has_errors = any(f.severity == "error" for f in spec_result.findings)
     if spec_has_errors:
         raise SystemExit(1)
-    _raise_on_findings(slides_result.findings, fail_on, as_json)
+    raise_on_findings(slides_result.findings, fail_on, as_json)
 
 
 def _validate_slides_path(
@@ -391,9 +391,9 @@ def _validate_slides_path(
     elif summary:
         _print_summary(result)
     else:
-        _print_human_readable(result)
+        print_human_readable(result)
 
-    _raise_on_findings(result.findings, fail_on, as_json)
+    raise_on_findings(result.findings, fail_on, as_json)
 
 
 def _run_slides(
@@ -409,7 +409,7 @@ def _run_slides(
         validate_files,
     )
 
-    check_list = _parse_checks(checks)
+    check_list = parse_checks(checks)
 
     if not shipping_only:
         if path.is_dir():

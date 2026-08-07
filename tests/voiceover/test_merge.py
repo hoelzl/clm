@@ -279,7 +279,7 @@ class TestPolishAndMerge:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_merge(
                 baseline_bullets="- existing point",
                 transcript_text="new addition from transcript. willkommen zurück",
@@ -310,7 +310,7 @@ class TestPolishAndMerge:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_merge(
                 baseline_bullets="",
                 transcript_text="point from transcript",
@@ -343,7 +343,7 @@ class TestPolishAndMerge:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_merge(
                 baseline_bullets="- extend returns a new list",
                 transcript_text="actually, extend mutates in place, it doesn't return anything",
@@ -363,7 +363,7 @@ class TestPolishAndMerge:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_merge(
                 baseline_bullets="- old",
                 transcript_text="something",
@@ -379,7 +379,7 @@ class TestPolishAndMerge:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=Exception("API down"))
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             with pytest.raises(Exception, match="Merge LLM call failed"):
                 await polish_and_merge(
                     baseline_bullets="- x",
@@ -407,7 +407,7 @@ class TestMergeBatch:
 
         slides = [SlideInput("s/1", "- baseline", "transcript", "content")]
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             results = await merge_batch(slides, language="en")
 
         assert len(results) == 1
@@ -441,7 +441,7 @@ class TestMergeBatch:
             SlideInput("s/2", "- b", "transcript b", "content b"),
         ]
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             results = await merge_batch(slides, language="en")
 
         assert len(results) == 2
@@ -481,7 +481,7 @@ class TestMergeBatch:
             SlideInput("s/2", "- b", "tx b", "c b"),
         ]
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             results = await merge_batch(slides, language="en")
 
         assert len(results) == 2
@@ -638,7 +638,7 @@ class TestRewriteDetection:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = await polish_and_merge(
                 baseline_bullets="- extend returns a new list",
                 transcript_text="actually, extend mutates in place and returns None",

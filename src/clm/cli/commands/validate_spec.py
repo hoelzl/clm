@@ -69,7 +69,7 @@ def validate_spec_cmd(
         raise click.ClickException(str(e)) from None
 
     if as_json:
-        click.echo(json.dumps(_result_to_dict(result), indent=2))
+        click.echo(json.dumps(result_to_dict(result), indent=2))
         return
 
     # Human-readable output
@@ -106,7 +106,7 @@ def _resolve_slides_dir(data_dir: Path | None, spec_file: Path) -> Path:
     return spec_file.parent.parent / "slides"
 
 
-def _result_to_dict(result) -> dict:
+def result_to_dict(result) -> dict:
     """Convert a SpecValidationResult to a JSON-serializable dict."""
     return {
         "course_spec": result.course_spec,

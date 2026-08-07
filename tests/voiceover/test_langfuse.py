@@ -80,10 +80,10 @@ class TestLangfuseConfigured:
 
 
 # ---------------------------------------------------------------------------
-# _build_client — Langfuse wrapping
+# build_client — Langfuse wrapping
 # ---------------------------------------------------------------------------
 class TestBuildClientLangfuse:
-    """_build_client returns Langfuse-wrapped client when configured."""
+    """build_client returns Langfuse-wrapped client when configured."""
 
     def _no_langfuse_env(self, monkeypatch):
         """Clear all Langfuse env vars."""
@@ -101,14 +101,14 @@ class TestBuildClientLangfuse:
     def test_plain_client_when_no_env_vars(self, monkeypatch):
         import openai
 
-        from clm.infrastructure.llm.client import _build_client
+        from clm.infrastructure.llm.client import build_client
 
         self._no_langfuse_env(monkeypatch)
-        client = _build_client(api_key="test-key")
+        client = build_client(api_key="test-key")
         assert type(client) is openai.AsyncOpenAI
 
     def test_langfuse_client_when_configured(self, monkeypatch):
-        from clm.infrastructure.llm.client import _build_client
+        from clm.infrastructure.llm.client import build_client
 
         self._set_langfuse_env(monkeypatch)
 
@@ -121,7 +121,7 @@ class TestBuildClientLangfuse:
         fake_module.AsyncOpenAI = mock_async_openai_cls  # type: ignore[attr-defined]
 
         with patch.dict(sys.modules, {"langfuse.openai": fake_module}):
-            client = _build_client(api_base="http://api.example.com", api_key="test-key")
+            client = build_client(api_base="http://api.example.com", api_key="test-key")
 
         assert client is mock_instance
         mock_async_openai_cls.assert_called_once_with(
@@ -131,21 +131,21 @@ class TestBuildClientLangfuse:
     def test_falls_back_when_langfuse_not_installed(self, monkeypatch):
         import openai
 
-        from clm.infrastructure.llm.client import _build_client
+        from clm.infrastructure.llm.client import build_client
 
         self._set_langfuse_env(monkeypatch)
 
         # Make langfuse.openai import raise ImportError
         with patch.dict(sys.modules, {"langfuse.openai": None}):
             # None in sys.modules causes ImportError on import
-            client = _build_client(api_key="test-key")
+            client = build_client(api_key="test-key")
 
         assert type(client) is openai.AsyncOpenAI
 
     def test_falls_back_on_langfuse_init_error(self, monkeypatch):
         import openai
 
-        from clm.infrastructure.llm.client import _build_client
+        from clm.infrastructure.llm.client import build_client
 
         self._set_langfuse_env(monkeypatch)
 
@@ -156,12 +156,12 @@ class TestBuildClientLangfuse:
         )
 
         with patch.dict(sys.modules, {"langfuse.openai": fake_module}):
-            client = _build_client(api_key="test-key")
+            client = build_client(api_key="test-key")
 
         assert type(client) is openai.AsyncOpenAI
 
     def test_api_base_forwarded_to_langfuse_client(self, monkeypatch):
-        from clm.infrastructure.llm.client import _build_client
+        from clm.infrastructure.llm.client import build_client
 
         self._set_langfuse_env(monkeypatch)
 
@@ -170,7 +170,7 @@ class TestBuildClientLangfuse:
         fake_module.AsyncOpenAI = mock_cls  # type: ignore[attr-defined]
 
         with patch.dict(sys.modules, {"langfuse.openai": fake_module}):
-            _build_client(api_base="https://openrouter.ai/api/v1")
+            build_client(api_base="https://openrouter.ai/api/v1")
 
         mock_cls.assert_called_once_with(base_url="https://openrouter.ai/api/v1")
 
@@ -270,7 +270,7 @@ class TestMergeContextForwarding:
             },
         }
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             result = asyncio.run(
                 polish_and_merge(
                     "- existing",
@@ -302,7 +302,7 @@ class TestMergeContextForwarding:
         )
         mock_client = self._make_mock_client(response)
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             asyncio.run(
                 polish_and_merge(
                     "- existing",
@@ -351,7 +351,7 @@ class TestMergeContextForwarding:
             SlideInput(slide_id="test/1", baseline="- old2", transcript="new2", slide_content=""),
         ]
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             results = asyncio.run(merge_batch(slides, language="en", langfuse_context=langfuse_ctx))
 
         call_kwargs = mock_client.chat.completions.create.call_args
@@ -380,7 +380,7 @@ class TestMergeContextForwarding:
             SlideInput(slide_id="test/0", baseline="- old", transcript="new", slide_content=""),
         ]
 
-        with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
+        with patch("clm.infrastructure.llm.client.build_client", return_value=mock_client):
             results = asyncio.run(merge_batch(slides, language="en", langfuse_context=langfuse_ctx))
 
         call_kwargs = mock_client.chat.completions.create.call_args

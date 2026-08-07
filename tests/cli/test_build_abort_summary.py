@@ -189,7 +189,7 @@ class TestFormatExitFailure:
     error summary above' is wrong on both counts for them."""
 
     def test_orphans_produce_dedicated_message_naming_the_files(self):
-        from clm.build.engine import _format_exit_failure, _record_teardown_orphans
+        from clm.build.engine import _record_teardown_orphans, format_exit_failure
 
         summary = BuildSummary(duration=1.0, total_files=3)
         orphans = [
@@ -198,7 +198,7 @@ class TestFormatExitFailure:
         ]
         _record_teardown_orphans(summary, orphans)
 
-        message = _format_exit_failure(summary)
+        message = format_exit_failure(summary)
 
         assert "orphaned" in message
         assert "2 worker job(s)" in message
@@ -207,11 +207,11 @@ class TestFormatExitFailure:
         assert "timed out" not in message
 
     def test_genuine_timeout_keeps_the_timeout_message(self):
-        from clm.build.engine import _format_exit_failure
+        from clm.build.engine import format_exit_failure
 
         summary = BuildSummary(duration=1.0, total_files=3, timed_out=True)
 
-        message = _format_exit_failure(summary)
+        message = format_exit_failure(summary)
 
         assert "timed out" in message
         assert "See the error summary above" in message

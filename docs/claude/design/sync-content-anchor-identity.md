@@ -349,7 +349,7 @@ prerequisite that every later phase relies on.
 `flush()` (no behaviour change for the v1/v2 walkers that still call `flush`),
 and `apply_plan` now calls `_flush_states_atomically(de_state, en_state)` —
 gated on `not result.has_errors` — which renders both decks in memory and swaps
-each in with `_atomic_write_text` (same-dir temp file + `os.replace`, utf-8/LF,
+each in with `atomic_write_text` (same-dir temp file + `os.replace`, utf-8/LF,
 byte-identical to the old path). A deferred-but-error-free pass still writes (the
 applied edits + partial-advance are the designed outcome); only a genuine error
 rolls the whole pass back. The one residual gap — the window *between* the two

@@ -153,7 +153,7 @@ def seed_staging_from_canonical(paths: CassettePaths) -> None:
     payload = vcr_serialize(
         {"requests": reqs, "responses": resps}, yamlserializer,
     )
-    _atomic_write_text(paths.staging, payload)
+    atomic_write_text(paths.staging, payload)
 ```
 
 The kernel's vcrpy sees one cassette and doesn't care that its contents

@@ -16,6 +16,10 @@ What remains here:
   ``__import__`` would slip past grimp and the old AST ratchet alike
   (round-2 finding M4), so a constrained layer must never stringify a
   clm import;
+- the **private-import guard** (#802 A9) — import-linter constrains which
+  modules may depend on which, but not which *names* cross the boundary;
+  the review found ~12 ``from clm.x import _private`` imports, and after
+  A5/A9 removed them all this guard keeps the count at zero;
 - the abstract :class:`Backend` surface pin and the worker-side Pydantic
   payload-schema pins (the process boundary every worker deserializes) —
   these change only deliberately, in the same commit as every
@@ -24,6 +28,7 @@ What remains here:
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "clm"
@@ -53,6 +58,98 @@ class TestImportContractGuards:
         assert not offenders, (
             "string-based clm imports in constrained layers dodge the "
             "import-linter contracts — use a real import statement:\n  " + "\n  ".join(offenders)
+        )
+
+
+def _iter_clm_from_imports():
+    """Yield ``(rel_path, lineno, source_module, alias_name)`` for every
+    ``from <clm module> import <name>`` statement under ``src/clm``.
+
+    Relative imports are resolved against the importing file's package so
+    ``from .app import _helper`` is seen exactly like its absolute form.
+    """
+    for file in sorted(_SRC.rglob("*.py")):
+        rel = file.relative_to(_SRC)
+        anchor = ("clm", *rel.parts[:-1])  # containing package, both for modules and __init__
+        tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.level == 0:
+                source = node.module or ""
+            else:
+                base = anchor[: len(anchor) - (node.level - 1)]
+                source = ".".join((*base, node.module) if node.module else base)
+            if source != "clm" and not source.startswith("clm."):
+                continue
+            for alias in node.names:
+                yield rel.as_posix(), node.lineno, source, alias.name
+
+
+def _is_dunder(name: str) -> bool:
+    return name.startswith("__") and name.endswith("__")
+
+
+def _clm_module_exists(dotted: str) -> bool:
+    path = _SRC.parent.joinpath(*dotted.split("."))
+    return path.with_suffix(".py").exists() or (path / "__init__.py").exists()
+
+
+class TestPrivateImportGuard:
+    """No module reaches into another module's underscore-privates (#802 A9).
+
+    import-linter constrains which modules may depend on which, but not
+    which *names* cross the boundary. The review counted ~12
+    ``from clm.x import _private`` imports (worst: ``mcp/tools.py`` → a CLI
+    command's private helper); A5 and A9 replaced every one with a public
+    seam. This guard keeps the count at zero, in both directions the
+    convention allows:
+
+    - a leading-underscore **symbol** is private to its defining module —
+      importing one from anywhere is an offence (fix: give the seam a
+      public name in the defining module);
+    - a leading-underscore **module** is private to its defining package —
+      importing it (or importing from it) is fine within that package's
+      subtree (``clm.cli.commands._export_shared`` from
+      ``clm.cli.commands.export.*``) and an offence outside it.
+
+    Dunder names (``from clm.__version__ import __version__``) are the
+    conventional public exception.
+    """
+
+    def test_no_cross_module_private_imports(self):
+        offenders: list[str] = []
+        for rel, lineno, source, name in _iter_clm_from_imports():
+            importer = ("clm", *Path(rel).parts[:-1])
+            source_parts = source.split(".")
+            # Private-module rule: every underscore component of the source
+            # path must own the importing file (subtree containment).
+            for i, comp in enumerate(source_parts):
+                if comp.startswith("_") and not _is_dunder(comp):
+                    owner = tuple(source_parts[:i])
+                    if importer[: len(owner)] != owner:
+                        offenders.append(
+                            f"{rel}:{lineno}: from {source} import {name} "
+                            f"(private module {'.'.join(source_parts[: i + 1])} "
+                            f"belongs to {'.'.join(owner)})"
+                        )
+                    break
+            else:
+                if name.startswith("_") and not _is_dunder(name):
+                    if _clm_module_exists(f"{source}.{name}"):
+                        # Importing a private submodule as a name: same
+                        # subtree rule as a dotted private-module source.
+                        if importer[: len(source_parts)] != tuple(source_parts):
+                            offenders.append(
+                                f"{rel}:{lineno}: from {source} import {name} "
+                                f"(private module {source}.{name} belongs to {source})"
+                            )
+                    else:
+                        offenders.append(f"{rel}:{lineno}: from {source} import {name}")
+        assert not offenders, (
+            "cross-module underscore-private imports (#802 A9 removed the "
+            "last one — give the seam a public name in the defining module "
+            "instead):\n  " + "\n  ".join(offenders)
         )
 
 

@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from clm.voiceover.narrative_commits import _git_toplevel, get_file_at_rev
+from clm.voiceover.narrative_commits import get_file_at_rev, git_toplevel
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ def resolve_rev(slide_path: Path, rev: str) -> str:
     """
     import subprocess
 
-    repo_root = _git_toplevel(slide_path)
+    repo_root = git_toplevel(slide_path)
     try:
         out = subprocess.check_output(
             ["git", "-C", str(repo_root), "rev-parse", "--verify", f"{rev}^{{commit}}"],

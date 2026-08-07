@@ -43,7 +43,7 @@ from clm.slides.bilingual_doc import (
     Member,
     SideCell,
 )
-from clm.slides.doc_lenses import _lines_sans_id
+from clm.slides.doc_lenses import lines_sans_id
 
 __all__ = [
     "DeckBaseline",
@@ -68,7 +68,7 @@ def content_fingerprint(cell: SideCell) -> str:
     lens applies to shared members, so an id stamp is a §7.3 transition,
     never a content change. This is the fingerprint the ledger records.
     """
-    return hashlib.sha256("\n".join(_lines_sans_id(cell)).encode("utf-8")).hexdigest()
+    return hashlib.sha256("\n".join(lines_sans_id(cell)).encode("utf-8")).hexdigest()
 
 
 # The for_slide attribute, stripped alongside slide_id for the owner-free
@@ -87,7 +87,7 @@ def pair_signature(cell: SideCell) -> str:
     rows — so the content classification can be skipped without silencing
     any other one-sided drift (the review's early-return finding).
     """
-    lines = _lines_sans_id(cell)
+    lines = lines_sans_id(cell)
     header = _FOR_SLIDE_ATTR_RE.sub("", lines[0])
     return hashlib.sha256("\n".join((header, *lines[1:])).encode("utf-8")).hexdigest()
 

@@ -43,10 +43,10 @@ class TestPolishText:
         return mock_response
 
     def _patch_client(self, mock_create):
-        """Patch _build_client to return a mock AsyncOpenAI client."""
+        """Patch build_client to return a mock AsyncOpenAI client."""
         mock_client = MagicMock()
         mock_client.chat.completions.create = mock_create
-        return patch("clm.infrastructure.llm.client._build_client", return_value=mock_client)
+        return patch("clm.infrastructure.llm.client.build_client", return_value=mock_client)
 
     def test_basic_call(self):
         from clm.notebooks.polish import polish_text
@@ -89,7 +89,7 @@ class TestPolishText:
 
         mock_create = AsyncMock(return_value=self._make_mock_response("- Result."))
 
-        with patch("clm.infrastructure.llm.client._build_client") as mock_build:
+        with patch("clm.infrastructure.llm.client.build_client") as mock_build:
             mock_client = MagicMock()
             mock_client.chat.completions.create = mock_create
             mock_build.return_value = mock_client

@@ -32,6 +32,7 @@ from nbformat import NotebookNode
 from nbformat.validator import normalize
 
 from clm.core.messaging.notebook_classes import NotebookPayload
+from clm.core.workshop_scope import is_in_workshop
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
@@ -39,7 +40,6 @@ from .output_spec import (
     POST_WORKSHOP_TAG,
     OutputSpec,
     PartialOutput,
-    _is_in_workshop,
     find_workshop_ranges,
 )
 
@@ -1092,7 +1092,7 @@ class NotebookProcessor:
         new_cells: list[NotebookNode] = []
         for idx, cell in enumerate(cells):
             tags = set(get_tags(cell))
-            in_workshop = _is_in_workshop(idx, ranges)
+            in_workshop = is_in_workshop(idx, ranges)
 
             drop_tags = post_drop if in_workshop else pre_drop
             if drop_tags.intersection(tags):

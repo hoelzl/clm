@@ -1316,7 +1316,7 @@ def _slide_start_ids(cells: list[_Cell]) -> list[str | None]:
     return out
 
 
-def _twin_ids_for(path: Path, text: str) -> list[str | None] | None:
+def twin_ids_for(path: Path, text: str) -> list[str | None] | None:
     """Positional twin slide_ids to reuse (#162 defensive), or ``None``.
 
     Reuse applies only when the twin exists *and* both halves have the same
@@ -1368,7 +1368,7 @@ def assign_ids_in_file(path: Path, options: AssignOptions) -> AssignResult:
         )
         return result
     text = path.read_text(encoding="utf-8")
-    twin_ids = _twin_ids_for(path, text)
+    twin_ids = twin_ids_for(path, text)
     new_text, result = assign_ids_for_text(text, path, options, twin_ids=twin_ids)
     if not options.report_only and new_text != text:
         path.write_text(new_text, encoding="utf-8", newline="\n")

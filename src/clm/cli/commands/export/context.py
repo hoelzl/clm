@@ -349,7 +349,7 @@ def render_full_markdown(course: Course, units: list[_SectionUnit], language: st
 # ---------------------------------------------------------------------------
 # Rendering — summary (LLM, cached)
 # ---------------------------------------------------------------------------
-async def _summaries_by_hash(
+async def summaries_by_hash(
     units: list[_SectionUnit],
     course: Course,
     language: str,
@@ -743,7 +743,7 @@ def context(
 
         try:
             summaries = asyncio.run(
-                _summaries_by_hash(
+                summaries_by_hash(
                     units,
                     course,
                     language,
