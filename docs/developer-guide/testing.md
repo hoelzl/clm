@@ -481,6 +481,27 @@ When triaging a nightly failure, check first whether the same test failed on
 earlier nights. `master` did not change between runs, so a first-time failure
 with no corresponding merge is a **flake**, not a regression.
 
+But *"different tests fail each night"* is not the same as *"each is its own
+small flake"*. The 2026-07-31 and 2026-08-08 nightlies looked like five
+unrelated one-off failures across two files; they were one deterministic bug
+(pytest's live-log handler destroying Click's `CliRunner` capture) latent in
+~90 modules, with a second bug deciding at random how many of them were exposed
+on any given night. When a nightly failure looks arbitrary, check whether the
+failing tests share a *mechanism* before concluding they share nothing.
+
+Two invariants came out of that and are pinned by tests — if either fails, read
+`docs/claude/design/test-flakiness-root-causes.md` before changing anything:
+
+- **CLI output survives log records.** `tests/conftest.py` neutralises pytest's
+  live-log handler for records emitted inside a `CliRunner` isolation, because
+  that handler suspends *and resumes* global capture and resuming rebinds
+  `sys.stdout`/`sys.stderr` away from Click. Pinned by
+  `tests/test_clirunner_capture_integrity.py`.
+- **Nothing strips the root logger's handlers.** pytest attaches its handlers
+  there once for the whole run loop, so a test that clears the root logger
+  disables them for every later test in that worker. Pinned by
+  `tests/test_global_state_isolation.py`.
+
 ### CI Environment Setup
 
 The GitHub Actions runner includes:

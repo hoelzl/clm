@@ -30,12 +30,51 @@ except locale.Error:
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
+# Handlers this module has installed on the root logger, so a repeat call can
+# retire its own predecessors without touching anyone else's. See the note in
+# ``setup_logging``.
+_installed_handlers: list[logging.Handler] = []
+
+
+def _retire_previously_installed_handlers(root_logger: logging.Logger) -> None:
+    """Remove and close only the handlers a previous ``setup_logging`` installed.
+
+    This used to clear the root logger wholesale::
+
+        for handler in root_logger.handlers[:]:
+            handler.close()
+            root_logger.removeHandler(handler)
+
+    which is hostile to anything that embeds clm in a process it does not own:
+    the MCP and web servers, an application importing ``clm``, and — the way it
+    surfaced — the test suite. pytest attaches its live-log and log-capture
+    handlers to the root logger for the *whole run loop*, so the first
+    in-process ``clm build`` on an xdist worker removed **and closed** them for
+    every test that followed on that worker. That silently disabled
+    ``caplog``-adjacent reporting and, worse, made an unrelated capture bug
+    (``docs/claude/design/test-flakiness-root-causes.md``) fire on a random
+    subset of tests each run instead of deterministically — which is why the
+    nightly looked like a 1-in-5 flake for weeks.
+
+    Closing a handler you did not open is never right; it can tear down a file
+    or socket another component is still writing to. Track our own and leave
+    the rest alone.
+    """
+    for handler in _installed_handlers:
+        if handler in root_logger.handlers:
+            root_logger.removeHandler(handler)
+        handler.close()
+    _installed_handlers.clear()
+
 
 def setup_logging(log_level_name: str, console_logging: bool = False):
     """Configure logging for CLM.
 
     By default, logs go to a file in the system-appropriate log directory.
     Console logging can be enabled for debugging.
+
+    Only handlers installed by a previous ``setup_logging`` call are retired;
+    handlers owned by an embedding application (or by pytest) are left in place.
 
     Args:
         log_level_name: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -44,11 +83,8 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
     log_level = logging.getLevelName(log_level_name.upper())
     log_file = get_log_file_path()
 
-    # Clear any existing handlers and close them properly
     root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        handler.close()
-        root_logger.removeHandler(handler)
+    _retire_previously_installed_handlers(root_logger)
 
     # File handler with rotation (10 MB max, keep 3 backups).
     # ResilientRotatingFileHandler tolerates the Windows "file in use"
@@ -67,6 +103,7 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
     )
     file_handler.setFormatter(file_formatter)
     root_logger.addHandler(file_handler)
+    _installed_handlers.append(file_handler)
 
     # Console handler (only if requested)
     if console_logging:
@@ -77,6 +114,7 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
         )
         console_handler.setLevel(log_level)
         root_logger.addHandler(console_handler)
+        _installed_handlers.append(console_handler)
 
     # Set levels
     root_logger.setLevel(logging.DEBUG)  # Let handlers filter
