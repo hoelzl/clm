@@ -28,6 +28,7 @@ import logging
 
 import pytest
 
+from clm.cli.commands.shared import setup_logging
 from clm.infrastructure.config import get_config
 
 
@@ -52,4 +53,66 @@ class TestGlobalStateIsolation:
             "config singleton kept a monkeypatched value across a test "
             "boundary — the autouse _restore_worker_global_state fixture in "
             "tests/conftest.py is broken"
+        )
+
+
+class TestSetupLoggingLeavesForeignHandlersAlone:
+    """``setup_logging`` must retire only the handlers it installed itself.
+
+    It used to clear *and close* every handler on the root logger. pytest
+    attaches its live-log and log-capture handlers there once for the whole run
+    loop, so the first in-process ``clm build`` on an xdist worker tore them off
+    — and closed them — for every test that followed. Beyond breaking pytest's
+    own reporting, that accidental immunity is what turned the CliRunner capture
+    bug into a nondeterministic 1-in-5 nightly flake instead of a reproducible
+    failure (``docs/claude/design/test-flakiness-root-causes.md``).
+
+    Closing a handler you did not open is also just wrong: it can tear down a
+    file or socket an embedding application is still writing to.
+    """
+
+    def test_a_foreign_root_handler_survives(self) -> None:
+        root = logging.getLogger()
+        foreign = logging.NullHandler()
+        root.addHandler(foreign)
+        try:
+            setup_logging("INFO")
+
+            assert foreign in root.handlers, (
+                "setup_logging removed a root handler it did not install — it "
+                "must retire only its own (see _retire_previously_installed_handlers)"
+            )
+        finally:
+            root.removeHandler(foreign)
+
+    def test_a_foreign_root_handler_is_not_closed(self) -> None:
+        closed: list[bool] = []
+
+        class _RecordingHandler(logging.NullHandler):
+            def close(self) -> None:
+                closed.append(True)
+                super().close()
+
+        root = logging.getLogger()
+        foreign = _RecordingHandler()
+        root.addHandler(foreign)
+        try:
+            setup_logging("INFO")
+
+            assert not closed, "setup_logging closed a handler it did not open"
+        finally:
+            root.removeHandler(foreign)
+
+    def test_its_own_handlers_do_not_accumulate(self) -> None:
+        """Repeat calls must still replace, not stack, clm's own file handlers."""
+        root = logging.getLogger()
+
+        setup_logging("INFO")
+        after_first = len(root.handlers)
+        setup_logging("INFO")
+        after_second = len(root.handlers)
+
+        assert after_second == after_first, (
+            "setup_logging leaked a handler on a repeat call — the retire step "
+            "is no longer matching the handlers it installs"
         )

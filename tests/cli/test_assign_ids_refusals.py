@@ -57,7 +57,7 @@ def test_report_refusals_json(tmp_path):
     r = CliRunner().invoke(
         cli, ["slides", "assign-ids", str(f), "--context", "--json", "--report-only"]
     )
-    data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
+    data = json.loads(r.stdout)
     assert data["hard_refusals"] == 1
     ctx = data["refusals"][0]["context"]
     assert ctx["preceding_heading"] == "Introduction"

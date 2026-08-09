@@ -33,6 +33,23 @@ from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 logger = logging.getLogger(__name__)
 
 
+def _completion_timeout() -> float:
+    """Seconds to wait for jobs to finish, from ``CLM_E2E_TIMEOUT``.
+
+    These tests used to hardcode 120s while ``test_e2e_course_conversion.py``
+    read the env var, so the one lever CI has to widen the budget (600s on PRs,
+    900s nightly) was not connected to the heaviest tests in the suite. The
+    2026-07-31 nightly lost ``test_e2e_managed_workers_reuse_across_builds`` to
+    exactly that: ``JobsPendingTimeoutError`` at the hardcoded 120s ceiling
+    while three other xdist workers competed for a 4-core runner.
+
+    Same contract as the conversion tests: ``<= 0`` means "use the backend's own
+    20-minute default".
+    """
+    timeout = float(os.environ.get("CLM_E2E_TIMEOUT", "120"))
+    return timeout if timeout > 0 else 1200.0
+
+
 async def _wait_for_healthy_workers_async(
     db_path: Path,
     expected_count: int,
@@ -120,8 +137,16 @@ async def workspace_path_fixture(tmp_path):
     return workspace
 
 
+# ``serial("workerpool")`` joins the group the *mock* pool tests already use
+# (tests/infrastructure/workers/test_lifecycle_mock.py). These are the far
+# heavier real-worker versions — each starts a pool of OS processes — and were
+# outside it, so up to `-n auto` of them could contend with each other and with
+# every other suite on a 4-core CI runner. That is what timed out the
+# 2026-07-31 nightly. Under ``--dist loadgroup`` the group serialises this
+# family within itself while other families keep running in parallel.
 @pytest.mark.e2e
 @pytest.mark.slow
+@pytest.mark.serial("workerpool")
 async def test_e2e_managed_workers_auto_lifecycle(
     e2e_course_1,
     db_path_fixture,
@@ -187,7 +212,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
             db_path=db_path_fixture,
             workspace_path=workspace_path_fixture,
             ignore_db=True,
-            max_wait_for_completion_duration=120,
+            max_wait_for_completion_duration=_completion_timeout(),
         )
 
         # Process course
@@ -220,6 +245,7 @@ async def test_e2e_managed_workers_auto_lifecycle(
 
 @pytest.mark.e2e
 @pytest.mark.slow
+@pytest.mark.serial("workerpool")
 async def test_e2e_managed_workers_reuse_across_builds(
     e2e_course_1,
     e2e_course_2,
@@ -236,10 +262,19 @@ async def test_e2e_managed_workers_reuse_across_builds(
     course1 = e2e_course_1
     course2 = e2e_course_2
 
-    # Create configuration with worker reuse
+    # Create configuration with worker reuse.
+    #
+    # Two notebook workers, not eight. What this test proves is that the second
+    # build *reuses* the first build's workers (same db_worker_ids), which any
+    # pool size >= 1 demonstrates equally well. Eight was chosen "for faster
+    # parallel processing" — but the pool-size cap that would normally clamp it
+    # to the host is deliberately neutralised in tests
+    # (``_neutralise_pool_size_cap``), so on a 4-core CI runner this really did
+    # start ten OS processes and then wait on them. Contention, not the code
+    # under test, is what failed the 2026-07-31 nightly.
     cli_overrides = {
         "default_execution_mode": "direct",
-        "notebook_count": 8,  # Use 8 workers for faster parallel processing of multiple notebooks
+        "notebook_count": 2,
         "plantuml_count": 1,  # Need plantuml worker for test data
         "drawio_count": 1,  # Need drawio worker for test data
         "auto_start": True,
@@ -259,10 +294,11 @@ async def test_e2e_managed_workers_reuse_across_builds(
     started_workers1 = lifecycle_manager1.start_managed_workers()
     worker1_ids = [w.db_worker_id for w in started_workers1]
 
-    # Wait for all 10 workers to become healthy before reuse-detection in
-    # the second build — count_healthy_workers() drives reuse, so checking
-    # before activation would bypass it.
-    await _wait_for_healthy_workers_async(db_path_fixture, expected_count=10)
+    # Wait for all 4 workers (2 notebook + 1 plantuml + 1 drawio) to become
+    # healthy before reuse-detection in the second build —
+    # count_healthy_workers() drives reuse, so checking before activation would
+    # bypass it.
+    await _wait_for_healthy_workers_async(db_path_fixture, expected_count=4)
 
     # Initialize variables for cleanup in finally block
     lifecycle_manager2 = None
@@ -273,7 +309,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
             db_path=db_path_fixture,
             workspace_path=workspace_path_fixture,
             ignore_db=True,
-            max_wait_for_completion_duration=120,
+            max_wait_for_completion_duration=_completion_timeout(),
         )
 
         async with backend1:
@@ -298,7 +334,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
             db_path=db_path_fixture,
             workspace_path=workspace_path_fixture,
             ignore_db=True,
-            max_wait_for_completion_duration=120,
+            max_wait_for_completion_duration=_completion_timeout(),
         )
 
         async with backend2:
@@ -314,6 +350,7 @@ async def test_e2e_managed_workers_reuse_across_builds(
 
 
 @pytest.mark.e2e
+@pytest.mark.serial("workerpool")
 async def test_e2e_worker_health_monitoring_during_build(
     e2e_course_1,
     db_path_fixture,

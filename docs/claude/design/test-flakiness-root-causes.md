@@ -1,6 +1,7 @@
 # Test-suite flakiness: root causes and remediation
 
-**Status**: analysis complete, remediation proposed (not implemented)
+**Status**: implemented — see §7 for what shipped and the one deliberate
+deviation from the original plan (step 2)
 **Date**: 2026-08-09
 **Scope**: the nightly full-suite failures of 2026-08-08 (issue #821) and
 2026-07-31 (issue #752), plus the standing flake landscape they sit in.
@@ -325,102 +326,161 @@ else:
 Costs nothing (§3.3: zero live-log output under xdist today) and removes the
 defect from every parallel run, nightly included.
 
+**One compensation is required, and shipped with it.** The live handler's
+`catching_logs(level=INFO)` pulled the *root* logger down to INFO for the whole
+run, which is how third-party records (`urllib3`, `docker`, `asyncio` — the ones
+that made the 2026-07-31 e2e failure report readable) reached `caplog` and the
+"Captured log call" section. Dropping the live handler would have quietly
+dropped those too, so the xdist branch sets `config.option.log_level` explicitly
+instead. Report sections keep exactly the content they had.
+
 ### Step 2 — make `CliRunner` invocations immune regardless *(defence in depth)*
 
-Step 1 leaves `-n0` runs exposed (the docker tier, and local debugging). Add a
-`cli_runner` fixture in `tests/conftest.py` that neutralises the capture
-suspension for the duration of `invoke()` only:
+Step 1 leaves `-n0` runs exposed (the docker tier, and local debugging).
+
+**Deviation from the original plan.** This was going to be a `cli_runner`
+fixture plus a migration of all 92 modules off bare `CliRunner()`, policed by a
+guard test. That was rejected during implementation: it is a large mechanical
+diff, it only protects call sites someone remembers to convert, and a new test
+written the obvious way (`CliRunner()`) would silently reacquire the bug.
+
+What shipped instead — `tests/conftest.py::_install_clirunner_live_log_guard` —
+attacks the same seam one level down. It wraps
+`_LiveLoggingStreamHandler.emit` once, at `pytest_configure`, and drops the
+handler's `capture_manager` for exactly those records emitted while a Click
+isolation owns `sys.stdout`/`sys.stderr`:
 
 ```python
-@pytest.fixture
-def cli_runner():
-    """A CliRunner whose captured output survives log records (Defect A).
-
-    pytest's live-log handler suspends *and resumes* global capture around every
-    record, and resuming rebinds sys.stdout/sys.stderr to pytest's own capture
-    objects — clobbering Click's isolation mid-invocation. Dropping the handler's
-    capture_manager for the duration of the call makes emit() a no-op against the
-    streams; the line still reaches the terminal reporter, which holds its own
-    file object.
-    """
+def emit(self, record):
+    if self.capture_manager is not None and _inside_click_runner():
+        saved, self.capture_manager = self.capture_manager, None
+        try:
+            original_emit(self, record)
+        finally:
+            self.capture_manager = saved
+    else:
+        original_emit(self, record)
 ```
 
-implemented as a `CliRunner` subclass overriding `invoke()` to set
-`handler.capture_manager = None` on any `_LiveLoggingStreamHandler` currently on
-the root logger, restoring it afterwards. Then migrate the 92 test modules off
-bare `CliRunner()` and add a guard test that fails on new bare uses.
+`emit` then leaves both streams alone. The line is still written, because the
+handler's stream is the terminal reporter, which holds its own file object and
+never consults `sys.stdout`. Outside an isolation, nothing changes.
+
+Detection is `isinstance(sys.stdout, click.testing._NamedTextIOWrapper)` — a
+private type, so it is resolved defensively with a name-based fallback, and
+`tests/test_clirunner_capture_integrity.py::test_isolation_detection_recognises_a_live_runner`
+fails loudly if Click ever renames it.
+
+Zero test churn, covers bare `CliRunner()`, covers tests not yet written, and
+works identically under `-n0` and xdist.
 
 ### Step 3 — a canary that would have caught this
 
-A test that, under forced live logging, invokes a command emitting
-`echo → log record → echo` and asserts both echoes are in `result.output`. Home:
-next to `tests/test_global_state_isolation.py`, which pins the analogous
-invariant for issue #694.
+`tests/test_clirunner_capture_integrity.py`. It attaches its *own* live-log
+handler for the duration of each test rather than depending on how the suite was
+invoked, so it holds under `-n auto` (where step 1 deliberately leaves live
+logging off) exactly as under `-n0`. Four properties: writes on both sides of a
+record survive; `ClickException.show()` survives (the 2026-08-08 shape, where
+`result.output` came back `''`); the guard does not leak past the invocation;
+and the isolation detector actually fires.
+
+Verified to fail for the right reason — with the guard removed, the first two
+fail and the other two still pass, which is correct: they pin different
+properties.
 
 ### Step 4 — stop `setup_logging()` nuking foreign handlers
 
-Change `src/clm/cli/commands/shared.py:47-51` to remove only the handlers it
-previously installed (tracked in a module-level list) instead of clearing the
-root logger. This is a production correctness fix — the current code breaks any
-embedder's logging, including the MCP and web servers — and it removes the
-accidental immunity that hides Defect A.
+`setup_logging()` now retires only the handlers it installed itself, tracked in
+a module-level `_installed_handlers`. This is a production correctness fix — the
+old code tore down *and closed* handlers belonging to any embedder, including
+the MCP and web servers — and it removes the accidental immunity that was hiding
+Defect A.
 
-**Land this after steps 1–2, never before**: on its own it converts a 2-failure
-nightly into a ~35-failure one.
+**Landed after steps 1–2, deliberately**: on its own it would have converted a
+2-failure nightly into a ~35-failure one.
 
-Optionally also extend `_restore_worker_global_state` to snapshot and restore
-`logging.getLogger().handlers`, so no future test can strip pytest's handlers for
-its successors.
+`_restore_worker_global_state` also snapshots and restores
+`logging.getLogger().handlers` now, so no future test can strip pytest's
+handlers for its successors. Handlers are detached and re-attached, never
+closed. Pinned by
+`tests/test_global_state_isolation.py::TestSetupLoggingLeavesForeignHandlersAlone`
+(a foreign handler survives; it is not closed; clm's own handlers still do not
+accumulate across repeat calls).
 
 ### Step 5 — delete the band-aids
 
-`tests/cli/test_cache_explain.py:58-59` and
-`tests/cli/test_assign_ids_refusals.py:60`: parse `result.stdout` directly. Their
-existence is the trail this defect left; removing them is how we know it is gone.
+Both brace-slicing sites now parse `result.stdout` directly — the JSON payload is
+the command's contract, and reading the stdout stream alone keeps anything the
+command writes to stderr out of the parse. Their existence was the trail this
+defect left; removing them is how we know it is gone. Verified passing both with
+and without `CLM_ENABLE_TEST_LOGGING`.
 
 ### Step 6 — Defect B
 
-1. Add `@pytest.mark.serial("workerpool")` to the real-pool tests in
-   `tests/e2e/test_e2e_lifecycle.py`, joining the mock tests already in that
-   group.
-2. Drop `notebook_count` from 8 to 2. The test proves reuse, not throughput.
-3. Replace the hardcoded `120` at lines 190/276/301 with the `CLM_E2E_TIMEOUT`
-   read that `test_e2e_course_conversion.py:497` already uses, so the workflows'
-   600/900 actually apply.
-4. Only if it still flakes: `@pytest.mark.flaky(reruns=2,
-   only_rerun=["JobsPendingTimeoutError"])`, per the existing scoped-retry policy.
+1. All three non-docker real-pool tests in `tests/e2e/test_e2e_lifecycle.py` now
+   carry `@pytest.mark.serial("workerpool")`, joining the mock tests already in
+   that group.
+2. `notebook_count` dropped from 8 to 2 in the reuse test (and the healthy-worker
+   wait from 10 to 4). The test proves reuse, not throughput; any pool size ≥ 1
+   demonstrates it. Runtime fell from ~85s to 43s locally.
+3. The hardcoded `120` at all three sites is replaced by `_completion_timeout()`,
+   which reads `CLM_E2E_TIMEOUT` with the same `<= 0 → 1200` contract
+   `test_e2e_course_conversion.py:497` uses, so the workflows' 600/900 finally
+   apply.
+4. Not done, deliberately: `@pytest.mark.flaky(reruns=2,
+   only_rerun=["JobsPendingTimeoutError"])`. Hold it in reserve — per
+   `testing.md`, a retry is a last resort after the cause is addressed, and 1–3
+   address the cause. Reach for it only if the nightly shows this test failing
+   again.
 
 ---
 
 ## 8. Verification
 
-The fix is provable, not hopeful — Defect A reproduces deterministically:
+The fix is provable, not hopeful — Defect A reproduced deterministically, so
+"it passes now" is a measurement rather than an absence of evidence. Measured on
+Windows, `.venv`, after the changes:
 
-```bash
-# Before: fails. After steps 1-2: passes.
-CLM_ENABLE_TEST_LOGGING=1 pytest tests/cli/test_outline.py -n0
+| Command | Before | After |
+|---|---|---|
+| `CLM_ENABLE_TEST_LOGGING=1 pytest tests/cli/test_outline.py -n0` | 7 failed | 40 passed |
+| `CLM_ENABLE_TEST_LOGGING=1 pytest tests/release -n0` | 6 failed | 118 passed |
+| `CLM_ENABLE_TEST_LOGGING=1 pytest tests/cli/test_cache_explain.py -n0` | 8 failed | 10 passed |
+| `CLM_ENABLE_TEST_LOGGING=1 CLM_LOG_LEVEL=INFO pytest -q` (`-n auto`) | 25, then 34 failed | 9457 passed |
+| same, `-n4` (CI's shape) | 5 failed | 9457 passed |
+| `CLM_ENABLE_TEST_LOGGING=1 pytest tests/cli tests/release tests/voiceover tests/recordings -n0` | 0 failed (immunised — the misleading baseline) | 3378 passed |
+| `pytest tests/e2e/test_e2e_lifecycle.py -m "not docker" -n0` | 3 passed in ~124s | 3 passed in 82s |
 
-# Before: 25-34 failures (varies per run). After: 0, stably.
-CLM_ENABLE_TEST_LOGGING=1 CLM_LOG_LEVEL=INFO pytest -q
+The canary was also verified to fail for the right reason: with the guard
+removed, `test_output_survives_a_log_record` and
+`test_click_exception_after_a_log_record_still_reports` fail while the other two
+still pass.
 
-# The nightly's exact shape.
-CLM_ENABLE_TEST_LOGGING=1 CLM_LOG_LEVEL=INFO pytest -m "not docker" --log-cli-level=INFO
-```
-
-Add a run of the second command to whatever gate covers the unit tier, so the
-unit/nightly configuration asymmetry (§3.2) cannot re-open the hole. The cheapest
-version: give the PR unit tier the same env vars the nightly uses. Once steps 1–2
-land that is free, and it closes the "nothing on a PR can catch it" gap
-permanently.
+**On closing the detection gap.** The original plan was to give the PR unit tier
+the nightly's env vars, so the unit/nightly asymmetry (§3.2) could not re-open
+the hole. Step 1 makes that ineffective: live logging is now off under xdist
+regardless of the env var, so the unit tier would never exercise the path. The
+detection therefore lives in `tests/test_clirunner_capture_integrity.py`, which
+attaches its own live-log handler and so pins the invariant on every run, in
+every tier, at any parallelism. That is strictly better than a CI env tweak — it
+cannot be silently disabled by a workflow edit.
 
 ---
 
 ## 9. Open questions
 
 - Should `CLM_ENABLE_TEST_LOGGING` keep enabling *live* logging at all, or switch
-  to `log_file` (which needs no capture suspension and survives xdist)? Live
-  logging's real value is watching a hanging e2e test in a `-n0` run; a log file
-  serves the post-mortem case better and is inert with respect to capture.
-- `setup_logging()` is also called on every in-process `clm build` inside tests,
-  which means each such test rewrites the developer's real log file under
-  `get_log_file_path()`. Out of scope here, worth a separate look.
+  to `log_file` (which needs no capture suspension and survives xdist)? Step 1
+  narrows this to `-n0` runs only, where live logging's real value — watching a
+  hanging e2e test — actually applies. Left as is; revisit if the `-n0` docker
+  tier ever grows `CliRunner` tests, since the guard rather than the gate is what
+  protects it there.
+- **Resolved during implementation, recorded so it is not re-investigated**: the
+  worry that in-process `clm build` calls rewrite the developer's real log file
+  is unfounded. `tests/conftest.py::_isolate_clm_log_dir` already points every
+  worker at its own temp `CLM_LOG_DIR` for the whole session.
+- Defect B's fixes remove the oversubscription, but the `serial` groups are
+  applied by hand and nothing checks that a *new* real-worker test joins one.
+  A collection-time assertion ("a test that calls `start_managed_workers` must
+  carry `serial('workerpool')`") would close that, at the cost of a somewhat
+  brittle static check. Not attempted.

@@ -55,8 +55,14 @@ def _explain(tmp_path: Path, *extra_args: str):
 def _explain_json(tmp_path: Path) -> dict:
     result = _explain(tmp_path, "--json")
     assert result.exit_code == 0, result.output
-    # Locate the JSON object in the output (logging lines may precede it).
-    return json.loads(result.output[result.output.index("{") :])
+    # ``stdout``, not ``output``: the JSON payload is the command's contract,
+    # and reading the stdout stream alone keeps anything the command writes to
+    # stderr out of the parse. (This used to slice from the first ``{`` to skip
+    # "logging lines that may precede it" — a workaround for pytest's live-log
+    # handler shredding CliRunner capture, which fixed nothing and turned the
+    # 2026-07-31 nightly into `ValueError: substring not found`. That is now
+    # handled at the root, in tests/conftest.py.)
+    return json.loads(result.stdout)
 
 
 def _artifact(data: dict, output_metadata: str) -> dict:
@@ -254,7 +260,7 @@ class TestExplainImageOverrides:
             "candidate:9",
         )
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output[result.output.index("{") :])
+        data = json.loads(result.stdout)
         assert data["components"]["worker_image_identity"] == "docker:candidate:9"
 
     def test_no_flags_matches_the_config_fallback(self, tmp_path):

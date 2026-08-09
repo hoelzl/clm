@@ -112,6 +112,17 @@ os.environ.setdefault("CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS", "30")
 for _color_var in ("FORCE_COLOR", "CLICOLOR_FORCE"):
     os.environ.pop(_color_var, None)
 
+# The stream type ``CliRunner.isolation()`` installs on ``sys.stdout``/
+# ``sys.stderr``. Private to ``click.testing``, so resolve it defensively: if a
+# future Click renames it, fall back to matching on the type name, and let
+# ``tests/test_clirunner_capture_integrity.py`` be the thing that fails loudly.
+try:
+    from click.testing import _NamedTextIOWrapper as _ClickRunnerStream
+
+    _CLICK_RUNNER_STREAM_TYPES: tuple[type, ...] = (_ClickRunnerStream,)
+except ImportError:  # pragma: no cover - Click renamed its private wrapper
+    _CLICK_RUNNER_STREAM_TYPES = ()
+
 from clm.core.course_spec import TopicSpec
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
@@ -646,6 +657,76 @@ class PytestLocalOpsBackend(LocalOpsBackend):
 # E2E Test Fixtures
 
 
+def _is_xdist_worker(config) -> bool:
+    """Whether this process is a pytest-xdist worker rather than the controller."""
+    return hasattr(config, "workerinput")
+
+
+def _inside_click_runner() -> bool:
+    """Whether a ``CliRunner`` isolation currently owns ``sys.stdout``/``sys.stderr``.
+
+    ``CliRunner.isolation()`` swaps both streams for its own
+    ``_NamedTextIOWrapper`` objects over the ``StreamMixer`` that backs
+    ``result.output``. Nothing else in this suite installs that type, so its
+    presence is an exact signal.
+    """
+    if _CLICK_RUNNER_STREAM_TYPES:
+        return isinstance(sys.stdout, _CLICK_RUNNER_STREAM_TYPES) or isinstance(
+            sys.stderr, _CLICK_RUNNER_STREAM_TYPES
+        )
+    return "_NamedTextIOWrapper" in (
+        type(sys.stdout).__name__,
+        type(sys.stderr).__name__,
+    )
+
+
+def _install_clirunner_live_log_guard() -> None:
+    """Stop pytest's live-log handler from clobbering ``CliRunner`` capture.
+
+    ``_LiveLoggingStreamHandler.emit`` wraps every record in
+    ``CaptureManager.global_and_fixture_disabled()`` so the line reaches the real
+    terminal instead of the capture buffer. That context manager suspends global
+    capture and then *resumes* it -- and resuming does
+    ``setattr(sys, "stdout", self.tmpfile)``, installing pytest's own stream
+    object over whatever was there. When the record is emitted from inside a
+    ``CliRunner.invoke()``, "whatever was there" is Click's isolation, which is
+    destroyed for the remainder of that invocation: every later ``click.echo``
+    lands in pytest's captured output instead of ``result.output``. The
+    invocation's assertions then fail against a truncated (often empty) string.
+
+    That cost the 2026-07-31 and 2026-08-08 nightlies six failing tests between
+    them, and it is latent in every one of the ~90 ``CliRunner`` modules. Full
+    analysis: ``docs/claude/design/test-flakiness-root-causes.md``.
+
+    The fix is to drop the handler's ``capture_manager`` for exactly the records
+    emitted inside an isolation. ``emit`` then leaves ``sys.stdout``/``sys.stderr``
+    alone; the line still gets written, because the handler's stream is the
+    terminal reporter, which holds its own file object and never consults
+    ``sys.stdout``. Outside an isolation nothing changes at all.
+
+    Idempotent: ``pytest_configure`` runs once per process, but a nested or
+    re-entered configure must not stack wrappers.
+    """
+    from _pytest.logging import _LiveLoggingStreamHandler
+
+    original_emit = _LiveLoggingStreamHandler.emit
+    if getattr(original_emit, "_clm_clirunner_guarded", False):
+        return
+
+    def emit(self, record):
+        if self.capture_manager is not None and _inside_click_runner():
+            saved, self.capture_manager = self.capture_manager, None
+            try:
+                original_emit(self, record)
+            finally:
+                self.capture_manager = saved
+        else:
+            original_emit(self, record)
+
+    emit._clm_clirunner_guarded = True  # type: ignore[attr-defined]
+    _LiveLoggingStreamHandler.emit = emit  # type: ignore[method-assign]
+
+
 def pytest_configure(config):
     """Configure pytest and set default log levels.
 
@@ -675,15 +756,40 @@ def pytest_configure(config):
     # External tool paths are already configured by _setup_external_tools() at module import
     # This avoids duplicate initialization and speeds up startup
 
-    # Enable live logging if explicitly requested
-    if os.environ.get("CLM_ENABLE_TEST_LOGGING"):
+    # Click's CliRunner isolates output at the Python level only, so pytest's
+    # live-log handler can (and does) clobber it mid-invocation. Neutralise that
+    # before the first test runs; see the helper for the mechanism.
+    _install_clirunner_live_log_guard()
+
+    # Enable live logging if explicitly requested -- but never on an xdist
+    # worker, where it is pure cost: execnet swallows the worker's terminal
+    # output, so the live lines are *invisible* (measured: 0 "live log"
+    # sections in the nightly's ``-n auto`` job vs 35 in its ``-n0`` docker
+    # job) while each record still suspends and resumes global capture.
+    log_level_name = os.environ.get("CLM_LOG_LEVEL", "INFO")
+    if os.environ.get("CLM_ENABLE_TEST_LOGGING") and not _is_xdist_worker(config):
         config.option.log_cli = True
-        config.option.log_cli_level = os.environ.get("CLM_LOG_LEVEL", "INFO")
+        config.option.log_cli_level = log_level_name
         config.option.log_cli_format = "[%(asctime)s] %(levelname)-8s %(name)s - %(message)s"
         config.option.log_cli_date_format = "%H:%M:%S"
     else:
         # Disable live logging by default
         config.option.log_cli = False
+        if os.environ.get("CLM_ENABLE_TEST_LOGGING"):
+            # ``--log-cli-level=INFO`` on the command line (both workflows pass
+            # it) re-enables live logging all by itself -- see
+            # ``_pytest.logging.LoggingPlugin._log_cli_enabled``. Clearing
+            # ``log_cli`` alone would not be enough.
+            config.option.log_cli_level = None
+            # ...but keep the *report* sections as rich as they were. The live
+            # handler's ``catching_logs(level=INFO)`` used to pull the root
+            # logger down to INFO for the whole run, which is what let
+            # third-party records (urllib3, docker, asyncio) reach ``caplog``
+            # and the "Captured log call" section of a failure report. Those
+            # lines are load-bearing when triaging an e2e timeout, so set
+            # ``log_level`` explicitly to keep them.
+            if config.option.log_level is None:
+                config.option.log_level = log_level_name
 
     # Set all application loggers to WARNING by default to suppress INFO logs during tests
     # This prevents log spam in test output
@@ -915,6 +1021,17 @@ def _restore_worker_global_state():
     propagate) and the config singleton before each test and restore both
     after it, so no test can poison its successors. Pinned by
     ``tests/test_global_state_isolation.py``.
+
+    The root logger's *handler list* is snapshotted for the same reason. pytest
+    attaches its live-log and log-file handlers to the root logger once, for the
+    whole run loop, so a test that clears the root logger removes them for every
+    later test in that worker process — permanently, because nothing re-adds
+    them. ``clm.cli.commands.shared.setup_logging`` used to do exactly that, and
+    the resulting immunity is what made an unrelated capture bug look like a
+    1-in-5 nightly flake (``docs/claude/design/test-flakiness-root-causes.md``).
+    That function is fixed; this is the belt to its braces. Handlers are only
+    detached and re-attached here, never closed — closing a handler this fixture
+    does not own is the very mistake being guarded against.
     """
     import clm.infrastructure.config as config_module
 
@@ -933,6 +1050,8 @@ def _restore_worker_global_state():
     )
     loggers = [logging.getLogger(name) for name in chain]
     snapshot = [(lg.level, lg.disabled, lg.propagate) for lg in loggers]
+    root_logger = logging.getLogger()
+    root_handlers = list(root_logger.handlers)
     previous_config = config_module._config
     try:
         yield
@@ -941,6 +1060,8 @@ def _restore_worker_global_state():
             lg.setLevel(level)
             lg.disabled = disabled
             lg.propagate = propagate
+        if root_logger.handlers != root_handlers:
+            root_logger.handlers[:] = root_handlers
         config_module._config = previous_config
 
 
