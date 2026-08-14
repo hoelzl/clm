@@ -795,7 +795,18 @@ the other bugs consume.
    plus the preserved-mechanical pin; `test_diverged_base_has_no_similarity_proxy`
    flipped from pinning `mirror_remove` to the framed row (its #630 subject
    unchanged). `remove_vs_edit` chosen over `pending_divergence` because its
-   `remove`/`keep` answers fit a one-sided member. Original plan text:
+   `remove`/`keep` answers fit a one-sided member. Review round 1 (fresh-agent
+   adversarial review of #824) caught the pool path's `stamp_vs_new` branch
+   running *ahead* of the guard — its `treat_as_new` answer mirrors the
+   removal, the same loss one framed answer away; the divergence check now
+   runs before the stamp branch and the framed detail keeps the stamped-edit
+   hypothesis (regression test
+   `test_diverged_base_removal_with_suspected_stamp_frames_remove_vs_edit`).
+   Recorded minor, deliberately not fixed: a diverged-base removal that is
+   also a group split no longer gets the `remove_vs_split` reframe /
+   `suspected_group_split` observation (the reframe reads `mirror_remove`
+   rows only) — both frames are safe and answerable, the split hint is the
+   loss. Original plan text:
    `src/clm/slides/sync_diff.py:1203-1215`
    and `:1911-1922`: a two-sided base with `entry.de_fp != entry.en_fp` must
    downgrade `mirror_remove` from MECHANICAL to a framed `remove_vs_edit` /

@@ -1355,6 +1355,29 @@ class TestMirrorRemoveCarriedDivergence:
         item = _only_item(_diff(base, DE0, en_removed))
         assert (item.outcome, item.action) == ("remove", "mirror_remove")
 
+    def test_diverged_base_removal_with_suspected_stamp_frames_remove_vs_edit(self):
+        """Review follow-up (PR #824, round 1): the stamp suspicion must not
+        preempt the Y1 guard. A diverged base plus an unmatched id'd cell on
+        the gone side still frames ``remove_vs_edit`` — ``stamp_vs_new``'s
+        ``treat_as_new`` answer would mirror the removal, the same data loss
+        one framed answer away. The detail keeps the stamped-edit hypothesis
+        so the signal is not lost with the frame."""
+        de = DE0.replace("x = 1", "x = 98")
+        base = _snapshot(de, EN0)  # diverged base, positional
+        en = EN0.replace(
+            '# %% tags=["keep"]\nx = 1',
+            '# %% tags=["keep"] slide_id="x-stamped"\nx = 1',
+        )
+        diff = _diff(base, de, en)
+        by_key = {i.key: i for i in diff.items}
+        row = by_key["pos:s0/code/0"]
+        assert (row.outcome, row.action) == ("conflict", "remove_vs_edit")
+        assert row.side == "en"  # the gone side
+        assert "stamped" in row.detail  # the hypothesis survives the frame
+        # The id view still frames stamp_vs_new — its treat_as_new answer only
+        # copies (never deletes), so it is safe on a diverged base.
+        assert by_key["id:x-stamped"].action == "stamp_vs_new"
+
 
 class TestTagParity:
     """Cross-side tag parity as an orthogonal aspect row (issue #615).

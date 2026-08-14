@@ -2652,6 +2652,38 @@ class _Differ:
             gone: Lang = "de" if de_state == "missing" else "en"
             other_state = en_state if gone == "de" else de_state
             suspected_stamp = self._stamped_candidate_exists(group, entry.kind, gone)
+            if other_state == "same" and _base_carried_divergence(entry):
+                # Y1: same rule as the id-keyed path — a diverged base means
+                # the survivor's bytes are not the removed side's, so the
+                # removal must be answered, never mirrored. This check runs
+                # BEFORE the stamp branch on purpose: stamp_vs_new's
+                # treat_as_new answer mirrors the removal, which is exactly
+                # the deletion a diverged base makes unsafe (PR #824 review).
+                detail = (
+                    f"removed on the {gone} side while the pair was already "
+                    f"diverged at base — the survivor's recorded bytes are not "
+                    f"the removed side's, so mirroring the removal could "
+                    f"delete content the {gone} side never held"
+                )
+                if suspected_stamp:
+                    detail += (
+                        f"; the {gone} side also gained an unmatched id'd cell — "
+                        f"possibly this cell stamped and edited: if so, stamp the "
+                        f"surviving twin with the same slide_id by hand and "
+                        f"re-run report instead of answering"
+                    )
+                self.emit(
+                    handle,
+                    "conflict",
+                    "remove_vs_edit",
+                    "both",
+                    detail,
+                    group=group,
+                    side=gone,
+                    member=member,
+                    base=entry,
+                )
+                return
             if suspected_stamp and other_state == "same":
                 # An unmatched one-sided id'd cell exists on the "removed"
                 # side: the cell was plausibly stamped (and edited), not
@@ -2680,25 +2712,6 @@ class _Differ:
                     base=entry,
                 )
             elif other_state == "same":
-                if _base_carried_divergence(entry):
-                    # Y1: same rule as the id-keyed path — a diverged base
-                    # means the survivor's bytes are not the removed side's,
-                    # so the removal must be answered, never mirrored.
-                    self.emit(
-                        handle,
-                        "conflict",
-                        "remove_vs_edit",
-                        "both",
-                        f"removed on the {gone} side while the pair was already "
-                        f"diverged at base — the survivor's recorded bytes are not "
-                        f"the removed side's, so mirroring the removal could "
-                        f"delete content the {gone} side never held",
-                        group=group,
-                        side=gone,
-                        member=member,
-                        base=entry,
-                    )
-                    return
                 self.emit(
                     handle,
                     "remove",
