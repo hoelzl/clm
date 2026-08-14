@@ -1,6 +1,18 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (item 1 DONE) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1, 3, 5 DONE) | **Owner**: unassigned
+
+**2026-08-14 update**: Phase 3 status audit against git history and issues — two
+items shipped under the #656 ceremony arc without being recorded here: **item 3
+(Y3 + D9, decision keying)** and **item 5 (Y4, decision freshness)** — see the
+item bodies for evidence. The remaining items (2/Y1, 4/Y5, 6/Y6, 7/Y7, 8/Y8,
+9/Y9) were re-verified against current code and are genuinely **not done**:
+their code sites are unchanged since the 2026-07-24 review. Note Y2's strict
+gate (item 1) closed the main *arming* path for Y1/Y6 (new diverged baselines
+can no longer be banked via `record` without `--allow-diverged-companion`), but
+the missing guards themselves are still latent for pre-existing or
+escape-hatch baselines. Phase 3a's S4/S8 ride-alongs are now tracked as part of
+issue #798, so Phase 3a leaves nothing untracked.
 
 **2026-07-26 update (3)**: **release 1.23.0 shipped** (Phase 2's whole body of
 work is now on PyPI), and **Phase 3 item 1 (Y2 + D8) is DONE** — the strict
@@ -703,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: item 1 (Y2 + D8) DONE 2026-07-26; next is item 2 (Y1)
+### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 3 (Y3 + D9), 5 (Y4) DONE; next is item 2 (Y1)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -774,13 +786,27 @@ the other bugs consume.
      CSharpCourses) to size the blast radius, and prepare the fix-forward
      instructions. The `cold_sweep_hint` in `doc_report.py:85` actively steers
      agents toward wholesale `record` — re-word it once the gate is strict.
-2. **Y1 — `mirror_remove` divergence guard.** `src/clm/slides/sync_diff.py:1203-1215`
+2. **Y1 — `mirror_remove` divergence guard.** ▸ Re-verified OPEN 2026-08-14:
+   both removal paths unchanged since the review — the id-keyed path
+   (`sync_diff.py:1861-1873`) and the positional-pool path (`:2648-2659`)
+   still check only that the survivor sits on its own base fingerprint; the
+   `de_fp != en_fp` downgrade exists only on the edit paths (`:1650/1683`,
+   `:2716-2730`). `src/clm/slides/sync_diff.py:1203-1215`
    and `:1911-1922`: a two-sided base with `entry.de_fp != entry.en_fp` must
    downgrade `mirror_remove` from MECHANICAL to a framed `remove_vs_edit` /
    `pending_divergence`. This mirrors the guard the edit paths already have at
    `:992/1025` and `:1979` — reuse that predicate rather than writing a second
    one.
-3. **Y3 + D9 — decision keying.** `src/clm/slides/doc_apply.py:100-115`,
+3. **Y3 + D9 — decision keying.** ▸ **DONE** (shipped 2026-07-31/08-04 under
+   the #656 schema-4 arc; recorded here 2026-08-14). `Decision` carries an
+   `action` field and answers match per `(key, action)` — exact first, key-only
+   fallback binds at most one item (`doc_apply.py:285-293`, `:1826-1841`), so a
+   valid answer can no longer land on a co-keyed item the judge never
+   addressed. Schema 3 retired and `report_id` made mandatory by `a9153d3d`
+   (breaking); stale-shape rows are rejected with the accepted shapes named.
+   Info topic `sync-agents.md` documents the discriminator (§"Naming the row
+   you are answering"); downstream course-repo docs migration was part of the
+   schema-4 rollout. Original plan text: `src/clm/slides/doc_apply.py:100-115`,
    `:199-200`, `:1296-1347`: keys become key+action so each framed question is
    answered independently.
    - **Breaking.** Update in lockstep: `src/clm/cli/info_topics/` (the sync
@@ -789,25 +815,52 @@ the other bugs consume.
      agents produce wrong output — treat it as part of the fix, not follow-up.
    - Add a clear rejection message for old-format keys pointing at the migration,
      rather than silently accepting them (which would preserve the bug).
-4. **Y5 — trust-gate `stamp_twin_id`.** `sync_diff.py:417-435`: do not emit a
+4. **Y5 — trust-gate `stamp_twin_id`.** ▸ Re-verified OPEN 2026-08-14:
+   `_emit_pending_id_stamps` (`sync_diff.py:652-670`) still emits the stamp
+   mechanically with no ledger-trust check; #716's cardinality guard
+   (`3c92b8da`) fixed the residue-*surplus* adoption shape (C1/C2), not the
+   equal-cardinality swapped-twin Y5 repro. Original plan: `sync_diff.py:417-435`: do not emit a
    mechanical id stamp for a member whose pairing came from
    `pair_positionally` (`doc_lenses.py:505-522`) and is not ledger-known at that
    pairing. Frame it instead. Since P2 makes the id *the* identity, a wrong stamp
    is the worst corruption in the system and it currently requires no judgment.
-5. **Y4 — bind decisions to fingerprints.** A decision should carry the moved
+5. **Y4 — bind decisions to fingerprints.** ▸ **DONE — via a different
+   mechanism than specified** (shipped 2026-07-31/08-04 as #649's `report_id`;
+   recorded here 2026-08-14). Instead of a per-decision fingerprint, every
+   report envelope carries a `report_id` freshness token over bundle bytes +
+   ledger section, and `apply` refuses a document whose token no longer matches
+   the deck: "Nothing was written: re-run `clm slides sync report`"
+   (`sync_v3.py:415-441`, `REQUIRE_REPORT_ID` since `a9153d3d`). This covers the
+   Y4 repro (v2 translation landing after a v3 edit, banked as verified) at the
+   document level — the v3 edit changes the token, so the stale document is
+   rejected before any write. Per-decision fingerprints were deliberately not
+   added; if item-level staleness ever slips past the token (it is per-deck,
+   not per-member), revisit the original design:
+   A decision should carry the moved
    side's fingerprint from the report it answered; on mismatch, reject with
    "re-run report" rather than applying a stale translation and recording it as
    verified (`doc_apply.py:1399`).
-6. **Y6 — preamble divergence guard.** `sync_diff.py:2560-2599`: extend the
+6. **Y6 — preamble divergence guard.** ▸ Re-verified OPEN 2026-08-14: the
+   one-side-moved branch (`sync_diff.py:3589-3598`) still emits mechanical
+   `propagate_preamble` unconditionally; only the neither-moved branch
+   (`:3560-3570`) has the carried-divergence check. Original plan: `sync_diff.py:2560-2599`: extend the
    carried-divergence check from the neither-moved branch to the one-side-moved
    branch, matching the cell path at `:1025`.
-7. **Y7 — rename+edit.** `sync_diff.py:1149-1227`, `:565-586`: `_pool_side_deficit`
+7. **Y7 — rename+edit.** ▸ Re-verified OPEN 2026-08-14: `_pool_side_deficit`
+   (`sync_diff.py:1050-1071`) still skips non-`pos:` base entries (`:1058`), and
+   no rename+edit drop-to-cold path exists. Original plan: `sync_diff.py:1149-1227`, `:565-586`: `_pool_side_deficit`
    counts only `pos:` base entries, so an id-keyed base cell missing on one side
    never triggers `stamp_vs_new`. Widen it, and make rename+edit drop to cold
    rather than emitting `mirror_remove` + `copy_new_shared`.
-8. **Y8** — require content affinity before `_align_pool`'s lone-candidate claim
+8. **Y8** ▸ Re-verified OPEN 2026-08-14: the lone-candidate claim
+   (`sync_diff.py:2422-2423`) still requires no content affinity (it remains
+   framed downstream, so misleading rather than silent). Original plan:
+   require content affinity before `_align_pool`'s lone-candidate claim
    (`:1693-1697`).
-9. **Y9** — hardening: warn when `record` runs on a deck with pending framed
+9. **Y9** ▸ Re-verified OPEN 2026-08-14: `record` (`sync_v3.py:460-592`) still
+   never consults the diff — no pending-framed warning; the `confirm` path
+   (`doc_apply.py:1584-1601`) still has no byte-divergence rejection for a
+   shared companion member. Original plan: — hardening: warn when `record` runs on a deck with pending framed
    items; reject `confirm` on a byte-diverged shared companion member.
 
 **Landmines**
