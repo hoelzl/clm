@@ -176,7 +176,7 @@ MECHANICAL_ACTIONS = frozenset(
         "propagate_shared_edit",  # shared: one side moved — verbatim copy
         "copy_new_shared",  # shared add on one side — verbatim copy
         "record_symmetric_add",  # both sides added identical content
-        "mirror_remove",  # one side removed, twin untouched
+        "mirror_remove",  # one side removed, twin untouched, base undiverged (Y1)
         "record_remove",  # both sides removed
         "mirror_tags",  # tag-set change on one side, body unchanged
         "record_tags",  # identical tag-set change on both sides
@@ -243,6 +243,19 @@ _SPLIT_SIMILARITY_BUDGET = 2000
 #: collapse almost no ceremony and land one-sided about half the time by
 #: chance; the field report that motivated the observation was ~30 rows.
 _UNIFORM_DRIFT_MIN = 3
+
+
+def _base_carried_divergence(entry: MemberBaseline) -> bool:
+    """The recorded baseline itself carried a cross-side byte divergence.
+
+    On such a base no side is a safe verbatim source: the twin's recorded
+    bytes are not the moved side's, so a one-sided edit must never propagate
+    mechanically — and a one-sided REMOVAL must never mirror mechanically
+    either, because the survivor sitting on its own fingerprint says nothing
+    about what the removed side held (review 2026-07-24, finding Y1). Every
+    propagate/mirror path must consult this one predicate and frame instead.
+    """
+    return entry.de_fp is not None and entry.en_fp is not None and entry.de_fp != entry.en_fp
 
 
 class _BodySimilarity:
@@ -1647,7 +1660,7 @@ class _Differ:
         # twin look edited (the review's false-propagate finding).
         moved_de = member.de is not None and de_fp != entry.de_fp
         moved_en = member.en is not None and en_fp != entry.en_fp
-        base_diverged = entry.de_fp != entry.en_fp
+        base_diverged = _base_carried_divergence(entry)
 
         if member.de is None or member.en is None:
             self._classify_one_sided(member, group, entry, handle)
@@ -1858,6 +1871,27 @@ class _Differ:
                     base=entry,
                 )
                 return
+        if _base_carried_divergence(entry):
+            # Y1: the baseline itself recorded different bytes per side, so
+            # the survivor sitting on its own fingerprint proves nothing
+            # about what the removed side held — mirroring the removal could
+            # delete content that never existed on the removed side. Frame
+            # it, exactly as the edit paths refuse verbatim propagation.
+            self.emit(
+                handle,
+                "conflict",
+                "remove_vs_edit",
+                "both",
+                f"removed on the {gone} side while the pair was already diverged at "
+                f"base — the {present} side's recorded bytes are not the removed "
+                f"side's, so mirroring the removal could delete content the "
+                f"{gone} side never held",
+                group=group,
+                side=gone,
+                member=member,
+                base=entry,
+            )
+            return
         if content_fingerprint(cell) == entry.side_fp(present):
             self.emit(
                 handle,
@@ -2646,6 +2680,25 @@ class _Differ:
                     base=entry,
                 )
             elif other_state == "same":
+                if _base_carried_divergence(entry):
+                    # Y1: same rule as the id-keyed path — a diverged base
+                    # means the survivor's bytes are not the removed side's,
+                    # so the removal must be answered, never mirrored.
+                    self.emit(
+                        handle,
+                        "conflict",
+                        "remove_vs_edit",
+                        "both",
+                        f"removed on the {gone} side while the pair was already "
+                        f"diverged at base — the survivor's recorded bytes are not "
+                        f"the removed side's, so mirroring the removal could "
+                        f"delete content the {gone} side never held",
+                        group=group,
+                        side=gone,
+                        member=member,
+                        base=entry,
+                    )
+                    return
                 self.emit(
                     handle,
                     "remove",
@@ -2713,7 +2766,7 @@ class _Differ:
         twin_cell = en_cell if moved == "de" else de_cell
         if moved_cell is None:  # pragma: no cover - changed implies present
             return
-        if entry.de_fp != entry.en_fp:
+        if _base_carried_divergence(entry):
             # One side moved while the pair was already diverged at base —
             # no side is a safe verbatim source (same rule as id-keyed).
             self.emit(

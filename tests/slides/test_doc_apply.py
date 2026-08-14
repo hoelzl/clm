@@ -1473,6 +1473,11 @@ class TestRemoveVsSplit:
         # bytes per side, the surviving twin's body says nothing about what
         # vanished — the similar-bodies scan must stay silent instead of
         # comparing wrong-side text.
+        # Y1 (review 2026-07-24): the same diverged base also downgrades the
+        # removal itself — this row pinned ``mirror_remove`` before the Y1
+        # guard; it now correctly frames ``remove_vs_edit``, which is what
+        # keeps the similarity scan silent (the scan reads mirror_remove
+        # rows, and a diverged-base removal no longer is one).
         de_cell = '# %% tags=["keep"]\nshared_setup = 111\nprint(shared_setup)\n\n'
         en_cell = '# %% tags=["keep"]\nshared_setup = 222\nprint(shared_setup)\n\n'
         deck = _Deck(
@@ -1489,7 +1494,7 @@ class TestRemoveVsSplit:
         )
         _, diff = deck.diff()
         row = next(i for i in diff.items if i.key == "pos:s0/code/0")
-        assert row.action == "mirror_remove", (row.action, row.detail)
+        assert row.action == "remove_vs_edit", (row.action, row.detail)
         assert not [o for o in diff.observations if o.kind == "suspected_group_split"]
 
     def test_exact_match_does_not_hide_the_similar_split_target(self, tmp_path: Path):

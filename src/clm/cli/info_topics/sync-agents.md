@@ -188,6 +188,13 @@ pass is answering a deck that has already moved.
 `mirror_order`, `mirror_layout`, the `record_*` acknowledgements, and the
 fork/unify/id-stamp transitions. Trust them; review with `git diff`.
 
+`mirror_remove` fires only when the recorded baseline's two halves agreed. If
+the baseline itself carried a byte divergence, a one-sided removal frames
+`remove_vs_edit` instead (answers: `remove` to mirror the deletion, `keep` to
+retain the survivor and re-add it on the removed side) — the survivor sitting
+on its own fingerprint says nothing about what the removed side held, so the
+removal needs your judgement, not a mirror.
+
 `record_neutral` is the one you will see most on a **never-recorded deck**, and
 it writes no file bytes at all — only the ledger entry. It fires for a member
 with no ledger entry whose two halves the engine can compare *directly*: both
