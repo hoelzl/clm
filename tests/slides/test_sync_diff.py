@@ -1451,6 +1451,94 @@ class TestMirrorRemoveCarriedDivergence:
         assert "edited" in item.detail  # the survivor moved too — say so
 
 
+class TestRenameEditGuard:
+    """Y7 (adversarial review 2026-07-24): a one-sided rename+edit defeats
+    both rival checks (the content-matched `_find_rival_stamp` and the
+    pos-only `_pool_side_deficit`) and used to execute mechanical
+    ``copy_new_shared`` + ``mirror_remove`` — a decision-free apply deleted
+    the twin's untouched cell and banked the loss invisibly (the next diff
+    was clean). The removal side must frame ``remove_vs_edit`` when the
+    gone side holds an estranged candidate (an unmatched one-sided id'd or
+    positional cell of the pool), and the copy side must frame
+    ``stamp_vs_new`` because the id-keyed base cell's half is unaccounted
+    for there.
+    """
+
+    OLD = '# %% tags=["keep"] slide_id="old"\nx = 1\n\n'
+
+    @staticmethod
+    def _de(cell: str) -> str:
+        return _build(HEADER_DE, _slide("s0", "de", "Titel"), cell)
+
+    @staticmethod
+    def _en(cell: str) -> str:
+        return _build(HEADER_EN, _slide("s0", "en", "Title"), cell)
+
+    def test_one_sided_rename_edit_frames_both_rows(self):
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        renamed = '# %% tags=["keep"] slide_id="new"\nx = 2\n\n'
+        diff = _diff(base, self._de(renamed), self._en(self.OLD))
+        assert {(i.key, i.outcome, i.action) for i in diff.items} == {
+            ("id:new", "conflict", "stamp_vs_new"),
+            ("id:old", "conflict", "remove_vs_edit"),
+        }, [(i.key, i.outcome, i.action) for i in diff.items]
+        by_key = {i.key: i for i in diff.items}
+        assert by_key["id:old"].side == "de"  # the gone side
+        assert "renamed" in by_key["id:old"].detail  # the hypothesis named
+
+    def test_one_sided_strip_edit_frames_the_removal(self):
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        stripped = '# %% tags=["keep"]\nx = 2\n\n'
+        diff = _diff(base, self._de(stripped), self._en(self.OLD))
+        assert not any(i.action == "mirror_remove" for i in diff.items)
+        by_key = {i.key: i for i in diff.items}
+        assert (by_key["id:old"].outcome, by_key["id:old"].action) == (
+            "conflict",
+            "remove_vs_edit",
+        )
+
+    def test_pure_rename_also_frames_the_copy(self):
+        # No edit: the rival-stamp check already framed id:old, but the
+        # mechanical copy of the renamed cell fired beside the frame — the
+        # unverified-mechanical-row leak class. The widened deficit frames
+        # it too.
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        renamed = '# %% tags=["keep"] slide_id="new"\nx = 1\n\n'
+        diff = _diff(base, self._de(renamed), self._en(self.OLD))
+        assert {(i.key, i.outcome, i.action) for i in diff.items} == {
+            ("id:new", "conflict", "stamp_vs_new"),
+            ("id:old", "conflict", "ambiguous_alignment"),
+        }, [(i.key, i.outcome, i.action) for i in diff.items]
+
+    def test_genuine_one_sided_removal_still_mirrors(self):
+        # Preserved-mechanical pin: no estranged candidate on the gone side,
+        # so the removal of an id-keyed cell stays a mechanical mirror.
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"))
+        item = _only_item(_diff(base, de, self._en(self.OLD)))
+        assert (item.outcome, item.action) == ("remove", "mirror_remove")
+        assert item.direction == "de_to_en"
+
+    def test_genuine_new_idd_cell_still_copies(self):
+        # Preserved-mechanical pin: old kept on both halves, a genuinely new
+        # id'd cell added on one side — no unaccounted base half, no frame.
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        new = '# %% tags=["keep"] slide_id="new"\ny = 5\n\n'
+        item = _only_item(_diff(base, self._de(self.OLD + new), self._en(self.OLD)))
+        assert (item.outcome, item.action) == ("add", "copy_new_shared")
+        assert item.key == "id:new"
+
+    def test_both_sides_rename_still_records_mechanically(self):
+        # The deliberate both-halves rename keeps its quiet record path.
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        renamed = '# %% tags=["keep"] slide_id="new"\nx = 1\n\n'
+        diff = _diff(base, self._de(renamed), self._en(renamed))
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:new", "record_symmetric_add"),
+            ("id:old", "record_remove"),
+        }, [(i.key, i.action) for i in diff.items]
+
+
 class TestStampTwinIdTrustGate:
     """Y5 (adversarial review 2026-07-24): ``pair_positionally`` adopts an
     id-less twin by pool order, and P2 makes a stamped id the member's

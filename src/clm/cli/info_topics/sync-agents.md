@@ -193,7 +193,16 @@ the baseline itself carried a byte divergence, a one-sided removal frames
 `remove_vs_edit` instead (answers: `remove` to mirror the deletion, `keep` to
 retain the survivor and re-add it on the removed side) — the survivor sitting
 on its own fingerprint says nothing about what the removed side held, so the
-removal needs your judgement, not a mirror.
+removal needs your judgement, not a mirror. It also frames when the removed
+side holds an **unpaired cell that could be the same member renamed or
+stripped of its id and edited** (Y7): a one-sided hand rename+edit otherwise
+executes `copy_new_shared` + `mirror_remove` mechanically, and a decision-free
+apply deletes the twin's untouched cell and banks the loss — the next diff is
+clean. If it was a genuine rename, rename the twin identically (`clm slides
+rename-id` renames on both halves and migrates the ledger in one step) and
+re-run report. The copy side frames too: a new id'd cell appearing while an
+**id-keyed** base cell's half is unaccounted for gets the same `stamp_vs_new`
+frame a positional pool gap produces.
 
 Preamble propagation carries the same guard: a one-sided preamble edit on a
 baseline whose recorded preamble fingerprints already differed — or whose
@@ -247,8 +256,9 @@ member present on **one half only** carries no answers at all — `confirm`
 asserts both halves agree — so it comes back `resolution: manual` with the
 repair in its `detail`),
 `stamp_vs_new` (a new id'd cell appeared while a positional cell of the same
-pool vanished on that side — answer `treat_as_new` when the id'd cell really
-is new; see "Replacing a positional cell" below), `remove_vs_split` (a
+pool vanished on that side — or while an **id-keyed** base cell's twin half is
+unaccounted there, the one-sided rename+edit shape — answer `treat_as_new`
+when the id'd cell really is new; see "Replacing a positional cell" below), `remove_vs_split` (a
 removal whose vanished cell is byte-identical — or body-identical, when
 only header attrs/tags changed — to an un-ledgered one-sided
 cell of another group — either a suspected **group split**: an id-keyed

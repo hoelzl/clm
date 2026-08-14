@@ -1115,16 +1115,33 @@ class _Differ:
     def _pool_side_deficit(self, group: str, kind: str, side: Lang) -> bool:
         """True when the (group, kind) pool has fewer current cells on
         ``side`` than unclaimed base entries recorded that side — some base
-        cell is unaccounted for there."""
+        cell is unaccounted for there.
+
+        Y7: id-keyed base entries count too, per HALF. An id-keyed entry's
+        ``side`` half is accounted only when a current member carries that
+        id on ``side`` — a one-sided rename+edit removes the half without
+        touching the entry's claim, and previously defeated every rival
+        check so a mechanical copy/mirror pair executed against the
+        renamed-away cell. Group membership for id-keyed entries comes from
+        the recorded owner anchor; anchor and header entries (owner None)
+        never count.
+        """
         assert self.base is not None
         base_token = self._base_group_for(group)
         base_count = 0
         for entry in self.base.members.values():
-            if not entry.key.startswith("pos:") or entry.key in self.matched_base_keys:
+            if entry.side_fp(side) is None:
                 continue
-            token, entry_kind, _ = entry.key.split(":", 1)[1].rsplit("/", 2)
-            if token == base_token and entry_kind == kind and entry.side_fp(side) is not None:
-                base_count += 1
+            if entry.key.startswith("pos:"):
+                if entry.key in self.matched_base_keys:
+                    continue
+                token, entry_kind, _ = entry.key.split(":", 1)[1].rsplit("/", 2)
+                if token == base_token and entry_kind == kind:
+                    base_count += 1
+            elif entry.owner == f"id:{base_token}" and entry.kind == kind:
+                current = self.current.member_by_key(MemberKey.parse(entry.key))
+                if current is None or current.side(side) is None:
+                    base_count += 1
         cur_count = 0
         for candidate, owner_group in self._pos_members:
             if id(candidate) in self.absorbed_pos or candidate.kind != kind:
@@ -1999,7 +2016,42 @@ class _Differ:
                 base=entry,
             )
             return
+        # Y7: the gone side holding an unpaired cell of this pool (an
+        # unmatched one-sided id'd cell, or a one-sided positional cell)
+        # means this "removal" may be that cell renamed or stripped of its
+        # id and edited — the content-matched rival check above only catches
+        # the untouched rename. Computed once for the branches below; only
+        # id-keyed entries are checked (pos: slots have the pool path's own
+        # stamp suspicion, #600).
+        suspected_rename = entry.key.startswith("id:") and (
+            self._stamped_candidate_exists(group, member.kind, gone)
+            or self._estranged_pos_candidate_exists(group, member.kind, gone)
+        )
         if content_fingerprint(cell) == entry.side_fp(present):
+            if suspected_rename:
+                # Mirroring the removal would delete the survivor while the
+                # estranged cell reconciles elsewhere (or never): a
+                # decision-free apply then banked the loss invisibly. Frame
+                # it (P8), exactly like the pos: pool path (#600).
+                self.emit(
+                    handle,
+                    "conflict",
+                    "remove_vs_edit",
+                    "both",
+                    f"member removed on the {gone} side, the {present} side is "
+                    f"unchanged — but the {gone} side holds an unpaired cell "
+                    f"of this pool that may be this member renamed or "
+                    f"stripped of its id and edited: answer remove if the "
+                    f"removal is genuine (mirrors it), keep to retain and "
+                    f"restore the survivor; if it was a rename, rename the "
+                    f"twin identically (`clm slides rename-id` on both "
+                    f"halves) and re-run report",
+                    group=group,
+                    side=gone,
+                    member=member,
+                    base=entry,
+                )
+                return
             self.emit(
                 handle,
                 "remove",
@@ -2013,12 +2065,20 @@ class _Differ:
                 base=entry,
             )
         else:
+            detail = f"removed on the {gone} side but edited on the {present} side"
+            if suspected_rename:
+                detail += (
+                    f"; the {gone} side also holds an unpaired cell of this pool — "
+                    f"possibly this member renamed or stripped of its id: if so, "
+                    f"rename the twin identically and re-run report instead of "
+                    f"answering"
+                )
             self.emit(
                 handle,
                 "conflict",
                 "remove_vs_edit",
                 "both",
-                f"removed on the {gone} side but edited on the {present} side",
+                detail,
                 group=group,
                 side=gone,
                 member=member,
@@ -2068,6 +2128,22 @@ class _Differ:
             return None
         self.absorbed_pos.add(id(candidates[0]))
         return candidates[0]
+
+    def _estranged_pos_candidate_exists(self, group: str, kind: str, side: Lang) -> bool:
+        """An unclaimed one-sided positional current member on ``side`` in
+        this pool's group/kind — the shape a stripped(+edited) id'd cell
+        takes (Y7). The non-claiming sibling of :meth:`_absorb_any_pos_twin`
+        and the positional counterpart of :meth:`_stamped_candidate_exists`:
+        a suspicion check only — the candidate keeps its own row (cold in
+        ledger mode), nothing is absorbed."""
+        for candidate, owner_group in self._pos_members:
+            if id(candidate) in self.absorbed_pos or candidate.kind != kind:
+                continue
+            if _member_group_token(candidate, owner_group) != group or not candidate.is_one_sided:
+                continue
+            if candidate.side(side) is not None:
+                return True
+        return False
 
     # -- base class localized ---------------------------------------------------
 

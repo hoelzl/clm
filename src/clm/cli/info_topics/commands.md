@@ -2085,6 +2085,10 @@ already agree — ledger-only), the §7.3 transitions (`record_fork`,
 propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
 removal against an already-diverged baseline frames `remove_vs_edit`
 instead — the survivor's bytes say nothing about what the removed side held.
+It also frames when the removed side holds an unpaired cell that could be
+the same member renamed or stripped of its id and edited (Y7) — otherwise a
+one-sided rename+edit executes `copy_new_shared` + `mirror_remove`
+mechanically and banks the deletion invisibly.
 `propagate_preamble` carries the same guard: a one-sided preamble edit on a
 baseline whose recorded preamble fingerprints already differed — or whose
 twin preamble was empty at base — frames `pending_divergence` (choose a side)
@@ -2099,8 +2103,9 @@ banks the pairing so the next report stamps.)
 **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
-`stamp_vs_new` (a suspected id-stamp of a vanished positional cell — answer
-`treat_as_new` to grow the twin / mirror the removal), `remove_vs_split` (a
+`stamp_vs_new` (a suspected id-stamp of a vanished positional cell — or of an
+id-keyed cell whose twin half is unaccounted, the one-sided rename+edit shape
+— answer `treat_as_new` to grow the twin / mirror the removal), `remove_vs_split` (a
 removal that may be a group split — answer `remove` when it is a genuine
 deletion whose bytes merely coincide with another group's new one-sided cell,
 otherwise mirror the inserted slide on the twin and re-report),
