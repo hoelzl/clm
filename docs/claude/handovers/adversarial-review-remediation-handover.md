@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–6 DONE; next is item 7/Y7) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–7 DONE; next is item 8/Y8) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -715,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4), 6 (Y6, PR #829) DONE; next is item 7 (Y7)
+### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4), 6 (Y6, PR #829), 7 (Y7, PR #831) DONE; next is item 8 (Y8)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -918,12 +918,37 @@ the other bugs consume.
    legacy ledger without `preamble_fps`, one-sided or late-created
    companions). When a future item adds a verdict path, review it against
    "is the claim true in every deck/baseline state", not just the happy one.
-7. **Y7 — rename+edit.** ▸ Re-verified OPEN 2026-08-14: `_pool_side_deficit`
-   (`sync_diff.py:1050-1071`) still skips non-`pos:` base entries (`:1058`), and
-   no rename+edit drop-to-cold path exists. Original plan: `sync_diff.py:1149-1227`, `:565-586`: `_pool_side_deficit`
-   counts only `pos:` base entries, so an id-keyed base cell missing on one side
-   never triggers `stamp_vs_new`. Widen it, and make rename+edit drop to cold
-   rather than emitting `mirror_remove` + `copy_new_shared`.
+7. **Y7 — rename+edit.** ▸ **DONE 2026-08-14 (PR #831, four adversarial
+   rounds).** The removal side (`_classify_one_sided`) frames
+   `remove_vs_edit` when the gone side holds an unpaired cell that could be
+   the renamed/stripped member (`_rename_suspicion`: `_stamped_candidate_in`
+   + the new `_estranged_pos_candidate_exists`), reusing the Y1-hardened
+   `remove`/`keep` answers — extending `stamp_vs_new` to id-keyed removal
+   rows was put to the maintainer and rejected (executor view dispatch,
+   `_item_phase`, and the record path would all have moved for zero
+   vocabulary gain). The copy side frames `stamp_vs_new` via the new
+   `_id_half_gap` (per-half existence check for id-keyed entries;
+   `_pool_side_deficit` itself stays pos-only). Tests:
+   `TestRenameEditGuard` in `tests/slides/test_sync_diff.py` (10) and
+   `tests/slides/test_doc_apply.py` (3). The rounds found what the plan's
+   one-liner hid: **round 1, Critical** — feeding the id-keyed gap into the
+   shared deficit let it satisfy the pos→id migration precondition (#644),
+   so a new id'd cell byte-identical to a still-present pool cell stole its
+   base entry (authored cell deleted decision-free, next diff clean — the
+   exact Y7 signature re-opened); **round 1, Important** — a simultaneous
+   one-sided anchor rename breaks group-token matching (base owner names
+   the old anchor id), so the scans fall back to group-unscoped, gated on
+   `_one_sided_anchor_present` (the plain-add over-frame is deliberate and
+   pinned: an anchor renamed AND edited is fingerprint-indistinguishable
+   from remove+add); **round 2, Critical** — `_estranged_pos_candidate_exists`
+   must not skip absorb-claimed cells: a mid-transition fork classified
+   earlier in deck order could claim the estranged cell and hide it,
+   making the removal row depend on cell ORDER. Round 3 was wording-only
+   (the fallback must not claim the candidate is "elsewhere in the deck" —
+   a renamed anchor gives the SAME logical group different tokens); round 4
+   CLEAN. The strip-id variant's copy side already frames `verify_cold` in
+   ledger mode; in snapshot-baseline flows it stays a mechanical
+   (additive-only) `copy_new_shared` — recorded as accepted residue.
 8. **Y8** ▸ Re-verified OPEN 2026-08-14: the lone-candidate claim
    (`sync_diff.py:2422-2423`) still requires no content affinity (it remains
    framed downstream, so misleading rather than silent). Original plan:
