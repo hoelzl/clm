@@ -206,8 +206,12 @@ identity corruption, so no mechanical row (not `record_fork`, not
 `mirror_tags`, not an order mirror) may execute or bank against a pool-order
 guess. Judge the pairing (the report's excerpts show both halves); `confirm`
 banks it and the *next* report stamps mechanically, with the member's other
-aspects re-derived then. If the pairing is wrong, fix the files (reorder or
-hand-add the `slide_id`) before recording.
+aspects re-derived then. One exception: if the tag sets diverge cross-side,
+`confirm` is refused while they do — the gate co-frames a `conflict_tags`
+row for exactly this case; answer it (`de`/`en`) and `confirm` in the same
+document (the mirror lands first), or align the tag lines by hand. If the
+pairing is wrong, fix the files (reorder or hand-add the `slide_id`) before
+recording.
 
 `record_neutral` is the one you will see most on a **never-recorded deck**, and
 it writes no file bytes at all — only the ledger entry. It fires for a member

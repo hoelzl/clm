@@ -92,6 +92,7 @@ class _Deck:
         self,
         decisions: dict[str, doc_apply.Decision] | None = None,
         *,
+        decision_rows: list[doc_apply.Decision] | None = None,
         dry_run: bool = False,
         only_members: set[str] | None = None,
     ) -> doc_apply.ApplyOutcome:
@@ -106,6 +107,7 @@ class _Deck:
             ledger,
             doc_ledger.deck_key_for(self.de_path),
             decisions=decisions,
+            decision_rows=decision_rows,
             only_members=only_members,
             dry_run=dry_run,
         )
@@ -1239,6 +1241,81 @@ class TestStampTrustGate:
             ledger_after.decks[doc_ledger.deck_key_for(deck.de_path)].members
             == ledger_before.decks[doc_ledger.deck_key_for(deck.de_path)].members
         )
+
+    def test_unverified_pairing_with_divergent_tags_stays_answerable(self, tmp_path: Path):
+        """Y5 review round 3 (PR #825, Important): confirm on the pairing frame
+        is refused while tag sets diverge cross-side (_reject_divergent_tags),
+        so the gate co-frames conflict_tags. Confirm alone is rejected naming
+        the (real) tag row; answering the tags row first lets confirm land in
+        the same pass — the executor's documented mirror-then-confirm dance."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# SHARED ONE\n\n',
+            '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# SHARED TWO\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" tags=["b"]\n# SHARED TWO\n\n',
+            '# %% [markdown] lang="en" tags=["a"]\n# SHARED ONE\n\n',
+        )
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"verify_translation", "conflict_tags"}
+        # confirm alone is refused — and the refusal names a REAL row.
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:aa", choice="confirm", action="verify_translation"),
+                doc_apply.Decision(key="id:bb", choice="confirm", action="verify_translation"),
+            ]
+        )
+        assert outcome.error is None
+        rejected = [r for r in outcome.results if r.status == "rejected"]
+        assert len(rejected) == 2 and all("tag" in r.reason for r in rejected)
+        # The designed dance: answer the tags row, then confirm lands.
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:aa", choice="de", action="conflict_tags"),
+                doc_apply.Decision(key="id:aa", choice="confirm", action="verify_translation"),
+                doc_apply.Decision(key="id:bb", choice="de", action="conflict_tags"),
+                doc_apply.Decision(key="id:bb", choice="confirm", action="verify_translation"),
+            ]
+        )
+        assert outcome.error is None, outcome.to_payload()
+        # The confirm LANDS but its recording defers a pass by design (an
+        # answered conflict_tags defers its sibling's record — the banked
+        # state must be the post-mirror one, #615), so pass 2 re-frames the
+        # pairing row alone (tags now agree) and a second confirm banks.
+        _, diff2 = deck.diff()
+        assert {i.action for i in diff2.items} == {"verify_translation"}
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:aa", choice="confirm", action="verify_translation"),
+                doc_apply.Decision(key="id:bb", choice="confirm", action="verify_translation"),
+            ]
+        )
+        assert outcome.error is None, outcome.to_payload()
+        _, diff3 = deck.diff()
+        assert {i.key for i in diff3.items if i.action == "stamp_twin_id"} == {"id:aa", "id:bb"}
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
 
 
 class TestGroupRenameLedgerIntegrity:

@@ -1344,6 +1344,30 @@ class _Differ:
             # pass; the aspects re-derive on the next report once confirm
             # banks the pairing.
             stamp_side = self._pending_stamp_sides.get(handle)
+            # Tags are language-independent (§3.1): if the adopted twin's tag
+            # set diverges, confirm on the pairing row is refused downstream
+            # (_reject_divergent_tags) — co-frame the tags question or the
+            # member deadlocks behind a refusal naming a row that does not
+            # exist (PR #825 review round 3). Never the mechanical
+            # mirror_tags here: attribution against an unverified pairing is
+            # meaningless. conflict_tags answers de/en mirror that side's tag
+            # set; the executor sees the in-place mutation and a co-answered
+            # confirm then lands in the same pass.
+            de, en = member.de, member.en
+            if de is not None and en is not None and set(de.tags) != set(en.tags):
+                self.emit(
+                    handle,
+                    "conflict",
+                    "conflict_tags",
+                    "both",
+                    f"the twins' tag sets diverge (de: {list(de.tags)}, en: "
+                    f"{list(en.tags)}) and the pairing itself is unverified — "
+                    "answer de or en to mirror that side's tag set, then "
+                    "confirm the pairing row",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
             self.emit(
                 handle,
                 "conflict",
@@ -3365,9 +3389,11 @@ class _Differ:
             handle = member.key.render()
             if handle in self._unverified_stamp_pairings:
                 # The adopted twin's physical position is part of the guess —
-                # a wrong adoption would read as a cross-group move and mirror
-                # order mechanically. The pairing frame dominates; placement
-                # re-derives on the next pass (Y5, PR #825 review round 2).
+                # skip it here (Y5, PR #825 review round 2). Nothing is lost:
+                # the pairing's confirm banks the member under its current
+                # group, and lens pairing is region-local, so an adopted pair
+                # always shares one group — no cross-side placement residue
+                # exists to re-derive.
                 continue
             base_de = base_group_of.get(("de", handle))
             base_en = base_group_of.get(("en", handle))
@@ -3488,13 +3514,19 @@ class _Differ:
         """
         # A handle mid-cross-group-move already carries its own placement
         # item — exclude it from the pair evidence or the scope row would
-        # double-frame the same divergence.
-        cur_common = (set(cur_of["de"]) & set(cur_of["en"])) - self._cross_moved
+        # double-frame the same divergence. Handles with an unverified
+        # stamp pairing (Y5) are excluded likewise: the adopted twin's slot
+        # is part of the pool-order guess, so a mirror_order driven by it
+        # would execute the guess while the pairing frame is pending.
+        excluded = self._cross_moved | self._unverified_stamp_pairings
+        cur_common = (set(cur_of["de"]) & set(cur_of["en"])) - excluded
         cur_pair = {lang: [h for h in cur_of[lang] if h in cur_common] for lang in _SIDES}
         pair_diverged = len(cur_common) >= 2 and cur_pair["de"] != cur_pair["en"]
         handle = MemberKey.positional(group, f"order.{part}", 0).render()
 
-        common_set = set(base_of["de"]) & set(base_of["en"]) & set(cur_of["de"]) & set(cur_of["en"])
+        common_set = (
+            set(base_of["de"]) & set(base_of["en"]) & set(cur_of["de"]) & set(cur_of["en"])
+        ) - excluded
         if len(common_set) < 2:
             if pair_diverged:
                 self.emit(

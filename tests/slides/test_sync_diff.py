@@ -18,6 +18,7 @@ import pytest
 from clm.slides.bilingual_doc import BilingualDeck
 from clm.slides.doc_lenses import parse_bundle
 from clm.slides.sync_diff import (
+    MECHANICAL_ACTIONS,
     DeckBaseline,
     DeckDiff,
     baseline_from_deck,
@@ -1603,6 +1604,84 @@ class TestStampTwinIdTrustGate:
         ), [(i.key, i.action, i.detail) for i in diff.items]
         framed = {i.key: i.action for i in diff.items}
         assert framed == {"id:aa": "verify_translation", "id:bb": "verify_translation"}
+
+    def test_unverified_pairing_never_leaks_an_order_mirror(self):
+        """PR #825 review round 3 (Important): the adopted twin's position is
+        part of the guess — ``_diff_order`` must not mirror it mechanically
+        while the pairing frame is pending."""
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _localized("aa", "de", "Apfel"),
+            _localized("xx", "de", "Birne"),
+        )
+        en0 = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _localized("aa", "en", "Apple"),
+            _localized("xx", "en", "Pear"),
+        )
+        base = _snapshot(de0, en0)
+        base.complete = False
+        # EN twin of aa: edited off base, id-stripped, moved below xx — the
+        # adoption pairs it positionally, and its slot feeds the order check.
+        en1 = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _localized("xx", "en", "Pear"),
+            '# %% [markdown] lang="en"\n# Apple v2\n\n',
+        )
+        diff = _diff(base, de0, en1)
+        assert not any(i.action == "mirror_order" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert not any(i.action == "stamp_twin_id" for i in diff.items)
+        assert {i.action for i in diff.items if i.key == "id:aa"} == {"verify_translation"}
+
+    def test_unverified_pairing_with_divergent_tags_co_frames_the_tags_row(self):
+        """PR #825 review round 3 (Important): confirm on the pairing frame is
+        refused while tag sets diverge cross-side (``_reject_divergent_tags``),
+        so suppressing the tags row deadlocked the member — the refusal named a
+        nonexistent item. The gate co-frames ``conflict_tags`` (never the
+        mechanical ``mirror_tags``: attribution against an unverified pairing
+        is meaningless), keeping the executor's mirror-then-confirm dance
+        answerable."""
+        base = _snapshot(
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+        )
+        base.complete = False
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# SHARED ONE\n\n',
+            '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# SHARED TWO\n\n',
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" tags=["b"]\n# SHARED TWO\n\n',
+            '# %% [markdown] lang="en" tags=["a"]\n# SHARED ONE\n\n',
+        )
+        diff = _diff(base, de, en)
+        assert not any(i.action in MECHANICAL_ACTIONS for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        by_key: dict[str, set[str]] = {}
+        for i in diff.items:
+            by_key.setdefault(i.key, set()).add(i.action)
+        assert by_key.get("id:aa") == {"verify_translation", "conflict_tags"}
+        assert by_key.get("id:bb") == {"verify_translation", "conflict_tags"}
 
     def test_gated_stamp_surfaces_in_the_text_report(self):
         """The text report must not lose the pending-stamp signal when the gate
