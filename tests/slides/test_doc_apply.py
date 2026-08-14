@@ -464,6 +464,18 @@ class TestMechanicalRows:
         assert _statuses(outcome)[key] == "already_applied", outcome.to_payload()
         deck.assert_converged()
 
+    def test_companion_preamble_decision_without_companion_files_rejects(self, tmp_path: Path):
+        """A decision aimed at the companion preamble handle on a deck with
+        NO companion files: no such row can have been framed, and no state
+        'already holds' — the honest verdict is rejected, not already_applied
+        (#829 review round 2)."""
+        deck = _deck(tmp_path)  # deck halves only — no companion files
+        key = "pos:~preamble/companion/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "no companion files" in result.reason
+
     def test_group_rename_is_recorded_without_touching_files(self, tmp_path: Path):
         deck = _deck(tmp_path)
         deck.edit_de('slide_id="s0"', 'slide_id="s0-neu"')
