@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–5 DONE; next is item 6/Y6) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–6 DONE; next is item 7/Y7) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -715,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4) DONE; next is item 6 (Y6)
+### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4), 6 (Y6, PR #829) DONE; next is item 7 (Y7)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -888,12 +888,36 @@ the other bugs consume.
    side's fingerprint from the report it answered; on mismatch, reject with
    "re-run report" rather than applying a stale translation and recording it as
    verified (`doc_apply.py:1399`).
-6. **Y6 — preamble divergence guard.** ▸ Re-verified OPEN 2026-08-14: the
-   one-side-moved branch (`sync_diff.py:3589-3598`) still emits mechanical
-   `propagate_preamble` unconditionally; only the neither-moved branch
-   (`:3560-3570`) has the carried-divergence check. Original plan: `sync_diff.py:2560-2599`: extend the
-   carried-divergence check from the neither-moved branch to the one-side-moved
-   branch, matching the cell path at `:1025`.
+6. **Y6 — preamble divergence guard.** ▸ **DONE 2026-08-14 (PR #829).** The
+   one-side-moved branch of `_diff_preambles` now frames `pending_divergence`
+   when the recorded base preambles disagree (`base_de != base_en` — which
+   also covers the one-side-empty-at-base shape), matching the cell path's
+   `_classify_shared` rule; aligned bases keep the mechanical
+   `propagate_preamble` (pinned). Making the frame answerable surfaced two
+   pre-existing apply-side dead ends, fixed in the same PR: a `de`/`en`
+   answer on the member-less `pos:~preamble/<part>/0` handle routed to the
+   *cell* propagate and was rejected with the "carries no member" executor
+   error (now routes to `propagate_preamble`, like `conflict_preamble`), and
+   a landed answer fell through `_record_item` to the member-table upsert
+   (preamble recording is now keyed on the exact handle set
+   `_PREAMBLE_HANDLES`, never a prefix — the parser accepts an anchor
+   literally named `~preamble`). Tests: `TestPropagatePreambleCarriedDivergence`
+   (5 differ-level, incl. the preserved-mechanical pin) and the e2e
+   `test_preamble_edit_on_diverged_base_frames_then_converges`,
+   `test_carried_preamble_divergence_frame_is_answerable`,
+   `test_preamble_named_anchor_members_still_record` in
+   `tests/slides/test_doc_apply.py`. **Review notes for the next items**:
+   five fresh-agent rounds, and the pattern held again — every round found a
+   subtler defect in the fix itself, all in the unmatched-decision VERDICT
+   path this PR added (misleading "no member" verdict → "this member frames"
+   noun → and/or guard on companion presence → frameability judged on file
+   presence only, not the pre-apply baseline). The end state:
+   `_unmatched_decision_result` takes a `_preamble_frameable_parts` set
+   derived from the pre-apply baseline at `apply_deck` entry, and rejects
+   preamble decisions whose part could never have framed a row (cold deck,
+   legacy ledger without `preamble_fps`, one-sided or late-created
+   companions). When a future item adds a verdict path, review it against
+   "is the claim true in every deck/baseline state", not just the happy one.
 7. **Y7 — rename+edit.** ▸ Re-verified OPEN 2026-08-14: `_pool_side_deficit`
    (`sync_diff.py:1050-1071`) still skips non-`pos:` base entries (`:1058`), and
    no rename+edit drop-to-cold path exists. Original plan: `sync_diff.py:1149-1227`, `:565-586`: `_pool_side_deficit`
