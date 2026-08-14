@@ -195,6 +195,13 @@ retain the survivor and re-add it on the removed side) — the survivor sitting
 on its own fingerprint says nothing about what the removed side held, so the
 removal needs your judgement, not a mirror.
 
+Preamble propagation carries the same guard: a one-sided preamble edit on a
+baseline whose recorded preamble fingerprints already differed — or whose
+twin preamble was empty at base — frames `pending_divergence` on the
+`pos:~preamble/<part>/0` handle instead of copying the moved side verbatim
+over the twin. Answer `de` or `en` to propagate that side's preamble and
+record the alignment.
+
 `stamp_twin_id` fires only when the pairing is **ledger-known**: the recorded
 entry the member resolved to (its own id entry, or a positional entry matched
 at migration) agrees with the stamped side's twin — by content fingerprint,

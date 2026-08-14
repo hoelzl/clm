@@ -385,6 +385,50 @@ class TestMechanicalRows:
         assert deck.en_path.read_text(encoding="utf-8").startswith("# preamble v2")
         deck.assert_converged()
 
+    def test_preamble_edit_on_diverged_base_frames_then_converges(self, tmp_path: Path):
+        """Y6: a one-sided preamble edit on a baseline-carried divergence must
+        FRAME (no decision-free file mutation), and the frame must be
+        answerable — frame → decide → converge, not a dead end."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )
+        deck.record()  # the baseline banks the in-flight preamble divergence
+        deck.edit_de("# pre-de", "# pre-de v2")
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:~preamble/deck/0")
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        # No decision: nothing mutates, the row stays pending.
+        outcome = deck.apply()
+        assert not outcome.wrote
+        assert deck.en_path.read_text(encoding="utf-8").startswith("# pre-en\n")
+        assert _statuses(outcome)["pos:~preamble/deck/0"] == "pending"
+        # Answering with the moved side lands the propagate and converges.
+        outcome = deck.apply(_decision(item.key, choice="de"))
+        assert _statuses(outcome)[item.key] == "applied"
+        assert deck.en_path.read_text(encoding="utf-8").startswith("# pre-de v2\n")
+        deck.assert_converged()
+
+    def test_carried_preamble_divergence_frame_is_answerable(self, tmp_path: Path):
+        """The neither-moved preamble frame (pre-existing) must accept its
+        advertised de/en answers — before the apply-side route existed, a
+        side answer on a member-less preamble row was rejected with the
+        'carries no member' executor error, dead-ending the frame."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )
+        deck.record()
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:~preamble/deck/0")
+        assert item.action == "pending_divergence"
+        outcome = deck.apply(_decision(item.key, choice="en"))
+        assert _statuses(outcome)[item.key] == "applied", outcome.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8").startswith("# pre-en\n")
+        deck.assert_converged()
+
     def test_group_rename_is_recorded_without_touching_files(self, tmp_path: Path):
         deck = _deck(tmp_path)
         deck.edit_de('slide_id="s0"', 'slide_id="s0-neu"')

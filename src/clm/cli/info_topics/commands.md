@@ -2085,6 +2085,10 @@ already agree — ledger-only), the §7.3 transitions (`record_fork`,
 propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
 removal against an already-diverged baseline frames `remove_vs_edit`
 instead — the survivor's bytes say nothing about what the removed side held.
+`propagate_preamble` carries the same guard: a one-sided preamble edit on a
+baseline whose recorded preamble fingerprints already differed — or whose
+twin preamble was empty at base — frames `pending_divergence` (choose a side)
+instead of copying the moved side verbatim over the twin.
 `stamp_twin_id` fires only when the pairing is ledger-known — the recorded
 entry the member resolved to agrees with the stamped side's twin (by content
 fingerprint, or pre-fork fingerprint for a fork); a purely positional,
