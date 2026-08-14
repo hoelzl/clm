@@ -1626,7 +1626,7 @@ class TestRenameEditGuard:
         ]
         by_key = {i.key: i for i in diff.items}
         assert by_key["id:old"].action == "remove_vs_edit"
-        assert "elsewhere in the deck" in by_key["id:old"].detail
+        assert "could not be matched to this slide" in by_key["id:old"].detail
         assert by_key["id:n"].action == "stamp_vs_new"
 
 

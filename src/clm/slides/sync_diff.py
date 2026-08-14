@@ -1127,7 +1127,7 @@ class _Differ:
         here let a new id'd cell byte-identical to a still-present pool cell
         steal that cell's base entry (PR #831 review round 1, Critical). The
         stamp-suspicion path needs the wider question — see
-        :meth:`_id_half_gap_exists`.
+        :meth:`_id_half_gap`.
         """
         assert self.base is not None
         base_token = self._base_group_for(group)
@@ -1160,7 +1160,10 @@ class _Differ:
         ANCHOR change defeats the owner match (the base owner names the old
         anchor id, the current group the new one), so with one-sided-anchor
         evidence the scan retries group-unscoped and reports ``"deck"``
-        (PR #831 review round 1).
+        (PR #831 review round 1). The scan is deliberately part-blind (deck
+        vs companion): a relayout combined with a rename+edit would slip a
+        part-filtered check, so both parts count and the detail wording
+        stays at "this slide", never "this pool" (PR #831 review round 3).
         """
         assert self.base is not None
         base_token = self._base_group_for(group)
@@ -1353,10 +1356,11 @@ class _Differ:
                 # add (verbatim copy to the twin, #600); a stamped-edit is
                 # reconciled manually.
                 gap_clause = (
-                    "a base cell of this pool"
+                    "a base cell of this slide"
                     if gap_scope != "deck"
-                    else "a base cell elsewhere in the deck (a one-sided anchor "
-                    "change is in flight, so group matching is unreliable)"
+                    else "a base cell that could not be matched to this slide "
+                    "(a one-sided anchor change is in flight, so group "
+                    "matching is unreliable)"
                 )
                 self.emit(
                     handle,
@@ -2091,10 +2095,11 @@ class _Differ:
             else None
         )
         suspicion_clause = (
-            "an unpaired cell of this pool"
+            "an unpaired cell of this slide"
             if suspicion_scope == "pool"
-            else "an unpaired cell elsewhere in the deck (a one-sided anchor "
-            "change is in flight, so group matching is unreliable)"
+            else "an unpaired cell that could not be matched to this slide "
+            "(a one-sided anchor change is in flight, so group matching is "
+            "unreliable)"
         )
         if content_fingerprint(cell) == entry.side_fp(present):
             if suspicion_scope is not None:
@@ -2207,7 +2212,7 @@ class _Differ:
         positional counterpart of :meth:`_stamped_candidate_exists`: a
         suspicion check only — the candidate keeps its own row (cold in
         ledger mode), nothing is absorbed. ``any_group`` drops the group
-        match for the anchor-rename fallback (see :meth:`_rename_suspected`).
+        match for the anchor-rename fallback (see :meth:`_rename_suspicion`).
 
         Cells in ``absorbed_pos`` are NOT skipped: an absorb claim exists to
         suppress the pool's own mechanical row for a mid-transition twin,
@@ -2236,8 +2241,10 @@ class _Differ:
         candidate's owner group from the changed half), so with
         one-sided-anchor evidence the scan retries group-unscoped and
         reports ``"deck"`` (PR #831 review round 1). A ``"deck"`` result
-        means the candidate was found OUTSIDE this group — the scoped scan
-        already ran.
+        means the group-TOKEN match failed — the candidate may sit in
+        another group OR in this same logical group under a renamed anchor;
+        the scan cannot tell, so details must not claim a location
+        (PR #831 review round 3).
         """
         if self._stamped_candidate_in(
             group, kind, gone, any_group=False
