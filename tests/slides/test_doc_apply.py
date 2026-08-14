@@ -92,6 +92,7 @@ class _Deck:
         self,
         decisions: dict[str, doc_apply.Decision] | None = None,
         *,
+        decision_rows: list[doc_apply.Decision] | None = None,
         dry_run: bool = False,
         only_members: set[str] | None = None,
     ) -> doc_apply.ApplyOutcome:
@@ -106,6 +107,7 @@ class _Deck:
             ledger,
             doc_ledger.deck_key_for(self.de_path),
             decisions=decisions,
+            decision_rows=decision_rows,
             only_members=only_members,
             dry_run=dry_run,
         )
@@ -1065,6 +1067,258 @@ class TestStampVsNew:
         de = deck.de_path.read_text(encoding="utf-8")
         assert de.count("x = 10") == 1 and de.count("y = 20") == 1
         assert "x = 1\n" not in de and "y = 2\n" not in de
+        deck.assert_converged()
+
+
+class TestStampTrustGate:
+    """Y5 (adversarial review 2026-07-24), end to end through the real ledger
+    and executor: a ``stamp_twin_id`` whose pairing is only a pool-order guess
+    must never execute — apply leaves the twin untouched until the pairing is
+    banked by an explicit decision, after which the stamp lands mechanically.
+    """
+
+    def test_apply_never_stamps_a_positionally_guessed_twin(self, tmp_path: Path):
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()  # warm deck; the members below are un-ledgered
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _localized("apples", "de", "Aepfel"),
+            _localized("oranges", "de", "Birnen"),
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# ORANGES text\n\n',
+            '# %% [markdown] lang="en"\n# APPLES text\n\n',
+        )
+        _, diff = deck.diff()
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        deck.apply()  # framed rows only: nothing executes
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="apples"' not in en_text
+        assert 'slide_id="oranges"' not in en_text
+        # The framed path is not a dead end: confirming banks the pairings,
+        # and the NEXT report stamps mechanically.
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="confirm")
+            for i in diff.items
+            if i.action == "verify_cold"
+        }
+        assert len(decisions) == 2
+        outcome = deck.apply(decisions)
+        assert outcome.error is None, outcome.to_payload()
+        _, diff2 = deck.diff()
+        assert {i.key for i in diff2.items if i.action == "stamp_twin_id"} == {
+            "id:apples",
+            "id:oranges",
+        }
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="apples"' in en_text
+        assert 'slide_id="oranges"' in en_text
+        deck.assert_converged()
+
+    def test_forked_pairing_guess_is_framed_not_banked(self, tmp_path: Path):
+        """Y5 review round 1 (PR #825): a complete fork whose twin was adopted
+        by pool order must not bank the pairing via the mechanical
+        ``record_fork`` either — a decision-free apply leaves files AND ledger
+        untouched, and only an explicit confirm unblocks the stamp."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                "# %% [markdown]\n# SHARED ONE\n\n",
+                "# %% [markdown]\n# SHARED TWO\n\n",
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                "# %% [markdown]\n# SHARED ONE\n\n",
+                "# %% [markdown]\n# SHARED TWO\n\n",
+            ),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" slide_id="aa"\n# SHARED ONE\n\n',
+            '# %% [markdown] lang="de" slide_id="bb"\n# SHARED TWO\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# SHARED TWO\n\n',
+            '# %% [markdown] lang="en"\n# SHARED ONE\n\n',
+        )
+        ledger_before = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        _, diff = deck.diff()
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert not any(i.action == "record_fork" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        deck.apply()  # framed rows only: nothing executes, nothing banks
+        assert 'slide_id="aa"' not in deck.en_path.read_text(encoding="utf-8")
+        ledger_after = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        assert (
+            ledger_after.decks[doc_ledger.deck_key_for(deck.de_path)].members
+            == ledger_before.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        )
+        # confirm banks the pairings; the next report stamps mechanically.
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="confirm")
+            for i in diff.items
+            if i.action == "verify_translation"
+        }
+        assert len(decisions) == 2
+        outcome = deck.apply(decisions)
+        assert outcome.error is None, outcome.to_payload()
+        _, diff2 = deck.diff()
+        assert {i.key for i in diff2.items if i.action == "stamp_twin_id"} == {
+            "id:aa",
+            "id:bb",
+        }
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_unverified_pairing_mutates_nothing_mechanically(self, tmp_path: Path):
+        """Y5 review round 2 (PR #825, Important): an unverified-pairing
+        member must not get ANY mechanical row — mirror_tags would copy the
+        foreign twin's tags onto the authoring half while the pairing frame
+        is still pending. A decision-free apply leaves files AND ledger
+        byte-identical."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% [markdown] tags=["a"]\n# ---\n\n',
+                '# %% [markdown] tags=["b"]\n# ---\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% [markdown] tags=["a"]\n# ---\n\n',
+                '# %% [markdown] tags=["b"]\n# ---\n\n',
+            ),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# ---\n\n',
+            '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# ---\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" tags=["b"]\n# ---\n\n',
+            '# %% [markdown] lang="en" tags=["a"]\n# ---\n\n',
+        )
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        ledger_before = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        _, diff = deck.diff()
+        assert not any(i.action in doc_apply.MECHANICAL_ACTIONS for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        deck.apply()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        ledger_after = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        assert (
+            ledger_after.decks[doc_ledger.deck_key_for(deck.de_path)].members
+            == ledger_before.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        )
+
+    def test_unverified_pairing_with_divergent_tags_stays_answerable(self, tmp_path: Path):
+        """Y5 review round 3 (PR #825, Important): confirm on the pairing frame
+        is refused while tag sets diverge cross-side (_reject_divergent_tags),
+        so the gate co-frames conflict_tags. Confirm alone is rejected naming
+        the (real) tag row; answering the tags row first lets confirm land in
+        the same pass — the executor's documented mirror-then-confirm dance."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# SHARED ONE\n\n',
+            '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# SHARED TWO\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" tags=["b"]\n# SHARED TWO\n\n',
+            '# %% [markdown] lang="en" tags=["a"]\n# SHARED ONE\n\n',
+        )
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"verify_translation", "conflict_tags"}
+        # confirm alone is refused — and the refusal names a REAL row.
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:aa", choice="confirm", action="verify_translation"),
+                doc_apply.Decision(key="id:bb", choice="confirm", action="verify_translation"),
+            ]
+        )
+        assert outcome.error is None
+        rejected = [r for r in outcome.results if r.status == "rejected"]
+        assert len(rejected) == 2 and all("tag" in r.reason for r in rejected)
+        # The designed dance: answer the tags row, then confirm lands.
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:aa", choice="de", action="conflict_tags"),
+                doc_apply.Decision(key="id:aa", choice="confirm", action="verify_translation"),
+                doc_apply.Decision(key="id:bb", choice="de", action="conflict_tags"),
+                doc_apply.Decision(key="id:bb", choice="confirm", action="verify_translation"),
+            ]
+        )
+        assert outcome.error is None, outcome.to_payload()
+        # The confirm LANDS (applied, not rejected) but its recording defers a
+        # pass by design (an answered conflict_tags defers its sibling's
+        # record — the banked state must be the post-mirror one, #615)...
+        pass1 = {(r.key, r.action): r for r in outcome.results}
+        assert pass1[("id:aa", "verify_translation")].status == "applied"
+        assert "deferred" in pass1[("id:aa", "verify_translation")].reason
+        # ...so pass 2 re-frames the pairing row alone (tags now agree) and a
+        # second confirm banks.
+        _, diff2 = deck.diff()
+        assert {i.action for i in diff2.items} == {"verify_translation"}
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:aa", choice="confirm", action="verify_translation"),
+                doc_apply.Decision(key="id:bb", choice="confirm", action="verify_translation"),
+            ]
+        )
+        assert outcome.error is None, outcome.to_payload()
+        _, diff3 = deck.diff()
+        assert {i.key for i in diff3.items if i.action == "stamp_twin_id"} == {"id:aa", "id:bb"}
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
         deck.assert_converged()
 
 

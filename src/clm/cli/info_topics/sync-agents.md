@@ -195,6 +195,24 @@ retain the survivor and re-add it on the removed side) — the survivor sitting
 on its own fingerprint says nothing about what the removed side held, so the
 removal needs your judgement, not a mirror.
 
+`stamp_twin_id` fires only when the pairing is **ledger-known**: the recorded
+entry the member resolved to (its own id entry, or a positional entry matched
+at migration) agrees with the stamped side's twin — by content fingerprint,
+or by pre-fork fingerprint (content modulo exactly the `lang` attribute) for
+the fork shape. An id'd cell whose id-less twin was paired purely by position
+— never recorded — frames a single `verify_translation` row and every other
+row for the member is suppressed that pass: a wrong stamp is permanent
+identity corruption, so no mechanical row (not `record_fork`, not
+`mirror_tags`, not an order mirror) may execute or bank against a pool-order
+guess. Judge the pairing (the report's excerpts show both halves); `confirm`
+banks it and the *next* report stamps mechanically, with the member's other
+aspects re-derived then. One exception: if the tag sets diverge cross-side,
+`confirm` is refused while they do — the gate co-frames a `conflict_tags`
+row for exactly this case; answer it (`de`/`en`) and `confirm` in the same
+document (the mirror lands first), or align the tag lines by hand. If the
+pairing is wrong, fix the files (reorder or hand-add the `slide_id`) before
+recording.
+
 `record_neutral` is the one you will see most on a **never-recorded deck**, and
 it writes no file bytes at all — only the ledger entry. It fires for a member
 with no ledger entry whose two halves the engine can compare *directly*: both

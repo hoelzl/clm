@@ -116,6 +116,7 @@ def _render_pair(
                 if hunks:
                     lines.append(f"    {lang} vs base {recovered.base_ref[:12]}:")
                     lines.extend(f"      {hunk_line}" for hunk_line in hunks.splitlines())
+    stamped = {item.key for item in diff.items if item.action == "stamp_twin_id"}
     for obs in diff.observations:
         # Two kinds are worth a line in the human report, for opposite reasons:
         # ``group_order_divergence`` suppresses is_clean (issue #654), so without
@@ -123,7 +124,14 @@ def _render_pair(
         # visible cause; ``uniform_drift_side`` collapses a wall of per-item
         # translate_edit rows into the one reading that answers them together
         # (Q5) — printing it after the items is deliberate, it is a summary.
-        if obs.kind in ("group_order_divergence", "uniform_drift_side"):
+        # ``id_stamp_pending_twin`` prints only when the stamp row was gated
+        # off (Y5: the pairing is not ledger-known) — an emitted stamp row
+        # carries the signal itself, so printing both would be redundant.
+        if obs.kind in ("group_order_divergence", "uniform_drift_side") or (
+            obs.kind == "id_stamp_pending_twin"
+            and obs.member is not None
+            and obs.member.render() not in stamped
+        ):
             lines.append(f"  observation/{obs.kind}: {obs.detail}")
     if base_diffs and batch:
         # The #773 batch summary — like uniform_drift_side, a summary prints

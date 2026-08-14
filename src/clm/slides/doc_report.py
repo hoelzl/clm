@@ -143,13 +143,31 @@ def cold_sweep_hint(diff: DeckDiff) -> str | None:
     """
     questions = [item for item in diff.items if item.action != "record_neutral"]
     if questions and all(item.action == "verify_cold" for item in questions):
-        return (
+        hint = (
             "every member is cold (no ledger entry) — for a freshly authored or "
             "never-recorded deck, review both halves (`record` asserts they are in "
             "sync; its gate only proves the pair is structurally sound, companions "
             "included) and then bank it wholesale with `clm slides sync record DECK` "
             "instead of confirming per item"
         )
+        # Y5: an all-cold report is also what the stamp trust gate produces —
+        # and record banks the positionally guessed id-stamp pairings along
+        # with everything else, so the hint must name them as part of the
+        # review it calls for. (Only GATED stamps are named: an emitted
+        # stamp_twin_id row is ledger-known by construction.)
+        stamped = {item.key for item in diff.items if item.action == "stamp_twin_id"}
+        if any(
+            obs.kind == "id_stamp_pending_twin"
+            and obs.member is not None
+            and obs.member.render() not in stamped
+            for obs in diff.observations
+        ):
+            hint += (
+                "; review any pending id-stamp pairings especially — `record` "
+                "banks a positionally paired twin as the member's identity, so "
+                "a swapped pool order becomes permanent"
+            )
+        return hint
     return None
 
 

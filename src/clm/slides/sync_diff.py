@@ -66,6 +66,7 @@ from clm.slides.doc_identity import (
     MemberBaseline,
     baseline_from_deck,
     content_fingerprint,
+    pre_fork_fingerprint,
 )
 from clm.slides.doc_identity import (
     body_fingerprint as _body_fp,
@@ -567,6 +568,14 @@ class _Differ:
         self.absorbed_pos: set[int] = set()
         #: id-keyed members consumed by another member's conflict item
         self.consumed_id_members: set[str] = set()
+        #: id-stamp observations (the #443 shape), handle → id-less side; the
+        #: stamp is emitted from _diff_id_member, where the ledger's verdict
+        #: on the pairing is known (Y5)
+        self._pending_stamp_sides: dict[str, Lang] = {}
+        #: handles whose pending stamp's pairing is NOT ledger-known — the
+        #: fork classifier must frame the pairing rather than bank it via a
+        #: mechanical record_fork (Y5, PR #825 review round 1)
+        self._unverified_stamp_pairings: set[str] = set()
         #: handles with a framed/mechanical cross-group move item — their
         #: placement is that item's job; the scope pair-parity check must
         #: not double-frame it (#654)
@@ -651,7 +660,13 @@ class _Differ:
         self._id_members = id_members
 
         self._detect_group_renames()
-        self._emit_pending_id_stamps()
+        for obs in self.current.observations:
+            if (
+                obs.kind == "id_stamp_pending_twin"
+                and obs.member is not None
+                and obs.side is not None
+            ):
+                self._pending_stamp_sides[obs.member.render()] = obs.side
         for member, group in id_members:
             self._diff_id_member(member, group)
         self._diff_pos_pools(pos_members)
@@ -662,25 +677,61 @@ class _Differ:
         self._diff_preambles()
         return self._finish()
 
-    def _emit_pending_id_stamps(self) -> None:
-        """§7.3 id-stamp: the #443 one-sided-id shape, observed at parse.
+    def _stamp_pairing_ledger_known(
+        self, entry: MemberBaseline, member: Member, side: Lang
+    ) -> bool:
+        """Does the ledger already know THIS pairing on the stamped side?
+
+        The recorded entry must agree with the twin cell the pool-order
+        adoption picked, modulo only the identity attributes: by content
+        fingerprint (the twin is the recorded cell — e.g. an id stripped
+        from a recorded twin, or a pairing an earlier ``record``/``confirm``
+        banked), or by **pre-fork** fingerprint for the §7.3 fork shape (a
+        fork rewrites exactly the header's ``lang`` attribute, so the
+        comparison is modulo ``lang`` — but tags, owner, vo_anchor, body and
+        separators must still match; a body-only match confuses cells whose
+        bodies collide, PR #825 review round 2).
+        """
+        twin = member.side(side)
+        if twin is None:
+            return False
+        recorded = entry.side_fp(side)
+        if recorded is None:
+            return False
+        return recorded in (content_fingerprint(twin), pre_fork_fingerprint(twin))
+
+    def _emit_pending_id_stamp(self, member: Member, entry: MemberBaseline) -> None:
+        """§7.3 id-stamp: the #443 one-sided-id shape, gated on ledger trust (Y5).
 
         The lens records ``id_stamp_pending_twin`` when an id'd cell adopted
-        a positional twin; the mechanical resolution is stamping the twin,
-        regardless of whether the member's content also moved."""
-        for obs in self.current.observations:
-            if obs.kind != "id_stamp_pending_twin" or obs.member is None:
-                continue
-            member = self.current.member_by_key(obs.member)
-            self.emit(
-                obs.member.render(),
-                "transition",
-                "stamp_twin_id",
-                "en_to_de" if obs.side == "de" else "de_to_en",
-                f"id'd on one half only — stamp the {obs.side} twin (#443)",
-                side=obs.side,
-                member=member,
-            )
+        a positional twin. Completing that adoption mechanically is safe only
+        when the ledger already knows THIS pairing — the adoption itself is a
+        pool-order guess, and P2 makes the stamped id the member's identity,
+        so a wrong stamp is permanent identity corruption (the 2026-07-24
+        review's Y5 repro stamped ``apples`` onto the oranges text).
+
+        Otherwise no stamp is emitted and the member is framed instead (see
+        the ``_unverified_stamp_pairings`` guard at the top of
+        ``_classify_matched``): the agent judges the pairing, ``confirm``
+        banks it, and the next report finds it ledger-known.
+        """
+        handle = member.key.render()
+        side = self._pending_stamp_sides.get(handle)
+        if side is None:
+            return
+        if not self._stamp_pairing_ledger_known(entry, member, side):
+            self._unverified_stamp_pairings.add(handle)
+            return
+        self.emit(
+            handle,
+            "transition",
+            "stamp_twin_id",
+            "en_to_de" if side == "de" else "de_to_en",
+            f"id'd on one half only — stamp the {side} twin (#443)",
+            side=side,
+            member=member,
+            base=entry,
+        )
 
     def _finish(self) -> DeckDiff:
         split_observations = self._reframe_group_split_removals()
@@ -985,6 +1036,7 @@ class _Differ:
             self._diff_unmatched_current(member, group)
             return
         self.matched_base_keys.add(entry.key)
+        self._emit_pending_id_stamp(member, entry)
         self._classify_matched(member, group, entry)
 
     def _match_key_migration(self, member: Member, group: str) -> MemberBaseline | None:
@@ -1280,6 +1332,55 @@ class _Differ:
     def _classify_matched(self, member: Member, group: str, entry: MemberBaseline) -> None:
         handle = entry.key if entry.key.startswith("id:") else member.key.render()
         migrated = self.key_migrations.get(entry.key)
+
+        if handle in self._unverified_stamp_pairings:
+            # Y5 (PR #825): the pending stamp's twin was adopted by pool order
+            # and the ledger does not know the pairing. EVERY other row for
+            # this member would execute or bank against that guess — the
+            # fork's record_fork banks it (round 1), mirror_tags/mirror_layout
+            # /retarget_owner mutate the foreign twin or the authoring half
+            # while the frame is pending (round 2). The conflict_tags doctrine
+            # below applies: one framed row, everything else suppressed this
+            # pass; the aspects re-derive on the next report once confirm
+            # banks the pairing.
+            stamp_side = self._pending_stamp_sides.get(handle)
+            # Tags are language-independent (§3.1): if the adopted twin's tag
+            # set diverges, confirm on the pairing row is refused downstream
+            # (_reject_divergent_tags) — co-frame the tags question or the
+            # member deadlocks behind a refusal naming a row that does not
+            # exist (PR #825 review round 3). Never the mechanical
+            # mirror_tags here: attribution against an unverified pairing is
+            # meaningless. conflict_tags answers de/en mirror that side's tag
+            # set; the executor sees the in-place mutation and a co-answered
+            # confirm then lands in the same pass.
+            de, en = member.de, member.en
+            if de is not None and en is not None and set(de.tags) != set(en.tags):
+                self.emit(
+                    handle,
+                    "conflict",
+                    "conflict_tags",
+                    "both",
+                    f"the twins' tag sets diverge (de: {list(de.tags)}, en: "
+                    f"{list(en.tags)}) and the pairing itself is unverified — "
+                    "answer de or en to mirror that side's tag set, then "
+                    "confirm the pairing row",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
+            self.emit(
+                handle,
+                "conflict",
+                "verify_translation",
+                "both",
+                f"the {stamp_side} twin was paired by pool order and the "
+                "pairing is not ledger-known — verify the pair is a faithful "
+                "rendering before anything banks or mirrors (Y5)",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
 
         # Cross-side tag parity (#615) — an orthogonal aspect row like the
         # layout/owner checks below, but only on the localized path: shared
@@ -3286,6 +3387,14 @@ class _Differ:
                 # (the group's own add/remove items carry the real work).
                 continue
             handle = member.key.render()
+            if handle in self._unverified_stamp_pairings:
+                # The adopted twin's physical position is part of the guess —
+                # skip it here (Y5, PR #825 review round 2). Nothing is lost:
+                # the pairing's confirm banks the member under its current
+                # group, and lens pairing is region-local, so an adopted pair
+                # always shares one group — no cross-side placement residue
+                # exists to re-derive.
+                continue
             base_de = base_group_of.get(("de", handle))
             base_en = base_group_of.get(("en", handle))
             moved_de = base_de is not None and de_group != base_de
@@ -3405,13 +3514,19 @@ class _Differ:
         """
         # A handle mid-cross-group-move already carries its own placement
         # item — exclude it from the pair evidence or the scope row would
-        # double-frame the same divergence.
-        cur_common = (set(cur_of["de"]) & set(cur_of["en"])) - self._cross_moved
+        # double-frame the same divergence. Handles with an unverified
+        # stamp pairing (Y5) are excluded likewise: the adopted twin's slot
+        # is part of the pool-order guess, so a mirror_order driven by it
+        # would execute the guess while the pairing frame is pending.
+        excluded = self._cross_moved | self._unverified_stamp_pairings
+        cur_common = (set(cur_of["de"]) & set(cur_of["en"])) - excluded
         cur_pair = {lang: [h for h in cur_of[lang] if h in cur_common] for lang in _SIDES}
         pair_diverged = len(cur_common) >= 2 and cur_pair["de"] != cur_pair["en"]
         handle = MemberKey.positional(group, f"order.{part}", 0).render()
 
-        common_set = set(base_of["de"]) & set(base_of["en"]) & set(cur_of["de"]) & set(cur_of["en"])
+        common_set = (
+            set(base_of["de"]) & set(base_of["en"]) & set(cur_of["de"]) & set(cur_of["en"])
+        ) - excluded
         if len(common_set) < 2:
             if pair_diverged:
                 self.emit(

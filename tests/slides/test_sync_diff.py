@@ -18,6 +18,7 @@ import pytest
 from clm.slides.bilingual_doc import BilingualDeck
 from clm.slides.doc_lenses import parse_bundle
 from clm.slides.sync_diff import (
+    MECHANICAL_ACTIONS,
     DeckBaseline,
     DeckDiff,
     baseline_from_deck,
@@ -1393,6 +1394,340 @@ class TestMirrorRemoveCarriedDivergence:
         assert (item.outcome, item.action) == ("conflict", "remove_vs_edit")
         assert "diverged at base" in item.detail
         assert "edited" in item.detail  # the survivor moved too — say so
+
+
+class TestStampTwinIdTrustGate:
+    """Y5 (adversarial review 2026-07-24): ``pair_positionally`` adopts an
+    id-less twin by pool order, and P2 makes a stamped id the member's
+    identity — so a mechanical ``stamp_twin_id`` on a pairing the ledger
+    does not know is permanent identity corruption (the review's repro
+    stamped ``apples`` onto the oranges text). The stamp may execute
+    mechanically only when the pairing is ledger-known: recorded under the
+    member's own key with the twin's current fingerprint, or content-matched
+    via a pos→id key migration. Anything else stays framed — ``confirm``
+    banks the pairing and the NEXT report stamps mechanically.
+    """
+
+    @staticmethod
+    def _warm_ledger_base() -> DeckBaseline:
+        base = _snapshot(
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        base.complete = False  # ledger semantics: a missing entry is cold, never "new"
+        return base
+
+    # The Y5 repro state: two localized cells added per side; the EN twins
+    # are id-less and SWAPPED, so pool order marries each id to the other
+    # text. Equal cardinality — the #716 residue guard does not fire.
+    _DE_SWAPPED = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        _localized("apples", "de", "Aepfel"),
+        _localized("oranges", "de", "Birnen"),
+    )
+    _EN_SWAPPED = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] lang="en"\n# ORANGES text\n\n',
+        '# %% [markdown] lang="en"\n# APPLES text\n\n',
+    )
+
+    def test_swapped_idless_twins_are_never_stamped_mechanically(self):
+        """The Y5 repro: no ledger entry knows either pairing, so both members
+        stay framed and NO stamp executes."""
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        stamps = [i for i in diff.items if i.action == "stamp_twin_id"]
+        assert stamps == [], [(i.key, i.action, i.detail) for i in diff.items]
+        framed = {i.key: i.action for i in diff.items}
+        assert framed == {"id:apples": "verify_cold", "id:oranges": "verify_cold"}
+        # The observation still surfaces, so the report names the pending stamp.
+        pending = {o.member.value for o in diff.observations if o.kind == "id_stamp_pending_twin"}
+        assert pending == {"apples", "oranges"}
+
+    def test_confirmed_pairing_stamps_mechanically_on_the_next_pass(self):
+        """The framed path is not a dead end: once the pairing is banked
+        (``confirm`` / ``record``), the next report finds it ledger-known and
+        the stamp is mechanical."""
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        assert not any(i.action == "stamp_twin_id" for i in diff.items)
+        banked = _snapshot(self._DE_SWAPPED, self._EN_SWAPPED)
+        banked.complete = False
+        diff2 = _diff(banked, self._DE_SWAPPED, self._EN_SWAPPED)
+        stamps = {i.key for i in diff2.items if i.action == "stamp_twin_id"}
+        assert stamps == {"id:apples", "id:oranges"}, [
+            (i.key, i.action, i.detail) for i in diff2.items
+        ]
+
+    def test_ledger_known_pairing_restores_a_stripped_id_mechanically(self):
+        """Pin (must survive the gate): the id was recorded on BOTH halves and
+        stripped from EN with the text untouched — the pairing is ledger-known,
+        so re-stamping it stays mechanical."""
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("m1", "de", "DE Text"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _localized("m1", "en", "EN text"))
+        base = _snapshot(de, en)
+        base.complete = False
+        item = _only_item(_diff(base, de, en.replace(' slide_id="m1"', "")))
+        assert (item.outcome, item.action) == ("transition", "stamp_twin_id")
+        assert item.side == "en"
+
+    def test_one_sided_ledger_entry_does_not_trust_the_positional_twin(self):
+        """A ledger entry that recorded only the DE half proves the ID, not the
+        PAIRING — the newly authored id-less EN twin is still a pool-order
+        guess, so no mechanical stamp."""
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("m1", "de", "DE Text"))
+        base = _snapshot(de, _build(HEADER_EN, _slide("s0", "en", "Title")))
+        base.complete = False
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# EN text\n\n',
+        )
+        diff = _diff(base, de, en)
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert {i.action for i in diff.items if i.key == "id:m1"} == {"verify_translation"}
+
+    # -- the fork route around the gate (PR #825 review round 1) ----------------
+    #
+    # fork_match migrates a positional base entry by a body match on EITHER
+    # side, so a fork can establish the member's identity without establishing
+    # the STAMPED side's pairing. Two recorded shared cells forked into
+    # localized cells, DE halves id'd, EN twins id-less and swapped.
+    _FORK_BASE_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        "# %% [markdown]\n# SHARED ONE\n\n",
+        "# %% [markdown]\n# SHARED TWO\n\n",
+    )
+    _FORK_BASE_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        "# %% [markdown]\n# SHARED ONE\n\n",
+        "# %% [markdown]\n# SHARED TWO\n\n",
+    )
+    _FORK_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% [markdown] lang="de" slide_id="aa"\n# SHARED ONE\n\n',
+        '# %% [markdown] lang="de" slide_id="bb"\n# SHARED TWO\n\n',
+    )
+    _FORK_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] lang="en"\n# SHARED TWO\n\n',
+        '# %% [markdown] lang="en"\n# SHARED ONE\n\n',
+    )
+
+    def test_fork_adoption_with_swapped_twin_neither_stamps_nor_banks(self):
+        """The fork Y5 route: suppressing the stamp is not enough — the same
+        pass's mechanical ``record_fork`` would bank the guessed pairing and
+        the next report would find it 'ledger-known'. Both must stay framed."""
+        base = _snapshot(self._FORK_BASE_DE, self._FORK_BASE_EN)
+        base.complete = False
+        diff = _diff(base, self._FORK_DE, self._FORK_EN)
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert not any(i.action == "record_fork" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        framed = {i.key: i.action for i in diff.items}
+        assert framed == {"id:aa": "verify_translation", "id:bb": "verify_translation"}
+
+    def test_fork_with_true_twin_still_stamps_and_records_mechanically(self):
+        """Pin: the legitimate fork — the EN twin's body IS the recorded shared
+        body, so the pairing is content-established on both sides and the fork
+        plus stamp stay mechanical."""
+        base = _snapshot(
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), "# %% [markdown]\n# SHARED ONE\n\n"),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), "# %% [markdown]\n# SHARED ONE\n\n"),
+        )
+        base.complete = False
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" slide_id="aa"\n# SHARED ONE\n\n',
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# SHARED ONE\n\n',
+        )
+        diff = _diff(base, de, en)
+        actions = {i.action for i in diff.items if i.key == "id:aa"}
+        assert actions == {"stamp_twin_id", "record_fork"}, [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+
+    # -- same-body/different-header collision (PR #825 review round 2) ---------
+    #
+    # Two recorded shared cells with IDENTICAL bodies but different tags,
+    # forked with id'd DE halves and swapped id-less EN twins. A body-only
+    # trust check cannot tell the cells apart — the header (tags) is exactly
+    # what must stay load-bearing.
+    _COLLIDE_BASE_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% [markdown] tags=["a"]\n# ---\n\n',
+        '# %% [markdown] tags=["b"]\n# ---\n\n',
+    )
+    _COLLIDE_BASE_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] tags=["a"]\n# ---\n\n',
+        '# %% [markdown] tags=["b"]\n# ---\n\n',
+    )
+    _COLLIDE_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# ---\n\n',
+        '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# ---\n\n',
+    )
+    _COLLIDE_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] lang="en" tags=["b"]\n# ---\n\n',
+        '# %% [markdown] lang="en" tags=["a"]\n# ---\n\n',
+    )
+
+    def test_same_body_different_tags_fork_swap_is_not_ledger_known(self):
+        """PR #825 review round 2 (Critical): the stamped side must match the
+        recorded entry modulo EXACTLY the lang attribute — a body-only match
+        confuses cells whose bodies collide."""
+        base = _snapshot(self._COLLIDE_BASE_DE, self._COLLIDE_BASE_EN)
+        base.complete = False
+        diff = _diff(base, self._COLLIDE_DE, self._COLLIDE_EN)
+        assert not any(
+            i.action in ("stamp_twin_id", "record_fork", "mirror_tags") for i in diff.items
+        ), [(i.key, i.action, i.detail) for i in diff.items]
+        framed = {i.key: i.action for i in diff.items}
+        assert framed == {"id:aa": "verify_translation", "id:bb": "verify_translation"}
+
+    def test_unverified_pairing_never_leaks_an_order_mirror(self):
+        """PR #825 review round 3 (Important): the adopted twin's position is
+        part of the guess — ``_diff_order`` must not mirror it mechanically
+        while the pairing frame is pending."""
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _localized("aa", "de", "Apfel"),
+            _localized("xx", "de", "Birne"),
+        )
+        en0 = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _localized("aa", "en", "Apple"),
+            _localized("xx", "en", "Pear"),
+        )
+        base = _snapshot(de0, en0)
+        base.complete = False
+        # EN twin of aa: edited off base, id-stripped, moved below xx — the
+        # adoption pairs it positionally, and its slot feeds the order check.
+        en1 = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _localized("xx", "en", "Pear"),
+            '# %% [markdown] lang="en"\n# Apple v2\n\n',
+        )
+        diff = _diff(base, de0, en1)
+        assert not any(i.action == "mirror_order" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert not any(i.action == "stamp_twin_id" for i in diff.items)
+        assert {i.action for i in diff.items if i.key == "id:aa"} == {"verify_translation"}
+
+    def test_unverified_pairing_with_divergent_tags_co_frames_the_tags_row(self):
+        """PR #825 review round 3 (Important): confirm on the pairing frame is
+        refused while tag sets diverge cross-side (``_reject_divergent_tags``),
+        so suppressing the tags row deadlocked the member — the refusal named a
+        nonexistent item. The gate co-frames ``conflict_tags`` (never the
+        mechanical ``mirror_tags``: attribution against an unverified pairing
+        is meaningless), keeping the executor's mirror-then-confirm dance
+        answerable."""
+        base = _snapshot(
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% [markdown] tags=["a"]\n# SHARED ONE\n\n',
+                '# %% [markdown] tags=["b"]\n# SHARED TWO\n\n',
+            ),
+        )
+        base.complete = False
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# SHARED ONE\n\n',
+            '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# SHARED TWO\n\n',
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" tags=["b"]\n# SHARED TWO\n\n',
+            '# %% [markdown] lang="en" tags=["a"]\n# SHARED ONE\n\n',
+        )
+        diff = _diff(base, de, en)
+        assert not any(i.action in MECHANICAL_ACTIONS for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        by_key: dict[str, set[str]] = {}
+        for i in diff.items:
+            by_key.setdefault(i.key, set()).add(i.action)
+        assert by_key.get("id:aa") == {"verify_translation", "conflict_tags"}
+        assert by_key.get("id:bb") == {"verify_translation", "conflict_tags"}
+
+    def test_gated_stamp_surfaces_in_the_text_report(self):
+        """The text report must not lose the pending-stamp signal when the gate
+        suppresses the stamp row (PR #825 review round 1, minor): the JSON
+        report carries the ``id_stamp_pending_twin`` observation; the text
+        report must print it too, or a human reader sees only bare verify_cold
+        rows with no hint that an identity decision is pending."""
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from clm.cli.commands.slides import sync_v3
+
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        bundle = SimpleNamespace(de_path=Path("slides_t.de.py"))
+        text = sync_v3._render_pair(bundle, diff)  # type: ignore[arg-type]
+        lines = [ln for ln in text.splitlines() if "id_stamp_pending_twin" in ln]
+        assert len(lines) == 2, text
+
+    def test_trusted_stamp_does_not_double_print_the_observation(self):
+        """A stamp row that WAS emitted carries the signal itself; printing the
+        observation too would be a redundant line per trusted stamp."""
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from clm.cli.commands.slides import sync_v3
+
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("m1", "de", "DE Text"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _localized("m1", "en", "EN text"))
+        base = _snapshot(de, en)
+        base.complete = False
+        diff = _diff(base, de, en.replace(' slide_id="m1"', ""))
+        bundle = SimpleNamespace(de_path=Path("slides_t.de.py"))
+        text = sync_v3._render_pair(bundle, diff)  # type: ignore[arg-type]
+        assert "stamp_twin_id" in text  # the row itself
+        assert "id_stamp_pending_twin" not in text  # no redundant observation line
+
+    def test_cold_sweep_hint_names_pending_id_stamp_pairings(self):
+        """The wholesale-record hint fires on an all-verify_cold report —
+        exactly the gated-stamp shape — and must say that `record` banks the
+        positionally guessed pairings too (PR #825 review round 1, minor)."""
+        from clm.slides.doc_report import cold_sweep_hint
+
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        hint = cold_sweep_hint(diff)
+        assert hint is not None
+        assert "id-stamp" in hint
 
 
 class TestTagParity:

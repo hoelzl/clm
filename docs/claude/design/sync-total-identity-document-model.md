@@ -178,7 +178,8 @@ with these supporting rules:
 - **Cross-half id disagreement is a transition, not a regime split.** A cell
   id'd on one half and id-less on the other (the #443 shape) parses as one
   member with an `id-stamp pending twin` transition (§7.3) — a mechanical item
-  that stamps the twin — because the id'd side's key wins and the twin is
+  that stamps the twin once the pairing is ledger-known, framed until then —
+  because the id'd side's key wins and the twin is
   located by rule 2 within the same group. Under the current engine this
   configuration selects *two different classifiers*; here it is one row in the
   transition table.
@@ -550,7 +551,19 @@ Base class **localized** (two bodies):
   choice.
 - **Id-stamp (id-less → id'd, incl. one-half-only).** Observed id on one half,
   none on the twin: mechanical `stamp twin` item (the #443 shape, reduced to a
-  one-row transition). Observed id on a previously positional member: the key
+  one-row transition) — **but only when the pairing is ledger-known** (Y5,
+  adversarial review 2026-07-24): the ledger entry the member resolved to
+  (its own id entry, or a recorded positional entry matched at migration)
+  must agree with the stamped side's twin — by content fingerprint, or, for
+  the fork shape, by *pre-fork* fingerprint (content modulo exactly the
+  `lang` attribute a fork adds; tags, owner, vo_anchor, body and separators
+  must still match). A purely positional, never-recorded adoption frames a
+  single `verify_translation` row and suppresses every other row for the
+  member this pass — the stamp fixes identity (P2), so no mechanical row
+  (not `record_fork`, not `mirror_tags`, not an order mirror) may execute or
+  bank against a pool-order guess. `confirm` banks the pairing and the next
+  pass stamps mechanically; the suppressed aspects re-derive then.
+  Observed id on a previously positional member: the key
   migrates `pos:… → id:…` in the ledger entry *at record time*, an explicit,
   logged rename of the key — one of exactly **two** places key migration is
   allowed.

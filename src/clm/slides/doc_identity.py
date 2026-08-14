@@ -55,6 +55,7 @@ __all__ = [
     "lines_fingerprint",
     "member_group_token",
     "pair_signature",
+    "pre_fork_fingerprint",
 ]
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
@@ -90,6 +91,36 @@ def pair_signature(cell: SideCell) -> str:
     lines = lines_sans_id(cell)
     header = _FOR_SLIDE_ATTR_RE.sub("", lines[0])
     return hashlib.sha256("\n".join((header, *lines[1:])).encode("utf-8")).hexdigest()
+
+
+# The lang attribute a §7.3 fork adds to the header — stripped for the
+# pre-fork fingerprint alongside slide_id.
+_LANG_ATTR_RE = re.compile(r'\s*lang="(?:de|en)"')
+
+
+def pre_fork_fingerprint(cell: SideCell) -> str:
+    """The content fingerprint modulo the ``lang`` attribute (and ``slide_id``).
+
+    A §7.3 fork rewrites exactly the header's ``lang`` attribute, so a forked
+    cell's pre-fork identity is its content modulo that one attribute — tags,
+    owner, vo_anchor, body and separators still have to match the recorded
+    cell. This is the comparison the Y5 stamp trust gate needs: a body-only
+    match confuses cells whose bodies collide (tiny separator cells collide
+    by construction), and a full-content match rejects the legitimate fork.
+    For a cell with no lang attribute this equals :func:`content_fingerprint`.
+
+    Known limitation (PR #825 review round 4, minor): the strip is a plain
+    regex, so a pathological tag VALUE containing the substring
+    ``lang="de"``/``lang="en"`` is over-stripped too — the same shape
+    ``_SLIDE_ID_ATTR_RE`` and ``_FOR_SLIDE_ATTR_RE`` already have, and
+    self-consistent with the engine's own header grammar (its parser reads
+    the same substring as the lang attribute). The header-grammar-owned
+    strip is future hardening, not a correctness gap in practice.
+    """
+    lines = lines_sans_id(cell)
+    return hashlib.sha256(
+        "\n".join((_LANG_ATTR_RE.sub("", lines[0]), *lines[1:])).encode("utf-8")
+    ).hexdigest()
 
 
 def body_fingerprint(cell: SideCell) -> str:
