@@ -661,6 +661,43 @@ class TestDecisions:
         assert "y = 99" not in deck.de_path.read_text(encoding="utf-8")
         deck.assert_converged()
 
+    def test_remove_vs_edit_keep_lands_under_a_shifted_pool_pairing(self, tmp_path: Path):
+        """#824 review round 2: when the removed side still holds a sibling
+        cell, the parser shifts the pool pairing and the survivor's member
+        carries the NEIGHBOR's cell on the removed side. `keep` must still
+        re-add the survivor — `copy_new`'s `member.side(target)` existence
+        check answers for the neighbor, not the slot, and wrongly rejects
+        with 'already exists'."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x", 98),
+                _shared_code("y", 2),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x", 1),
+                _shared_code("y", 2),
+            ),
+        )
+        deck.record()  # diverged base: DE x=98, EN x=1
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            # x removed on EN — y shifts into x's parse slot
+            _shared_code("y", 2),
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert item.action == "remove_vs_edit"
+        outcome = deck.apply(_decision(item.key, choice="keep"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert "x = 98" in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
 
 class TestColdBodyRecovery:
     """Issue #572: a `body` answer fixes a stale twin on a two-sided

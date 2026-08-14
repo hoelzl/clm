@@ -799,6 +799,47 @@ class _Executor(DeckEmitter):
             new_cell = evolve(moved, lines=moved.lines)
         self.insert_mirrored(member, source, target, moved.part, new_cell)
 
+    def keep_survivor(self, item: DiffItem, gone: Lang) -> None:
+        """remove_vs_edit ``keep``: retain the survivor, re-add it on the gone side.
+
+        Slot-aware twin of :meth:`copy_new`. Under a shifted pool pairing the
+        survivor's parse member can carry a NEIGHBORING slot's cell on the
+        ``gone`` side, so ``copy_new``'s ``member.side(target)`` existence
+        check answers for the neighbor and wrongly rejects a keep that should
+        land (#824 review round 2). The slot's own gone-side cell exists iff a
+        current cell still carries the slot's recorded gone-side fingerprint —
+        that shape means the removal row is stale, not that the keep is wrong.
+        """
+        present = _other(gone)
+        holder, cell = self._locate_twin(item, present)
+        if item.base is not None:
+            base_fp = item.base.side_fp(gone)
+            if base_fp is not None:
+                still_present = [
+                    m
+                    for m in self.streams.get((gone, cell.part), [])
+                    if (c := m.side(gone)) is not None and content_fingerprint(c) == base_fp
+                ]
+                if still_present:
+                    raise _ItemError(
+                        f"the {gone} side of {item.key} already exists — the removal "
+                        f"row is stale; re-run report"
+                    )
+        if cell.lang_attr:
+            # Same mint as copy_new (#717): the target half's lang variant.
+            header = swap_lang(cell.header, gone)
+            new_cell = evolve(cell, lines=(header, *cell.lines[1:]), lang_attr=gone)
+        else:
+            new_cell = evolve(cell, lines=cell.lines)
+        into = None
+        if holder.side(gone) is not None:
+            # Shifted pool pairing: the survivor's member already carries a
+            # NEIGHBORING slot's gone-side cell — the re-add needs its own
+            # member, or the insert would overwrite the neighbor (#824 review
+            # round 2).
+            into = evolve(holder, de=None, en=None)
+        self.insert_mirrored(holder, present, gone, cell.part, new_cell, into=into)
+
     def mirror_remove(self, item: DiffItem, gone: Lang) -> None:
         present = _other(gone)
         member, cell = self._locate_twin(item, present)
@@ -1683,12 +1724,17 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         ex.set_side(holder, survivor, None)
         return
     if choice == "keep":
-        # remove_vs_edit: keep the edited survivor and re-add it on the twin.
+        # remove_vs_edit: keep the survivor and re-add it on the removed side.
+        # Slot-aware (NOT copy_new): under a shifted pool pairing copy_new's
+        # member.side(target) existence check answers for a NEIGHBORING slot's
+        # cell and wrongly rejects a keep that should land (#824 review
+        # round 2) — and the report advertises keep on every remove_vs_edit
+        # row, so advertising a rejected answer would be a defect (:174).
         if item.side is None:
             raise _ItemError(
                 f"{item.key} names no removed side — reconcile manually (edit + record)"
             )
-        ex.copy_new(item, _other(item.side))
+        ex.keep_survivor(item, item.side)
         return
     if choice == "treat_as_new":
         # stamp_vs_new (#600): the agent judged the suspected stamped-edit to

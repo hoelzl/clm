@@ -1877,15 +1877,21 @@ class _Differ:
             # about what the removed side held — mirroring the removal could
             # delete content that never existed on the removed side. Frame
             # it, exactly as the edit paths refuse verbatim propagation.
+            detail = (
+                f"removed on the {gone} side while the pair was already diverged at "
+                f"base — the {present} side's recorded bytes are not the removed "
+                f"side's, so mirroring the removal could delete content the "
+                f"{gone} side never held"
+            )
+            if content_fingerprint(cell) != entry.side_fp(present):
+                # Keep the pre-guard signal: the survivor isn't at base either.
+                detail += f"; the {present} side is also edited off base"
             self.emit(
                 handle,
                 "conflict",
                 "remove_vs_edit",
                 "both",
-                f"removed on the {gone} side while the pair was already diverged at "
-                f"base — the {present} side's recorded bytes are not the removed "
-                f"side's, so mirroring the removal could delete content the "
-                f"{gone} side never held",
+                detail,
                 group=group,
                 side=gone,
                 member=member,

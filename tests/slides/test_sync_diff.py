@@ -1378,6 +1378,22 @@ class TestMirrorRemoveCarriedDivergence:
         # copies (never deletes), so it is safe on a diverged base.
         assert by_key["id:x-stamped"].action == "stamp_vs_new"
 
+    def test_diverged_base_removal_with_edited_survivor_keeps_both_clauses(self):
+        """The Y1 guard's detail must still say when the survivor ALSO moved
+        off base — the pre-existing 'edited on the {present} side' clause
+        tells the agent the survivor isn't at base; dropping it thins the
+        frame (PR #824 review round 2, minor)."""
+        de = DE0.replace(
+            '# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 98'
+        )
+        en = EN0.replace('# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 1')
+        base = _snapshot(de, en)  # diverged base: DE x=98, EN x=1
+        en_removed = EN0.replace('# %% tags=["keep"]\nx = 1\n\n', "")
+        item = _only_item(_diff(base, de.replace("x = 98", "x = 99"), en_removed))
+        assert (item.outcome, item.action) == ("conflict", "remove_vs_edit")
+        assert "diverged at base" in item.detail
+        assert "edited" in item.detail  # the survivor moved too — say so
+
 
 class TestTagParity:
     """Cross-side tag parity as an orthogonal aspect row (issue #615).

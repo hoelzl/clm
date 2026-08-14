@@ -127,13 +127,26 @@ class DeckEmitter:
                 return
 
     def insert_mirrored(
-        self, member: Member, source: Lang, target: Lang, part: str, new_cell: SideCell
+        self,
+        member: Member,
+        source: Lang,
+        target: Lang,
+        part: str,
+        new_cell: SideCell,
+        *,
+        into: Member | None = None,
     ) -> None:
         """Insert ``member``'s new ``target`` cell after the mirrored predecessor.
 
         Walk backwards from the member's position in the *source* stream to
         the nearest member that also has a cell in the target stream; insert
         right after it (or at the top of the file when none precedes it).
+
+        ``into`` is the member receiving the new cell and entering the target
+        stream; it defaults to ``member`` itself. Pass a distinct fresh member
+        when the positioning member already carries a DIFFERENT slot's target
+        cell (a shifted pool pairing — #824 review round 2): reusing it would
+        overwrite the neighbor's cell via ``set_side``.
 
         Source-only members between that predecessor and the inserted member
         may be the source's copies of target-only cells sitting just past the
@@ -179,8 +192,8 @@ class DeckEmitter:
         self._check_anchor_adjacency(
             member, source, target, insert_at, source_stream, target_stream
         )
-        target_stream.insert(insert_at, member)
-        self.set_side(member, target, new_cell)
+        target_stream.insert(insert_at, into if into is not None else member)
+        self.set_side(into if into is not None else member, target, new_cell)
 
     @staticmethod
     def _check_anchor_adjacency(
