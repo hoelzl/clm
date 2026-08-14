@@ -2082,7 +2082,10 @@ item seeds order trust for the scopes whose sides agree.
 `mirror_order`, `mirror_layout`, the `record_*` acknowledgements (both sides
 already agree — ledger-only), the §7.3 transitions (`record_fork`,
 `record_unify`, `stamp_twin_id`, `record_key_migration`), and preamble
-propagation. **Framed actions** (need a decision): `translate_edit`,
+propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
+removal against an already-diverged baseline frames `remove_vs_edit`
+instead — the survivor's bytes say nothing about what the removed side held.)
+**Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
 `stamp_vs_new` (a suspected id-stamp of a vanished positional cell — answer

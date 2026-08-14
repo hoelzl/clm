@@ -661,6 +661,179 @@ class TestDecisions:
         assert "y = 99" not in deck.de_path.read_text(encoding="utf-8")
         deck.assert_converged()
 
+    def test_remove_vs_edit_keep_lands_under_a_shifted_pool_pairing(self, tmp_path: Path):
+        """#824 review round 2: when the removed side still holds a sibling
+        cell, the parser shifts the pool pairing and the survivor's member
+        carries the NEIGHBOR's cell on the removed side. `keep` must still
+        re-add the survivor — `copy_new`'s `member.side(target)` existence
+        check answers for the neighbor, not the slot, and wrongly rejects
+        with 'already exists'."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x", 98),
+                _shared_code("y", 2),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x", 1),
+                _shared_code("y", 2),
+            ),
+        )
+        deck.record()  # diverged base: DE x=98, EN x=1
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            # x removed on EN — y shifts into x's parse slot
+            _shared_code("y", 2),
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert item.action == "remove_vs_edit"
+        outcome = deck.apply(_decision(item.key, choice="keep"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert "x = 98" in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
+    def test_remove_vs_edit_keep_not_blocked_by_byte_duplicate(self, tmp_path: Path):
+        """#824 review round 3: a gone-side cell that merely BYTE-MATCHES the
+        slot's recorded fingerprint (a duplicated pool sibling) is not the
+        slot's own cell — `keep` must land, not reject as 'stale' (the
+        fingerprint-collision staleness scan false-positived here and its
+        're-run report' advice changed nothing)."""
+        dup_de = '# %% tags=["keep"]\nsetup = 1\n\n'
+        dup_en = '# %% tags=["keep"]\nsetup = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), dup_de, dup_de),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), dup_en, dup_en),
+        )
+        deck.record()  # both slots diverged at base: (setup=1, setup=2) twice
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), dup_en)  # one dropped
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert item.action == "remove_vs_edit"
+        outcome = deck.apply(_decision(item.key, choice="keep"))
+        result = next(r for r in outcome.results if r.key == item.key)
+        assert result.status == "applied", (result.status, result.reason)
+        assert "setup = 1" in deck.en_path.read_text(encoding="utf-8")
+
+    def test_remove_vs_edit_keep_not_blocked_by_a_stamped_twin(self, tmp_path: Path):
+        """#824 review round 3: content_fingerprint is modulo slide_id, so an
+        unmatched id'd cell carrying the removed cell's bytes collides with
+        the slot's base fingerprint — it is a suspected stamp, not proof the
+        slot's cell still exists. `keep` must land."""
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), _shared_code("x", 98)),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("x", 1)),
+        )
+        deck.record()  # diverged base: DE x=98, EN x=1
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            # the positional cell is gone, but a stamped cell carries its bytes
+            '# %% tags=["keep"] slide_id="x-stamped"\nx = 1',
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert item.action == "remove_vs_edit"
+        outcome = deck.apply(_decision(item.key, choice="keep"))
+        result = next(r for r in outcome.results if r.key == item.key)
+        assert result.status == "applied", (result.status, result.reason)
+        assert "x = 98" in deck.en_path.read_text(encoding="utf-8")
+
+    def test_batched_keeps_on_a_shifted_pool_defer_behind_the_earlier_row(self, tmp_path: Path):
+        """#824 review round 4: two keeps answered in one document on a pool
+        whose pairing is shifted (x and y both removed on EN) must NOT both
+        execute — the second keep's insert anchors on the cross-paired member
+        carrying z's cell and the target stream comes out x, z, y, which the
+        re-parse then banks as a swapped base. The earlier keep lands; the
+        later one DEFERS and lands in a follow-up pass, in order."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x", 98),
+                _shared_code("y", 97),
+                _shared_code("z", 3),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x", 1),
+                _shared_code("y", 2),
+                _shared_code("z", 3),
+            ),
+        )
+        deck.record()  # diverged base on x and y, z in sync
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("z", 3))
+        _, diff = deck.diff()
+        assert {i.key: i.action for i in diff.items} == {
+            "pos:s0/code/0": "remove_vs_edit",
+            "pos:s0/code/1": "remove_vs_edit",
+        }
+        # Pass 1: answer keep on BOTH — only the earliest may land.
+        outcome = deck.apply(
+            {
+                "pos:s0/code/0": doc_apply.Decision(key="pos:s0/code/0", choice="keep"),
+                "pos:s0/code/1": doc_apply.Decision(key="pos:s0/code/1", choice="keep"),
+            }
+        )
+        statuses = _statuses(outcome)
+        assert statuses["pos:s0/code/0"] == "applied"
+        assert statuses["pos:s0/code/1"] == "deferred"
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert "x = 98" in en_text and "y = 97" not in en_text
+        assert en_text.index("x = 98") < en_text.index("z = 3")
+        # Pass 2: the deferred row re-frames (the frozen pool was not banked)
+        # and is now the earliest removal row — its keep lands, in order.
+        _, diff2 = deck.diff()
+        item = next(i for i in diff2.items if i.key == "pos:s0/code/1")
+        assert item.action == "remove_vs_edit"
+        outcome2 = deck.apply(_decision(item.key, choice="keep"))
+        assert _statuses(outcome2)[item.key] == "applied"
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert en_text.index("x = 98") < en_text.index("y = 97") < en_text.index("z = 3")
+        # Pass 3: the re-framed carried divergence on x resolves with a side answer.
+        _, diff3 = deck.diff()
+        carried = [i for i in diff3.items if i.action == "pending_divergence"]
+        outcome3 = deck.apply({i.key: doc_apply.Decision(key=i.key, choice="de") for i in carried})
+        deck.assert_converged()
+
+    def test_keep_defers_while_an_earlier_pool_removal_row_is_pending(self, tmp_path: Path):
+        """The single-keep variant: answering keep on a LATER slot while the
+        earlier removal row is unanswered must defer, not land at the wrong
+        position (the pool freeze leaves the row unbanked, but the file bytes
+        would already be mis-ordered)."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x", 98),
+                _shared_code("y", 97),
+                _shared_code("z", 3),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x", 1),
+                _shared_code("y", 2),
+                _shared_code("z", 3),
+            ),
+        )
+        deck.record()
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("z", 3))
+        outcome = deck.apply(_decision("pos:s0/code/1", choice="keep"))
+        statuses = _statuses(outcome)
+        assert statuses["pos:s0/code/1"] == "deferred"
+        assert "y = 97" not in deck.en_path.read_text(encoding="utf-8")
+
 
 class TestColdBodyRecovery:
     """Issue #572: a `body` answer fixes a stale twin on a two-sided
@@ -1473,6 +1646,11 @@ class TestRemoveVsSplit:
         # bytes per side, the surviving twin's body says nothing about what
         # vanished — the similar-bodies scan must stay silent instead of
         # comparing wrong-side text.
+        # Y1 (review 2026-07-24): the same diverged base also downgrades the
+        # removal itself — this row pinned ``mirror_remove`` before the Y1
+        # guard; it now correctly frames ``remove_vs_edit``, which is what
+        # keeps the similarity scan silent (the scan reads mirror_remove
+        # rows, and a diverged-base removal no longer is one).
         de_cell = '# %% tags=["keep"]\nshared_setup = 111\nprint(shared_setup)\n\n'
         en_cell = '# %% tags=["keep"]\nshared_setup = 222\nprint(shared_setup)\n\n'
         deck = _Deck(
@@ -1489,7 +1667,7 @@ class TestRemoveVsSplit:
         )
         _, diff = deck.diff()
         row = next(i for i in diff.items if i.key == "pos:s0/code/0")
-        assert row.action == "mirror_remove", (row.action, row.detail)
+        assert row.action == "remove_vs_edit", (row.action, row.detail)
         assert not [o for o in diff.observations if o.kind == "suspected_group_split"]
 
     def test_exact_match_does_not_hide_the_similar_split_target(self, tmp_path: Path):

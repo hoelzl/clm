@@ -799,6 +799,37 @@ class _Executor(DeckEmitter):
             new_cell = evolve(moved, lines=moved.lines)
         self.insert_mirrored(member, source, target, moved.part, new_cell)
 
+    def keep_survivor(self, item: DiffItem, gone: Lang) -> None:
+        """remove_vs_edit ``keep``: retain the survivor, re-add it on the gone side.
+
+        Slot-aware twin of :meth:`copy_new`. Under a shifted pool pairing the
+        survivor's parse member can carry a NEIGHBORING slot's cell on the
+        ``gone`` side, so ``copy_new``'s ``member.side(target)`` existence
+        check answers for the neighbor and wrongly rejects a keep that should
+        land (#824 review round 2). There is deliberately NO fingerprint
+        staleness scan here: a gone-side cell that byte-matches the slot's
+        recorded fingerprint is not necessarily the slot's own cell (pool
+        duplicates; a stamped twin — fingerprints are modulo slide_id), and
+        the CLI re-diffs from current files at apply time, so a genuinely
+        stale removal row never reaches the executor (#824 review round 3).
+        """
+        present = _other(gone)
+        holder, cell = self._locate_twin(item, present)
+        if cell.lang_attr:
+            # Same mint as copy_new (#717): the target half's lang variant.
+            header = swap_lang(cell.header, gone)
+            new_cell = evolve(cell, lines=(header, *cell.lines[1:]), lang_attr=gone)
+        else:
+            new_cell = evolve(cell, lines=cell.lines)
+        into = None
+        if holder.side(gone) is not None:
+            # Shifted pool pairing: the survivor's member already carries a
+            # NEIGHBORING slot's gone-side cell — the re-add needs its own
+            # member, or the insert would overwrite the neighbor (#824 review
+            # round 2).
+            into = evolve(holder, de=None, en=None)
+        self.insert_mirrored(holder, present, gone, cell.part, new_cell, into=into)
+
     def mirror_remove(self, item: DiffItem, gone: Lang) -> None:
         present = _other(gone)
         member, cell = self._locate_twin(item, present)
@@ -1100,6 +1131,36 @@ def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
             if kind.startswith(marker):
                 return None
         return group, kind
+    return None
+
+
+#: Removal-family rows whose presence in a pool means the pool's positional
+#: parse pairing is SHIFTED: a slot is missing on one side, so the lens's
+#: cursor pairs every later cell with the wrong twin. (``record_remove`` is
+#: absent from both files and shifts nothing.)
+_SHIFTING_REMOVAL_ACTIONS = frozenset(
+    {"mirror_remove", "remove_vs_edit", "remove_vs_split", "stamp_vs_new"}
+)
+
+
+def _earlier_pool_removal(items: list[DiffItem], item: DiffItem) -> DiffItem | None:
+    """The first removal-family row PRECEDING ``item`` in its pool, if any.
+
+    Pool slots are emitted in ordinal order, and a shifted pairing makes a
+    later slot's keep insert anchor on a cross-paired member — the target
+    stream comes out mis-ordered and the re-parse banks the swap (#824
+    review round 4). A keep is only safe when it is the pool's earliest
+    unresolved removal row; every later one defers to a follow-up pass,
+    which re-pairs the pool first.
+    """
+    scope = _pool_scope(item)
+    if scope is None:
+        return None
+    for other in items:
+        if other is item:
+            break
+        if other.action in _SHIFTING_REMOVAL_ACTIONS and _pool_scope(other) == scope:
+            return other
     return None
 
 
@@ -1683,12 +1744,17 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         ex.set_side(holder, survivor, None)
         return
     if choice == "keep":
-        # remove_vs_edit: keep the edited survivor and re-add it on the twin.
+        # remove_vs_edit: keep the survivor and re-add it on the removed side.
+        # Slot-aware (NOT copy_new): under a shifted pool pairing copy_new's
+        # member.side(target) existence check answers for a NEIGHBORING slot's
+        # cell and wrongly rejects a keep that should land (#824 review
+        # round 2) — and the report advertises keep on every remove_vs_edit
+        # row, so advertising a rejected answer would be a defect (:174).
         if item.side is None:
             raise _ItemError(
                 f"{item.key} names no removed side — reconcile manually (edit + record)"
             )
-        ex.copy_new(item, _other(item.side))
+        ex.keep_survivor(item, item.side)
         return
     if choice == "treat_as_new":
         # stamp_vs_new (#600): the agent judged the suspected stamped-edit to
@@ -1932,13 +1998,40 @@ def apply_deck(
                 landed.append((item, "apply"))
                 outcome.results.append(ItemResult(item.key, item.action, "applied", item.detail))
             elif decision is not None:
-                _execute_decision(ex, item, decision, bundle.comment_token)
-                landed.append((item, "agent"))
-                outcome.results.append(
-                    ItemResult(
-                        item.key, item.action, "applied", f"decision: {decision.choice or 'body'}"
-                    )
+                blocker = (
+                    _earlier_pool_removal(diff.items, item)
+                    if decision.choice == "keep" and item.action == "remove_vs_edit"
+                    else None
                 )
+                if blocker is not None:
+                    # #824 review round 4: a keep behind an unresolved pool
+                    # removal inserts at the wrong position (the shifted
+                    # pairing anchors the walk on a cross-paired member).
+                    # Defer: the pool freeze keeps the row unbanked, and the
+                    # next pass re-pairs the pool so the keep lands in order.
+                    unresolved_items.append(item)
+                    outcome.results.append(
+                        ItemResult(
+                            item.key,
+                            item.action,
+                            "deferred",
+                            f"the pool's pairing is shifted by the earlier "
+                            f"{blocker.action} row {blocker.key} — resolve that row "
+                            f"first, re-run report, then answer this one (a shifted "
+                            f"pool takes one keep per pass)",
+                        )
+                    )
+                else:
+                    _execute_decision(ex, item, decision, bundle.comment_token)
+                    landed.append((item, "agent"))
+                    outcome.results.append(
+                        ItemResult(
+                            item.key,
+                            item.action,
+                            "applied",
+                            f"decision: {decision.choice or 'body'}",
+                        )
+                    )
             else:
                 assert item.action in FRAMED_ACTIONS
                 unresolved_items.append(item)
