@@ -715,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 3 (Y3 + D9), 5 (Y4) DONE; next is item 2 (Y1)
+### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 5 (Y4) DONE; next is item 4 (Y5)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -786,12 +786,17 @@ the other bugs consume.
      CSharpCourses) to size the blast radius, and prepare the fix-forward
      instructions. The `cold_sweep_hint` in `doc_report.py:85` actively steers
      agents toward wholesale `record` — re-word it once the gate is strict.
-2. **Y1 — `mirror_remove` divergence guard.** ▸ Re-verified OPEN 2026-08-14:
-   both removal paths unchanged since the review — the id-keyed path
-   (`sync_diff.py:1861-1873`) and the positional-pool path (`:2648-2659`)
-   still check only that the survivor sits on its own base fingerprint; the
-   `de_fp != en_fp` downgrade exists only on the edit paths (`:1650/1683`,
-   `:2716-2730`). `src/clm/slides/sync_diff.py:1203-1215`
+2. **Y1 — `mirror_remove` divergence guard.** ▸ **DONE** (2026-08-14, PR #824).
+   Both removal paths now consult the extracted `_base_carried_divergence()`
+   predicate (the edit paths' inline checks call it too) and frame
+   `remove_vs_edit` on a diverged base: id-keyed at `sync_diff.py` in
+   `_classify_one_sided`, positional in `_classify_pool_slot`. Regression
+   tests `TestMirrorRemoveCarriedDivergence` (both paths, RED before the fix)
+   plus the preserved-mechanical pin; `test_diverged_base_has_no_similarity_proxy`
+   flipped from pinning `mirror_remove` to the framed row (its #630 subject
+   unchanged). `remove_vs_edit` chosen over `pending_divergence` because its
+   `remove`/`keep` answers fit a one-sided member. Original plan text:
+   `src/clm/slides/sync_diff.py:1203-1215`
    and `:1911-1922`: a two-sided base with `entry.de_fp != entry.en_fp` must
    downgrade `mirror_remove` from MECHANICAL to a framed `remove_vs_edit` /
    `pending_divergence`. This mirrors the guard the edit paths already have at
