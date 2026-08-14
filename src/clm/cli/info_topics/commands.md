@@ -2087,10 +2087,11 @@ removal against an already-diverged baseline frames `remove_vs_edit`
 instead — the survivor's bytes say nothing about what the removed side held.
 `stamp_twin_id` fires only when the pairing is ledger-known — the recorded
 entry the member resolved to agrees with the stamped side's twin (by content
-fingerprint, or body fingerprint for a fork); a purely positional,
-never-recorded adoption stays framed as `verify_cold` / `verify_translation`
-(a complete fork's `record_fork` is framed with it), and `confirm` banks the
-pairing so the next report stamps.)
+fingerprint, or pre-fork fingerprint for a fork); a purely positional,
+never-recorded adoption frames one `verify_translation` row with every other
+row for the member suppressed that pass (no `record_fork`, `mirror_tags`, or
+order mirror may execute or bank against a pool-order guess), and `confirm`
+banks the pairing so the next report stamps.)
 **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,

@@ -1560,6 +1560,50 @@ class TestStampTwinIdTrustGate:
             (i.key, i.action, i.detail) for i in diff.items
         ]
 
+    # -- same-body/different-header collision (PR #825 review round 2) ---------
+    #
+    # Two recorded shared cells with IDENTICAL bodies but different tags,
+    # forked with id'd DE halves and swapped id-less EN twins. A body-only
+    # trust check cannot tell the cells apart — the header (tags) is exactly
+    # what must stay load-bearing.
+    _COLLIDE_BASE_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% [markdown] tags=["a"]\n# ---\n\n',
+        '# %% [markdown] tags=["b"]\n# ---\n\n',
+    )
+    _COLLIDE_BASE_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] tags=["a"]\n# ---\n\n',
+        '# %% [markdown] tags=["b"]\n# ---\n\n',
+    )
+    _COLLIDE_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# ---\n\n',
+        '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# ---\n\n',
+    )
+    _COLLIDE_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] lang="en" tags=["b"]\n# ---\n\n',
+        '# %% [markdown] lang="en" tags=["a"]\n# ---\n\n',
+    )
+
+    def test_same_body_different_tags_fork_swap_is_not_ledger_known(self):
+        """PR #825 review round 2 (Critical): the stamped side must match the
+        recorded entry modulo EXACTLY the lang attribute — a body-only match
+        confuses cells whose bodies collide."""
+        base = _snapshot(self._COLLIDE_BASE_DE, self._COLLIDE_BASE_EN)
+        base.complete = False
+        diff = _diff(base, self._COLLIDE_DE, self._COLLIDE_EN)
+        assert not any(
+            i.action in ("stamp_twin_id", "record_fork", "mirror_tags") for i in diff.items
+        ), [(i.key, i.action, i.detail) for i in diff.items]
+        framed = {i.key: i.action for i in diff.items}
+        assert framed == {"id:aa": "verify_translation", "id:bb": "verify_translation"}
+
     def test_gated_stamp_surfaces_in_the_text_report(self):
         """The text report must not lose the pending-stamp signal when the gate
         suppresses the stamp row (PR #825 review round 1, minor): the JSON

@@ -1190,6 +1190,56 @@ class TestStampTrustGate:
         assert outcome.all_applied, outcome.to_payload()
         deck.assert_converged()
 
+    def test_unverified_pairing_mutates_nothing_mechanically(self, tmp_path: Path):
+        """Y5 review round 2 (PR #825, Important): an unverified-pairing
+        member must not get ANY mechanical row — mirror_tags would copy the
+        foreign twin's tags onto the authoring half while the pairing frame
+        is still pending. A decision-free apply leaves files AND ledger
+        byte-identical."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% [markdown] tags=["a"]\n# ---\n\n',
+                '# %% [markdown] tags=["b"]\n# ---\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% [markdown] tags=["a"]\n# ---\n\n',
+                '# %% [markdown] tags=["b"]\n# ---\n\n',
+            ),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" tags=["a"] slide_id="aa"\n# ---\n\n',
+            '# %% [markdown] lang="de" tags=["b"] slide_id="bb"\n# ---\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" tags=["b"]\n# ---\n\n',
+            '# %% [markdown] lang="en" tags=["a"]\n# ---\n\n',
+        )
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        ledger_before = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        _, diff = deck.diff()
+        assert not any(i.action in doc_apply.MECHANICAL_ACTIONS for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        deck.apply()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        ledger_after = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        assert (
+            ledger_after.decks[doc_ledger.deck_key_for(deck.de_path)].members
+            == ledger_before.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        )
+
 
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename

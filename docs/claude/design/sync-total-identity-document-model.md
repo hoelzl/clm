@@ -555,13 +555,14 @@ Base class **localized** (two bodies):
   adversarial review 2026-07-24): the ledger entry the member resolved to
   (its own id entry, or a recorded positional entry matched at migration)
   must agree with the stamped side's twin — by content fingerprint, or, for
-  the fork shape (the fork rewrites the stamped side's header; the body
-  survives), by body fingerprint. A purely positional, never-recorded
-  adoption stays framed (`verify_cold` / `verify_translation`) — the stamp
-  fixes identity (P2), so the engine never executes a pool-order guess;
-  `confirm` banks the pairing and the next pass stamps mechanically. The
-  same guard frames a complete fork's `record_fork` when the pairing is
-  unverified, since that row would bank the guessed pairing one row later.
+  the fork shape, by *pre-fork* fingerprint (content modulo exactly the
+  `lang` attribute a fork adds; tags, owner, vo_anchor, body and separators
+  must still match). A purely positional, never-recorded adoption frames a
+  single `verify_translation` row and suppresses every other row for the
+  member this pass — the stamp fixes identity (P2), so no mechanical row
+  (not `record_fork`, not `mirror_tags`, not an order mirror) may execute or
+  bank against a pool-order guess. `confirm` banks the pairing and the next
+  pass stamps mechanically; the suppressed aspects re-derive then.
   Observed id on a previously positional member: the key
   migrates `pos:… → id:…` in the ledger entry *at record time*, an explicit,
   logged rename of the key — one of exactly **two** places key migration is
