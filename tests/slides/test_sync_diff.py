@@ -729,6 +729,61 @@ class TestPreambles:
         assert (item.outcome, item.action) == ("conflict", "conflict_preamble")
 
 
+class TestPropagatePreambleCarriedDivergence:
+    """Y6 (review 2026-07-24): the one-side-moved preamble branch carries the
+    same divergence guard the cell path does — a baseline whose recorded
+    preamble fingerprints differ per side has no safe verbatim source, so a
+    one-sided preamble edit must FRAME, never mechanically propagate over the
+    twin. Reachable for pre-existing or escape-hatch baselines even with the
+    Y2 strict ``record`` gate (a trivial DE kernel-metadata edit replaced the
+    entire EN preamble before this guard).
+    """
+
+    def test_de_edit_on_diverged_base_frames_pending_divergence(self):
+        # The old row was a mechanical propagate_preamble; the new row is the
+        # frame. _only_item pins both sides of that exchange at once.
+        base = _snapshot("# pre-de\n" + DE0, "# pre-en\n" + EN0)
+        diff = _diff(base, "# pre-de v2\n" + DE0, "# pre-en\n" + EN0)
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        assert item.direction == "none"
+        assert item.key == "pos:~preamble/deck/0"
+
+    def test_en_edit_on_diverged_base_frames_pending_divergence(self):
+        base = _snapshot("# pre-de\n" + DE0, "# pre-en\n" + EN0)
+        diff = _diff(base, "# pre-de\n" + DE0, "# pre-en v2\n" + EN0)
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        assert item.direction == "none"
+
+    def test_preamble_added_on_one_side_of_diverged_base_frames(self):
+        # Base carried an empty DE preamble against recorded EN content: the
+        # new DE preamble must not mechanically overwrite the EN preamble.
+        base = _snapshot(DE0, "# pre-en\n" + EN0)
+        diff = _diff(base, "# pre-de new\n" + DE0, "# pre-en\n" + EN0)
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+
+    def test_preamble_added_on_aligned_empty_base_stays_mechanical(self):
+        # The common flow — no preambles at base, one side adds one — keeps
+        # its mechanical propagate (preserved-mechanical pin).
+        base = _snapshot(DE0, EN0)
+        diff = _diff(base, "# new preamble\n" + DE0, EN0)
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("mechanical", "propagate_preamble")
+        assert item.direction == "de_to_en"
+
+    def test_diverged_companion_preamble_edit_frames(self):
+        # Same guard on the companion part, not just the deck part.
+        de_c = _build("# c-de\n", _companion_cell("s0-vo", "de", "s0", "DE Notiz"))
+        en_c = _build("# c-en\n", _companion_cell("s0-vo", "en", "s0", "EN note"))
+        base = _snapshot(DE0, EN0, de_c, en_c)
+        diff = _diff(base, DE0, EN0, de_c.replace("# c-de", "# c-de v2"), en_c)
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        assert item.key == "pos:~preamble/companion/0"
+
+
 class TestEnvelope:
     def test_payload_announces_the_wire_schema_with_stable_booleans(self):
         base = _snapshot(DE0, EN0)

@@ -3774,6 +3774,23 @@ class _Differ:
                 )
                 continue
             moved: Lang = "de" if moved_de else "en"
+            if base_de != base_en:
+                # Y6: the baseline itself carried a cross-side preamble
+                # divergence (or one side's preamble was empty/absent at
+                # base), so the unmoved side is not a safe verbatim
+                # overwrite target — frame, exactly as the cell path refuses
+                # verbatim propagation on a diverged base
+                # (:meth:`_classify_shared`).
+                self.emit(
+                    handle,
+                    "conflict",
+                    "pending_divergence",
+                    "none",
+                    f"{part} preamble changed on the {moved} side while the "
+                    f"preambles were already diverged at base — "
+                    f"align before recording",
+                )
+                continue
             self.emit(
                 handle,
                 "mechanical",

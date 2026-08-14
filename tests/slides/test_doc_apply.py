@@ -385,6 +385,159 @@ class TestMechanicalRows:
         assert deck.en_path.read_text(encoding="utf-8").startswith("# preamble v2")
         deck.assert_converged()
 
+    def test_preamble_edit_on_diverged_base_frames_then_converges(self, tmp_path: Path):
+        """Y6: a one-sided preamble edit on a baseline-carried divergence must
+        FRAME (no decision-free file mutation), and the frame must be
+        answerable — frame → decide → converge, not a dead end."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )
+        deck.record()  # the baseline banks the in-flight preamble divergence
+        deck.edit_de("# pre-de", "# pre-de v2")
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:~preamble/deck/0")
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        # No decision: nothing mutates, the row stays pending.
+        outcome = deck.apply()
+        assert not outcome.wrote
+        assert deck.en_path.read_text(encoding="utf-8").startswith("# pre-en\n")
+        assert _statuses(outcome)["pos:~preamble/deck/0"] == "pending"
+        # Answering with the moved side lands the propagate and converges.
+        outcome = deck.apply(_decision(item.key, choice="de"))
+        assert _statuses(outcome)[item.key] == "applied"
+        assert deck.en_path.read_text(encoding="utf-8").startswith("# pre-de v2\n")
+        deck.assert_converged()
+
+    def test_preamble_named_anchor_members_still_record(self, tmp_path: Path):
+        """Key-collision regression: the parser accepts an anchor literally
+        named ``~preamble``, whose member keys (``pos:~preamble/code/0``)
+        share the preamble-handle prefix. Their rows must record as MEMBERS —
+        a prefix-matched preamble route would swallow the record."""
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("~preamble", "de", "Titel"), _shared_code("x")),
+            _build(HEADER_EN, _slide("~preamble", "en", "Title"), _shared_code("x")),
+        )
+        deck.record()
+        deck.edit_de("x = 1", "x = 2")
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        assert "x = 2" in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
+    def test_carried_preamble_divergence_frame_is_answerable(self, tmp_path: Path):
+        """The neither-moved preamble frame (pre-existing) must accept its
+        advertised de/en answers — before the apply-side route existed, a
+        side answer on a member-less preamble row was rejected with the
+        'carries no member' executor error, dead-ending the frame."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )
+        deck.record()
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:~preamble/deck/0")
+        assert item.action == "pending_divergence"
+        outcome = deck.apply(_decision(item.key, choice="en"))
+        assert _statuses(outcome)[item.key] == "applied", outcome.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8").startswith("# pre-en\n")
+        deck.assert_converged()
+
+    def test_stale_preamble_decision_reports_already_applied(self, tmp_path: Path):
+        """A decision re-aimed at an already-resolved preamble frame matches
+        no current item. The handle never names a member, so the unmatched
+        path must not misreport it as 'no member with this handle' (#829
+        review round 1)."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )
+        deck.record()
+        key = "pos:~preamble/deck/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        assert _statuses(outcome)[key] == "applied", outcome.to_payload()
+        outcome = deck.apply(_decision(key, choice="de"))  # stale repeat
+        assert _statuses(outcome)[key] == "already_applied", outcome.to_payload()
+        deck.assert_converged()
+
+    def test_companion_preamble_decision_without_companion_files_rejects(self, tmp_path: Path):
+        """A decision aimed at the companion preamble handle on a deck with
+        NO companion files: no such row can have been framed, and no state
+        'already holds' — the honest verdict is rejected, not already_applied
+        (#829 review round 2)."""
+        deck = _deck(tmp_path)  # deck halves only — no companion files
+        key = "pos:~preamble/companion/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "preamble row is frameable" in result.reason
+
+    def test_companion_preamble_decision_with_one_sided_companion_rejects(self, tmp_path: Path):
+        """A companion file on ONE side only: the differ never frames a
+        companion preamble row for that layout (it skips the part unless both
+        halves carry the file), so a decision on the companion preamble
+        handle is just as unanswerable as with no companion at all — reject,
+        do not claim already_applied (#829 review round 3)."""
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(_vo_cell("s0-vo", "s0", "de", "Hallo Welt")), encoding="utf-8"
+        )
+        deck.record()
+        key = "pos:~preamble/companion/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "preamble row is frameable" in result.reason
+
+    def test_companion_preamble_decision_with_late_companions_rejects(self, tmp_path: Path):
+        """Companion files created AFTER the last record: the baseline banked
+        no companion preamble fingerprints, so the differ skips the part
+        (file creation is layout state) and no companion preamble row is
+        frameable — a decision on the handle rejects, it does not claim
+        already_applied (#829 review round 4)."""
+        deck = _deck(tmp_path)  # recorded WITHOUT companion files
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            "# c-de\n" + _build(_vo_cell("s0-vo", "s0", "de", "Hallo Welt")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            "# c-en\n" + _build(_vo_cell("s0-vo", "s0", "en", "Hello World")),
+            encoding="utf-8",
+        )
+        key = "pos:~preamble/companion/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "preamble row is frameable" in result.reason
+
+    def test_preamble_decision_on_cold_deck_rejects(self, tmp_path: Path):
+        """No ledger at all: the differ never reaches the preamble pass
+        without a baseline, so a preamble decision was never an answer to a
+        reportable row — reject, do not claim already_applied (#829 review
+        round 4)."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )  # deliberately never recorded
+        key = "pos:~preamble/deck/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "preamble row is frameable" in result.reason
+
     def test_group_rename_is_recorded_without_touching_files(self, tmp_path: Path):
         deck = _deck(tmp_path)
         deck.edit_de('slide_id="s0"', 'slide_id="s0-neu"')
