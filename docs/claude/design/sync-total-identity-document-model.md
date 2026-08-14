@@ -552,13 +552,16 @@ Base class **localized** (two bodies):
 - **Id-stamp (id-less → id'd, incl. one-half-only).** Observed id on one half,
   none on the twin: mechanical `stamp twin` item (the #443 shape, reduced to a
   one-row transition) — **but only when the pairing is ledger-known** (Y5,
-  adversarial review 2026-07-24): the member content-matched a recorded
-  positional entry, or its own ledger entry records the stamped side with the
-  twin's current fingerprint (a stripped id being restored, or a pairing an
-  earlier `record`/`confirm` banked). A purely positional, never-recorded
+  adversarial review 2026-07-24): the ledger entry the member resolved to
+  (its own id entry, or a recorded positional entry matched at migration)
+  must agree with the stamped side's twin — by content fingerprint, or, for
+  the fork shape (the fork rewrites the stamped side's header; the body
+  survives), by body fingerprint. A purely positional, never-recorded
   adoption stays framed (`verify_cold` / `verify_translation`) — the stamp
   fixes identity (P2), so the engine never executes a pool-order guess;
-  `confirm` banks the pairing and the next pass stamps mechanically.
+  `confirm` banks the pairing and the next pass stamps mechanically. The
+  same guard frames a complete fork's `record_fork` when the pairing is
+  unverified, since that row would bank the guessed pairing one row later.
   Observed id on a previously positional member: the key
   migrates `pos:… → id:…` in the ledger entry *at record time*, an explicit,
   logged rename of the key — one of exactly **two** places key migration is

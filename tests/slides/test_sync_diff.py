@@ -1488,6 +1488,124 @@ class TestStampTwinIdTrustGate:
         ]
         assert {i.action for i in diff.items if i.key == "id:m1"} == {"verify_translation"}
 
+    # -- the fork route around the gate (PR #825 review round 1) ----------------
+    #
+    # fork_match migrates a positional base entry by a body match on EITHER
+    # side, so a fork can establish the member's identity without establishing
+    # the STAMPED side's pairing. Two recorded shared cells forked into
+    # localized cells, DE halves id'd, EN twins id-less and swapped.
+    _FORK_BASE_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        "# %% [markdown]\n# SHARED ONE\n\n",
+        "# %% [markdown]\n# SHARED TWO\n\n",
+    )
+    _FORK_BASE_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        "# %% [markdown]\n# SHARED ONE\n\n",
+        "# %% [markdown]\n# SHARED TWO\n\n",
+    )
+    _FORK_DE = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% [markdown] lang="de" slide_id="aa"\n# SHARED ONE\n\n',
+        '# %% [markdown] lang="de" slide_id="bb"\n# SHARED TWO\n\n',
+    )
+    _FORK_EN = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] lang="en"\n# SHARED TWO\n\n',
+        '# %% [markdown] lang="en"\n# SHARED ONE\n\n',
+    )
+
+    def test_fork_adoption_with_swapped_twin_neither_stamps_nor_banks(self):
+        """The fork Y5 route: suppressing the stamp is not enough — the same
+        pass's mechanical ``record_fork`` would bank the guessed pairing and
+        the next report would find it 'ledger-known'. Both must stay framed."""
+        base = _snapshot(self._FORK_BASE_DE, self._FORK_BASE_EN)
+        base.complete = False
+        diff = _diff(base, self._FORK_DE, self._FORK_EN)
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert not any(i.action == "record_fork" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        framed = {i.key: i.action for i in diff.items}
+        assert framed == {"id:aa": "verify_translation", "id:bb": "verify_translation"}
+
+    def test_fork_with_true_twin_still_stamps_and_records_mechanically(self):
+        """Pin: the legitimate fork — the EN twin's body IS the recorded shared
+        body, so the pairing is content-established on both sides and the fork
+        plus stamp stay mechanical."""
+        base = _snapshot(
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), "# %% [markdown]\n# SHARED ONE\n\n"),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), "# %% [markdown]\n# SHARED ONE\n\n"),
+        )
+        base.complete = False
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" slide_id="aa"\n# SHARED ONE\n\n',
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# SHARED ONE\n\n',
+        )
+        diff = _diff(base, de, en)
+        actions = {i.action for i in diff.items if i.key == "id:aa"}
+        assert actions == {"stamp_twin_id", "record_fork"}, [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+
+    def test_gated_stamp_surfaces_in_the_text_report(self):
+        """The text report must not lose the pending-stamp signal when the gate
+        suppresses the stamp row (PR #825 review round 1, minor): the JSON
+        report carries the ``id_stamp_pending_twin`` observation; the text
+        report must print it too, or a human reader sees only bare verify_cold
+        rows with no hint that an identity decision is pending."""
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from clm.cli.commands.slides import sync_v3
+
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        bundle = SimpleNamespace(de_path=Path("slides_t.de.py"))
+        text = sync_v3._render_pair(bundle, diff)  # type: ignore[arg-type]
+        lines = [ln for ln in text.splitlines() if "id_stamp_pending_twin" in ln]
+        assert len(lines) == 2, text
+
+    def test_trusted_stamp_does_not_double_print_the_observation(self):
+        """A stamp row that WAS emitted carries the signal itself; printing the
+        observation too would be a redundant line per trusted stamp."""
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from clm.cli.commands.slides import sync_v3
+
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("m1", "de", "DE Text"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _localized("m1", "en", "EN text"))
+        base = _snapshot(de, en)
+        base.complete = False
+        diff = _diff(base, de, en.replace(' slide_id="m1"', ""))
+        bundle = SimpleNamespace(de_path=Path("slides_t.de.py"))
+        text = sync_v3._render_pair(bundle, diff)  # type: ignore[arg-type]
+        assert "stamp_twin_id" in text  # the row itself
+        assert "id_stamp_pending_twin" not in text  # no redundant observation line
+
+    def test_cold_sweep_hint_names_pending_id_stamp_pairings(self):
+        """The wholesale-record hint fires on an all-verify_cold report —
+        exactly the gated-stamp shape — and must say that `record` banks the
+        positionally guessed pairings too (PR #825 review round 1, minor)."""
+        from clm.slides.doc_report import cold_sweep_hint
+
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        hint = cold_sweep_hint(diff)
+        assert hint is not None
+        assert "id-stamp" in hint
+
 
 class TestTagParity:
     """Cross-side tag parity as an orthogonal aspect row (issue #615).

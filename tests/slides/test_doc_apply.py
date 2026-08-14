@@ -1124,6 +1124,72 @@ class TestStampTrustGate:
         assert 'slide_id="oranges"' in en_text
         deck.assert_converged()
 
+    def test_forked_pairing_guess_is_framed_not_banked(self, tmp_path: Path):
+        """Y5 review round 1 (PR #825): a complete fork whose twin was adopted
+        by pool order must not bank the pairing via the mechanical
+        ``record_fork`` either — a decision-free apply leaves files AND ledger
+        untouched, and only an explicit confirm unblocks the stamp."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                "# %% [markdown]\n# SHARED ONE\n\n",
+                "# %% [markdown]\n# SHARED TWO\n\n",
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                "# %% [markdown]\n# SHARED ONE\n\n",
+                "# %% [markdown]\n# SHARED TWO\n\n",
+            ),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" slide_id="aa"\n# SHARED ONE\n\n',
+            '# %% [markdown] lang="de" slide_id="bb"\n# SHARED TWO\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# SHARED TWO\n\n',
+            '# %% [markdown] lang="en"\n# SHARED ONE\n\n',
+        )
+        ledger_before = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        _, diff = deck.diff()
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert not any(i.action == "record_fork" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        deck.apply()  # framed rows only: nothing executes, nothing banks
+        assert 'slide_id="aa"' not in deck.en_path.read_text(encoding="utf-8")
+        ledger_after = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        assert (
+            ledger_after.decks[doc_ledger.deck_key_for(deck.de_path)].members
+            == ledger_before.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        )
+        # confirm banks the pairings; the next report stamps mechanically.
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="confirm")
+            for i in diff.items
+            if i.action == "verify_translation"
+        }
+        assert len(decisions) == 2
+        outcome = deck.apply(decisions)
+        assert outcome.error is None, outcome.to_payload()
+        _, diff2 = deck.diff()
+        assert {i.key for i in diff2.items if i.action == "stamp_twin_id"} == {
+            "id:aa",
+            "id:bb",
+        }
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
 
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename

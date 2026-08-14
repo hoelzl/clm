@@ -2085,10 +2085,11 @@ already agree — ledger-only), the §7.3 transitions (`record_fork`,
 propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
 removal against an already-diverged baseline frames `remove_vs_edit`
 instead — the survivor's bytes say nothing about what the removed side held.
-`stamp_twin_id` fires only when the pairing is ledger-known — recorded under
-the member's id with the twin's current fingerprint, or content-matched to a
-recorded positional entry; a purely positional, never-recorded adoption stays
-framed as `verify_cold` / `verify_translation`, and `confirm` banks the
+`stamp_twin_id` fires only when the pairing is ledger-known — the recorded
+entry the member resolved to agrees with the stamped side's twin (by content
+fingerprint, or body fingerprint for a fork); a purely positional,
+never-recorded adoption stays framed as `verify_cold` / `verify_translation`
+(a complete fork's `record_fork` is framed with it), and `confirm` banks the
 pairing so the next report stamps.)
 **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
