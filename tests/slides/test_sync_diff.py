@@ -1538,6 +1538,48 @@ class TestRenameEditGuard:
             ("id:old", "record_remove"),
         }, [(i.key, i.action) for i in diff.items]
 
+    def test_new_id_cell_identical_to_present_pos_cell_cannot_steal_its_entry(self):
+        """#644 x Y7 (PR #831 review round 1, CRITICAL): remove id-cell A on
+        one side and add id-cell N byte-identical to a STILL-PRESENT
+        positional cell P. The id-keyed gap must not satisfy the pos→id
+        migration precondition — a stamp takes a cell OUT of the pool, and
+        A's gap says nothing about P's pool. Pre-fix N migrated P's base
+        entry and emitted a mechanical mirror_remove that deleted N's
+        authoring half, next diff clean."""
+        pos = '# %% tags=["keep"]\np = 1\n\n'
+        a = '# %% tags=["keep"] slide_id="a"\na = 1\n\n'
+        n = '# %% tags=["keep"] slide_id="n"\np = 1\n\n'
+        base = _snapshot(self._de(pos + a), self._en(pos + a))
+        diff = _diff(base, self._de(pos + n), self._en(pos + a))
+        assert {(i.key, i.outcome, i.action) for i in diff.items} == {
+            ("id:n", "conflict", "stamp_vs_new"),
+            ("id:a", "conflict", "remove_vs_edit"),
+        }, [(i.key, i.outcome, i.action) for i in diff.items]
+
+    def test_simultaneous_anchor_rename_still_frames(self):
+        """PR #831 review round 1 (Important): renaming the slide anchor AND
+        a cell on one half breaks group-token matching (the base owner names
+        the old anchor id, the current group the new one), which defeated
+        both guards. With one-sided-anchor evidence the suspicion scans fall
+        back to group-unscoped — nothing destructive may execute
+        mechanically."""
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        renamed_cell = '# %% tags=["keep"] slide_id="new"\nx = 2\n\n'
+        de = _build(HEADER_DE, _slide("sX", "de", "Titel"), renamed_cell)
+        diff = _diff(base, de, self._en(self.OLD))
+        assert not any(i.action in ("mirror_remove", "copy_new_shared") for i in diff.items), [
+            (i.key, i.outcome, i.action) for i in diff.items
+        ]
+        by_key = {i.key: i for i in diff.items}
+        assert (by_key["id:old"].outcome, by_key["id:old"].action) == (
+            "conflict",
+            "remove_vs_edit",
+        )
+        assert (by_key["id:new"].outcome, by_key["id:new"].action) == (
+            "conflict",
+            "stamp_vs_new",
+        )
+
 
 class TestStampTwinIdTrustGate:
     """Y5 (adversarial review 2026-07-24): ``pair_positionally`` adopts an
