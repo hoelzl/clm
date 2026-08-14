@@ -1888,6 +1888,18 @@ def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDif
             f"'{row.action}' — the answer names a row that is not in the "
             "current report",
         )
+    if row.key in _PREAMBLE_HANDLES:
+        # A preamble handle never names a member — the member lookup below
+        # would misreport it as a stale key. Nothing framed means the
+        # preamble state the answer asked for already holds (a prior apply
+        # landed it, or the divergence was resolved another way).
+        return ItemResult(
+            row.key,
+            row.action or "?",
+            "already_applied",
+            "the preamble frames nothing in the current report — the state "
+            "this answer asks for already holds (nothing to do)",
+        )
     try:
         member = deck.member_by_key(MemberKey.parse(row.key))
     except ValueError:

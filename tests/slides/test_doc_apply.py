@@ -446,6 +446,24 @@ class TestMechanicalRows:
         assert deck.de_path.read_text(encoding="utf-8").startswith("# pre-en\n")
         deck.assert_converged()
 
+    def test_stale_preamble_decision_reports_already_applied(self, tmp_path: Path):
+        """A decision re-aimed at an already-resolved preamble frame matches
+        no current item. The handle never names a member, so the unmatched
+        path must not misreport it as 'no member with this handle' (#829
+        review round 1)."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )
+        deck.record()
+        key = "pos:~preamble/deck/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        assert _statuses(outcome)[key] == "applied", outcome.to_payload()
+        outcome = deck.apply(_decision(key, choice="de"))  # stale repeat
+        assert _statuses(outcome)[key] == "already_applied", outcome.to_payload()
+        deck.assert_converged()
+
     def test_group_rename_is_recorded_without_touching_files(self, tmp_path: Path):
         deck = _deck(tmp_path)
         deck.edit_de('slide_id="s0"', 'slide_id="s0-neu"')
