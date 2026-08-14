@@ -2032,9 +2032,10 @@ def apply_deck(
     outcome = ApplyOutcome(dry_run=dry_run)
     ex = _Executor(bundle=bundle, deck=deck, comment_token=bundle.comment_token)
     originals = ex.emit_all()
-    # The preamble-frameability verdict for unmatched decisions is judged
-    # against the PRE-apply baseline (the one ``diff`` was computed from), so
-    # derive it before any landed item records into ``ledger``.
+    # The preamble-frameability verdict for unmatched decisions must describe
+    # the PRE-apply baseline the ``diff`` was computed from — derive it at
+    # entry, immune to wherever the apply loop later records landed items
+    # into ``ledger``.
     deck_ledger = ledger.decks.get(deck_key)
     preamble_frameable = _preamble_frameable_parts(
         deck, baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
