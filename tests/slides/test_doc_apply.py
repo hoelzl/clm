@@ -1475,6 +1475,82 @@ class TestStampTrustGate:
         deck.assert_converged()
 
 
+class TestRenameEditGuard:
+    """Y7 (adversarial review 2026-07-24): a one-sided rename+edit of an
+    id-keyed shared cell used to execute mechanical copy_new_shared +
+    mirror_remove — a decision-free apply deleted the twin's untouched cell
+    and the NEXT DIFF was clean, so the loss was banked invisibly. Both
+    sides must frame; the answer dance must converge with the existing
+    treat_as_new / remove vocabulary (design fork chosen: reuse
+    remove_vs_edit over extending stamp_vs_new to id-keyed removal rows)."""
+
+    OLD = '# %% tags=["keep"] slide_id="old"\nx = 1\n\n'
+
+    def _deck(self, tmp_path: Path) -> _Deck:
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.OLD),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.OLD),
+        )
+        deck.record()
+        return deck
+
+    def test_rename_edit_mutates_nothing_decision_free_then_converges(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        deck.edit_de(
+            '# %% tags=["keep"] slide_id="old"\nx = 1',
+            '# %% tags=["keep"] slide_id="new"\nx = 2',
+        )
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:new", "stamp_vs_new"),
+            ("id:old", "remove_vs_edit"),
+        }, [(i.key, i.action) for i in diff.items]
+        # No decisions: nothing mutates, nothing banks.
+        outcome = deck.apply()
+        assert not outcome.wrote
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        # The reconciliation dance with the existing vocabulary: the new id
+        # is genuine (grow the twin) and the old cell is genuinely gone.
+        outcome = deck.apply(
+            {
+                "id:new": doc_apply.Decision(key="id:new", choice="treat_as_new"),
+                "id:old": doc_apply.Decision(key="id:old", choice="remove"),
+            }
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="new"' in en and "x = 2" in en
+        assert 'slide_id="old"' not in en
+        deck.assert_converged()
+
+    def test_rename_edit_keep_restores_the_survivor(self, tmp_path: Path):
+        """The accidental rename: keep re-adds the old cell on the renamed
+        side; the leftover new-id row stays answerable next pass."""
+        deck = self._deck(tmp_path)
+        deck.edit_de(
+            '# %% tags=["keep"] slide_id="old"\nx = 1',
+            '# %% tags=["keep"] slide_id="new"\nx = 2',
+        )
+        outcome = deck.apply({"id:old": doc_apply.Decision(key="id:old", choice="keep")})
+        assert _statuses(outcome)["id:old"] == "applied", outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert 'slide_id="old"' in de and "x = 1" in de  # the survivor is back
+
+    def test_strip_edit_frames_the_removal_decision_free(self, tmp_path: Path):
+        """The strip-id variant: the twin's id-keyed cell must not be
+        mechanically mirrored away while the stripped cell sits cold."""
+        deck = self._deck(tmp_path)
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        deck.edit_de('# %% tags=["keep"] slide_id="old"\nx = 1', '# %% tags=["keep"]\nx = 2')
+        _, diff = deck.diff()
+        assert not any(i.action == "mirror_remove" for i in diff.items)
+        outcome = deck.apply()
+        assert not outcome.wrote
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+
+
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename
     recorded through the sync loop must leave ZERO dangling `id:<old>`
