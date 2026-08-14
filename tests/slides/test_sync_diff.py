@@ -1580,6 +1580,55 @@ class TestRenameEditGuard:
             "stamp_vs_new",
         )
 
+    def test_absorbed_fork_twin_does_not_hide_the_estranged_cell(self):
+        """PR #831 review round 2 (CRITICAL): a mid-transition fork
+        classified earlier in deck order claims the lone unpaired pos cell
+        via _absorb_any_pos_twin — the claim suppresses the pool's own
+        mechanical row, it must not hide the cell from the Y7 suspicion
+        scan. Both classification orders must frame the removal; pre-fix,
+        the fork-first order emitted a mechanical mirror_remove that deleted
+        the untouched twin, next diff clean."""
+        b = '# %% tags=["keep"] slide_id="b"\nb = 1\n\n'
+        q = '# %% tags=["keep"]\nq = 1\n\n'
+        b_stripped = '# %% tags=["keep"]\nb = 2\n\n'
+        q_forked = '# %% tags=["keep"] lang="en" slide_id="q2"\nq = 1\n\n'
+        base = _snapshot(
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), b, q),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), b, q),
+        )
+        cur_de = _build(HEADER_DE, _slide("s0", "de", "Titel"), b_stripped)
+        for label, en in (
+            ("fork first", _build(HEADER_EN, _slide("s0", "en", "Title"), q_forked, b)),
+            ("victim first", _build(HEADER_EN, _slide("s0", "en", "Title"), b, q_forked)),
+        ):
+            diff = _diff(base, cur_de, en)
+            assert not any(i.action == "mirror_remove" for i in diff.items), label
+            by_key = {i.key: i for i in diff.items}
+            assert (by_key["id:b"].outcome, by_key["id:b"].action) == (
+                "conflict",
+                "remove_vs_edit",
+            ), label
+
+    def test_one_sided_anchor_add_widens_suspicion_deck_wide(self):
+        """Deliberate trade-off (PR #831 review round 2, Minor): a plain
+        one-sided slide ADD also opens the group-unscoped fallback (an
+        anchor renamed AND edited is fingerprint-indistinguishable from a
+        remove+add), so a concurrent genuine removal frames instead of
+        mirroring — safe direction, convergent dance, and the detail must
+        SAY the match was deck-wide. Pinned so a future narrowing is a
+        conscious decision, not a regression."""
+        base = _snapshot(self._de(self.OLD), self._en(self.OLD))
+        new_slide = _slide("s9", "de", "Neu") + '# %% tags=["keep"] slide_id="n"\ny = 5\n\n'
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), new_slide)  # id:old removed
+        diff = _diff(base, de, self._en(self.OLD))
+        assert not any(i.action in ("mirror_remove", "copy_new_shared") for i in diff.items), [
+            (i.key, i.outcome, i.action) for i in diff.items
+        ]
+        by_key = {i.key: i for i in diff.items}
+        assert by_key["id:old"].action == "remove_vs_edit"
+        assert "elsewhere in the deck" in by_key["id:old"].detail
+        assert by_key["id:n"].action == "stamp_vs_new"
+
 
 class TestStampTwinIdTrustGate:
     """Y5 (adversarial review 2026-07-24): ``pair_positionally`` adopts an

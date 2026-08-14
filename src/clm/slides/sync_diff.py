@@ -1148,39 +1148,52 @@ class _Differ:
                 cur_count += 1
         return base_count > cur_count
 
-    def _id_half_gap_exists(self, group: str, kind: str, side: Lang) -> bool:
-        """An id-keyed base entry of this (group, kind) whose ``side`` half
-        is unaccounted — no current member carries that id on ``side`` (Y7).
+    def _id_half_gap(self, group: str, kind: str, side: Lang) -> str | None:
+        """``"pool"``/``"deck"`` when an id-keyed base entry's ``side`` half
+        is unaccounted — no current member carries that id on ``side`` —
+        else ``None`` (Y7).
 
         Per-half and existence-based, never count-based: id identity is
         stable, so unlike the positional pool there is no aliasing to
         absorb. Group membership comes from the recorded owner anchor;
-        anchor and header entries (owner ``None``) never count. A
-        simultaneous one-sided ANCHOR rename defeats the owner match (the
-        base owner names the old anchor id, the current group the new one),
-        so with one-sided-anchor evidence the scan falls back to
-        group-unscoped (PR #831 review round 1, Important) — the over-frame
-        cost is bounded to decks mid-anchor-rename.
+        anchor and header entries (owner ``None``) never count. A one-sided
+        ANCHOR change defeats the owner match (the base owner names the old
+        anchor id, the current group the new one), so with one-sided-anchor
+        evidence the scan retries group-unscoped and reports ``"deck"``
+        (PR #831 review round 1).
         """
         assert self.base is not None
         base_token = self._base_group_for(group)
-        anchor_shift = self._one_sided_anchor_present()
         for entry in self.base.members.values():
             if entry.key.startswith("pos:") or entry.kind != kind:
                 continue
-            if entry.side_fp(side) is None:
-                continue
-            if entry.owner != f"id:{base_token}" and not anchor_shift:
+            if entry.side_fp(side) is None or entry.owner != f"id:{base_token}":
                 continue
             current = self.current.member_by_key(MemberKey.parse(entry.key))
             if current is None or current.side(side) is None:
-                return True
-        return False
+                return "pool"
+        if not self._one_sided_anchor_present():
+            return None
+        for entry in self.base.members.values():
+            if entry.key.startswith("pos:") or entry.kind != kind:
+                continue
+            if entry.side_fp(side) is None or entry.owner is None:
+                continue
+            current = self.current.member_by_key(MemberKey.parse(entry.key))
+            if current is None or current.side(side) is None:
+                return "deck"
+        return None
 
     def _one_sided_anchor_present(self) -> bool:
         """An unmatched one-sided id'd ANCHOR (slide/subslide) member exists
-        — evidence of a one-sided anchor rename or add, which breaks
-        group-token matching between base and current (Y7 round 1)."""
+        — evidence of a one-sided anchor rename or add (Y7 round 1).
+
+        A plain one-sided slide ADD fires this too, and that is deliberate:
+        an anchor renamed AND edited is fingerprint-indistinguishable from
+        a remove+add, and the gate only ever *widens* a suspicion scan —
+        the cost is framed-but-convergent rows when a routine one-sided
+        slide add coincides with a one-sided removal, never a lost cell
+        (PR #831 review round 2: the safe direction, kept consciously)."""
         assert self.base is not None
         migration_targets = set(self.key_migrations.values())
         for member, _owner_group in self._id_members:
@@ -1329,9 +1342,8 @@ class _Differ:
             return
         if member.is_one_sided:
             side = "de" if member.de is not None else "en"
-            if self._pool_side_deficit(group, member.kind, side) or self._id_half_gap_exists(
-                group, member.kind, side
-            ):
+            gap_scope = self._id_half_gap(group, member.kind, side)
+            if self._pool_side_deficit(group, member.kind, side) or gap_scope is not None:
                 # A base cell of this pool is unaccounted for on this side —
                 # a positional pool cell, or one half of an id-keyed cell
                 # (Y7: a one-sided rename+edit leaves exactly that gap):
@@ -1340,13 +1352,19 @@ class _Differ:
                 # frame instead (P8). `treat_as_new` resolves it as a genuine
                 # add (verbatim copy to the twin, #600); a stamped-edit is
                 # reconciled manually.
+                gap_clause = (
+                    "a base cell of this pool"
+                    if gap_scope != "deck"
+                    else "a base cell elsewhere in the deck (a one-sided anchor "
+                    "change is in flight, so group matching is unreliable)"
+                )
                 self.emit(
                     handle,
                     "conflict",
                     "stamp_vs_new",
                     "both",
-                    f"new id'd cell on the {side} side while a base "
-                    f"cell of this pool is unaccounted for — possibly the same "
+                    f"new id'd cell on the {side} side while {gap_clause} "
+                    f"is unaccounted for — possibly the same "
                     f"cell stamped and edited; answer treat_as_new if it is a "
                     f"genuinely new cell (copies it to the twin), or reconcile "
                     f"the stamped edit manually",
@@ -2067,11 +2085,19 @@ class _Differ:
         # the untouched rename. Computed once for the branches below; only
         # id-keyed entries are checked (pos: slots have the pool path's own
         # stamp suspicion, #600).
-        suspected_rename = entry.key.startswith("id:") and self._rename_suspected(
-            group, member.kind, gone
+        suspicion_scope = (
+            self._rename_suspicion(group, member.kind, gone)
+            if entry.key.startswith("id:")
+            else None
+        )
+        suspicion_clause = (
+            "an unpaired cell of this pool"
+            if suspicion_scope == "pool"
+            else "an unpaired cell elsewhere in the deck (a one-sided anchor "
+            "change is in flight, so group matching is unreliable)"
         )
         if content_fingerprint(cell) == entry.side_fp(present):
-            if suspected_rename:
+            if suspicion_scope is not None:
                 # Mirroring the removal would delete the survivor while the
                 # estranged cell reconciles elsewhere (or never): a
                 # decision-free apply then banked the loss invisibly. Frame
@@ -2082,8 +2108,8 @@ class _Differ:
                     "remove_vs_edit",
                     "both",
                     f"member removed on the {gone} side, the {present} side is "
-                    f"unchanged — but the {gone} side holds an unpaired cell "
-                    f"of this pool that may be this member renamed or "
+                    f"unchanged — but the {gone} side holds {suspicion_clause} "
+                    f"that may be this member renamed or "
                     f"stripped of its id and edited: answer remove if the "
                     f"removal is genuine (mirrors it), keep to retain and "
                     f"restore the survivor; if it was a rename, rename the "
@@ -2109,9 +2135,9 @@ class _Differ:
             )
         else:
             detail = f"removed on the {gone} side but edited on the {present} side"
-            if suspected_rename:
+            if suspicion_scope is not None:
                 detail += (
-                    f"; the {gone} side also holds an unpaired cell of this pool — "
+                    f"; the {gone} side also holds {suspicion_clause} — "
                     f"possibly this member renamed or stripped of its id: if so, "
                     f"rename the twin identically and re-run report instead of "
                     f"answering"
@@ -2175,15 +2201,22 @@ class _Differ:
     def _estranged_pos_candidate_exists(
         self, group: str, kind: str, side: Lang, *, any_group: bool = False
     ) -> bool:
-        """An unclaimed one-sided positional current member on ``side`` in
-        this pool's group/kind — the shape a stripped(+edited) id'd cell
-        takes (Y7). The non-claiming sibling of :meth:`_absorb_any_pos_twin`
-        and the positional counterpart of :meth:`_stamped_candidate_exists`:
-        a suspicion check only — the candidate keeps its own row (cold in
+        """A one-sided positional current member on ``side`` in this pool's
+        group/kind — the shape a stripped(+edited) id'd cell takes (Y7). The
+        non-claiming sibling of :meth:`_absorb_any_pos_twin` and the
+        positional counterpart of :meth:`_stamped_candidate_exists`: a
+        suspicion check only — the candidate keeps its own row (cold in
         ledger mode), nothing is absorbed. ``any_group`` drops the group
-        match for the anchor-rename fallback (see :meth:`_rename_suspected`)."""
+        match for the anchor-rename fallback (see :meth:`_rename_suspected`).
+
+        Cells in ``absorbed_pos`` are NOT skipped: an absorb claim exists to
+        suppress the pool's own mechanical row for a mid-transition twin,
+        not to deny the cell's existence — and an unrelated fork classified
+        earlier in deck order would otherwise hide the estranged cell and
+        re-open the Y7 mechanical mirror_remove (PR #831 review round 2,
+        Critical — the row depended on cell ORDER)."""
         for candidate, owner_group in self._pos_members:
-            if id(candidate) in self.absorbed_pos or candidate.kind != kind:
+            if candidate.kind != kind:
                 continue
             if not any_group and _member_group_token(candidate, owner_group) != group:
                 continue
@@ -2193,25 +2226,30 @@ class _Differ:
                 return True
         return False
 
-    def _rename_suspected(self, group: str, kind: str, gone: Lang) -> bool:
-        """An unpaired cell on the ``gone`` side that could be this member,
-        renamed or stripped of its id and edited (Y7).
+    def _rename_suspicion(self, group: str, kind: str, gone: Lang) -> str | None:
+        """``"pool"``/``"deck"`` when the gone side holds an unpaired cell
+        that could be this member, renamed or stripped of its id and edited
+        — else ``None`` (Y7).
 
-        Group-scoped first; a simultaneous one-sided ANCHOR rename breaks
-        group-token matching (the member's group comes from its surviving
-        half, the candidate's owner group from the renamed half), so with
-        one-sided-anchor evidence the scan falls back to group-unscoped
-        (PR #831 review round 1, Important).
+        Group-scoped first; a one-sided ANCHOR change breaks group-token
+        matching (the member's group comes from its surviving half, the
+        candidate's owner group from the changed half), so with
+        one-sided-anchor evidence the scan retries group-unscoped and
+        reports ``"deck"`` (PR #831 review round 1). A ``"deck"`` result
+        means the candidate was found OUTSIDE this group — the scoped scan
+        already ran.
         """
         if self._stamped_candidate_in(
             group, kind, gone, any_group=False
         ) or self._estranged_pos_candidate_exists(group, kind, gone):
-            return True
+            return "pool"
         if not self._one_sided_anchor_present():
-            return False
-        return self._stamped_candidate_in(
+            return None
+        if self._stamped_candidate_in(
             group, kind, gone, any_group=True
-        ) or self._estranged_pos_candidate_exists(group, kind, gone, any_group=True)
+        ) or self._estranged_pos_candidate_exists(group, kind, gone, any_group=True):
+            return "deck"
+        return None
 
     # -- base class localized ---------------------------------------------------
 
