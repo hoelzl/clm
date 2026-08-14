@@ -746,6 +746,94 @@ class TestDecisions:
         assert result.status == "applied", (result.status, result.reason)
         assert "x = 98" in deck.en_path.read_text(encoding="utf-8")
 
+    def test_batched_keeps_on_a_shifted_pool_defer_behind_the_earlier_row(self, tmp_path: Path):
+        """#824 review round 4: two keeps answered in one document on a pool
+        whose pairing is shifted (x and y both removed on EN) must NOT both
+        execute — the second keep's insert anchors on the cross-paired member
+        carrying z's cell and the target stream comes out x, z, y, which the
+        re-parse then banks as a swapped base. The earlier keep lands; the
+        later one DEFERS and lands in a follow-up pass, in order."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x", 98),
+                _shared_code("y", 97),
+                _shared_code("z", 3),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x", 1),
+                _shared_code("y", 2),
+                _shared_code("z", 3),
+            ),
+        )
+        deck.record()  # diverged base on x and y, z in sync
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("z", 3))
+        _, diff = deck.diff()
+        assert {i.key: i.action for i in diff.items} == {
+            "pos:s0/code/0": "remove_vs_edit",
+            "pos:s0/code/1": "remove_vs_edit",
+        }
+        # Pass 1: answer keep on BOTH — only the earliest may land.
+        outcome = deck.apply(
+            {
+                "pos:s0/code/0": doc_apply.Decision(key="pos:s0/code/0", choice="keep"),
+                "pos:s0/code/1": doc_apply.Decision(key="pos:s0/code/1", choice="keep"),
+            }
+        )
+        statuses = _statuses(outcome)
+        assert statuses["pos:s0/code/0"] == "applied"
+        assert statuses["pos:s0/code/1"] == "deferred"
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert "x = 98" in en_text and "y = 97" not in en_text
+        assert en_text.index("x = 98") < en_text.index("z = 3")
+        # Pass 2: the deferred row re-frames (the frozen pool was not banked)
+        # and is now the earliest removal row — its keep lands, in order.
+        _, diff2 = deck.diff()
+        item = next(i for i in diff2.items if i.key == "pos:s0/code/1")
+        assert item.action == "remove_vs_edit"
+        outcome2 = deck.apply(_decision(item.key, choice="keep"))
+        assert _statuses(outcome2)[item.key] == "applied"
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert en_text.index("x = 98") < en_text.index("y = 97") < en_text.index("z = 3")
+        # Pass 3: the re-framed carried divergence on x resolves with a side answer.
+        _, diff3 = deck.diff()
+        carried = [i for i in diff3.items if i.action == "pending_divergence"]
+        outcome3 = deck.apply({i.key: doc_apply.Decision(key=i.key, choice="de") for i in carried})
+        deck.assert_converged()
+
+    def test_keep_defers_while_an_earlier_pool_removal_row_is_pending(self, tmp_path: Path):
+        """The single-keep variant: answering keep on a LATER slot while the
+        earlier removal row is unanswered must defer, not land at the wrong
+        position (the pool freeze leaves the row unbanked, but the file bytes
+        would already be mis-ordered)."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x", 98),
+                _shared_code("y", 97),
+                _shared_code("z", 3),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x", 1),
+                _shared_code("y", 2),
+                _shared_code("z", 3),
+            ),
+        )
+        deck.record()
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("z", 3))
+        outcome = deck.apply(_decision("pos:s0/code/1", choice="keep"))
+        statuses = _statuses(outcome)
+        assert statuses["pos:s0/code/1"] == "deferred"
+        assert "y = 97" not in deck.en_path.read_text(encoding="utf-8")
+
 
 class TestColdBodyRecovery:
     """Issue #572: a `body` answer fixes a stale twin on a two-sided

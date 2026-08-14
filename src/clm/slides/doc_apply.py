@@ -1134,6 +1134,36 @@ def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
     return None
 
 
+#: Removal-family rows whose presence in a pool means the pool's positional
+#: parse pairing is SHIFTED: a slot is missing on one side, so the lens's
+#: cursor pairs every later cell with the wrong twin. (``record_remove`` is
+#: absent from both files and shifts nothing.)
+_SHIFTING_REMOVAL_ACTIONS = frozenset(
+    {"mirror_remove", "remove_vs_edit", "remove_vs_split", "stamp_vs_new"}
+)
+
+
+def _earlier_pool_removal(items: list[DiffItem], item: DiffItem) -> DiffItem | None:
+    """The first removal-family row PRECEDING ``item`` in its pool, if any.
+
+    Pool slots are emitted in ordinal order, and a shifted pairing makes a
+    later slot's keep insert anchor on a cross-paired member — the target
+    stream comes out mis-ordered and the re-parse banks the swap (#824
+    review round 4). A keep is only safe when it is the pool's earliest
+    unresolved removal row; every later one defers to a follow-up pass,
+    which re-pairs the pool first.
+    """
+    scope = _pool_scope(item)
+    if scope is None:
+        return None
+    for other in items:
+        if other is item:
+            break
+        if other.action in _SHIFTING_REMOVAL_ACTIONS and _pool_scope(other) == scope:
+            return other
+    return None
+
+
 #: Framed actions whose pos-view evidence is a two-sided base entry facing a
 #: one-sided survivor. While one is unresolved, its pool must NOT be
 #: re-recorded wholesale: the fresh snapshot only knows the one-sided present
@@ -1968,13 +1998,40 @@ def apply_deck(
                 landed.append((item, "apply"))
                 outcome.results.append(ItemResult(item.key, item.action, "applied", item.detail))
             elif decision is not None:
-                _execute_decision(ex, item, decision, bundle.comment_token)
-                landed.append((item, "agent"))
-                outcome.results.append(
-                    ItemResult(
-                        item.key, item.action, "applied", f"decision: {decision.choice or 'body'}"
-                    )
+                blocker = (
+                    _earlier_pool_removal(diff.items, item)
+                    if decision.choice == "keep" and item.action == "remove_vs_edit"
+                    else None
                 )
+                if blocker is not None:
+                    # #824 review round 4: a keep behind an unresolved pool
+                    # removal inserts at the wrong position (the shifted
+                    # pairing anchors the walk on a cross-paired member).
+                    # Defer: the pool freeze keeps the row unbanked, and the
+                    # next pass re-pairs the pool so the keep lands in order.
+                    unresolved_items.append(item)
+                    outcome.results.append(
+                        ItemResult(
+                            item.key,
+                            item.action,
+                            "deferred",
+                            f"the pool's pairing is shifted by the earlier "
+                            f"{blocker.action} row {blocker.key} — resolve that row "
+                            f"first, re-run report, then answer this one (a shifted "
+                            f"pool takes one keep per pass)",
+                        )
+                    )
+                else:
+                    _execute_decision(ex, item, decision, bundle.comment_token)
+                    landed.append((item, "agent"))
+                    outcome.results.append(
+                        ItemResult(
+                            item.key,
+                            item.action,
+                            "applied",
+                            f"decision: {decision.choice or 'body'}",
+                        )
+                    )
             else:
                 assert item.action in FRAMED_ACTIONS
                 unresolved_items.append(item)
