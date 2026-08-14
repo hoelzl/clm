@@ -698,6 +698,54 @@ class TestDecisions:
         assert "x = 98" in deck.en_path.read_text(encoding="utf-8")
         deck.assert_converged()
 
+    def test_remove_vs_edit_keep_not_blocked_by_byte_duplicate(self, tmp_path: Path):
+        """#824 review round 3: a gone-side cell that merely BYTE-MATCHES the
+        slot's recorded fingerprint (a duplicated pool sibling) is not the
+        slot's own cell — `keep` must land, not reject as 'stale' (the
+        fingerprint-collision staleness scan false-positived here and its
+        're-run report' advice changed nothing)."""
+        dup_de = '# %% tags=["keep"]\nsetup = 1\n\n'
+        dup_en = '# %% tags=["keep"]\nsetup = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), dup_de, dup_de),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), dup_en, dup_en),
+        )
+        deck.record()  # both slots diverged at base: (setup=1, setup=2) twice
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), dup_en)  # one dropped
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert item.action == "remove_vs_edit"
+        outcome = deck.apply(_decision(item.key, choice="keep"))
+        result = next(r for r in outcome.results if r.key == item.key)
+        assert result.status == "applied", (result.status, result.reason)
+        assert "setup = 1" in deck.en_path.read_text(encoding="utf-8")
+
+    def test_remove_vs_edit_keep_not_blocked_by_a_stamped_twin(self, tmp_path: Path):
+        """#824 review round 3: content_fingerprint is modulo slide_id, so an
+        unmatched id'd cell carrying the removed cell's bytes collides with
+        the slot's base fingerprint — it is a suspected stamp, not proof the
+        slot's cell still exists. `keep` must land."""
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), _shared_code("x", 98)),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("x", 1)),
+        )
+        deck.record()  # diverged base: DE x=98, EN x=1
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            # the positional cell is gone, but a stamped cell carries its bytes
+            '# %% tags=["keep"] slide_id="x-stamped"\nx = 1',
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert item.action == "remove_vs_edit"
+        outcome = deck.apply(_decision(item.key, choice="keep"))
+        result = next(r for r in outcome.results if r.key == item.key)
+        assert result.status == "applied", (result.status, result.reason)
+        assert "x = 98" in deck.en_path.read_text(encoding="utf-8")
+
 
 class TestColdBodyRecovery:
     """Issue #572: a `body` answer fixes a stale twin on a two-sided

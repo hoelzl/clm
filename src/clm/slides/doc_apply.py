@@ -806,25 +806,15 @@ class _Executor(DeckEmitter):
         survivor's parse member can carry a NEIGHBORING slot's cell on the
         ``gone`` side, so ``copy_new``'s ``member.side(target)`` existence
         check answers for the neighbor and wrongly rejects a keep that should
-        land (#824 review round 2). The slot's own gone-side cell exists iff a
-        current cell still carries the slot's recorded gone-side fingerprint —
-        that shape means the removal row is stale, not that the keep is wrong.
+        land (#824 review round 2). There is deliberately NO fingerprint
+        staleness scan here: a gone-side cell that byte-matches the slot's
+        recorded fingerprint is not necessarily the slot's own cell (pool
+        duplicates; a stamped twin — fingerprints are modulo slide_id), and
+        the CLI re-diffs from current files at apply time, so a genuinely
+        stale removal row never reaches the executor (#824 review round 3).
         """
         present = _other(gone)
         holder, cell = self._locate_twin(item, present)
-        if item.base is not None:
-            base_fp = item.base.side_fp(gone)
-            if base_fp is not None:
-                still_present = [
-                    m
-                    for m in self.streams.get((gone, cell.part), [])
-                    if (c := m.side(gone)) is not None and content_fingerprint(c) == base_fp
-                ]
-                if still_present:
-                    raise _ItemError(
-                        f"the {gone} side of {item.key} already exists — the removal "
-                        f"row is stale; re-run report"
-                    )
         if cell.lang_attr:
             # Same mint as copy_new (#717): the target half's lang variant.
             header = swap_lang(cell.header, gone)
