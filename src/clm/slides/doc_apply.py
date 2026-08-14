@@ -1877,6 +1877,13 @@ def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDif
       did it. Reporting that as ``rejected`` is what made #649 read as
       "rejected" while the write had demonstrably landed;
     * the handle names no member of this deck — a genuine stale handle.
+
+    Plus the fourth situation the member-centric reading predates: a
+    **preamble handle** never names a member, so it is judged against the
+    deck's preamble streams instead — ``already_applied`` when the part's
+    frame could have existed and is gone, ``rejected`` when the deck does
+    not carry companion files on both halves (no companion preamble row can
+    ever have been framed for it).
     """
     framed = [i.action for i in diff.items if i.key == row.key]
     if row.action is not None and framed:
@@ -1893,21 +1900,21 @@ def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDif
         # would misreport it as a stale key. Nothing framed means the
         # preamble state the answer asked for already holds (a prior apply
         # landed it, or the divergence was resolved another way) — but only
-        # claim that for a part the deck actually carries: with no companion
-        # files there is no companion preamble whose state could hold.
+        # claim that for a part the deck actually carries on BOTH halves:
+        # the differ never frames a companion preamble row unless both
+        # companion files exist, so with a one-sided (or absent) companion
+        # no such row can ever have been framed and the answer is wrong.
         part = row.key.rsplit("/", 2)[1]
-        if (
-            part == "companion"
-            and deck.de_companion_preamble is None
-            and deck.en_companion_preamble is None
+        if part == "companion" and (
+            deck.de_companion_preamble is None or deck.en_companion_preamble is None
         ):
             return ItemResult(
                 row.key,
                 row.action or "?",
                 "rejected",
-                "this deck has no companion files, so no companion preamble "
-                "row can have been framed for it — check the key against "
-                "`report --json`",
+                "the deck does not carry companion files on both halves, so "
+                "no companion preamble row can have been framed for it — "
+                "check the key against `report --json`",
             )
         return ItemResult(
             row.key,

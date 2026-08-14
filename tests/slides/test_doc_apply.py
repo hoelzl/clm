@@ -474,7 +474,30 @@ class TestMechanicalRows:
         outcome = deck.apply(_decision(key, choice="de"))
         result = next(r for r in outcome.results if r.key == key)
         assert result.status == "rejected", outcome.to_payload()
-        assert "no companion files" in result.reason
+        assert "companion files on both halves" in result.reason
+
+    def test_companion_preamble_decision_with_one_sided_companion_rejects(self, tmp_path: Path):
+        """A companion file on ONE side only: the differ never frames a
+        companion preamble row for that layout (it skips the part unless both
+        halves carry the file), so a decision on the companion preamble
+        handle is just as unanswerable as with no companion at all — reject,
+        do not claim already_applied (#829 review round 3)."""
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(_vo_cell("s0-vo", "s0", "de", "Hallo Welt")), encoding="utf-8"
+        )
+        deck.record()
+        key = "pos:~preamble/companion/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "companion files on both halves" in result.reason
 
     def test_group_rename_is_recorded_without_touching_files(self, tmp_path: Path):
         deck = _deck(tmp_path)
