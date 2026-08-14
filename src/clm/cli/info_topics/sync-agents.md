@@ -195,6 +195,17 @@ retain the survivor and re-add it on the removed side) — the survivor sitting
 on its own fingerprint says nothing about what the removed side held, so the
 removal needs your judgement, not a mirror.
 
+`stamp_twin_id` fires only when the pairing is **ledger-known**: the id was
+recorded on both halves before (e.g. it was stripped from one side with the
+text untouched), the cell content-matched a recorded positional entry, or you
+banked the pairing earlier. An id'd cell whose id-less twin was paired purely
+by position — never recorded — stays framed (`verify_cold` /
+`verify_translation`): a wrong stamp is permanent identity corruption, so the
+engine never guesses it. Judge the pairing (the report's excerpts show both
+halves); `confirm` banks it and the *next* report stamps mechanically. If the
+pairing is wrong, fix the files (reorder or hand-add the `slide_id`) before
+recording.
+
 `record_neutral` is the one you will see most on a **never-recorded deck**, and
 it writes no file bytes at all — only the ledger entry. It fires for a member
 with no ledger entry whose two halves the engine can compare *directly*: both

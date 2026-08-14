@@ -2084,7 +2084,12 @@ already agree — ledger-only), the §7.3 transitions (`record_fork`,
 `record_unify`, `stamp_twin_id`, `record_key_migration`), and preamble
 propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
 removal against an already-diverged baseline frames `remove_vs_edit`
-instead — the survivor's bytes say nothing about what the removed side held.)
+instead — the survivor's bytes say nothing about what the removed side held.
+`stamp_twin_id` fires only when the pairing is ledger-known — recorded under
+the member's id with the twin's current fingerprint, or content-matched to a
+recorded positional entry; a purely positional, never-recorded adoption stays
+framed as `verify_cold` / `verify_translation`, and `confirm` banks the
+pairing so the next report stamps.)
 **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,

@@ -1068,6 +1068,63 @@ class TestStampVsNew:
         deck.assert_converged()
 
 
+class TestStampTrustGate:
+    """Y5 (adversarial review 2026-07-24), end to end through the real ledger
+    and executor: a ``stamp_twin_id`` whose pairing is only a pool-order guess
+    must never execute — apply leaves the twin untouched until the pairing is
+    banked by an explicit decision, after which the stamp lands mechanically.
+    """
+
+    def test_apply_never_stamps_a_positionally_guessed_twin(self, tmp_path: Path):
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()  # warm deck; the members below are un-ledgered
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _localized("apples", "de", "Aepfel"),
+            _localized("oranges", "de", "Birnen"),
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# ORANGES text\n\n',
+            '# %% [markdown] lang="en"\n# APPLES text\n\n',
+        )
+        _, diff = deck.diff()
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        deck.apply()  # framed rows only: nothing executes
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="apples"' not in en_text
+        assert 'slide_id="oranges"' not in en_text
+        # The framed path is not a dead end: confirming banks the pairings,
+        # and the NEXT report stamps mechanically.
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="confirm")
+            for i in diff.items
+            if i.action == "verify_cold"
+        }
+        assert len(decisions) == 2
+        outcome = deck.apply(decisions)
+        assert outcome.error is None, outcome.to_payload()
+        _, diff2 = deck.diff()
+        assert {i.key for i in diff2.items if i.action == "stamp_twin_id"} == {
+            "id:apples",
+            "id:oranges",
+        }
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="apples"' in en_text
+        assert 'slide_id="oranges"' in en_text
+        deck.assert_converged()
+
+
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename
     recorded through the sync loop must leave ZERO dangling `id:<old>`

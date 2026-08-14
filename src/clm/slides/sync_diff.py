@@ -567,6 +567,10 @@ class _Differ:
         self.absorbed_pos: set[int] = set()
         #: id-keyed members consumed by another member's conflict item
         self.consumed_id_members: set[str] = set()
+        #: id-stamp observations (the #443 shape), handle → id-less side; the
+        #: stamp is emitted from _diff_id_member, where the ledger's verdict
+        #: on the pairing is known (Y5)
+        self._pending_stamp_sides: dict[str, Lang] = {}
         #: handles with a framed/mechanical cross-group move item — their
         #: placement is that item's job; the scope pair-parity check must
         #: not double-frame it (#654)
@@ -651,7 +655,13 @@ class _Differ:
         self._id_members = id_members
 
         self._detect_group_renames()
-        self._emit_pending_id_stamps()
+        for obs in self.current.observations:
+            if (
+                obs.kind == "id_stamp_pending_twin"
+                and obs.member is not None
+                and obs.side is not None
+            ):
+                self._pending_stamp_sides[obs.member.render()] = obs.side
         for member, group in id_members:
             self._diff_id_member(member, group)
         self._diff_pos_pools(pos_members)
@@ -662,25 +672,46 @@ class _Differ:
         self._diff_preambles()
         return self._finish()
 
-    def _emit_pending_id_stamps(self) -> None:
-        """§7.3 id-stamp: the #443 one-sided-id shape, observed at parse.
+    def _emit_pending_id_stamp(self, member: Member, entry: MemberBaseline) -> None:
+        """§7.3 id-stamp: the #443 one-sided-id shape, gated on ledger trust (Y5).
 
         The lens records ``id_stamp_pending_twin`` when an id'd cell adopted
-        a positional twin; the mechanical resolution is stamping the twin,
-        regardless of whether the member's content also moved."""
-        for obs in self.current.observations:
-            if obs.kind != "id_stamp_pending_twin" or obs.member is None:
-                continue
-            member = self.current.member_by_key(obs.member)
-            self.emit(
-                obs.member.render(),
-                "transition",
-                "stamp_twin_id",
-                "en_to_de" if obs.side == "de" else "de_to_en",
-                f"id'd on one half only — stamp the {obs.side} twin (#443)",
-                side=obs.side,
-                member=member,
-            )
+        a positional twin. Completing that adoption mechanically is safe only
+        when the ledger already knows THIS pairing — the adoption itself is a
+        pool-order guess, and P2 makes the stamped id the member's identity,
+        so a wrong stamp is permanent identity corruption (the 2026-07-24
+        review's Y5 repro stamped ``apples`` onto the oranges text). Trusted
+        shapes:
+
+        * the member just migrated a positional base entry — the migration
+          matched by content fingerprint, so the pairing is
+          content-established, not positional; or
+        * the member's own entry records the stamped side with the twin
+          cell's current fingerprint — e.g. an id stripped from a recorded
+          twin (the stamp restores the known pairing), or a pairing an
+          earlier ``record`` / ``confirm`` already banked.
+
+        Otherwise no stamp is emitted and the member's framed classification
+        stands on its own (``verify_cold`` / ``verify_translation`` / …): the
+        agent judges the pairing, ``confirm`` banks it, and the next report
+        finds it ledger-known.
+        """
+        side = self._pending_stamp_sides.get(member.key.render())
+        if side is None:
+            return
+        if entry.key not in self.key_migrations:  # not content-matched via migration
+            twin = member.side(side)
+            if twin is None or entry.side_fp(side) != content_fingerprint(twin):
+                return
+        self.emit(
+            member.key.render(),
+            "transition",
+            "stamp_twin_id",
+            "en_to_de" if side == "de" else "de_to_en",
+            f"id'd on one half only — stamp the {side} twin (#443)",
+            side=side,
+            member=member,
+        )
 
     def _finish(self) -> DeckDiff:
         split_observations = self._reframe_group_split_removals()
@@ -985,6 +1016,7 @@ class _Differ:
             self._diff_unmatched_current(member, group)
             return
         self.matched_base_keys.add(entry.key)
+        self._emit_pending_id_stamp(member, entry)
         self._classify_matched(member, group, entry)
 
     def _match_key_migration(self, member: Member, group: str) -> MemberBaseline | None:

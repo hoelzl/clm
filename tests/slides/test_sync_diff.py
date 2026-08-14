@@ -1395,6 +1395,100 @@ class TestMirrorRemoveCarriedDivergence:
         assert "edited" in item.detail  # the survivor moved too — say so
 
 
+class TestStampTwinIdTrustGate:
+    """Y5 (adversarial review 2026-07-24): ``pair_positionally`` adopts an
+    id-less twin by pool order, and P2 makes a stamped id the member's
+    identity — so a mechanical ``stamp_twin_id`` on a pairing the ledger
+    does not know is permanent identity corruption (the review's repro
+    stamped ``apples`` onto the oranges text). The stamp may execute
+    mechanically only when the pairing is ledger-known: recorded under the
+    member's own key with the twin's current fingerprint, or content-matched
+    via a pos→id key migration. Anything else stays framed — ``confirm``
+    banks the pairing and the NEXT report stamps mechanically.
+    """
+
+    @staticmethod
+    def _warm_ledger_base() -> DeckBaseline:
+        base = _snapshot(
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        base.complete = False  # ledger semantics: a missing entry is cold, never "new"
+        return base
+
+    # The Y5 repro state: two localized cells added per side; the EN twins
+    # are id-less and SWAPPED, so pool order marries each id to the other
+    # text. Equal cardinality — the #716 residue guard does not fire.
+    _DE_SWAPPED = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        _localized("apples", "de", "Aepfel"),
+        _localized("oranges", "de", "Birnen"),
+    )
+    _EN_SWAPPED = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% [markdown] lang="en"\n# ORANGES text\n\n',
+        '# %% [markdown] lang="en"\n# APPLES text\n\n',
+    )
+
+    def test_swapped_idless_twins_are_never_stamped_mechanically(self):
+        """The Y5 repro: no ledger entry knows either pairing, so both members
+        stay framed and NO stamp executes."""
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        stamps = [i for i in diff.items if i.action == "stamp_twin_id"]
+        assert stamps == [], [(i.key, i.action, i.detail) for i in diff.items]
+        framed = {i.key: i.action for i in diff.items}
+        assert framed == {"id:apples": "verify_cold", "id:oranges": "verify_cold"}
+        # The observation still surfaces, so the report names the pending stamp.
+        pending = {o.member.value for o in diff.observations if o.kind == "id_stamp_pending_twin"}
+        assert pending == {"apples", "oranges"}
+
+    def test_confirmed_pairing_stamps_mechanically_on_the_next_pass(self):
+        """The framed path is not a dead end: once the pairing is banked
+        (``confirm`` / ``record``), the next report finds it ledger-known and
+        the stamp is mechanical."""
+        diff = _diff(self._warm_ledger_base(), self._DE_SWAPPED, self._EN_SWAPPED)
+        assert not any(i.action == "stamp_twin_id" for i in diff.items)
+        banked = _snapshot(self._DE_SWAPPED, self._EN_SWAPPED)
+        banked.complete = False
+        diff2 = _diff(banked, self._DE_SWAPPED, self._EN_SWAPPED)
+        stamps = {i.key for i in diff2.items if i.action == "stamp_twin_id"}
+        assert stamps == {"id:apples", "id:oranges"}, [
+            (i.key, i.action, i.detail) for i in diff2.items
+        ]
+
+    def test_ledger_known_pairing_restores_a_stripped_id_mechanically(self):
+        """Pin (must survive the gate): the id was recorded on BOTH halves and
+        stripped from EN with the text untouched — the pairing is ledger-known,
+        so re-stamping it stays mechanical."""
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("m1", "de", "DE Text"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _localized("m1", "en", "EN text"))
+        base = _snapshot(de, en)
+        base.complete = False
+        item = _only_item(_diff(base, de, en.replace(' slide_id="m1"', "")))
+        assert (item.outcome, item.action) == ("transition", "stamp_twin_id")
+        assert item.side == "en"
+
+    def test_one_sided_ledger_entry_does_not_trust_the_positional_twin(self):
+        """A ledger entry that recorded only the DE half proves the ID, not the
+        PAIRING — the newly authored id-less EN twin is still a pool-order
+        guess, so no mechanical stamp."""
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _localized("m1", "de", "DE Text"))
+        base = _snapshot(de, _build(HEADER_EN, _slide("s0", "en", "Title")))
+        base.complete = False
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# EN text\n\n',
+        )
+        diff = _diff(base, de, en)
+        assert not any(i.action == "stamp_twin_id" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert {i.action for i in diff.items if i.key == "id:m1"} == {"verify_translation"}
+
+
 class TestTagParity:
     """Cross-side tag parity as an orthogonal aspect row (issue #615).
 
