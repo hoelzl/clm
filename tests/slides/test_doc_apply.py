@@ -410,6 +410,23 @@ class TestMechanicalRows:
         assert deck.en_path.read_text(encoding="utf-8").startswith("# pre-de v2\n")
         deck.assert_converged()
 
+    def test_preamble_named_anchor_members_still_record(self, tmp_path: Path):
+        """Key-collision regression: the parser accepts an anchor literally
+        named ``~preamble``, whose member keys (``pos:~preamble/code/0``)
+        share the preamble-handle prefix. Their rows must record as MEMBERS —
+        a prefix-matched preamble route would swallow the record."""
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("~preamble", "de", "Titel"), _shared_code("x")),
+            _build(HEADER_EN, _slide("~preamble", "en", "Title"), _shared_code("x")),
+        )
+        deck.record()
+        deck.edit_de("x = 1", "x = 2")
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        assert "x = 2" in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
     def test_carried_preamble_divergence_frame_is_answerable(self, tmp_path: Path):
         """The neither-moved preamble frame (pre-existing) must accept its
         advertised de/en answers — before the apply-side route existed, a

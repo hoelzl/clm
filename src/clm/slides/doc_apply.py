@@ -658,6 +658,13 @@ _PHASES: dict[str, int] = {
     "conflict_preamble": 5,
 }
 
+#: The two member-less preamble handles (``pos:~preamble/<part>/0``). Rows on
+#: them act on the per-``(lang, part)`` preamble streams, not on any member —
+#: matched EXACTLY, never by prefix: the parser accepts an anchor literally
+#: named ``~preamble``, whose real member keys (``pos:~preamble/code/0``)
+#: share the prefix.
+_PREAMBLE_HANDLES = frozenset({f"pos:~preamble/{part}/0" for part in ("deck", "companion")})
+
 
 def _item_phase(item: DiffItem) -> int:
     """The execution phase of one item.
@@ -1256,13 +1263,15 @@ def _record_item(
                 record_order_scope(target, fresh, group, part)
             return set()
         return set()
-    if action in ("record_preamble", "propagate_preamble", "conflict_preamble") or key.startswith(
-        "pos:~preamble/"
+    if action in ("record_preamble", "propagate_preamble", "conflict_preamble") or (
+        key in _PREAMBLE_HANDLES
     ):
         # Preamble rows bank exactly the preamble scope — keyed on the handle,
         # not the action, so a resolved pending_divergence frame on a
         # (member-less) preamble handle records here too instead of falling
-        # through to the member-table upsert.
+        # through to the member-table upsert. The match is exact: an anchor
+        # literally named ``~preamble`` is parseable, and its real member
+        # keys (``pos:~preamble/code/0``) must not be swallowed here.
         part = key.split(":", 1)[1].rsplit("/", 2)[1]
         record_preamble_scope(target, fresh, part)
         return set()
@@ -1674,7 +1683,7 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             ex.mirror_tags(item_with_side(item, side), side)
             return
         if action in ("conflict_shared", "pending_divergence"):
-            if item.key.startswith("pos:~preamble/"):
+            if item.key in _PREAMBLE_HANDLES:
                 # The preamble frame carries no member — route to the
                 # preamble copy, exactly as conflict_preamble does. Sending
                 # it through the cell propagate dead-ends the frame on the
