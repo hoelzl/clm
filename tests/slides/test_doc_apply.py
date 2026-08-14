@@ -474,7 +474,7 @@ class TestMechanicalRows:
         outcome = deck.apply(_decision(key, choice="de"))
         result = next(r for r in outcome.results if r.key == key)
         assert result.status == "rejected", outcome.to_payload()
-        assert "companion files on both halves" in result.reason
+        assert "preamble row is frameable" in result.reason
 
     def test_companion_preamble_decision_with_one_sided_companion_rejects(self, tmp_path: Path):
         """A companion file on ONE side only: the differ never frames a
@@ -497,7 +497,46 @@ class TestMechanicalRows:
         outcome = deck.apply(_decision(key, choice="de"))
         result = next(r for r in outcome.results if r.key == key)
         assert result.status == "rejected", outcome.to_payload()
-        assert "companion files on both halves" in result.reason
+        assert "preamble row is frameable" in result.reason
+
+    def test_companion_preamble_decision_with_late_companions_rejects(self, tmp_path: Path):
+        """Companion files created AFTER the last record: the baseline banked
+        no companion preamble fingerprints, so the differ skips the part
+        (file creation is layout state) and no companion preamble row is
+        frameable — a decision on the handle rejects, it does not claim
+        already_applied (#829 review round 4)."""
+        deck = _deck(tmp_path)  # recorded WITHOUT companion files
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            "# c-de\n" + _build(_vo_cell("s0-vo", "s0", "de", "Hallo Welt")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            "# c-en\n" + _build(_vo_cell("s0-vo", "s0", "en", "Hello World")),
+            encoding="utf-8",
+        )
+        key = "pos:~preamble/companion/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "preamble row is frameable" in result.reason
+
+    def test_preamble_decision_on_cold_deck_rejects(self, tmp_path: Path):
+        """No ledger at all: the differ never reaches the preamble pass
+        without a baseline, so a preamble decision was never an answer to a
+        reportable row — reject, do not claim already_applied (#829 review
+        round 4)."""
+        deck = _Deck(
+            tmp_path,
+            "# pre-de\n" + _build(*DE_PARTS),
+            "# pre-en\n" + _build(*EN_PARTS),
+        )  # deliberately never recorded
+        key = "pos:~preamble/deck/0"
+        outcome = deck.apply(_decision(key, choice="de"))
+        result = next(r for r in outcome.results if r.key == key)
+        assert result.status == "rejected", outcome.to_payload()
+        assert "preamble row is frameable" in result.reason
 
     def test_group_rename_is_recorded_without_touching_files(self, tmp_path: Path):
         deck = _deck(tmp_path)

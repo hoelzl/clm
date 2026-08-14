@@ -47,6 +47,7 @@ from attrs import define, evolve, field, frozen
 from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, MemberKey, SideCell
 from clm.slides.doc_identity import (
+    DeckBaseline,
     content_fingerprint,
     iter_with_groups,
     member_group_token,
@@ -55,6 +56,7 @@ from clm.slides.doc_ledger import (
     DeckLedger,
     LedgerMember,
     TopicLedger,
+    baseline_from_ledger,
     preserve_unchanged_member,
     record_group_order,
     record_order_scope,
@@ -664,6 +666,34 @@ _PHASES: dict[str, int] = {
 #: named ``~preamble``, whose real member keys (``pos:~preamble/code/0``)
 #: share the prefix.
 _PREAMBLE_HANDLES = frozenset({f"pos:~preamble/{part}/0" for part in ("deck", "companion")})
+
+
+def _preamble_frameable_parts(deck: BilingualDeck, base: DeckBaseline | None) -> frozenset[str]:
+    """The parts a diff against ``base`` could ever frame a preamble row for.
+
+    Mirrors the skip conditions in ``_Differ._diff_preambles``: both halves
+    must carry the part's file NOW, and the baseline must hold at least one
+    side's preamble fingerprint for the part — absent on a cold deck, on a
+    legacy ledger section without ``preamble_fps``, and for companion files
+    created after the last record. A decision aimed at a preamble handle
+    outside this set was never an answer to any reportable row.
+    """
+    if base is None:
+        return frozenset()
+    current = {
+        "deck": (deck.de_deck_preamble, deck.en_deck_preamble),
+        "companion": (deck.de_companion_preamble, deck.en_companion_preamble),
+    }
+    return frozenset(
+        part
+        for part, (de_lines, en_lines) in current.items()
+        if de_lines is not None
+        and en_lines is not None
+        and (
+            base.preamble_fps.get(("de", part)) is not None
+            or base.preamble_fps.get(("en", part)) is not None
+        )
+    )
 
 
 def _item_phase(item: DiffItem) -> int:
@@ -1863,7 +1893,12 @@ def _execute_mechanical(ex: _Executor, item: DiffItem) -> None:
         raise _ItemError(f"no executor for mechanical action '{action}'")
 
 
-def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDiff) -> ItemResult:
+def _unmatched_decision_result(
+    row: Decision,
+    deck: BilingualDeck,
+    diff: DeckDiff,
+    preamble_frameable: frozenset[str],
+) -> ItemResult:
     """Classify a decision row that matched no item in the current diff.
 
     Three situations wore one verdict before schema 4:
@@ -1879,11 +1914,12 @@ def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDif
     * the handle names no member of this deck — a genuine stale handle.
 
     Plus the fourth situation the member-centric reading predates: a
-    **preamble handle** never names a member, so it is judged against the
-    deck's preamble streams instead — ``already_applied`` when the part's
-    frame could have existed and is gone, ``rejected`` when the deck does
-    not carry companion files on both halves (no companion preamble row can
-    ever have been framed for it).
+    **preamble handle** never names a member, so it is judged against
+    :func:`_preamble_frameable_parts` — ``already_applied`` only when a
+    preamble row for the part could have been framed against this baseline
+    and is gone, ``rejected`` when no such row is frameable at all (cold
+    deck, legacy ledger without preamble fingerprints, or a companion file
+    missing on one half / created after the last record).
     """
     framed = [i.action for i in diff.items if i.key == row.key]
     if row.action is not None and framed:
@@ -1897,24 +1933,24 @@ def _unmatched_decision_result(row: Decision, deck: BilingualDeck, diff: DeckDif
         )
     if row.key in _PREAMBLE_HANDLES:
         # A preamble handle never names a member — the member lookup below
-        # would misreport it as a stale key. Nothing framed means the
-        # preamble state the answer asked for already holds (a prior apply
-        # landed it, or the divergence was resolved another way) — but only
-        # claim that for a part the deck actually carries on BOTH halves:
-        # the differ never frames a companion preamble row unless both
-        # companion files exist, so with a one-sided (or absent) companion
-        # no such row can ever have been framed and the answer is wrong.
+        # would misreport it as a stale key. Judge it against frameability
+        # instead: nothing framed means the preamble state the answer asked
+        # for already holds (a prior apply landed it, or the divergence was
+        # resolved another way) — but only claim that when a preamble row
+        # for the part COULD have been framed against this baseline. On a
+        # cold deck, a legacy ledger without preamble fingerprints, or a
+        # one-sided/late-created companion file no such row is frameable,
+        # and the answer is simply wrong.
         part = row.key.rsplit("/", 2)[1]
-        if part == "companion" and (
-            deck.de_companion_preamble is None or deck.en_companion_preamble is None
-        ):
+        if part not in preamble_frameable:
             return ItemResult(
                 row.key,
                 row.action or "?",
                 "rejected",
-                "the deck does not carry companion files on both halves, so "
-                "no companion preamble row can have been framed for it — "
-                "check the key against `report --json`",
+                f"no {part} preamble row is frameable for this deck in its "
+                "current state (needs both file halves and a recorded "
+                f"{part} preamble baseline) — check the key against "
+                "`report --json`",
             )
         return ItemResult(
             row.key,
@@ -1996,6 +2032,13 @@ def apply_deck(
     outcome = ApplyOutcome(dry_run=dry_run)
     ex = _Executor(bundle=bundle, deck=deck, comment_token=bundle.comment_token)
     originals = ex.emit_all()
+    # The preamble-frameability verdict for unmatched decisions is judged
+    # against the PRE-apply baseline (the one ``diff`` was computed from), so
+    # derive it before any landed item records into ``ledger``.
+    deck_ledger = ledger.decks.get(deck_key)
+    preamble_frameable = _preamble_frameable_parts(
+        deck, baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
+    )
 
     # Positional entries are recorded per pool (ordinals renumber together),
     # so a lone `confirm` on one pos-keyed cold member would silently bless
@@ -2106,7 +2149,7 @@ def apply_deck(
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
     for row in rows:
         if id(row) not in matched and row.key not in seen_decisions:
-            outcome.results.append(_unmatched_decision_result(row, deck, diff))
+            outcome.results.append(_unmatched_decision_result(row, deck, diff, preamble_frameable))
 
     if not landed:
         return outcome
