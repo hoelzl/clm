@@ -102,13 +102,20 @@ def pre_fork_fingerprint(cell: SideCell) -> str:
     """The content fingerprint modulo the ``lang`` attribute (and ``slide_id``).
 
     A §7.3 fork rewrites exactly the header's ``lang`` attribute, so a forked
-    cell's pre-fork identity is its content modulo that one attribute — every
-    other byte (tags, for_slide, vo_anchor, body, separators) still has to
-    match the recorded cell. This is the comparison the Y5 stamp trust gate
-    needs: a body-only match confuses cells whose bodies collide (tiny
-    separator cells collide by construction), and a full-content match
-    rejects the legitimate fork. For a cell with no lang attribute this
-    equals :func:`content_fingerprint`.
+    cell's pre-fork identity is its content modulo that one attribute — tags,
+    owner, vo_anchor, body and separators still have to match the recorded
+    cell. This is the comparison the Y5 stamp trust gate needs: a body-only
+    match confuses cells whose bodies collide (tiny separator cells collide
+    by construction), and a full-content match rejects the legitimate fork.
+    For a cell with no lang attribute this equals :func:`content_fingerprint`.
+
+    Known limitation (PR #825 review round 4, minor): the strip is a plain
+    regex, so a pathological tag VALUE containing the substring
+    ``lang="de"``/``lang="en"`` is over-stripped too — the same shape
+    ``_SLIDE_ID_ATTR_RE`` and ``_FOR_SLIDE_ATTR_RE`` already have, and
+    self-consistent with the engine's own header grammar (its parser reads
+    the same substring as the lang attribute). The header-grammar-owned
+    strip is future hardening, not a correctness gap in practice.
     """
     lines = lines_sans_id(cell)
     return hashlib.sha256(

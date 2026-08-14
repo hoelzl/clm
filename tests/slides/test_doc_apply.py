@@ -1298,10 +1298,14 @@ class TestStampTrustGate:
             ]
         )
         assert outcome.error is None, outcome.to_payload()
-        # The confirm LANDS but its recording defers a pass by design (an
-        # answered conflict_tags defers its sibling's record — the banked
-        # state must be the post-mirror one, #615), so pass 2 re-frames the
-        # pairing row alone (tags now agree) and a second confirm banks.
+        # The confirm LANDS (applied, not rejected) but its recording defers a
+        # pass by design (an answered conflict_tags defers its sibling's
+        # record — the banked state must be the post-mirror one, #615)...
+        pass1 = {(r.key, r.action): r for r in outcome.results}
+        assert pass1[("id:aa", "verify_translation")].status == "applied"
+        assert "deferred" in pass1[("id:aa", "verify_translation")].reason
+        # ...so pass 2 re-frames the pairing row alone (tags now agree) and a
+        # second confirm banks.
         _, diff2 = deck.diff()
         assert {i.action for i in diff2.items} == {"verify_translation"}
         outcome = deck.apply(
