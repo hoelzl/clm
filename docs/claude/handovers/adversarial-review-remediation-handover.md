@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1, 3, 5 DONE) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–5 DONE; next is item 6/Y6) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -715,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 5 (Y4) DONE; next is item 4 (Y5)
+### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4) DONE; next is item 6 (Y6)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -831,11 +831,43 @@ the other bugs consume.
      agents produce wrong output — treat it as part of the fix, not follow-up.
    - Add a clear rejection message for old-format keys pointing at the migration,
      rather than silently accepting them (which would preserve the bug).
-4. **Y5 — trust-gate `stamp_twin_id`.** ▸ Re-verified OPEN 2026-08-14:
-   `_emit_pending_id_stamps` (`sync_diff.py:652-670`) still emits the stamp
-   mechanically with no ledger-trust check; #716's cardinality guard
-   (`3c92b8da`) fixed the residue-*surplus* adoption shape (C1/C2), not the
-   equal-cardinality swapped-twin Y5 repro. Original plan: `sync_diff.py:417-435`: do not emit a
+4. **Y5 — trust-gate `stamp_twin_id`.** ▸ **DONE** (2026-08-14, PR #825).
+   The stamp is now emitted from `_diff_id_member` after base-entry
+   resolution, gated by `_stamp_pairing_ledger_known`: the resolved entry
+   must agree with the stamped side's twin by content fingerprint, or by
+   `pre_fork_fingerprint` (content modulo exactly the `lang` attribute) for
+   the §7.3 fork shape. An unverified pairing frames one `verify_translation`
+   row at the top of `_classify_matched` with every other row for the member
+   suppressed that pass (the conflict_tags doctrine); `confirm` banks the
+   pairing and the next pass stamps mechanically. Regression tests
+   `TestStampTwinIdTrustGate` (differ) + `TestStampTrustGate` (apply e2e),
+   all RED before the fix. **Four fresh-agent review rounds** (the Y1
+   pattern held — every round found a subtler defect in the fix itself):
+   round 1 found the fork route (`fork_match` matches a body fp on either
+   side, and `record_fork` banked the guessed pairing a row later); round 2
+   found the body-fp tolerance confusing same-body/different-tags cells
+   (Critical, replaced with the pre-fork fingerprint) and mechanical aspect
+   rows executing ahead of the guard (guard moved to `_classify_matched`'s
+   top); round 3 found the `_compare_order` mirror leak (unverified handles
+   now excluded, `_cross_moved` precedent) and the tags deadlock (confirm is
+   refused by `_reject_divergent_tags` while tags diverge — the gate now
+   co-frames `conflict_tags`, restoring the mirror-then-confirm dance);
+   round 4 found only Minors (regex over-strip docstring overclaim, softened;
+   a test assertion tightened). Ride-alongs: the text report prints gated
+   `id_stamp_pending_twin` observations, `cold_sweep_hint` names pending
+   id-stamp pairings, the stamp emit carries `base=entry` so
+   `_sweep_migrated_pos` retires the migrated `pos:` entry in-pass, and the
+   design doc §7.3 + both info topics state the ledger-known condition.
+   **Spun out: #826** — a round-3 finding that reproduces on master
+   (`_absorb_pos_twin` only claims one-sided positional candidates; a fork
+   class-shift mispairs the pool and a mechanical `mirror_tags` executes
+   against it): pre-existing, one lens-level step below the gate.
+   Recorded minor, deliberately not hardened: `pre_fork_fingerprint`'s lang
+   strip is a plain regex and over-strips a pathological tag *value*
+   containing `lang="de"`/`lang="en"` — the same shape
+   `_SLIDE_ID_ATTR_RE`/`_FOR_SLIDE_ATTR_RE` already carry, self-consistent
+   with the header grammar (docstring says so). Original plan text:
+   `sync_diff.py:417-435`: do not emit a
    mechanical id stamp for a member whose pairing came from
    `pair_positionally` (`doc_lenses.py:505-522`) and is not ledger-known at that
    pairing. Frame it instead. Since P2 makes the id *the* identity, a wrong stamp
