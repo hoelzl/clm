@@ -1904,6 +1904,59 @@ class TestConfirmSharedDivergenceGuard:
         assert doc_apply.item_answers(item) == ()
         assert doc_apply.item_resolution(item) == "manual"
 
+    def test_separator_only_divergence_is_not_body_answerable(self, tmp_path: Path):
+        # Round 3 (Minor): trailing separator counts are not body lines —
+        # _replace_body keeps the target's own separator count, so a body
+        # answer is a guaranteed no-op for this shape. It takes the
+        # structural branch (nothing advertised, manual) like tag-order.
+        tail = '# %% tags=["keep"] slide_id="tail"\ny = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), tail),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), tail),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["keep"] slide_id="sh1"\nx = 1\n\n',  # one trailing blank
+            tail,
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["keep"] slide_id="sh1"\nx = 1\n\n\n',  # two trailing blanks
+            tail,
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:sh1")
+        assert item.action == "verify_cold", [(i.key, i.action) for i in diff.items]
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+        outcome = deck.apply(_decision("id:sh1", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:sh1")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "outside the body lines" in result.reason
+
+    def test_shared_diverged_cold_detail_carries_the_repair(self, tmp_path: Path):
+        # Round 3 (Minor): the M6 doctrine — an empty advertisement means
+        # the detail carries the repair.
+        deck = _deck(tmp_path)  # recorded; companions arrive cold
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Erklaere die Schleife")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Completely different narration")),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:s0-vo")
+        assert "diverge byte-wise" in item.detail
+        assert "align the cells by hand" in item.detail
+
     def test_confirm_accepts_identical_shared_companion(self, tmp_path: Path):
         # Preserved: the normal cold ceremony — byte-identical shared pair.
         deck = _Deck(

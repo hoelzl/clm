@@ -51,6 +51,7 @@ from clm.slides.doc_identity import (
     content_fingerprint,
     iter_with_groups,
     member_group_token,
+    shared_pair_diverged,
 )
 from clm.slides.doc_ledger import (
     DeckLedger,
@@ -190,11 +191,12 @@ def item_answers(item: DiffItem) -> tuple[str, ...]:
       byte-identical twins). This covers ``verify_translation`` too — it is
       reachable on a shared member via an id-stamp on one half plus a
       tag-order divergence on the idless twin (round 2). When the bodies
-      agree and only the header diverges (tag order, owner, kind), ``body``
-      drops too — it rewrites only body lines, so advertising it would loop
-      the frame forever. What remains: ``body`` for a genuinely
-      body-diverged id-keyed member; nothing (``resolution: manual`` —
-      hand-align, or mint a ``slide_id``, and re-report) otherwise.
+      agree modulo trailing separators, ``body`` drops too — it rewrites
+      only body lines (``_replace_body`` keeps the target's own separator
+      count), so advertising it would loop or no-op the frame. What
+      remains: ``body`` for a genuinely body-diverged id-keyed member;
+      nothing (``resolution: manual`` — hand-align, or mint a
+      ``slide_id``, and re-report) otherwise.
     """
     answers = decision_vocabulary(item.action)
     if item.action not in ("verify_cold", "verify_translation"):
@@ -206,10 +208,10 @@ def item_answers(item: DiffItem) -> tuple[str, ...]:
         member is not None
         and member.de is not None
         and member.en is not None
-        and _shared_pair_diverged(member.de, member.en)
+        and shared_pair_diverged(member.de, member.en)
     ):
         answers = tuple(a for a in answers if a != "confirm")
-        if member.de.body == member.en.body:
+        if member.de.body.rstrip("\n") == member.en.body.rstrip("\n"):
             answers = tuple(a for a in answers if a != "body")
     if item.action == "verify_cold" and not item.key.startswith("id:"):
         return tuple(a for a in answers if a != "body")
@@ -1683,20 +1685,6 @@ def _reject_divergent_tags(de_cell: SideCell, en_cell: SideCell) -> None:
         )
 
 
-def _shared_pair_diverged(de_cell: SideCell, en_cell: SideCell) -> bool:
-    """True when a SHARED pair (neither side carries ``lang``) diverges
-    byte-wise — the shape ``_reject_divergent_shared`` refuses to confirm
-    (Y9). ``j2`` cells are exempt: the header macros legitimately differ
-    per half (``header_de``/``header_en``), and the structural verify gate
-    excludes them from byte comparison for the same reason."""
-    return (
-        de_cell.lang_attr is None
-        and en_cell.lang_attr is None
-        and de_cell.cell_type != "j2"
-        and content_fingerprint(de_cell) != content_fingerprint(en_cell)
-    )
-
-
 def _reject_divergent_shared(de_cell: SideCell, en_cell: SideCell) -> None:
     """The confirm shared-member guard (Y9): a SHARED member (neither side
     carries ``lang``) records as byte-identical twins — confirming a
@@ -1704,21 +1692,23 @@ def _reject_divergent_shared(de_cell: SideCell, en_cell: SideCell) -> None:
     on separated voiceover companions, whose structural record gate the
     confirm path never consults). Localized pairs may diverge — that is
     what translation IS. Runs after :func:`_reject_divergent_tags`, so a
-    fingerprint miss here is body/owner/kind/tag-order, never tag sets.
-    The message splits body from header divergence: a body answer rewrites
-    only body lines, so it cannot fix header bytes (tag ORDER, for_slide,
-    vo_anchor) — those are align-by-hand."""
-    if not _shared_pair_diverged(de_cell, en_cell):
+    fingerprint miss here is body/owner/kind/tag-order/separators, never
+    tag sets. The message splits what a ``body`` answer can fix (body
+    lines, modulo trailing separators — ``_replace_body`` keeps the
+    target's own separator count) from what it cannot (header bytes,
+    separator counts — align-by-hand)."""
+    if not shared_pair_diverged(de_cell, en_cell):
         return
-    if de_cell.body != en_cell.body:
+    if de_cell.body.rstrip("\n") != en_cell.body.rstrip("\n"):
         raise _ItemError(
             "the sides of this shared member diverge — a shared member "
             "records as byte-identical twins; answer with a body (naming "
             "the stale side) or align the cells by hand, then re-run report"
         )
     raise _ItemError(
-        "the sides of this shared member diverge in the cell header (tag "
-        "order, owner, or kind) — a body answer cannot fix header bytes; "
+        "the sides of this shared member diverge outside the body lines "
+        "(cell header — tag order, owner, kind — or trailing separators) — "
+        "a body answer rewrites only body lines and cannot fix those; "
         "align the cells by hand, then re-run report"
     )
 

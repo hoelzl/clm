@@ -400,12 +400,13 @@ way layout and owner changes get their own rows):
   the confirm path never consulted it — a separated voiceover companion
   could be blessed this way). The report never advertises `confirm` for
   that shape (the standing no-dead-answers rule), and never advertises
-  `body` when the divergence is header-only (tag order, `for_slide`,
-  `vo_anchor` — a body answer rewrites only body lines, so it would loop
-  the frame): a body-diverged id-keyed member keeps the `body` answer
+  `body` when the divergence is outside the body lines (tag order,
+  `for_slide`, `vo_anchor`, trailing separator counts — a body answer
+  rewrites only body lines, so it would loop or no-op the frame): a
+  body-diverged id-keyed member keeps the `body` answer
   (name the stale `side`); everything else renders `resolution: manual` —
-  hand-align (or mint a `slide_id`) and re-report. The rejection message
-  splits the same two cases. Localized pairs may diverge (that is what
+  hand-align (or mint a `slide_id`) and re-report, and the item's detail
+  names that repair. Localized pairs may diverge (that is what
   translation is), and `j2` header members are exempt (the
   `header_de`/`header_en` macros legitimately differ per half).
 

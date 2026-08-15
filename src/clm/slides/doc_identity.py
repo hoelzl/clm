@@ -78,6 +78,24 @@ def content_fingerprint(cell: SideCell) -> str:
 _FOR_SLIDE_ATTR_RE = re.compile(r'\s*for_slide="[^"]*"')
 
 
+def shared_pair_diverged(de_cell: SideCell, en_cell: SideCell) -> bool:
+    """True when a SHARED pair (neither side carries ``lang``) diverges
+    byte-wise (Y9).
+
+    A shared member records as byte-identical twins, so this is the shape
+    the confirm route refuses to bank and the cold detail names a repair
+    for. ``j2`` cells are exempt: the header macros legitimately differ
+    per half (``header_de``/``header_en``), and the structural verify gate
+    excludes them from byte comparison for the same reason.
+    """
+    return (
+        de_cell.lang_attr is None
+        and en_cell.lang_attr is None
+        and de_cell.cell_type != "j2"
+        and content_fingerprint(de_cell) != content_fingerprint(en_cell)
+    )
+
+
 def pair_signature(cell: SideCell) -> str:
     """The content fingerprint additionally modulo the ``for_slide`` attribute.
 
