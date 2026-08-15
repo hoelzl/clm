@@ -2322,24 +2322,29 @@ class TestLoneCandidateAffinity:
         assert "no content affinity" in slot.detail
         assert "suppressed" not in slot.detail
 
-    def test_unrelated_mark_loses_to_another_slots_claim(self):
-        # Round-1 review: two pending-twin slots, ONE lone new cell
-        # byte-identical to the SECOND slot's recorded cell. The first
-        # slot's no-affinity mark must not announce a suppression that
-        # never happens (a claimed cell leaves the news — its only row is
-        # the claiming slot's frame) or contradict that frame: it
-        # reframes as claimed-elsewhere.
+    def test_byte_claim_requires_the_slots_own_position(self):
+        # Round-3 review (Critical): a lone candidate BYTE-IDENTICAL to a
+        # later slot's recorded cell but sitting at a different pool
+        # position must not be claimed either — the cross-position byte
+        # record livelocked the pool exactly like the affine divergence
+        # (rerecord pairs the cell with the wrong slot; the slot's ledger
+        # entry is dropped as unresolved; record_symmetric_add reports
+        # success forever). The aliasing slot frames "unrelated"; the
+        # byte-matching slot frames "misplaced".
         r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
         base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
         diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, r2))
+        assert not any(i.action == "record_symmetric_add" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
         slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
         slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
         assert (slot_b.action, slot_r2.action) == (
             "ambiguous_alignment",
-            "record_symmetric_add",
-        ), [(i.key, i.action, i.detail) for i in diff.items]
-        assert "another pending slot" in slot_b.detail
-        assert "suppressed" not in slot_b.detail
+            "ambiguous_alignment",
+        )
+        assert "no content affinity" in slot_b.detail
+        assert "different pool position" in slot_r2.detail
 
     def test_affinity_claim_requires_the_slots_own_position(self):
         # Round-2 review (Important): a lone candidate body-similar to a

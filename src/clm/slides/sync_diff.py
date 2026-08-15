@@ -2746,6 +2746,13 @@ class _Differ:
         # the recorded cell (the same budgeted near-match the #630 split
         # scan uses) = plausibly the twin landed with edits; dissimilar =
         # a genuine add, the slot's pending twin is still missing.
+        # Y8 rounds 2-3: BOTH claims bind only at the slot's OWN rendered
+        # handle. A cross-position claim's record/divergence resolution
+        # writes against a cell the fresh-snapshot rerecord then pairs
+        # with a DIFFERENT slot — the pool livelocks (the slot's ledger
+        # entry is dropped as unresolved and the record reports success
+        # forever without anything sticking); the byte-identical variant
+        # livelocks exactly like the affine one.
         for idx, entry in enumerate(base_entries):
             if not entry.one_sided:
                 continue
@@ -2760,6 +2767,8 @@ class _Differ:
                 want.add(content_fingerprint(rec_cell))
             claimed = None
             for candidate in news[pending]:
+                if candidate.key.render() != entry.key:
+                    continue  # cross-position: claiming mis-pairs the rerecord
                 cell = candidate.side(pending)
                 if cell is not None and content_fingerprint(cell) in want:
                     claimed = candidate
@@ -2768,18 +2777,13 @@ class _Differ:
             if claimed is None and len(news[pending]) == 1:
                 candidate = news[pending][0]
                 cand_cell = candidate.side(pending)
-                lone_affine = (
-                    rec_cell is not None
-                    and cand_cell is not None
-                    and self._pool_similarity.similar(rec_cell.body, cand_cell.body)
+                lone_affine = cand_cell is not None and (
+                    content_fingerprint(cand_cell) in want
+                    or (
+                        rec_cell is not None
+                        and self._pool_similarity.similar(rec_cell.body, cand_cell.body)
+                    )
                 )
-                # Y8 round 2: the affinity claim binds only at the slot's
-                # OWN rendered handle. A cross-position claim's divergence
-                # resolution propagates into a cell the fresh-snapshot
-                # rerecord then pairs with a DIFFERENT slot — the pool
-                # livelocks (the slot's ledger entry is dropped as
-                # unresolved and the record reports success forever
-                # without anything sticking).
                 if lone_affine and candidate.key.render() == entry.key:
                     claimed = candidate
             if claimed is not None:
@@ -3210,12 +3214,13 @@ class _Differ:
         if pen_member.key.render() == handle:
             return (
                 " The new cell's own row is suppressed this pass (it shares this "
-                "row's handle) and re-frames on the next report"
+                "row's handle) and re-frames once the pool's membership changes"
             )
         if id(pen_member) in self._pool_news_suppressed:
             return (
                 " The new cell's own row is suppressed this pass (it shares "
-                "another pending slot's handle) and re-frames on the next report"
+                "another pending slot's handle) and re-frames once the pool's "
+                "membership changes"
             )
         return " The new cell's own row frames separately this pass"
 
@@ -3342,6 +3347,12 @@ class _Differ:
             # cell left the news, so its only row is the claiming slot's
             # frame — and no copy: the cell still sits unrecorded at this
             # twin's copy target until the claiming slot resolves.
+            # Since rounds 2-3 bind every claim at the claiming slot's own
+            # handle this state is not known to be reachable (a marked
+            # candidate renders at most one slot's handle); the branch is
+            # kept because a mark whose candidate IS later claimed must
+            # never frame a stale row-fate note against the claiming
+            # slot's frame.
             self.emit(
                 handle,
                 "conflict",

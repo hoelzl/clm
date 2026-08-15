@@ -1637,6 +1637,42 @@ class TestLoneCandidateAffinity:
         assert "compute_third_value(4)" in en  # the affine twin copied verbatim
         deck.assert_converged()
 
+    def test_cross_position_byte_twin_frames_and_converges(self, tmp_path: Path):
+        # Round-3 review (Critical): the BYTE claim livelocked the pool in
+        # exactly the cross-position geometry (the mechanical
+        # record_symmetric_add recorded against a cell the rerecord pairs
+        # with the wrong slot — the slot's ledger entry was dropped as
+        # unresolved and the record reported success forever). The byte
+        # claim now binds at the slot's own position too; both slots
+        # frame; minting a slide_id reconciles everything mechanically.
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.A, self.B, r2),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.A),
+        )
+        deck.record()
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n'
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), self.A, c)
+        _, diff = deck.diff()
+        # No cross-position record: two answerless frames, nothing else.
+        assert not any(i.action == "record_symmetric_add" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert [(i.outcome, i.action) for i in diff.items] == [
+            ("conflict", "ambiguous_alignment"),
+            ("conflict", "ambiguous_alignment"),
+        ]
+        outcome = deck.apply()
+        assert not outcome.wrote  # decision-free: nothing mutates
+        deck.edit_en('# %% tags=["keep"]\ngamma', '# %% tags=["keep"] slide_id="c-gamma"\ngamma')
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert en.count("compute_third_value(4)") == 2  # the new cell AND the twin
+        assert "compute_second_value(2)" in en
+        deck.assert_converged()
+
 
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename

@@ -286,14 +286,15 @@ is a body-similarity heuristic — ratio ≥ 0.9 over bodies of ≥ 10 stripped
 characters, budgeted per report — so a *near-identical boilerplate* cell
 can still read as the twin (its frame goes to review, never silent) and a
 *tiny* genuinely-landed twin reads as unrelated (align the cells by hand).
-The affinity claim also binds only at the slot's **own pool position**: a
-body-similar cell at a *different* position frames the same action with a
-"landed at a different pool position" reading (claiming it there would
-mis-pair the pool's recording). The cell's own row is suppressed for the
-pass only when pool ordinals make it share a framed slot's handle — the
-frame names whose handle; at another ordinal it frames separately. When
-the lone cell was instead claimed as *another* pending slot's landed twin,
-the frame says so — resolve that slot first); carries **no** answers:
+The affinity claim also binds only at the slot's **own pool position**:
+a body-similar or even byte-identical cell at a *different* position
+frames the same action with a "landed at a different pool position"
+reading (claiming it there would mis-pair the pool's recording). The
+cell's own row is suppressed for the pass only when pool ordinals make
+it share a framed slot's handle — the frame names whose handle; at
+another ordinal it frames separately. When the lone cell was instead
+claimed as *another* pending slot's landed twin, the frame says so —
+resolve that slot first); carries **no** answers:
 reconcile by editing, minting ids, then re-report),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
