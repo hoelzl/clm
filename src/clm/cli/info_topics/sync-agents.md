@@ -277,12 +277,39 @@ the differ can see in the same pass never frames this: it emits the
 mechanical `retarget_owner`, which rewrites the companion's `for_slide` to
 follow the rename — narration is never a removal decision when its slide
 still exists, #650), `ambiguous_alignment` (genuinely ambiguous residue
-— rival id stamps, both sides adding different content into one pool;
-carries **no** answers: reconcile by editing, minting ids, then re-report),
+— rival id stamps, both sides adding different content into one pool, or a
+pending-twin pool slot whose lone new cell on the pending side is not a
+claimable landed twin (Y8 — see "Pending-twin pool claims" below); carries
+**no** answers: reconcile by editing, minting ids, then re-report),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
 engine writes the twin's attribute; see "Forking a shared cell" below), and
 the normalize-refusal deck item (run `clm slides normalize`, then re-report).
+
+### Pending-twin pool claims (Y8)
+
+When a pool cell's twin was still pending at base and the missing side
+gains exactly one new cell, the engine claims it as the landed twin only
+with **content affinity** to the recorded cell — a body-similarity
+heuristic (ratio ≥ 0.9 over bodies of ≥ 10 stripped characters, budgeted
+per report), so a *near-identical boilerplate* cell can still read as the
+twin (its frame goes to review, never silent) and a *tiny* genuinely-
+landed twin reads as unrelated (align the cells by hand). The claim also
+binds only at the slot's **own pool position**: a body-similar or even
+byte-identical cell at a *different* position frames `ambiguous_alignment`
+with a "landed at a different pool position" reading (claiming it there
+would mis-pair the pool's recording) — mint a `slide_id` on it, or remove
+it, and re-report; the pending twin then copies mechanically. A slide
+**renamed** in the same pass reads as cross-position to that gate, so the
+frame names the rename instead: no action needed — the candidate's own row
+is held back for the pass and the claim binds once the rename is recorded.
+Without affinity the cell is treated as a genuine add, not the twin (same
+mint-or-remove reconciliation). The cell's own row is suppressed for the
+pass when pool ordinals make it share a framed slot's handle, or held
+back while a slide rename is in flight (it renders the slot's handle
+under the new anchor) — the frame names whose handle; at another ordinal
+it frames separately. When the lone cell was instead claimed as *another*
+pending slot's landed twin, the frame says so — resolve that slot first.
 
 ### Parse refusals: read the code, not the header
 

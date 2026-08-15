@@ -2228,3 +2228,225 @@ class TestCrossPlacedNoEvidence:
         assert [(i.outcome, i.action, i.key) for i in diff.items] == [
             ("order", "order_decision", "id:m")
         ], [(i.key, i.action, i.detail) for i in diff.items]
+
+
+class TestLoneCandidateAffinity:
+    """Y8 (adversarial review 2026-07-24): ``_align_pool``'s lone-candidate
+    claim bound ANY single unmatched new cell as "the landed twin" of a
+    pending-twin pool slot, with no content affinity. The downstream
+    ``pending_divergence`` frame's de/en answer then overwrites a genuinely
+    new, unrelated cell verbatim — framed, so misleading rather than
+    silent. The claim now requires body similarity to the recorded cell;
+    without affinity the cell keeps its own add/cold row and the slot's
+    pending-twin copy tells the truth.
+    """
+
+    A = '# %% tags=["keep"]\nalpha = compute_first(1)\n\n'
+    B = '# %% tags=["keep"]\nbeta = compute_second_value(2)\n\n'
+
+    @staticmethod
+    def _de(*cells: str) -> str:
+        return _build(HEADER_DE, _slide("s0", "de", "Titel"), *cells)
+
+    @staticmethod
+    def _en(*cells: str) -> str:
+        return _build(HEADER_EN, _slide("s0", "en", "Title"), *cells)
+
+    def _base(self):
+        # B exists only on DE at base — a pending EN twin in the pool.
+        return _snapshot(self._de(self.A, self.B), self._en(self.A))
+
+    def test_byte_identical_landing_records(self):
+        # Preserved: the byte-exact claim path is untouched.
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, self.B))
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("add", "record_symmetric_add")
+        assert item.key == "pos:s0/code/1"
+
+    def test_edited_landing_with_affinity_still_claims(self):
+        # Preserved: the twin landed with a small edit — body-similar, so
+        # the claim fires and the divergence frames for review.
+        edited = '# %% tags=["keep"]\nbeta = compute_second_value(3)\n\n'
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, edited))
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        assert item.key == "pos:s0/code/1"
+
+    def test_unrelated_lone_new_cell_is_not_the_landed_twin(self):
+        # The Y8 shape: the lone new cell has no content affinity to the
+        # recorded cell — it must keep its own add row, and the slot frames
+        # (the twin's copy cannot execute while the foreign cell sits
+        # unrecorded in the pool) instead of offering an overwrite.
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, foreign))
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert sorted((i.action, i.direction) for i in diff.items) == [
+            ("ambiguous_alignment", "none"),  # the slot: not the twin
+        ]
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert "no content affinity" in slot.detail
+        assert "suppressed" in slot.detail  # the foreign cell's own row is held back
+
+    def test_two_unrelated_candidates_stay_ambiguous(self):
+        # Preserved: several candidates, no byte match — the slot stays
+        # ambiguous (never mechanical), affinity is not used to pick one.
+        c1 = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        c2 = '# %% tags=["keep"]\nimport sys\n\ncfg = load_everything()\n\n'
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, c1, c2))
+        actions = {(i.key, i.action) for i in diff.items}
+        assert ("pos:s0/code/1", "ambiguous_alignment") in actions, [
+            (i.key, i.action) for i in diff.items
+        ]
+
+    def test_non_aliasing_candidate_keeps_its_row_and_pair(self):
+        # Round-1 review: the suppression exists because pool ordinals
+        # ALIAS — the candidate's own row would render on the slot's
+        # handle. When the candidate parses at a DIFFERENT ordinal there
+        # is nothing to suppress: its row must frame normally and its
+        # byte-identical sibling on the recorded side must keep the
+        # record_symmetric_add pair.
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        diff = _diff(
+            self._base(),
+            self._de(foreign, self.A, self.B),
+            self._en(foreign, self.A),
+        )
+        actions = {(i.key, i.action) for i in diff.items}
+        assert ("pos:s0/code/0", "record_symmetric_add") in actions, [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "no content affinity" in slot.detail
+        assert "suppressed" not in slot.detail
+
+    def test_byte_claim_requires_the_slots_own_position(self):
+        # Round-3 review (Critical): a lone candidate BYTE-IDENTICAL to a
+        # later slot's recorded cell but sitting at a different pool
+        # position must not be claimed either — the cross-position byte
+        # record livelocked the pool exactly like the affine divergence
+        # (rerecord pairs the cell with the wrong slot; the slot's ledger
+        # entry is dropped as unresolved; record_symmetric_add reports
+        # success forever). The aliasing slot frames "unrelated"; the
+        # byte-matching slot frames "misplaced".
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, r2))
+        assert not any(i.action == "record_symmetric_add" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
+        assert (slot_b.action, slot_r2.action) == (
+            "ambiguous_alignment",
+            "ambiguous_alignment",
+        )
+        assert "no content affinity" in slot_b.detail
+        assert "different pool position" in slot_r2.detail
+
+    def test_affinity_claim_requires_the_slots_own_position(self):
+        # Round-2 review (Important): a lone candidate body-similar to a
+        # LATER slot's recorded cell but sitting at a DIFFERENT pool
+        # position must not be claimed — the divergence resolution would
+        # propagate into a cell the fresh-snapshot rerecord pairs with the
+        # wrong slot (the pool livelock). The affine slot frames
+        # "misplaced"; the aliasing slot frames "unrelated".
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(5)\n\n'
+        base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, c))
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
+        assert (slot_b.action, slot_r2.action) == (
+            "ambiguous_alignment",
+            "ambiguous_alignment",
+        )
+        assert "no content affinity" in slot_b.detail
+        assert "different pool position" in slot_r2.detail
+
+    def test_two_marks_one_row_the_note_names_the_aliasing_slot(self):
+        # Round-2 review (Minor): two pending-twin slots, one lone
+        # no-affinity candidate. The aliasing slot suppresses the row; the
+        # other slot's frame must not claim it "frames separately".
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, foreign))
+        slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
+        assert (slot_b.action, slot_r2.action) == (
+            "ambiguous_alignment",
+            "ambiguous_alignment",
+        ), [(i.key, i.action, i.detail) for i in diff.items]
+        assert "it shares this row's handle" in slot_b.detail
+        assert "another pending slot's handle" in slot_r2.detail
+        assert "frames separately" not in slot_r2.detail
+        # The candidate's single row is suppressed — exactly the two frames.
+        assert len(diff.items) == 2
+
+    def test_rename_in_flight_reads_as_rename_not_misplaced(self):
+        # Round-4 review (Minor): the position gate compares raw rendered
+        # keys — under a group rename an at-position landing carries the
+        # NEW group token while the slot handle carries the BASE one. The
+        # frame must name the rename: acting on the generic "misplaced"
+        # advice (mint / move) would duplicate the cell. Round 5: the
+        # candidate's own row is held back too — emitted, it would report
+        # a false "recorded" verdict and be erased by the unresolved-pool
+        # drop before the claim can bind.
+        diff = _diff(
+            self._base(),
+            _build(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("s1", "en", "Title"), self.A, self.B),
+        )
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "being renamed" in slot.detail
+        assert "different pool position" not in slot.detail
+        assert "held back" in slot.detail  # the candidate's own row is too
+        assert not any(i.key == "pos:s1/code/1" for i in diff.items), [
+            (i.key, i.action) for i in diff.items
+        ]
+
+    def test_rename_with_slashy_group_id_reads_as_rename(self):
+        # Round-5 review (Minor): group ids are free-form and may contain
+        # "/" — the regrouped-handle compare must split kind/ordinal from
+        # the RIGHT, or a slashy rename falls back to the generic
+        # "misplaced" wording (whose mint/move advice is wrong here).
+        base = _snapshot(
+            _build(HEADER_DE, _slide("a/b", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("a/b", "en", "Title"), self.A),
+        )
+        diff = _diff(
+            base,
+            _build(HEADER_DE, _slide("c/d", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("c/d", "en", "Title"), self.A, self.B),
+        )
+        slot = next(i for i in diff.items if i.key == "pos:a/b/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "being renamed" in slot.detail
+        assert "different pool position" not in slot.detail
+
+    def test_rename_in_flight_foreign_cell_promises_no_claim(self):
+        # Round-5 self-review: a FOREIGN cell (no affinity) at the slot's
+        # position under a rename — the held-back note must not promise
+        # "the claim binds" (nothing will ever bind). Round 6: nor does
+        # the row "re-frame" once the rename records — the handles then
+        # align and the raw-alias route keeps it suppressed.
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        diff = _diff(
+            self._base(),
+            _build(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("s1", "en", "Title"), self.A, foreign),
+        )
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "no content affinity" in slot.detail
+        assert "held back" in slot.detail
+        assert "stays suppressed until the pool's membership changes" in slot.detail
+        assert "claim binds" not in slot.detail
+        assert "re-frames once the rename is recorded" not in slot.detail

@@ -1551,6 +1551,168 @@ class TestRenameEditGuard:
         assert deck.en_path.read_text(encoding="utf-8") == en_before
 
 
+class TestLoneCandidateAffinity:
+    """Y8 (adversarial review 2026-07-24): the lone-candidate claim bound
+    any single unmatched new cell as a pending twin's landed cell with no
+    content affinity, and the resulting frame's de/en answer overwrote the
+    foreign cell verbatim. Without affinity the cell must keep its own row
+    and the slot's pending-twin copy must tell the truth."""
+
+    A = '# %% tags=["keep"]\nalpha = compute_first(1)\n\n'
+    B = '# %% tags=["keep"]\nbeta = compute_second_value(2)\n\n'
+
+    def _deck(self, tmp_path: Path) -> _Deck:
+        # B exists only on DE at record time — a pending EN twin pool slot.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.A),
+        )
+        deck.record()
+        return deck
+
+    def test_unrelated_new_cell_survives_and_the_twin_copies(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n'
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), self.A, foreign)
+        _, diff = deck.diff()
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        # Only the answerless frame — the foreign cell's own row is
+        # suppressed (same rendered handle) so nothing deadlocks.
+        assert [(i.outcome, i.action) for i in diff.items] == [("conflict", "ambiguous_alignment")]
+        outcome = deck.apply()
+        assert not outcome.wrote  # decision-free: nothing mutates
+        # The documented reconciliation: mint a slide_id on the foreign
+        # cell — it leaves the positional pool, the twin's copy target
+        # frees up, and both copies execute mechanically.
+        deck.edit_en(
+            '# %% tags=["keep"]\nimport os', '# %% tags=["keep"] slide_id="c-pipe"\nimport os'
+        )
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert "run_pipeline" in en  # the foreign cell was NOT overwritten
+        assert "compute_second_value" in en  # the pending twin copied verbatim
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "run_pipeline" in de  # the new cell mirrored to DE
+        deck.assert_converged()
+
+    def test_cross_position_affinity_frames_and_converges(self, tmp_path: Path):
+        # Round-2 review (Important): a lone new cell body-similar to a
+        # LATER pending slot's recorded cell but sitting at a different
+        # pool position must NOT be claimed — claiming it livelocked the
+        # pool (the divergence resolution propagated into a cell the
+        # rerecord paired with the wrong slot). Both slots frame; minting
+        # a slide_id reconciles everything mechanically.
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.A, self.B, r2),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.A),
+        )
+        deck.record()
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(5)\n'
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), self.A, c)
+        _, diff = deck.diff()
+        # No claim across positions: two answerless frames, nothing else.
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert [(i.outcome, i.action) for i in diff.items] == [
+            ("conflict", "ambiguous_alignment"),
+            ("conflict", "ambiguous_alignment"),
+        ]
+        outcome = deck.apply()
+        assert not outcome.wrote  # decision-free: nothing mutates
+        # The documented reconciliation: mint a slide_id on the new cell —
+        # it leaves the positional pool and every copy executes.
+        deck.edit_en('# %% tags=["keep"]\ngamma', '# %% tags=["keep"] slide_id="c-gamma"\ngamma')
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert "compute_third_value(5)" in en  # the new cell was NOT overwritten
+        assert "compute_second_value(2)" in en  # the first twin copied verbatim
+        assert "compute_third_value(4)" in en  # the affine twin copied verbatim
+        deck.assert_converged()
+
+    def test_cross_position_byte_twin_frames_and_converges(self, tmp_path: Path):
+        # Round-3 review (Critical): the BYTE claim livelocked the pool in
+        # exactly the cross-position geometry (the mechanical
+        # record_symmetric_add recorded against a cell the rerecord pairs
+        # with the wrong slot — the slot's ledger entry was dropped as
+        # unresolved and the record reported success forever). The byte
+        # claim now binds at the slot's own position too; both slots
+        # frame; minting a slide_id reconciles everything mechanically.
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.A, self.B, r2),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.A),
+        )
+        deck.record()
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n'
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), self.A, c)
+        _, diff = deck.diff()
+        # No cross-position record: two answerless frames, nothing else.
+        assert not any(i.action == "record_symmetric_add" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert [(i.outcome, i.action) for i in diff.items] == [
+            ("conflict", "ambiguous_alignment"),
+            ("conflict", "ambiguous_alignment"),
+        ]
+        outcome = deck.apply()
+        assert not outcome.wrote  # decision-free: nothing mutates
+        deck.edit_en('# %% tags=["keep"]\ngamma', '# %% tags=["keep"] slide_id="c-gamma"\ngamma')
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert en.count("compute_third_value(4)") == 2  # the new cell AND the twin
+        assert "compute_second_value(2)" in en
+        deck.assert_converged()
+
+    def test_rename_in_flight_self_heals_decision_free(self, tmp_path: Path):
+        # Round-4 review (Minor): renaming the slide on both sides WHILE
+        # the byte-identical twin lands makes the position gate read the
+        # landing as cross-position (new group token vs the base handle).
+        # The frame must name the rename — and the deck must then heal
+        # with no decisions at all: the rename records, the claim binds,
+        # the twin records, and nothing duplicates.
+        deck = self._deck(tmp_path)
+        deck.write_de(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B)
+        deck.write_en(HEADER_EN, _slide("s1", "en", "Title"), self.A, self.B)
+        _, diff = deck.diff()
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "being renamed" in slot.detail
+        assert "different pool position" not in slot.detail
+        outcome = deck.apply()  # the rename records; the frame is answerless
+        statuses = _statuses(outcome)
+        assert statuses.get("id:s1") == "recorded", outcome.to_payload()
+        # Round 5: no false "recorded" verdict for the candidate — its row
+        # was held back, so it never reaches the report at all.
+        assert "pos:s1/code/1" not in statuses, outcome.to_payload()
+        _, diff = deck.diff()
+        # Round 5: the DESIGNED route — with the candidate's own row held
+        # back, the slot entry survives the rename and the claim binds:
+        # the twin records as the slot's landed cell, not as a re-cold
+        # member (a re-emitted record_neutral would mean the entry was
+        # silently erased and re-recorded — the false-verdict churn).
+        twin_rows = [i for i in diff.items if i.key == "pos:s1/code/1"]
+        assert [(i.outcome, i.action) for i in twin_rows] == [("add", "record_symmetric_add")], [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert en.count("compute_second_value(2)") == 1  # no duplicate
+        assert de.count("compute_second_value(2)") == 1
+        deck.assert_converged()
+
+
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename
     recorded through the sync loop must leave ZERO dangling `id:<old>`

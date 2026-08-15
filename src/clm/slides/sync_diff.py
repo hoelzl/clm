@@ -328,6 +328,22 @@ def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | N
     return None
 
 
+def _pos_key_regrouped(handle: str, group: str) -> str | None:
+    """A positional handle re-rendered under a different group token.
+
+    Group ids are free-form and may themselves contain ``/`` (see
+    ``doc_identity.member_group_token``), so split from the RIGHT: kind
+    and ordinal are always the last two segments. Returns ``None`` for
+    non-positional handles.
+    """
+    if not handle.startswith("pos:"):
+        return None
+    parts = handle.rsplit("/", 2)
+    if len(parts) != 3:
+        return None
+    return f"pos:{group}/{parts[1]}/{parts[2]}"
+
+
 # ---------------------------------------------------------------------------
 # Diff items
 # ---------------------------------------------------------------------------
@@ -580,6 +596,15 @@ class _Differ:
         #: placement is that item's job; the scope pair-parity check must
         #: not double-frame it (#654)
         self._cross_moved: set[str] = set()
+        #: body near-match oracle for the pool's lone-candidate landed-twin
+        #: claim (Y8) — per-report budgeted, like the #630 split scan
+        self._pool_similarity = _BodySimilarity()
+        #: members whose own news row is suppressed for the pass because a
+        #: pending-twin slot framed ``unrelated`` on the same rendered key
+        #: (Y8) — two rows on one handle cannot both be answered, and the
+        #: answerless frame would defer the cold row's recording forever
+        #: (the #654 placement-suppression precedent)
+        self._pool_news_suppressed: set[int] = set()
         #: handles whose placement was framed with NO base evidence (a cold
         #: or order-blind member under different brackets per side) — their
         #: same-key verify_cold row is suppressed for the pass (#654; the
@@ -2731,6 +2756,19 @@ class _Differ:
         # the cell). Byte-identical claims first; then a LONE remaining
         # candidate (the twin landed with edits — framed downstream); with
         # several candidates the slot stays ambiguous and never mechanical.
+        # Y8: the lone-candidate claim requires CONTENT AFFINITY — a
+        # genuinely new, unrelated cell is not the twin, and the landed
+        # frame's de/en answer would overwrite it verbatim. Body-similar to
+        # the recorded cell (the same budgeted near-match the #630 split
+        # scan uses) = plausibly the twin landed with edits; dissimilar =
+        # a genuine add, the slot's pending twin is still missing.
+        # Y8 rounds 2-3: BOTH claims bind only at the slot's OWN rendered
+        # handle. A cross-position claim's record/divergence resolution
+        # writes against a cell the fresh-snapshot rerecord then pairs
+        # with a DIFFERENT slot — the pool livelocks (the slot's ledger
+        # entry is dropped as unresolved and the record reports success
+        # forever without anything sticking); the byte-identical variant
+        # livelocks exactly like the affine one.
         for idx, entry in enumerate(base_entries):
             if not entry.one_sided:
                 continue
@@ -2745,17 +2783,81 @@ class _Differ:
                 want.add(content_fingerprint(rec_cell))
             claimed = None
             for candidate in news[pending]:
+                if candidate.key.render() != entry.key:
+                    continue  # cross-position: claiming mis-pairs the rerecord
                 cell = candidate.side(pending)
                 if cell is not None and content_fingerprint(cell) in want:
                     claimed = candidate
                     break
+            lone_affine = False
             if claimed is None and len(news[pending]) == 1:
-                claimed = news[pending][0]
+                candidate = news[pending][0]
+                cand_cell = candidate.side(pending)
+                lone_affine = cand_cell is not None and (
+                    content_fingerprint(cand_cell) in want
+                    or (
+                        rec_cell is not None
+                        and self._pool_similarity.similar(rec_cell.body, cand_cell.body)
+                    )
+                )
+                if lone_affine and candidate.key.render() == entry.key:
+                    claimed = candidate
             if claimed is not None:
                 news[pending].remove(claimed)
                 status[pending][idx] = ("landed", claimed)
-            elif news[pending]:
+            elif len(news[pending]) > 1:
                 status[pending][idx] = ("ambiguous", None)
+            elif news[pending]:
+                # Exactly one candidate, not claimed. ``misplaced``: body
+                # similarity says it could be the twin, but it landed away
+                # from the slot's recorded position — claiming it would
+                # mis-pair the pool's recording (above). ``unrelated``:
+                # no content affinity (Y8) — a genuinely new cell, NOT the
+                # twin. Either way the slot frames instead of copying:
+                # while the cell sits unrecorded in the pending side's
+                # pool, the positional pairing makes the twin's copy
+                # target occupied and apply would refuse it. The candidate
+                # rides the status so the frame can name its row's fate.
+                status[pending][idx] = (
+                    "misplaced" if lone_affine else "unrelated",
+                    news[pending][0],
+                )
+
+        # A slot's ``unrelated``/``misplaced`` mark loses to a LATER slot's
+        # claim of the same lone candidate (claim-loop order): for the
+        # earlier slot the cell was never available. Reframe it so its
+        # frame neither contradicts the claiming slot's nor announces a
+        # suppression that never happens (a claimed cell left the news —
+        # its only row is the claiming slot's frame).
+        #
+        # The row suppression itself is computed HERE, over all marks at
+        # once, so every slot's frame text reads the final set — a later
+        # slot's suppression must not contradict an earlier slot's
+        # "frames separately" (round 2). A marked candidate's own news row
+        # is suppressed when it would render on a marked slot's handle
+        # (pool ordinals alias — an answerless frame beside an answerable
+        # cold row on one handle defers the cold row's recording forever,
+        # the #654 placement-suppression precedent); at any other ordinal
+        # there is no aliasing and its row frames normally. Round 5: under
+        # a group rename the candidate renders the slot's handle under the
+        # NEW group token — no aliasing, but the row must be held back
+        # just the same: the apply-side deferral guard is key-based, so
+        # the emitted row would report a false "recorded" verdict and be
+        # erased by the unresolved-pool drop instead of letting the claim
+        # bind once the rename records.
+        for idx, entry in enumerate(base_entries):
+            if not entry.one_sided:
+                continue
+            pending_side: Lang = "de" if entry.de_fp is None else "en"
+            state, marked = status[pending_side][idx]
+            if state not in ("unrelated", "misplaced") or marked is None:
+                continue
+            if all(marked is not m for m in news[pending_side]):
+                status[pending_side][idx] = ("claimed_elsewhere", None)
+            elif marked.key.render() == entry.key or marked.key.render() == (
+                _pos_key_regrouped(entry.key, group)
+            ):
+                self._pool_news_suppressed.add(id(marked))
 
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
@@ -3122,6 +3224,44 @@ class _Differ:
             twin=pair_twin,
         )
 
+    def _pool_own_row_note(self, pen_member: Member | None, handle: str, group: str) -> str:
+        """The frame-text note naming a marked candidate's row fate (Y8).
+
+        The suppression set is final by classification time (computed over
+        all marks in :meth:`_align_pool`), so the note can distinguish:
+        suppressed because the row would render on THIS frame's handle,
+        held back because it renders this handle under the slide's NEW
+        anchor (a group rename is in flight), suppressed because it
+        renders on ANOTHER marked slot's handle, or not suppressed at all.
+        """
+        if pen_member is None:
+            return ""
+        rendered = pen_member.key.render()
+        if rendered == handle:
+            return (
+                " The new cell's own row is suppressed this pass (it shares this "
+                "row's handle) and re-frames once the pool's membership changes"
+            )
+        if id(pen_member) in self._pool_news_suppressed:
+            if rendered == _pos_key_regrouped(handle, group):
+                # Reached from the ``unrelated`` branch (the rename variant
+                # of ``misplaced`` names the row's fate itself): no claim
+                # will ever bind. Nor does the row re-frame when the
+                # rename records — the handles then align and the raw-alias
+                # route keeps it suppressed (round 6).
+                return (
+                    " The new cell's own row is held back this pass (it renders "
+                    "this slot's handle under the slide's new anchor); once the "
+                    "rename is recorded the handles align and it stays "
+                    "suppressed until the pool's membership changes"
+                )
+            return (
+                " The new cell's own row is suppressed this pass (it shares "
+                "another pending slot's handle) and re-frames once the pool's "
+                "membership changes"
+            )
+        return " The new cell's own row frames separately this pass"
+
     def _classify_pool_slot_base_one_sided(
         self,
         group: str,
@@ -3147,6 +3287,9 @@ class _Differ:
         pair_twin = _pair_twin(de_member, en_member)
         if rec_state == "missing":
             if pen_state == "absent":
+                # The claim loop skips rec-missing slots, so no
+                # landed/unrelated state can coincide with this: the
+                # slot's content is gone from every side it was ever on.
                 self.emit(
                     handle,
                     "remove",
@@ -3179,6 +3322,116 @@ class _Differ:
                 "none",
                 f"the {pending} twin is pending while several unmatched new cells "
                 f"exist on that side — align manually before copying",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "unrelated":
+            # Y8: the lone new cell on the pending side is NOT the twin (no
+            # content affinity) — claiming it would frame an overwrite offer
+            # against a genuinely new cell. Frame the slot instead: the
+            # twin's copy cannot execute while the foreign cell sits
+            # unrecorded in the pool (the positional pairing occupies the
+            # copy's target).
+            own_row = self._pool_own_row_note(pen_member, handle, group)
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                f"the {pending} twin is still missing and the lone unmatched new "
+                f"cell of this pool on that side shows no content affinity to the "
+                f"recorded cell — treated as a genuine add, not the twin; mint a "
+                f"slide_id on the new cell (or remove it) and re-report — the "
+                f"twin copies once the pool's membership is unambiguous. If the "
+                f"cell IS the twin rewritten, align the cells by hand — the "
+                f"engine cannot claim it without content affinity.{own_row}",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "misplaced":
+            # Y8 round 2: the lone new cell IS body-similar to the recorded
+            # cell but landed away from this slot's recorded position.
+            # Claiming it would let the divergence resolution propagate
+            # into a cell the fresh-snapshot rerecord pairs with a
+            # DIFFERENT slot — the pool livelocks (the slot's ledger entry
+            # is dropped as unresolved while the record reports success).
+            # Frame the honest reconciliations instead.
+            #
+            # Round 4: the position gate compares raw rendered keys, whose
+            # group token is the BASE one on the slot handle but the
+            # CURRENT one on the candidate — under a group rename an
+            # at-position landing reads as cross-position. The gate must
+            # still not fire (a cross-token record reports success without
+            # sticking), but the frame says so: the claim binds once the
+            # rename is recorded, and acting on the generic advice (mint /
+            # move) would duplicate the cell. Round 5: the candidate's own
+            # row is held back in this shape too (the suppression
+            # precompute covers the regrouped handle) — emitted, it would
+            # report a false "recorded" verdict and be erased by the
+            # unresolved-pool drop before the claim can bind.
+            renamed_at_position = (
+                pen_member is not None
+                and pen_member.key.render() != handle
+                and pen_member.key.render() == _pos_key_regrouped(handle, group)
+            )
+            if renamed_at_position:
+                detail = (
+                    f"the {pending} twin landed at this slot's recorded position "
+                    f"while this slide was being renamed — the engine cannot "
+                    f"claim it until the rename is recorded; no action needed — "
+                    f"re-report once the rename lands and a byte-identical twin "
+                    f"records mechanically (an edited twin frames for review). "
+                    f"The new cell's own row is held back this pass (it renders "
+                    f"this slot's handle under the slide's new anchor)"
+                )
+            else:
+                own_row = self._pool_own_row_note(pen_member, handle, group)
+                detail = (
+                    f"the {pending} twin is still missing and the lone unmatched new "
+                    f"cell of this pool on that side shows content affinity to the "
+                    f"recorded cell but landed at a different pool position — the "
+                    f"engine cannot claim it there (recording would mis-pair the "
+                    f"pool); mint a slide_id on the new cell (or remove it) and "
+                    f"re-report. If the cell IS the twin rewritten, align the cells "
+                    f"by hand — move it to this slot's recorded position or mint "
+                    f"matching slide_ids — and re-report.{own_row}"
+                )
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                detail,
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "claimed_elsewhere":
+            # The lone new cell was claimed as ANOTHER pending slot's
+            # landed twin (claim-loop order). No suppression — a claimed
+            # cell left the news, so its only row is the claiming slot's
+            # frame — and no copy: the cell still sits unrecorded at this
+            # twin's copy target until the claiming slot resolves.
+            # Since rounds 2-3 bind every claim at the claiming slot's own
+            # handle this state is not known to be reachable (a marked
+            # candidate renders at most one slot's handle); the branch is
+            # kept because a mark whose candidate IS later claimed must
+            # never frame a stale row-fate note against the claiming
+            # slot's frame.
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                f"the {pending} twin is still missing and the lone unmatched new "
+                f"cell on that side was claimed as another pending slot's landed "
+                f"twin — resolve that slot's frame first; this twin copies once "
+                f"the pool's membership is unambiguous",
                 group=group,
                 member=member,
                 base=entry,
@@ -3374,7 +3627,13 @@ class _Differ:
     ) -> None:
         """Leftover cells with no base slot: adds — or, when both sides added
         different content into the same pool, a framed alignment decision
-        (copying both would duplicate; §3.3's honest residue)."""
+        (copying both would duplicate; §3.3's honest residue).
+
+        Members in ``_pool_news_suppressed`` are skipped (Y8): a
+        pending-twin slot already framed them as the no-affinity
+        ``unrelated`` candidate on the same rendered handle."""
+        de_new = [m for m in de_new if id(m) not in self._pool_news_suppressed]
+        en_new = [m for m in en_new if id(m) not in self._pool_news_suppressed]
         de_by_fp: dict[str, list[Member]] = {}
         for m in de_new:
             cell = m.de
