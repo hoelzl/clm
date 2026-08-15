@@ -136,8 +136,25 @@ class TestLedgerPathValidationRefused:
     @pytest.mark.parametrize(
         "as_path",
         [
-            pytest.param("C:/Users/somebody/outside.txt", id="drive-forward"),
-            pytest.param("C:\\Users\\somebody\\outside.txt", id="drive-backslash"),
+            # Windows drive paths are only absolute ON WINDOWS — on POSIX
+            # `Path("C:/x")` is a relative path that stays inside the topic
+            # dir (contained, no escape possible), so the refusal contract
+            # is Windows-specific for these shapes. CI's Linux runners skip
+            # them; the local Windows run exercises the refusal.
+            pytest.param(
+                "C:/Users/somebody/outside.txt",
+                id="drive-forward",
+                marks=pytest.mark.skipif(
+                    sys.platform != "win32", reason="drive paths only escape on Windows"
+                ),
+            ),
+            pytest.param(
+                "C:\\Users\\somebody\\outside.txt",
+                id="drive-backslash",
+                marks=pytest.mark.skipif(
+                    sys.platform != "win32", reason="drive paths only escape on Windows"
+                ),
+            ),
             pytest.param("/etc/motd", id="posix-absolute"),
             # Windows extended-length prefix: after separator normalization
             # it starts with "/" and is refused as absolute (cross-platform).
