@@ -433,11 +433,20 @@ def _hardlink_tree(source: Path, target: Path) -> str:
 
 
 def _delete_path(path: Path) -> None:
-    """Remove a file, symlink, or directory tree at *path*."""
+    """Remove a file, symlink/junction, or directory tree at *path*.
+
+    Reparse points (symlinks and NTFS junctions — ``is_symlink()`` is False
+    for junctions but ``rmtree`` refuses to traverse them) are unlinked
+    themselves, never followed: a hostile ledger entry that names a link
+    must not reach the link's target.
+    """
     if path.is_symlink() or path.is_file():
         path.unlink()
         return
     if path.is_dir():
+        if path.is_junction():  # Windows reparse point (Python 3.12+)
+            path.unlink()
+            return
         shutil.rmtree(path)
 
 

@@ -276,6 +276,37 @@ class TestLedgerSymlinkEscapes:
         assert not (topic_dir / LEDGER_NAME).exists()
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32" or not hasattr(Path("."), "is_junction"),
+    reason="NTFS junctions are Windows-only (Path.is_junction needs Python 3.12+)",
+)
+class TestLedgerJunctionEntries:
+    def test_remove_junction_entry_unlinks_link_not_target(self, tmp_path):
+        """A ledger entry naming an NTFS junction must unlink the junction,
+        never traverse it into the target (rmtree refuses reparse points,
+        so without the explicit unlink this crashed with OSError)."""
+        topic_dir, spec = _materialize(tmp_path)
+        outside = tmp_path / "outside_treasure"
+        (outside / "crown").mkdir(parents=True)
+        (outside / "crown" / "jewel.txt").write_text("JEWEL\n", encoding="utf-8")
+        jct = topic_dir / "evil_junction"
+        import subprocess
+
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(jct), str(outside)],
+            check=True,
+            capture_output=True,
+        )
+        _patch_entry(topic_dir, as_path="evil_junction")
+
+        result = _remove(tmp_path, spec)
+
+        assert result.exit_code == 0, result.output
+        assert (outside / "crown" / "jewel.txt").read_text(encoding="utf-8") == "JEWEL\n"
+        assert not jct.exists()
+        assert not (topic_dir / LEDGER_NAME).exists()
+
+
 class TestMixedLedgerNoPartialDeletion:
     def test_invalid_entry_prevents_deleting_valid_ones(self, tmp_path):
         """If one entry is invalid, earlier VALID entries must not already be
