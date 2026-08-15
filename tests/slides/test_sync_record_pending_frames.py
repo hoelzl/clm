@@ -111,3 +111,39 @@ class TestRecordPendingFramesWarning:
         assert _record(de, en) == 0  # second record: nothing pending
         err = capsys.readouterr().err
         assert "pending framed" not in err
+
+    def test_subset_record_does_not_claim_unblessed_frames(self, tmp_path: Path, capsys):
+        # Round 1 (Important): a subset record blesses only the named
+        # handles — claiming it blessed a pending framed item outside the
+        # subset would be a false receipt for the silent-blessing failure
+        # mode Y9(a) exists to kill.
+        de, en = _write_deck(tmp_path, [_shared_code("a")], [_shared_code("a")])
+        assert _record(de, en) == 0
+        capsys.readouterr()
+        _write_deck(
+            tmp_path,
+            [_shared_code("a"), _localized("m", "de", "DE Text")],
+            [_shared_code("a"), _localized("m", "en", "EN text")],
+        )
+        rc = run_record_v3(de, en, members=("id:s0",), provenance="record", as_json=False)
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "blesses" not in err  # no wholesale-blessing claim at all
+        assert "outside the recorded subset stay pending" in err
+
+    def test_subset_record_warns_for_blessed_frames(self, tmp_path: Path, capsys):
+        # A subset record naming the framed member DOES bless it wholesale
+        # — the warning says exactly that.
+        de, en = _write_deck(tmp_path, [_shared_code("a")], [_shared_code("a")])
+        assert _record(de, en) == 0
+        capsys.readouterr()
+        _write_deck(
+            tmp_path,
+            [_shared_code("a"), _localized("m", "de", "DE Text")],
+            [_shared_code("a"), _localized("m", "en", "EN text")],
+        )
+        rc = run_record_v3(de, en, members=("id:m",), provenance="record", as_json=False)
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "record blesses 1 pending framed item(s) wholesale: verify_cold id:m" in err
+        assert "outside the recorded subset" not in err

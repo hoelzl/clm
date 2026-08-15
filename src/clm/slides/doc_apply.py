@@ -184,12 +184,24 @@ def item_answers(item: DiffItem) -> tuple[str, ...]:
       member with only one side. Advertising it sent agents into a rejection
       that then blocked the whole positional pool (finding M6). The item stays
       framed, with ``resolution: manual`` and a detail naming the repair.
+    * A **byte-diverged shared** cold pair drops ``confirm`` (Y9): the
+      executor's ``_reject_divergent_shared`` refuses it (a shared member
+      records as byte-identical twins). An id-keyed member keeps ``body``;
+      a positional one keeps nothing — hand-align (or mint a ``slide_id``)
+      and re-report.
     """
     answers = decision_vocabulary(item.action)
     if item.action != "verify_cold":
         return answers
     if item.member is not None and item.member.is_one_sided:
         return ()
+    if (
+        item.member is not None
+        and item.member.de is not None
+        and item.member.en is not None
+        and _shared_pair_diverged(item.member.de, item.member.en)
+    ):
+        answers = tuple(a for a in answers if a != "confirm")
     if not item.key.startswith("id:"):
         return tuple(a for a in answers if a != "body")
     return answers
@@ -1662,28 +1674,44 @@ def _reject_divergent_tags(de_cell: SideCell, en_cell: SideCell) -> None:
         )
 
 
+def _shared_pair_diverged(de_cell: SideCell, en_cell: SideCell) -> bool:
+    """True when a SHARED pair (neither side carries ``lang``) diverges
+    byte-wise — the shape ``_reject_divergent_shared`` refuses to confirm
+    (Y9). ``j2`` cells are exempt: the header macros legitimately differ
+    per half (``header_de``/``header_en``), and the structural verify gate
+    excludes them from byte comparison for the same reason."""
+    return (
+        de_cell.lang_attr is None
+        and en_cell.lang_attr is None
+        and de_cell.cell_type != "j2"
+        and content_fingerprint(de_cell) != content_fingerprint(en_cell)
+    )
+
+
 def _reject_divergent_shared(de_cell: SideCell, en_cell: SideCell) -> None:
     """The confirm shared-member guard (Y9): a SHARED member (neither side
     carries ``lang``) records as byte-identical twins — confirming a
     byte-diverged shared pair banks the divergence as verified (observed
     on separated voiceover companions, whose structural record gate the
     confirm path never consults). Localized pairs may diverge — that is
-    what translation IS. ``j2`` cells are excluded: the header macros
-    legitimately differ per half (``header_de``/``header_en``), and the
-    structural verify gate excludes them from byte comparison for the
-    same reason. Runs after :func:`_reject_divergent_tags`, so a
-    fingerprint miss here is body/owner/kind, never tags."""
-    if (
-        de_cell.lang_attr is None
-        and en_cell.lang_attr is None
-        and de_cell.cell_type != "j2"
-        and content_fingerprint(de_cell) != content_fingerprint(en_cell)
-    ):
+    what translation IS. Runs after :func:`_reject_divergent_tags`, so a
+    fingerprint miss here is body/owner/kind/tag-order, never tag sets.
+    The message splits body from header divergence: a body answer rewrites
+    only body lines, so it cannot fix header bytes (tag ORDER, for_slide,
+    vo_anchor) — those are align-by-hand."""
+    if not _shared_pair_diverged(de_cell, en_cell):
+        return
+    if de_cell.body != en_cell.body:
         raise _ItemError(
             "the sides of this shared member diverge — a shared member "
             "records as byte-identical twins; answer with a body (naming "
-            "the stale side) or align the cells, then re-run report"
+            "the stale side) or align the cells by hand, then re-run report"
         )
+    raise _ItemError(
+        "the sides of this shared member diverge in the cell header (tag "
+        "order, owner, or kind) — a body answer cannot fix header bytes; "
+        "align the cells by hand, then re-run report"
+    )
 
 
 def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:

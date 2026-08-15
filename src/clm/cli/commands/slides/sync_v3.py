@@ -585,14 +585,39 @@ def _record_one(
             if item.action in FRAMED_ACTIONS
         ]
         if framed:
-            row["pending_framed"] = [f"{item.action} {item.key}" for item in framed]
-            click.echo(
-                f"warning: {bundle.de_path.name}: record blesses {len(framed)} "
-                f"pending framed item(s) wholesale: "
-                + ", ".join(row["pending_framed"])
-                + " — review them with `clm slides sync report` first",
-                err=True,
-            )
+            # A subset record blesses only the named handles — the warning
+            # must not claim a wholesale blessing for framed items outside
+            # the subset (round 1: a false receipt re-creates the silent
+            # blessing Y9(a) exists to kill).
+            if members:
+                subset = set(members)
+                blessed = [item for item in framed if item.key in subset]
+            else:
+                blessed = framed
+            outside = len(framed) - len(blessed)
+            if blessed:
+                row["pending_framed"] = [f"{item.action} {item.key}" for item in blessed]
+                suffix = (
+                    f" ({outside} more pending framed item(s) outside the "
+                    f"recorded subset stay pending)"
+                    if outside
+                    else ""
+                )
+                click.echo(
+                    f"warning: {bundle.de_path.name}: record blesses {len(blessed)} "
+                    f"pending framed item(s) wholesale: "
+                    + ", ".join(row["pending_framed"])
+                    + suffix
+                    + " — review them with `clm slides sync report` first",
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"note: {bundle.de_path.name}: {outside} pending framed "
+                    f"item(s) outside the recorded subset stay pending — review "
+                    f"them with `clm slides sync report` first",
+                    err=True,
+                )
     recorded, migrations = doc_ledger.record_deck_snapshot(
         ledger,
         deck_key,

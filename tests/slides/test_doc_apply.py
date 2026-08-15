@@ -1805,6 +1805,78 @@ class TestConfirmSharedDivergenceGuard:
         assert outcome.all_applied, outcome.to_payload()
         deck.assert_converged()
 
+    def test_diverged_shared_pair_advertises_no_confirm(self, tmp_path: Path):
+        # Round 1 (Important): the standing rule is that advertising an
+        # answer the executor rejects is a defect — the diverged shared
+        # cold pair must not advertise confirm. Id-keyed keeps the body
+        # escape; a positional member keeps nothing (manual).
+        deck = _deck(tmp_path)  # recorded; companions arrive cold
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Erklaere die Schleife")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Completely different narration")),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:s0-vo")
+        assert doc_apply.item_answers(item) == ("body",)
+        assert doc_apply.item_resolution(item) == "decision"
+
+    def test_diverged_shared_positional_pair_advertises_nothing(self, tmp_path: Path):
+        # Round 1 (Important): the worst case — a POSITIONAL diverged
+        # shared cold member advertised confirm as its only answer while
+        # body is refused positionally: no in-engine route at all. It now
+        # advertises nothing and renders resolution "manual" (hand-align,
+        # or mint a slide_id, and re-report).
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()  # no pool members at base — z's slot stays cold
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["keep"]\nz = "de body"\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["keep"]\nz = "en body"\n\n',
+        )
+        _, diff = deck.diff()
+        item = next(
+            (i for i in diff.items if i.key.startswith("pos:") and i.action == "verify_cold"),
+            None,
+        )
+        assert item is not None, [(i.key, i.action, i.detail[:60]) for i in diff.items]
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+
+    def test_tag_order_divergence_message_names_the_header(self, tmp_path: Path):
+        # Round 1 (Minor): a tag-ORDER divergence passes the tag-set guard
+        # and lands in the shared guard — but a body answer rewrites only
+        # body lines and can never fix header bytes, so the message must
+        # not advise one.
+        deck = _deck(tmp_path)
+        new_de = '# %% tags=["keep", "draft"] slide_id="tg"\nx = 1\n\n'
+        new_en = '# %% tags=["draft", "keep"] slide_id="tg"\nx = 1\n\n'
+        deck.write_de(HEADER_DE, _slide("s0", "de", "Titel"), new_de)
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), new_en)
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:tg")
+        assert item.action == "verify_cold"
+        outcome = deck.apply(_decision("id:tg", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:tg")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "cell header" in result.reason
+        assert "answer with a body (naming" not in result.reason
+        assert "align the cells by hand" in result.reason
+
     def test_confirm_accepts_identical_shared_companion(self, tmp_path: Path):
         # Preserved: the normal cold ceremony — byte-identical shared pair.
         deck = _Deck(

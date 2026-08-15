@@ -2227,7 +2227,10 @@ now prints a `warning: … record blesses N pending framed item(s) wholesale:
 …` on stderr (and adds a `pending_framed` list to the JSON pair row) naming
 each one — review them with `clm slides sync report` first. It still records
 (exit `0`): record is the trust verb, but the blessing is no longer silent.
-Mechanical residue (e.g. `record_neutral`) does not warn, and neither does
+A `--member` subset record warns only for the framed items it actually
+blesses; framed items outside the subset earn a `note: … stay pending`
+line instead, never a blessing claim. Mechanical residue (e.g.
+`record_neutral`) does not warn, and neither does
 the first record of a cold deck — with no ledger, nothing is pending against
 history.
 
