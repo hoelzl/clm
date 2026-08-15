@@ -65,8 +65,10 @@ from clm.slides.doc_identity import (
     DeckBaseline,
     MemberBaseline,
     baseline_from_deck,
+    body_reconciliation_available,
     content_fingerprint,
     pre_fork_fingerprint,
+    shared_pair_diverged,
 )
 from clm.slides.doc_identity import (
     body_fingerprint as _body_fp,
@@ -106,7 +108,7 @@ _NEUTRAL_DETAIL = (
 
 
 def _cold_detail(member: Member, base_text: str) -> str:
-    """The ``verify_cold`` detail, spelling out the one unanswerable shape.
+    """The ``verify_cold`` detail, spelling out the unanswerable shapes.
 
     A cold member present on ONE half only carries no answer at all (finding
     M6): ``confirm`` asserts that the two halves agree and the executor
@@ -115,8 +117,34 @@ def _cold_detail(member: Member, base_text: str) -> str:
     blocked its whole pool with no visible cause. The advertisement is now
     empty (:func:`clm.slides.doc_apply.item_answers`), so the detail has to
     carry the repair.
+
+    Y9 added the second empty-advertisement shape: a two-sided SHARED pair
+    whose halves diverge byte-wise (``confirm`` is guard-rejected, and when
+    the bodies agree modulo trailing separators ``body`` is no escape
+    either) — the detail names the repair for it too.
     """
     if not member.is_one_sided:
+        if (
+            member.de is not None
+            and member.en is not None
+            and shared_pair_diverged(member.de, member.en)
+        ):
+            body_escape = body_reconciliation_available(member.de, member.en)
+            repair = (
+                "mint a slide_id on both halves so the pair can be answered, "
+                "or align the cells by hand"
+                if member.key.scheme == "pos"
+                else (
+                    "answer with a body naming the stale side, or align the cells by hand"
+                    if body_escape
+                    else "align the cells by hand"
+                )
+            )
+            return (
+                f"{base_text}, and the halves of this shared member diverge "
+                f"byte-wise — confirm would bank the divergence as verified, "
+                f"so it is refused; {repair}, then re-report"
+            )
         return base_text
     side = "de" if member.de is not None else "en"
     if member.key.scheme == "pos":
@@ -1320,7 +1348,7 @@ class _Differ:
                 "unverified",
                 "verify_cold",
                 "none",
-                "no ledger entry — cold member, needs verification",
+                _cold_detail(member, "no ledger entry — cold member, needs verification"),
                 group=group,
                 member=member,
             )

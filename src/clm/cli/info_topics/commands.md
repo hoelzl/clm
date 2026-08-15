@@ -2218,6 +2218,22 @@ stale entries and performs the pos→id key migration when a cell gained an id
 who asserted the verification: `record` (default), `agent`, or
 `semantic:<model>`.
 
+**Record warns on pending framed items (CLM {version}, Y9).** The structural
+gate cannot see every pending state — the localized-pair frames
+(`verify_cold`, `verify_translation`, …) are structurally clean — so a warm
+deck can carry unanswered questions that `record` would bless wholesale. When
+the deck's diff against the ledger still contains *framed* items, `record`
+now prints a `warning: … record blesses N pending framed item(s) wholesale:
+…` on stderr (and adds a `pending_framed` list to the JSON pair row) naming
+each one — review them with `clm slides sync report` first. It still records
+(exit `0`): record is the trust verb, but the blessing is no longer silent.
+A `--member` subset record warns only for the framed items it actually
+blesses; framed items outside the subset earn a `note: … stay pending`
+line instead, never a blessing claim. Mechanical residue (e.g.
+`record_neutral`) does not warn, and neither does
+the first record of a cold deck — with no ledger, nothing is pending against
+history.
+
 **The gate reads the separated voiceover companions too (CLM {version}).** It
 runs over the same companion-inlined projection `verify` uses, so a divergence
 that lives only in the narration — a byte-diverged *shared* companion cell, a

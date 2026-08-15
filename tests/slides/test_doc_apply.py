@@ -1713,6 +1713,307 @@ class TestLoneCandidateAffinity:
         deck.assert_converged()
 
 
+class TestConfirmSharedDivergenceGuard:
+    """Y9 (adversarial review 2026-07-24): ``verify_cold``'s ``confirm``
+    banked a byte-diverged SHARED member as verified — observed on
+    separated voiceover companions, whose structural record gate the
+    confirm path never consults. A shared member records as byte-identical
+    twins; confirming diverged bytes is a lie the ledger then trusts.
+    Localized pairs may diverge — that is what translation is."""
+
+    @staticmethod
+    def _shared_vo(slug: str, for_slide: str, text: str) -> str:
+        # A SHARED companion cell: tags voiceover, no lang attribute.
+        return (
+            f'# %% [markdown] tags=["voiceover"] slide_id="{slug}" '
+            f'for_slide="{for_slide}"\n#\n# - {text}\n\n'
+        )
+
+    def test_confirm_rejects_byte_diverged_shared_companion(self, tmp_path: Path):
+        # The companions appear AFTER the record: the diverged shared
+        # member is cold and frames verify_cold.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Erklaere die Schleife")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Completely different narration")),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("verify_cold", "id:s0-vo")]
+        outcome = deck.apply(_decision("id:s0-vo", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:s0-vo")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "shared member" in result.reason
+        # Nothing was banked: the member re-frames cold on the next report.
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("verify_cold", "id:s0-vo")]
+        # The tested escape: the body answer naming the stale twin aligns
+        # the pair; the next confirm records and the deck converges.
+        outcome = deck.apply(_decision("id:s0-vo", body="# - Erklaere die Schleife", side="en"))
+        assert outcome.all_applied, outcome.to_payload()
+        outcome = deck.apply(_decision("id:s0-vo", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_confirm_accepts_diverged_localized_pair(self, tmp_path: Path):
+        # Preserved: a localized pair's halves MAY differ — translation.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        deck.edit_de(
+            '# {{ header_de("Titel DE") }}',
+            '# {{ header_de("Titel DE") }}\n\n# %% [markdown] lang="de" slide_id="m"\n# DE Text\n',
+        )
+        deck.edit_en(
+            '# {{ header_en("Title EN") }}',
+            '# {{ header_en("Title EN") }}\n\n# %% [markdown] lang="en" slide_id="m"\n# EN text\n',
+        )
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("verify_cold", "id:m")]
+        outcome = deck.apply(_decision("id:m", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_confirm_accepts_diverged_j2_header(self, tmp_path: Path):
+        # Preserved: j2 header macros legitimately differ per half
+        # (header_de/header_en) — the structural gate excludes them from
+        # byte comparison, and the confirm guard does too.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        _, diff = deck.diff()  # no ledger: everything is cold
+        assert any(i.key == "pos:~header/j2/0" for i in diff.items), [
+            (i.key, i.action) for i in diff.items
+        ]
+        decisions = {i.key: doc_apply.Decision(key=i.key, choice="confirm") for i in diff.items}
+        outcome = deck.apply(decisions)
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_diverged_shared_pair_advertises_no_confirm(self, tmp_path: Path):
+        # Round 1 (Important): the standing rule is that advertising an
+        # answer the executor rejects is a defect — the diverged shared
+        # cold pair must not advertise confirm. Id-keyed keeps the body
+        # escape; a positional member keeps nothing (manual).
+        deck = _deck(tmp_path)  # recorded; companions arrive cold
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Erklaere die Schleife")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Completely different narration")),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:s0-vo")
+        assert doc_apply.item_answers(item) == ("body",)
+        assert doc_apply.item_resolution(item) == "decision"
+
+    def test_diverged_shared_positional_pair_advertises_nothing(self, tmp_path: Path):
+        # Round 1 (Important): the worst case — a POSITIONAL diverged
+        # shared cold member advertised confirm as its only answer while
+        # body is refused positionally: no in-engine route at all. It now
+        # advertises nothing and renders resolution "manual" (hand-align,
+        # or mint a slide_id, and re-report).
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()  # no pool members at base — z's slot stays cold
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["keep"]\nz = "de body"\n\n',
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["keep"]\nz = "en body"\n\n',
+        )
+        _, diff = deck.diff()
+        item = next(
+            (i for i in diff.items if i.key.startswith("pos:") and i.action == "verify_cold"),
+            None,
+        )
+        assert item is not None, [(i.key, i.action, i.detail[:60]) for i in diff.items]
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+
+    def test_tag_order_divergence_message_names_the_header(self, tmp_path: Path):
+        # Round 1 (Minor): a tag-ORDER divergence passes the tag-set guard
+        # and lands in the shared guard — but a body answer rewrites only
+        # body lines and can never fix header bytes, so the message must
+        # not advise one.
+        deck = _deck(tmp_path)
+        new_de = '# %% tags=["keep", "draft"] slide_id="tg"\nx = 1\n\n'
+        new_en = '# %% tags=["draft", "keep"] slide_id="tg"\nx = 1\n\n'
+        deck.write_de(HEADER_DE, _slide("s0", "de", "Titel"), new_de)
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), new_en)
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:tg")
+        assert item.action == "verify_cold"
+        # Header-only divergence: body is no escape either — nothing is
+        # advertised, the item renders resolution "manual".
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+        outcome = deck.apply(_decision("id:tg", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:tg")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "cell header" in result.reason
+        assert "answer with a body (naming" not in result.reason
+        assert "align the cells by hand" in result.reason
+
+    def test_shared_verify_translation_advertises_no_confirm(self, tmp_path: Path):
+        # Round 2 (Important): verify_translation IS reachable on a shared
+        # member — an id-stamp on one half plus a tag-ORDER divergence on
+        # the idless twin (the lens adopts the body-equal twin, the stamp
+        # pairing is unverified on header bytes) — so the narrowing must
+        # cover it too, one action over.
+        cell = '# %% tags=["keep", "draft"]\nb = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), cell),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), cell),
+        )
+        deck.record()
+        deck.edit_de('# %% tags=["keep", "draft"]', '# %% tags=["keep", "draft"] slide_id="st"')
+        deck.edit_en('# %% tags=["keep", "draft"]', '# %% tags=["draft", "keep"]')
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.action == "verify_translation")
+        assert item.key == "id:st", [(i.key, i.action) for i in diff.items]
+        # Header-only divergence (tag order): neither confirm nor body is
+        # an escape — nothing is advertised, resolution is manual.
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+
+    def test_separator_only_divergence_is_not_body_answerable(self, tmp_path: Path):
+        # Round 3 (Minor): trailing separator counts are not body lines —
+        # _replace_body keeps the target's own separator count, so a body
+        # answer is a guaranteed no-op for this shape. It takes the
+        # structural branch (nothing advertised, manual) like tag-order.
+        tail = '# %% tags=["keep"] slide_id="tail"\ny = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), tail),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), tail),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["keep"] slide_id="sh1"\nx = 1\n\n',  # one trailing blank
+            tail,
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["keep"] slide_id="sh1"\nx = 1\n\n\n',  # two trailing blanks
+            tail,
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:sh1")
+        assert item.action == "verify_cold", [(i.key, i.action) for i in diff.items]
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+        outcome = deck.apply(_decision("id:sh1", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:sh1")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "without a usable body answer" in result.reason
+
+    def test_whitespace_only_divergence_is_not_body_answerable(self, tmp_path: Path):
+        # Round 4 (Minor): the body validator rejects both whitespace-only
+        # sources, so their textual difference must not advertise `body`.
+        tail = '# %% tags=["keep"] slide_id="tail-ws"\ny = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), tail),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), tail),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["keep"] slide_id="ws"\n \n\n',
+            tail,
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["keep"] slide_id="ws"\n\t\n\n',
+            tail,
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:ws")
+        assert item.action == "verify_cold", [(i.key, i.action) for i in diff.items]
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+        assert "body answer" not in item.detail
+        assert "align the cells by hand" in item.detail
+        outcome = deck.apply(_decision("id:ws", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:ws")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "both bodies are empty/whitespace-only" in result.reason
+
+    def test_shared_diverged_cold_detail_carries_the_repair(self, tmp_path: Path):
+        # Round 3 (Minor): the M6 doctrine — an empty advertisement means
+        # the detail carries the repair.
+        deck = _deck(tmp_path)  # recorded; companions arrive cold
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Erklaere die Schleife")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Completely different narration")),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:s0-vo")
+        assert "diverge byte-wise" in item.detail
+        assert "align the cells by hand" in item.detail
+
+    def test_confirm_accepts_identical_shared_companion(self, tmp_path: Path):
+        # Preserved: the normal cold ceremony — byte-identical shared pair.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Same narration")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Same narration")),
+            encoding="utf-8",
+        )
+        outcome = deck.apply(_decision("id:s0-vo", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename
     recorded through the sync loop must leave ZERO dangling `id:<old>`

@@ -78,6 +78,39 @@ def content_fingerprint(cell: SideCell) -> str:
 _FOR_SLIDE_ATTR_RE = re.compile(r'\s*for_slide="[^"]*"')
 
 
+def shared_pair_diverged(de_cell: SideCell, en_cell: SideCell) -> bool:
+    """True when a SHARED pair (neither side carries ``lang``) diverges
+    byte-wise (Y9).
+
+    A shared member records as byte-identical twins, so this is the shape
+    the confirm route refuses to bank and the cold detail names a repair
+    for. ``j2`` cells are exempt: the header macros legitimately differ
+    per half (``header_de``/``header_en``), and the structural verify gate
+    excludes them from byte comparison for the same reason.
+    """
+    return (
+        de_cell.lang_attr is None
+        and en_cell.lang_attr is None
+        and de_cell.cell_type != "j2"
+        and content_fingerprint(de_cell) != content_fingerprint(en_cell)
+    )
+
+
+def body_reconciliation_available(de_cell: SideCell, en_cell: SideCell) -> bool:
+    """Whether a ``body`` decision can reconcile this pair (Y9).
+
+    The bodies must differ beyond trailing separators (which
+    ``_replace_body`` preserves on the target), and at least one side must
+    contain non-whitespace content (the body validator rejects an empty or
+    whitespace-only answer). Keeping this predicate beside the shared-pair
+    fingerprint makes the report vocabulary, repair detail, and executor
+    message share the exact boundary.
+    """
+    return de_cell.body.rstrip("\n") != en_cell.body.rstrip("\n") and bool(
+        de_cell.body.strip() or en_cell.body.strip()
+    )
+
+
 def pair_signature(cell: SideCell) -> str:
     """The content fingerprint additionally modulo the ``for_slide`` attribute.
 
