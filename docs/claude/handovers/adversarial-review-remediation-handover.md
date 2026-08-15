@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–8 DONE; next is item 9/Y9) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3 DONE; next is Phase 3a's S4/S8 ride-alongs | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -715,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4), 6 (Y6, PR #829), 7 (Y7, PR #831), 8 (Y8, PR #833) DONE; next is item 9 (Y9)
+### Phase 3 — Sync engine correctness  ▸ STATUS: DONE (items 1–9; Y9 PR #835)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -984,11 +984,35 @@ the other bugs consume.
    cell degrades to a perpetual one-sided `verify_cold` via
    `_drop_unresolved_from_pools` (same end state on master, where it also
    reports a false `recorded` verdict — Y8's head fixes that verdict).
-9. **Y9** ▸ Re-verified OPEN 2026-08-14: `record` (`sync_v3.py:460-592`) still
-   never consults the diff — no pending-framed warning; the `confirm` path
-   (`doc_apply.py:1584-1601`) still has no byte-divergence rejection for a
-   shared companion member. Original plan: — hardening: warn when `record` runs on a deck with pending framed
-   items; reject `confirm` on a byte-diverged shared companion member.
+9. **Y9 — record/confirm hardening.** ▸ **DONE 2026-08-15 (PR #835, five
+   adversarial rounds).** `record` now diffs a warm deck against its existing
+   ledger before blessing it and warns on pending `FRAMED_ACTIONS` (stderr plus
+   `pending_framed` in the JSON pair row) while preserving record's exit-0 trust
+   semantics. A `--member` subset warns only for framed items it actually
+   blesses and notes that outside frames stay pending; cold bootstrap and
+   mechanical-only residue stay silent. The confirm route now rejects a
+   byte-diverged SHARED member (localized pairs may diverge; `j2` headers are
+   exempt), and `item_answers` never advertises the rejected `confirm` on either
+   `verify_cold` or the reachable shared-member `verify_translation` shape.
+   `body_reconciliation_available` is the shared boundary for whether `body` is
+   a real escape: bodies differ beyond target-preserved separators and at least
+   one side supplies non-whitespace content; otherwise the item advertises
+   nothing, renders `resolution: manual`, and `_cold_detail` carries the repair.
+   Tests: `TestConfirmSharedDivergenceGuard` in
+   `tests/slides/test_doc_apply.py` (11) and
+   `tests/slides/test_sync_record_pending_frames.py` (7). The rounds found what
+   the LOW one-liner hid: **round 1, Important** — the report still advertised
+   the guarded `confirm`, with a positional member advertising it as its ONLY
+   answer; **round 1, Important** — subset record claimed to bless framed items
+   outside the subset; **round 2, Important** — `verify_translation` is
+   reachable on a SHARED member via id-stamp + tag-order divergence, reopening
+   the dead advertisement one action over; rounds 3–4 narrowed guaranteed
+   no-op/rejected `body` answers (trailing separators, then whitespace-only
+   bodies), made every answerless detail carry its repair, and corrected stale
+   reconciliation prose. Round 5 CLEAN. Final candidate: 18/18 Y9 tests, 1,849
+   slides tests, 9,649 fast-suite tests; CI including Docker green. The third
+   original Y9 note — apply writes files before structural verification —
+   remains deliberately out of scope as its own change (landmine below).
 
 **Landmines**
 - Reproduction scripts for Y1–Y5 were written during the review but not kept.
@@ -1001,7 +1025,7 @@ the other bugs consume.
   state. Consider whether the write should move after the verify — but treat that
   as its own change with its own testing, not a drive-by.
 
-**Acceptance**: each of Y1–Y8 has a regression test that fails before the fix;
+**Acceptance**: each of Y1–Y9 has a regression test that fails before the fix;
 `record` and `verify` provably agree on the same projected pair; course repos
 migrated to the new decision format.
 
