@@ -1673,6 +1673,33 @@ class TestLoneCandidateAffinity:
         assert "compute_second_value(2)" in en
         deck.assert_converged()
 
+    def test_rename_in_flight_self_heals_decision_free(self, tmp_path: Path):
+        # Round-4 review (Minor): renaming the slide on both sides WHILE
+        # the byte-identical twin lands makes the position gate read the
+        # landing as cross-position (new group token vs the base handle).
+        # The frame must name the rename — and the deck must then heal
+        # with no decisions at all: the rename records, the claim binds,
+        # the twin records, and nothing duplicates.
+        deck = self._deck(tmp_path)
+        deck.write_de(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B)
+        deck.write_en(HEADER_EN, _slide("s1", "en", "Title"), self.A, self.B)
+        _, diff = deck.diff()
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "being renamed" in slot.detail
+        assert "different pool position" not in slot.detail
+        for _ in range(4):
+            deck.apply()  # no decisions — the frame advertises none needed
+            if deck.diff()[1].is_clean:
+                break
+        else:
+            raise AssertionError("did not converge decision-free")
+        en = deck.en_path.read_text(encoding="utf-8")
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert en.count("compute_second_value(2)") == 1  # no duplicate
+        assert de.count("compute_second_value(2)") == 1
+        deck.assert_converged()
+
 
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename

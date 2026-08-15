@@ -2388,3 +2388,19 @@ class TestLoneCandidateAffinity:
         assert "frames separately" not in slot_r2.detail
         # The candidate's single row is suppressed — exactly the two frames.
         assert len(diff.items) == 2
+
+    def test_rename_in_flight_reads_as_rename_not_misplaced(self):
+        # Round-4 review (Minor): the position gate compares raw rendered
+        # keys — under a group rename an at-position landing carries the
+        # NEW group token while the slot handle carries the BASE one. The
+        # frame must name the rename: acting on the generic "misplaced"
+        # advice (mint / move) would duplicate the cell.
+        diff = _diff(
+            self._base(),
+            _build(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("s1", "en", "Title"), self.A, self.B),
+        )
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "being renamed" in slot.detail
+        assert "different pool position" not in slot.detail

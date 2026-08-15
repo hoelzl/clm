@@ -3322,20 +3322,49 @@ class _Differ:
             # DIFFERENT slot — the pool livelocks (the slot's ledger entry
             # is dropped as unresolved while the record reports success).
             # Frame the honest reconciliations instead.
-            own_row = self._pool_own_row_note(pen_member, handle)
+            #
+            # Round 4: the position gate compares raw rendered keys, whose
+            # group token is the BASE one on the slot handle but the
+            # CURRENT one on the candidate — under a group rename an
+            # at-position landing reads as cross-position. The gate must
+            # still not fire (a cross-token record reports success without
+            # sticking), but the frame says so: the claim binds once the
+            # rename is recorded, and acting on the generic advice (mint /
+            # move) would duplicate the cell.
+            renamed_at_position = (
+                pen_member is not None
+                and handle.startswith("pos:")
+                and "/" in handle
+                and pen_member.key.render() == f"pos:{group}/{handle.split('/', 1)[1]}"
+            )
+            if renamed_at_position:
+                own_row = self._pool_own_row_note(pen_member, handle)
+                detail = (
+                    f"the {pending} twin landed at this slot's recorded position "
+                    f"while this slide was being renamed — the engine cannot "
+                    f"claim it until the rename is recorded; no action needed — "
+                    f"re-report once the rename lands and a byte-identical twin "
+                    f"records mechanically (an edited twin frames for review)."
+                    f"{own_row}"
+                )
+            else:
+                own_row = self._pool_own_row_note(pen_member, handle)
+                detail = (
+                    f"the {pending} twin is still missing and the lone unmatched new "
+                    f"cell of this pool on that side shows content affinity to the "
+                    f"recorded cell but landed at a different pool position — the "
+                    f"engine cannot claim it there (recording would mis-pair the "
+                    f"pool); mint a slide_id on the new cell (or remove it) and "
+                    f"re-report. If the cell IS the twin rewritten, align the cells "
+                    f"by hand — move it to this slot's recorded position or mint "
+                    f"matching slide_ids — and re-report.{own_row}"
+                )
             self.emit(
                 handle,
                 "conflict",
                 "ambiguous_alignment",
                 "none",
-                f"the {pending} twin is still missing and the lone unmatched new "
-                f"cell of this pool on that side shows content affinity to the "
-                f"recorded cell but landed at a different pool position — the "
-                f"engine cannot claim it there (recording would mis-pair the "
-                f"pool); mint a slide_id on the new cell (or remove it) and "
-                f"re-report. If the cell IS the twin rewritten, align the cells "
-                f"by hand — move it to this slot's recorded position or mint "
-                f"matching slide_ids — and re-report.{own_row}",
+                detail,
                 group=group,
                 member=member,
                 base=entry,

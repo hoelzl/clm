@@ -289,13 +289,15 @@ can still read as the twin (its frame goes to review, never silent) and a
 The affinity claim also binds only at the slot's **own pool position**:
 a body-similar or even byte-identical cell at a *different* position
 frames the same action with a "landed at a different pool position"
-reading (claiming it there would mis-pair the pool's recording). The
-cell's own row is suppressed for the pass only when pool ordinals make
-it share a framed slot's handle — the frame names whose handle; at
-another ordinal it frames separately. When the lone cell was instead
-claimed as *another* pending slot's landed twin, the frame says so —
-resolve that slot first); carries **no** answers:
-reconcile by editing, minting ids, then re-report),
+reading (claiming it there would mis-pair the pool's recording) — unless
+the slide was just **renamed**, which the frame says instead (no action
+needed; the claim binds once the rename is recorded). The cell's own row
+is suppressed for the pass only when pool ordinals make it share a framed
+slot's handle — the frame names whose handle; at another ordinal it
+frames separately. When the lone cell was instead claimed as *another*
+pending slot's landed twin, the frame says so — resolve that slot first);
+carries **no** answers: reconcile by editing, minting ids, then
+re-report),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
 engine writes the twin's attribute; see "Forking a shared cell" below), and
