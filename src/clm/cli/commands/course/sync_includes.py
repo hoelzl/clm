@@ -12,7 +12,13 @@ spec and materializes the source under ``<topic-dir>/<as>`` as a copy
 least one materialization gets a JSON ledger at ``<topic-dir>/.clm-include``
 listing exactly what was created — ``--remove`` reads the ledger to
 delete only paths the command put there, so user files in the topic dir
-are never touched.
+are never touched. Because the ledger is repo-supplied data, ``--remove``
+validates every entry against the canonical include-path rules
+(:func:`clm.core.course_spec.normalize_include_path`) plus a
+symlink-correct containment check under the resolved topic directory
+before deleting anything: a hostile or corrupted entry (absolute path,
+``..`` traversal, the topic dir itself, or a route through a symlinked
+directory) refuses the whole run before the first deletion (S4, #798).
 
 ``--print-gitignore`` emits suggested ``.gitignore`` patterns to stdout so
 the author can paste them once into a course-root ``.gitignore``. The
@@ -37,7 +43,13 @@ from pathlib import Path
 
 import click
 
-from clm.core.course_spec import CourseSpec, CourseSpecError, IncludeSpec
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    IncludePathError,
+    IncludeSpec,
+    normalize_include_path,
+)
 from clm.core.include_ledger import (
     LEDGER_NAME,
 )
@@ -161,6 +173,7 @@ def sync_includes_cmd(
     topic_map = build_topic_map(slides_dir)
     summary = _SyncSummary()
 
+    removal_plan: list[_PlannedRemoval] = []
     for binding in spec.iter_topic_bindings():
         matches = matches_for_binding(topic_map, binding.topic_id, binding.effective_module)
         if len(matches) != 1:
@@ -184,13 +197,19 @@ def sync_includes_cmd(
         ledger = _Ledger.load(ledger_path)
 
         if remove:
-            _remove_materializations(
-                topic_dir=topic_dir,
-                ledger=ledger,
-                ledger_path=ledger_path,
-                summary=summary,
-                dry_run=dry_run,
-            )
+            try:
+                removal_plan.extend(
+                    _plan_materialization_removal(
+                        topic_dir=topic_dir,
+                        ledger=ledger,
+                        topic_id=binding.topic_id,
+                    )
+                )
+            except IncludePathError as e:
+                # Fail closed: nothing has been deleted at this point (the
+                # executor only runs after every topic's plan validated),
+                # the hostile ledger stays on disk, and the run exits 1.
+                raise click.ClickException(str(e)) from None
             continue
 
         for inc in includes:
@@ -207,6 +226,16 @@ def sync_includes_cmd(
 
         if ledger.entries and not dry_run:
             _write_ledger(ledger_path, ledger)
+
+    if remove:
+        # The complete removal plan for every topic was validated above;
+        # only now does anything get deleted. A hostile or corrupted
+        # ledger entry refuses the whole run before the first unlink.
+        _execute_materialization_removal(
+            plan=removal_plan,
+            summary=summary,
+            dry_run=dry_run,
+        )
 
     _print_summary(summary, dry_run=dry_run, remove=remove)
     if summary.missing_required > 0:
@@ -412,28 +441,119 @@ def _delete_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def _remove_materializations(
+@dataclass(frozen=True)
+class _PlannedRemoval:
+    """One validated ledger deletion, ready to execute.
+
+    ``target`` is the exact path that will be deleted (final component
+    lexical, so a symlink entry unlinks the link itself), already verified
+    to sit inside the resolved topic directory via parent-chain
+    containment. Built only by :func:`_plan_materialization_removal`.
+    """
+
+    topic_dir: Path
+    ledger_path: Path
+    entry: _LedgerEntry
+    target: Path
+
+
+def _resolve_contained(
+    *, root: Path, rel: str, element_label: str, attr_name: str = "as_path"
+) -> Path:
+    """Lexically normalize *rel*, then resolve-verify containment under *root*.
+
+    Two independent layers (adversarial review S4, tracked in #798):
+
+    1. The canonical lexical validator :func:`normalize_include_path`
+       (shared with spec parsing) rejects empty, absolute, ``..``-bearing
+       and — for ``as`` paths — glob-bearing values, normalizing Windows
+       separators to ``/``.
+    2. A symlink-correct containment check: the target's *parent chain*
+       is resolved and must be ``root`` itself or beneath it. Resolving
+       the parent only (never the final component) means a legitimate
+       symlink materialization still unlinks the link rather than being
+       followed into its target, while a path that travels *through* a
+       symlinked directory (``link/inner``) resolves outside and is
+       refused.
+
+    Membership is tested with :meth:`Path.is_relative_to` on resolved
+    paths — never a string-prefix comparison, which a sibling directory
+    with a shared prefix would spoof.
+    """
+    normalized = normalize_include_path(
+        rel,
+        attr_name=attr_name,
+        element_label=element_label,
+        root_label="topic directory",
+    )
+    if normalized == ".":
+        raise IncludePathError(
+            f"{element_label}: '{attr_name}={rel!r}' names the topic "
+            f"directory itself; refusing to delete it."
+        )
+    root_resolved = root.resolve()
+    candidate = root_resolved / normalized
+    parent_resolved = candidate.parent.resolve()
+    if not (parent_resolved == root_resolved or parent_resolved.is_relative_to(root_resolved)):
+        raise IncludePathError(
+            f"{element_label}: '{attr_name}={rel!r}' resolves outside the "
+            f"topic directory ({parent_resolved} is not under "
+            f"{root_resolved}); refusing to delete it."
+        )
+    return candidate
+
+
+def _plan_materialization_removal(
     *,
     topic_dir: Path,
     ledger: _Ledger,
-    ledger_path: Path,
+    topic_id: str,
+) -> list[_PlannedRemoval]:
+    """Validate every ledger entry of one topic; plan deletions or refuse.
+
+    Validation happens for the complete ledger before any deletion is
+    performed anywhere (the executor runs only after every topic's plan
+    is valid), so a hostile entry can never cause partial deletion of
+    earlier valid entries.
+    """
+    plan: list[_PlannedRemoval] = []
+    for entry in ledger.entries:
+        target = _resolve_contained(
+            root=topic_dir,
+            rel=entry.as_path,
+            element_label=f"Topic '{topic_id}': .clm-include ledger entry",
+        )
+        plan.append(
+            _PlannedRemoval(
+                topic_dir=topic_dir,
+                ledger_path=topic_dir / LEDGER_NAME,
+                entry=entry,
+                target=target,
+            )
+        )
+    return plan
+
+
+def _execute_materialization_removal(
+    *,
+    plan: list[_PlannedRemoval],
     summary: _SyncSummary,
     dry_run: bool,
 ) -> None:
-    """Delete every path recorded in *ledger*, then drop the ledger itself."""
-    if not ledger.entries:
-        return
-    for entry in ledger.entries:
-        target = topic_dir / entry.as_path
+    """Delete exactly the planned, validated paths; then drop the ledgers."""
+    for item in plan:
         if dry_run:
-            click.echo(f"  would remove {topic_dir.name}/{entry.as_path}")
+            click.echo(f"  would remove {item.topic_dir.name}/{item.entry.as_path}")
             summary.removed += 1
             continue
-        if target.exists() or target.is_symlink():
-            _delete_path(target)
+        if item.target.exists() or item.target.is_symlink():
+            _delete_path(item.target)
         summary.removed += 1
-    if not dry_run and ledger_path.exists():
-        ledger_path.unlink()
+    if dry_run:
+        return
+    for item in plan:
+        if item.ledger_path.exists():
+            item.ledger_path.unlink()
 
 
 def _write_ledger(ledger_path: Path, ledger: _Ledger) -> None:

@@ -86,16 +86,29 @@ class IncludeSpec:
 _GLOB_METACHARS = frozenset("*?[]")
 
 
-def _normalize_include_path(
+class IncludePathError(CourseSpecError):
+    """An include path (spec attribute or ledger value) fails validation.
+
+    The single canonical validation for every ``<include>``-shaped path CLM
+    consumes — spec attributes at parse time and ``.clm-include`` ledger
+    values at ``sync-includes --remove`` time (adversarial review S4,
+    tracked in #798). Subclasses :class:`CourseSpecError` so existing
+    spec-parse callers catch it unchanged.
+    """
+
+
+def normalize_include_path(
     value: str,
     *,
     attr_name: str,
     element_label: str,
     reject_globs: bool = False,
+    root_label: str = "course root",
 ) -> str:
     """Validate and normalize an include path attribute.
 
-    Rejects empty strings, absolute paths, and any path that contains a
+    The canonical, shared validator for ``<include>``-shaped paths:
+    rejects empty strings, absolute paths, and any path that contains a
     ``..`` segment after splitting on either separator. When
     ``reject_globs`` is True, also rejects glob metacharacters
     (``*``, ``?``, ``[``, ``]``); used for the ``as`` attribute because
@@ -103,12 +116,17 @@ def _normalize_include_path(
     forward-slash-normalized form so includes from Windows-authored
     specs collide correctly with POSIX-authored ones in the dedup
     bookkeeping.
+
+    ``root_label`` names the root the path must stay inside of, for error
+    messages only — spec parsing says "course root", the include ledger
+    says "topic directory". Defaults to the spec-parse wording so
+    spec-side error messages are unchanged.
     """
     cleaned = value.strip()
     if not cleaned:
-        raise CourseSpecError(
+        raise IncludePathError(
             f"{element_label}: '{attr_name}' attribute is empty. "
-            f"Provide a course-root-relative path."
+            f"Provide a path relative to the {root_label}."
         )
     # Normalize separators *before* constructing a Path: on POSIX,
     # ``Path("a\\b")`` is one component and ``as_posix()`` won't split it,
@@ -118,21 +136,21 @@ def _normalize_include_path(
     cleaned = cleaned.replace("\\", "/")
     candidate = Path(cleaned)
     if candidate.is_absolute() or cleaned.startswith("/"):
-        raise CourseSpecError(
+        raise IncludePathError(
             f"{element_label}: '{attr_name}={cleaned!r}' is absolute. "
-            f"Include paths must be relative to the course root."
+            f"Include paths must be relative to the {root_label}."
         )
     parts = candidate.parts
     if any(part == ".." for part in parts):
-        raise CourseSpecError(
+        raise IncludePathError(
             f"{element_label}: '{attr_name}={cleaned!r}' contains a '..' "
-            f"segment. Include paths must stay inside the course root; "
+            f"segment. Include paths must stay inside the {root_label}; "
             f"reorganize the source so no '..' is needed."
         )
     if reject_globs:
         offending = sorted(_GLOB_METACHARS.intersection(cleaned))
         if offending:
-            raise CourseSpecError(
+            raise IncludePathError(
                 f"{element_label}: '{attr_name}={cleaned!r}' contains glob "
                 f"metacharacter(s) {''.join(offending)!r}. The 'as' attribute "
                 f"is used as a literal filesystem path and in generated "
@@ -156,15 +174,13 @@ def _parse_includes(parent: ETree.Element, *, element_label: str) -> list[Includ
         raw_source = inc.attrib.get("source")
         if raw_source is None:
             raise CourseSpecError(f"{element_label}: <include> requires a 'source' attribute.")
-        source = _normalize_include_path(
-            raw_source, attr_name="source", element_label=element_label
-        )
+        source = normalize_include_path(raw_source, attr_name="source", element_label=element_label)
 
         raw_as = inc.attrib.get("as")
         if raw_as is None or raw_as.strip() == "":
             as_path = Path(source).name
         else:
-            as_path = _normalize_include_path(
+            as_path = normalize_include_path(
                 raw_as,
                 attr_name="as",
                 element_label=element_label,
