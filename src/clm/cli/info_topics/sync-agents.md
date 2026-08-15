@@ -277,7 +277,12 @@ the differ can see in the same pass never frames this: it emits the
 mechanical `retarget_owner`, which rewrites the companion's `for_slide` to
 follow the rename — narration is never a removal decision when its slide
 still exists, #650), `ambiguous_alignment` (genuinely ambiguous residue
-— rival id stamps, both sides adding different content into one pool;
+— rival id stamps, both sides adding different content into one pool, or a
+pending-twin pool slot whose lone new cell on the pending side shows **no
+content affinity** to the recorded cell (Y8: the engine refuses to guess
+that it is the landed twin — its own row is suppressed for the pass
+because pool ordinals alias the two handles; mint a `slide_id` on it, or
+remove it, and re-report — the pending twin then copies mechanically);
 carries **no** answers: reconcile by editing, minting ids, then re-report),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
