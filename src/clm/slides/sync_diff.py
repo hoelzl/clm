@@ -328,6 +328,22 @@ def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | N
     return None
 
 
+def _pos_key_regrouped(handle: str, group: str) -> str | None:
+    """A positional handle re-rendered under a different group token.
+
+    Group ids are free-form and may themselves contain ``/`` (see
+    ``doc_identity.member_group_token``), so split from the RIGHT: kind
+    and ordinal are always the last two segments. Returns ``None`` for
+    non-positional handles.
+    """
+    if not handle.startswith("pos:"):
+        return None
+    parts = handle.rsplit("/", 2)
+    if len(parts) != 3:
+        return None
+    return f"pos:{group}/{parts[1]}/{parts[2]}"
+
+
 # ---------------------------------------------------------------------------
 # Diff items
 # ---------------------------------------------------------------------------
@@ -2822,7 +2838,13 @@ class _Differ:
         # (pool ordinals alias — an answerless frame beside an answerable
         # cold row on one handle defers the cold row's recording forever,
         # the #654 placement-suppression precedent); at any other ordinal
-        # there is no aliasing and its row frames normally.
+        # there is no aliasing and its row frames normally. Round 5: under
+        # a group rename the candidate renders the slot's handle under the
+        # NEW group token — no aliasing, but the row must be held back
+        # just the same: the apply-side deferral guard is key-based, so
+        # the emitted row would report a false "recorded" verdict and be
+        # erased by the unresolved-pool drop instead of letting the claim
+        # bind once the rename records.
         for idx, entry in enumerate(base_entries):
             if not entry.one_sided:
                 continue
@@ -2832,7 +2854,9 @@ class _Differ:
                 continue
             if all(marked is not m for m in news[pending_side]):
                 status[pending_side][idx] = ("claimed_elsewhere", None)
-            elif marked.key.render() == entry.key:
+            elif marked.key.render() == entry.key or marked.key.render() == (
+                _pos_key_regrouped(entry.key, group)
+            ):
                 self._pool_news_suppressed.add(id(marked))
 
         for idx, entry in enumerate(base_entries):
@@ -3200,23 +3224,31 @@ class _Differ:
             twin=pair_twin,
         )
 
-    def _pool_own_row_note(self, pen_member: Member | None, handle: str) -> str:
+    def _pool_own_row_note(self, pen_member: Member | None, handle: str, group: str) -> str:
         """The frame-text note naming a marked candidate's row fate (Y8).
 
         The suppression set is final by classification time (computed over
         all marks in :meth:`_align_pool`), so the note can distinguish:
         suppressed because the row would render on THIS frame's handle,
-        suppressed because it renders on ANOTHER marked slot's handle, or
-        not suppressed at all.
+        held back because it renders this handle under the slide's NEW
+        anchor (a group rename is in flight), suppressed because it
+        renders on ANOTHER marked slot's handle, or not suppressed at all.
         """
         if pen_member is None:
             return ""
-        if pen_member.key.render() == handle:
+        rendered = pen_member.key.render()
+        if rendered == handle:
             return (
                 " The new cell's own row is suppressed this pass (it shares this "
                 "row's handle) and re-frames once the pool's membership changes"
             )
         if id(pen_member) in self._pool_news_suppressed:
+            if rendered == _pos_key_regrouped(handle, group):
+                return (
+                    " The new cell's own row is held back this pass (it renders "
+                    "this slot's handle under the slide's new anchor) and the "
+                    "claim binds once the rename is recorded"
+                )
             return (
                 " The new cell's own row is suppressed this pass (it shares "
                 "another pending slot's handle) and re-frames once the pool's "
@@ -3296,7 +3328,7 @@ class _Differ:
             # twin's copy cannot execute while the foreign cell sits
             # unrecorded in the pool (the positional pairing occupies the
             # copy's target).
-            own_row = self._pool_own_row_note(pen_member, handle)
+            own_row = self._pool_own_row_note(pen_member, handle, group)
             self.emit(
                 handle,
                 "conflict",
@@ -3330,15 +3362,18 @@ class _Differ:
             # still not fire (a cross-token record reports success without
             # sticking), but the frame says so: the claim binds once the
             # rename is recorded, and acting on the generic advice (mint /
-            # move) would duplicate the cell.
+            # move) would duplicate the cell. Round 5: the candidate's own
+            # row is held back in this shape too (the suppression
+            # precompute covers the regrouped handle) — emitted, it would
+            # report a false "recorded" verdict and be erased by the
+            # unresolved-pool drop before the claim can bind.
             renamed_at_position = (
                 pen_member is not None
-                and handle.startswith("pos:")
-                and "/" in handle
-                and pen_member.key.render() == f"pos:{group}/{handle.split('/', 1)[1]}"
+                and pen_member.key.render() != handle
+                and pen_member.key.render() == _pos_key_regrouped(handle, group)
             )
             if renamed_at_position:
-                own_row = self._pool_own_row_note(pen_member, handle)
+                own_row = self._pool_own_row_note(pen_member, handle, group)
                 detail = (
                     f"the {pending} twin landed at this slot's recorded position "
                     f"while this slide was being renamed — the engine cannot "
@@ -3348,7 +3383,7 @@ class _Differ:
                     f"{own_row}"
                 )
             else:
-                own_row = self._pool_own_row_note(pen_member, handle)
+                own_row = self._pool_own_row_note(pen_member, handle, group)
                 detail = (
                     f"the {pending} twin is still missing and the lone unmatched new "
                     f"cell of this pool on that side shows content affinity to the "

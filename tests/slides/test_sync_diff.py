@@ -2394,13 +2394,39 @@ class TestLoneCandidateAffinity:
         # keys — under a group rename an at-position landing carries the
         # NEW group token while the slot handle carries the BASE one. The
         # frame must name the rename: acting on the generic "misplaced"
-        # advice (mint / move) would duplicate the cell.
+        # advice (mint / move) would duplicate the cell. Round 5: the
+        # candidate's own row is held back too — emitted, it would report
+        # a false "recorded" verdict and be erased by the unresolved-pool
+        # drop before the claim can bind.
         diff = _diff(
             self._base(),
             _build(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B),
             _build(HEADER_EN, _slide("s1", "en", "Title"), self.A, self.B),
         )
         slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "being renamed" in slot.detail
+        assert "different pool position" not in slot.detail
+        assert "held back" in slot.detail  # the candidate's own row is too
+        assert not any(i.key == "pos:s1/code/1" for i in diff.items), [
+            (i.key, i.action) for i in diff.items
+        ]
+
+    def test_rename_with_slashy_group_id_reads_as_rename(self):
+        # Round-5 review (Minor): group ids are free-form and may contain
+        # "/" — the regrouped-handle compare must split kind/ordinal from
+        # the RIGHT, or a slashy rename falls back to the generic
+        # "misplaced" wording (whose mint/move advice is wrong here).
+        base = _snapshot(
+            _build(HEADER_DE, _slide("a/b", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("a/b", "en", "Title"), self.A),
+        )
+        diff = _diff(
+            base,
+            _build(HEADER_DE, _slide("c/d", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("c/d", "en", "Title"), self.A, self.B),
+        )
+        slot = next(i for i in diff.items if i.key == "pos:a/b/code/1")
         assert slot.action == "ambiguous_alignment"
         assert "being renamed" in slot.detail
         assert "different pool position" not in slot.detail

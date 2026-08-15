@@ -1688,12 +1688,24 @@ class TestLoneCandidateAffinity:
         assert slot.action == "ambiguous_alignment"
         assert "being renamed" in slot.detail
         assert "different pool position" not in slot.detail
-        for _ in range(4):
-            deck.apply()  # no decisions — the frame advertises none needed
-            if deck.diff()[1].is_clean:
-                break
-        else:
-            raise AssertionError("did not converge decision-free")
+        outcome = deck.apply()  # the rename records; the frame is answerless
+        statuses = _statuses(outcome)
+        assert statuses.get("id:s1") == "recorded", outcome.to_payload()
+        # Round 5: no false "recorded" verdict for the candidate — its row
+        # was held back, so it never reaches the report at all.
+        assert "pos:s1/code/1" not in statuses, outcome.to_payload()
+        _, diff = deck.diff()
+        # Round 5: the DESIGNED route — with the candidate's own row held
+        # back, the slot entry survives the rename and the claim binds:
+        # the twin records as the slot's landed cell, not as a re-cold
+        # member (a re-emitted record_neutral would mean the entry was
+        # silently erased and re-recorded — the false-verdict churn).
+        twin_rows = [i for i in diff.items if i.key == "pos:s1/code/1"]
+        assert [(i.outcome, i.action) for i in twin_rows] == [("add", "record_symmetric_add")], [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
         en = deck.en_path.read_text(encoding="utf-8")
         de = deck.de_path.read_text(encoding="utf-8")
         assert en.count("compute_second_value(2)") == 1  # no duplicate
