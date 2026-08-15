@@ -1551,6 +1551,55 @@ class TestRenameEditGuard:
         assert deck.en_path.read_text(encoding="utf-8") == en_before
 
 
+class TestLoneCandidateAffinity:
+    """Y8 (adversarial review 2026-07-24): the lone-candidate claim bound
+    any single unmatched new cell as a pending twin's landed cell with no
+    content affinity, and the resulting frame's de/en answer overwrote the
+    foreign cell verbatim. Without affinity the cell must keep its own row
+    and the slot's pending-twin copy must tell the truth."""
+
+    A = '# %% tags=["keep"]\nalpha = compute_first(1)\n\n'
+    B = '# %% tags=["keep"]\nbeta = compute_second_value(2)\n\n'
+
+    def _deck(self, tmp_path: Path) -> _Deck:
+        # B exists only on DE at record time — a pending EN twin pool slot.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.A),
+        )
+        deck.record()
+        return deck
+
+    def test_unrelated_new_cell_survives_and_the_twin_copies(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n'
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), self.A, foreign)
+        _, diff = deck.diff()
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        # Only the answerless frame — the foreign cell's own row is
+        # suppressed (same rendered handle) so nothing deadlocks.
+        assert [(i.outcome, i.action) for i in diff.items] == [("conflict", "ambiguous_alignment")]
+        outcome = deck.apply()
+        assert not outcome.wrote  # decision-free: nothing mutates
+        # The documented reconciliation: mint a slide_id on the foreign
+        # cell — it leaves the positional pool, the twin's copy target
+        # frees up, and both copies execute mechanically.
+        deck.edit_en(
+            '# %% tags=["keep"]\nimport os', '# %% tags=["keep"] slide_id="c-pipe"\nimport os'
+        )
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert "run_pipeline" in en  # the foreign cell was NOT overwritten
+        assert "compute_second_value" in en  # the pending twin copied verbatim
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "run_pipeline" in de  # the new cell mirrored to DE
+        deck.assert_converged()
+
+
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename
     recorded through the sync loop must leave ZERO dangling `id:<old>`

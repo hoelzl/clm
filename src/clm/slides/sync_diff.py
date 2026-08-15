@@ -580,6 +580,15 @@ class _Differ:
         #: placement is that item's job; the scope pair-parity check must
         #: not double-frame it (#654)
         self._cross_moved: set[str] = set()
+        #: body near-match oracle for the pool's lone-candidate landed-twin
+        #: claim (Y8) — per-report budgeted, like the #630 split scan
+        self._pool_similarity = _BodySimilarity()
+        #: members whose own news row is suppressed for the pass because a
+        #: pending-twin slot framed ``unrelated`` on the same rendered key
+        #: (Y8) — two rows on one handle cannot both be answered, and the
+        #: answerless frame would defer the cold row's recording forever
+        #: (the #654 placement-suppression precedent)
+        self._pool_news_suppressed: set[int] = set()
         #: handles whose placement was framed with NO base evidence (a cold
         #: or order-blind member under different brackets per side) — their
         #: same-key verify_cold row is suppressed for the pass (#654; the
@@ -2731,6 +2740,12 @@ class _Differ:
         # the cell). Byte-identical claims first; then a LONE remaining
         # candidate (the twin landed with edits — framed downstream); with
         # several candidates the slot stays ambiguous and never mechanical.
+        # Y8: the lone-candidate claim requires CONTENT AFFINITY — a
+        # genuinely new, unrelated cell is not the twin, and the landed
+        # frame's de/en answer would overwrite it verbatim. Body-similar to
+        # the recorded cell (the same budgeted near-match the #630 split
+        # scan uses) = plausibly the twin landed with edits; dissimilar =
+        # a genuine add, the slot's pending twin is still missing.
         for idx, entry in enumerate(base_entries):
             if not entry.one_sided:
                 continue
@@ -2750,12 +2765,28 @@ class _Differ:
                     claimed = candidate
                     break
             if claimed is None and len(news[pending]) == 1:
-                claimed = news[pending][0]
+                candidate = news[pending][0]
+                cand_cell = candidate.side(pending)
+                if (
+                    rec_cell is not None
+                    and cand_cell is not None
+                    and self._pool_similarity.similar(rec_cell.body, cand_cell.body)
+                ):
+                    claimed = candidate
             if claimed is not None:
                 news[pending].remove(claimed)
                 status[pending][idx] = ("landed", claimed)
-            elif news[pending]:
+            elif len(news[pending]) > 1:
                 status[pending][idx] = ("ambiguous", None)
+            elif news[pending]:
+                # Exactly one candidate with no content affinity (Y8): a
+                # genuinely new cell, NOT the twin. The slot frames instead
+                # of copying — while the foreign cell sits unrecorded in
+                # the pending side's pool, the positional pairing makes the
+                # twin's copy target occupied and apply would refuse it.
+                # The candidate rides the status so the slot's frame can
+                # suppress its aliasing news row.
+                status[pending][idx] = ("unrelated", news[pending][0])
 
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
@@ -3146,7 +3177,10 @@ class _Differ:
         member = de_member or en_member  # the DiffItem convention: DE carrier first
         pair_twin = _pair_twin(de_member, en_member)
         if rec_state == "missing":
-            if pen_state == "absent":
+            if pen_state in ("absent", "unrelated"):
+                # ``unrelated``: the pending side's lone new cell is not the
+                # twin (no content affinity, Y8) — it keeps its own row, and
+                # the slot's content is gone from every side it was ever on.
                 self.emit(
                     handle,
                     "remove",
@@ -3179,6 +3213,38 @@ class _Differ:
                 "none",
                 f"the {pending} twin is pending while several unmatched new cells "
                 f"exist on that side — align manually before copying",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "unrelated":
+            # Y8: the lone new cell on the pending side is NOT the twin (no
+            # content affinity) — claiming it would frame an overwrite offer
+            # against a genuinely new cell. Frame the slot instead: the
+            # twin's copy cannot execute while the foreign cell sits
+            # unrecorded in the pool (the positional pairing occupies the
+            # copy's target). The candidate's own news row shares this
+            # frame's rendered key (pool ordinals alias), so it is
+            # suppressed for the pass — an answerless frame beside an
+            # answerable cold row would defer the cold row's recording
+            # forever; the candidate re-frames once this resolves.
+            if pen_member is not None:
+                self._pool_news_suppressed.add(id(pen_member))
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                f"the {pending} twin is still missing and the lone unmatched new "
+                f"cell of this pool on that side shows no content affinity to the "
+                f"recorded cell — it is a genuine add, not the twin; mint a "
+                f"slide_id on the new cell (or remove it) and re-report — the "
+                f"twin copies once the pool's membership is unambiguous. If the "
+                f"cell IS the twin rewritten, align the cells by hand — the "
+                f"engine cannot claim it without content affinity. The new "
+                f"cell's own row is suppressed this pass (it shares this row's "
+                f"handle) and re-frames on the next report",
                 group=group,
                 member=member,
                 base=entry,
@@ -3374,7 +3440,13 @@ class _Differ:
     ) -> None:
         """Leftover cells with no base slot: adds — or, when both sides added
         different content into the same pool, a framed alignment decision
-        (copying both would duplicate; §3.3's honest residue)."""
+        (copying both would duplicate; §3.3's honest residue).
+
+        Members in ``_pool_news_suppressed`` are skipped (Y8): a
+        pending-twin slot already framed them as the no-affinity
+        ``unrelated`` candidate on the same rendered handle."""
+        de_new = [m for m in de_new if id(m) not in self._pool_news_suppressed]
+        en_new = [m for m in en_new if id(m) not in self._pool_news_suppressed]
         de_by_fp: dict[str, list[Member]] = {}
         for m in de_new:
             cell = m.de

@@ -2228,3 +2228,74 @@ class TestCrossPlacedNoEvidence:
         assert [(i.outcome, i.action, i.key) for i in diff.items] == [
             ("order", "order_decision", "id:m")
         ], [(i.key, i.action, i.detail) for i in diff.items]
+
+
+class TestLoneCandidateAffinity:
+    """Y8 (adversarial review 2026-07-24): ``_align_pool``'s lone-candidate
+    claim bound ANY single unmatched new cell as "the landed twin" of a
+    pending-twin pool slot, with no content affinity. The downstream
+    ``pending_divergence`` frame's de/en answer then overwrites a genuinely
+    new, unrelated cell verbatim — framed, so misleading rather than
+    silent. The claim now requires body similarity to the recorded cell;
+    without affinity the cell keeps its own add/cold row and the slot's
+    pending-twin copy tells the truth.
+    """
+
+    A = '# %% tags=["keep"]\nalpha = compute_first(1)\n\n'
+    B = '# %% tags=["keep"]\nbeta = compute_second_value(2)\n\n'
+
+    @staticmethod
+    def _de(*cells: str) -> str:
+        return _build(HEADER_DE, _slide("s0", "de", "Titel"), *cells)
+
+    @staticmethod
+    def _en(*cells: str) -> str:
+        return _build(HEADER_EN, _slide("s0", "en", "Title"), *cells)
+
+    def _base(self):
+        # B exists only on DE at base — a pending EN twin in the pool.
+        return _snapshot(self._de(self.A, self.B), self._en(self.A))
+
+    def test_byte_identical_landing_records(self):
+        # Preserved: the byte-exact claim path is untouched.
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, self.B))
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("add", "record_symmetric_add")
+        assert item.key == "pos:s0/code/1"
+
+    def test_edited_landing_with_affinity_still_claims(self):
+        # Preserved: the twin landed with a small edit — body-similar, so
+        # the claim fires and the divergence frames for review.
+        edited = '# %% tags=["keep"]\nbeta = compute_second_value(3)\n\n'
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, edited))
+        item = _only_item(diff)
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        assert item.key == "pos:s0/code/1"
+
+    def test_unrelated_lone_new_cell_is_not_the_landed_twin(self):
+        # The Y8 shape: the lone new cell has no content affinity to the
+        # recorded cell — it must keep its own add row, and the slot frames
+        # (the twin's copy cannot execute while the foreign cell sits
+        # unrecorded in the pool) instead of offering an overwrite.
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, foreign))
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert sorted((i.action, i.direction) for i in diff.items) == [
+            ("ambiguous_alignment", "none"),  # the slot: not the twin
+        ]
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert "no content affinity" in slot.detail
+        assert "suppressed" in slot.detail  # the foreign cell's own row is held back
+
+    def test_two_unrelated_candidates_stay_ambiguous(self):
+        # Preserved: several candidates, no byte match — the slot stays
+        # ambiguous (never mechanical), affinity is not used to pick one.
+        c1 = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        c2 = '# %% tags=["keep"]\nimport sys\n\ncfg = load_everything()\n\n'
+        diff = _diff(self._base(), self._de(self.A, self.B), self._en(self.A, c1, c2))
+        actions = {(i.key, i.action) for i in diff.items}
+        assert ("pos:s0/code/1", "ambiguous_alignment") in actions, [
+            (i.key, i.action) for i in diff.items
+        ]
