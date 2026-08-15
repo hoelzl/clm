@@ -2299,3 +2299,45 @@ class TestLoneCandidateAffinity:
         assert ("pos:s0/code/1", "ambiguous_alignment") in actions, [
             (i.key, i.action) for i in diff.items
         ]
+
+    def test_non_aliasing_candidate_keeps_its_row_and_pair(self):
+        # Round-1 review: the suppression exists because pool ordinals
+        # ALIAS — the candidate's own row would render on the slot's
+        # handle. When the candidate parses at a DIFFERENT ordinal there
+        # is nothing to suppress: its row must frame normally and its
+        # byte-identical sibling on the recorded side must keep the
+        # record_symmetric_add pair.
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        diff = _diff(
+            self._base(),
+            self._de(foreign, self.A, self.B),
+            self._en(foreign, self.A),
+        )
+        actions = {(i.key, i.action) for i in diff.items}
+        assert ("pos:s0/code/0", "record_symmetric_add") in actions, [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "no content affinity" in slot.detail
+        assert "suppressed" not in slot.detail
+
+    def test_unrelated_mark_loses_to_another_slots_claim(self):
+        # Round-1 review: two pending-twin slots, ONE lone new cell with
+        # affinity to the SECOND slot only. The first slot's no-affinity
+        # mark must not announce a suppression that never happens (a
+        # claimed cell leaves the news — its only row is the claiming
+        # slot's frame) or contradict that frame: it reframes as
+        # claimed-elsewhere.
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(5)\n\n'
+        base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, c))
+        slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
+        assert (slot_b.action, slot_r2.action) == (
+            "ambiguous_alignment",
+            "pending_divergence",
+        ), [(i.key, i.action, i.detail) for i in diff.items]
+        assert "another pending slot" in slot_b.detail
+        assert "suppressed" not in slot_b.detail

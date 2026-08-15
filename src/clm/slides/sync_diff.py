@@ -2788,6 +2788,24 @@ class _Differ:
                 # suppress its aliasing news row.
                 status[pending][idx] = ("unrelated", news[pending][0])
 
+        # A slot's no-affinity ``unrelated`` mark loses to a LATER slot's
+        # claim of the same lone candidate (claim-loop order): for the
+        # earlier slot the cell was never available. Reframe it so its
+        # frame neither contradicts the claiming slot's nor announces a
+        # suppression that never happens (a claimed cell left the news —
+        # its only row is the claiming slot's frame).
+        for idx, entry in enumerate(base_entries):
+            if not entry.one_sided:
+                continue
+            pending_side: Lang = "de" if entry.de_fp is None else "en"
+            state, marked = status[pending_side][idx]
+            if (
+                state == "unrelated"
+                and marked is not None
+                and all(marked is not m for m in news[pending_side])
+            ):
+                status[pending_side][idx] = ("claimed_elsewhere", None)
+
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
             en_state, en_member = status["en"][idx]
@@ -3177,10 +3195,10 @@ class _Differ:
         member = de_member or en_member  # the DiffItem convention: DE carrier first
         pair_twin = _pair_twin(de_member, en_member)
         if rec_state == "missing":
-            if pen_state in ("absent", "unrelated"):
-                # ``unrelated``: the pending side's lone new cell is not the
-                # twin (no content affinity, Y8) — it keeps its own row, and
-                # the slot's content is gone from every side it was ever on.
+            if pen_state == "absent":
+                # The claim loop skips rec-missing slots, so no
+                # landed/unrelated state can coincide with this: the
+                # slot's content is gone from every side it was ever on.
                 self.emit(
                     handle,
                     "remove",
@@ -3224,13 +3242,22 @@ class _Differ:
             # against a genuinely new cell. Frame the slot instead: the
             # twin's copy cannot execute while the foreign cell sits
             # unrecorded in the pool (the positional pairing occupies the
-            # copy's target). The candidate's own news row shares this
-            # frame's rendered key (pool ordinals alias), so it is
-            # suppressed for the pass — an answerless frame beside an
-            # answerable cold row would defer the cold row's recording
-            # forever; the candidate re-frames once this resolves.
-            if pen_member is not None:
+            # copy's target). Suppress the candidate's own news row only
+            # when it would render on THIS frame's handle (pool ordinals
+            # alias) — an answerless frame beside an answerable cold row on
+            # one handle would defer the cold row's recording forever; at a
+            # different ordinal there is no aliasing and its row frames
+            # normally (suppressing it would strand its byte-identical
+            # sibling's record_symmetric_add pair).
+            aliases = pen_member is not None and pen_member.key.render() == handle
+            if aliases:
                 self._pool_news_suppressed.add(id(pen_member))
+            own_row = (
+                " The new cell's own row is suppressed this pass (it shares this "
+                "row's handle) and re-frames on the next report"
+                if aliases
+                else " The new cell's own row frames separately this pass"
+            )
             self.emit(
                 handle,
                 "conflict",
@@ -3238,13 +3265,31 @@ class _Differ:
                 "none",
                 f"the {pending} twin is still missing and the lone unmatched new "
                 f"cell of this pool on that side shows no content affinity to the "
-                f"recorded cell — it is a genuine add, not the twin; mint a "
+                f"recorded cell — treated as a genuine add, not the twin; mint a "
                 f"slide_id on the new cell (or remove it) and re-report — the "
                 f"twin copies once the pool's membership is unambiguous. If the "
                 f"cell IS the twin rewritten, align the cells by hand — the "
-                f"engine cannot claim it without content affinity. The new "
-                f"cell's own row is suppressed this pass (it shares this row's "
-                f"handle) and re-frames on the next report",
+                f"engine cannot claim it without content affinity.{own_row}",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "claimed_elsewhere":
+            # The lone new cell was claimed as ANOTHER pending slot's
+            # landed twin (claim-loop order). No suppression — a claimed
+            # cell left the news, so its only row is the claiming slot's
+            # frame — and no copy: the cell still sits unrecorded at this
+            # twin's copy target until the claiming slot resolves.
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                f"the {pending} twin is still missing and the lone unmatched new "
+                f"cell on that side was claimed as another pending slot's landed "
+                f"twin — resolve that slot's frame first; this twin copies once "
+                f"the pool's membership is unambiguous",
                 group=group,
                 member=member,
                 base=entry,
