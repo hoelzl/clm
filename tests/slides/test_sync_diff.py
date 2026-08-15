@@ -2430,3 +2430,21 @@ class TestLoneCandidateAffinity:
         assert slot.action == "ambiguous_alignment"
         assert "being renamed" in slot.detail
         assert "different pool position" not in slot.detail
+
+    def test_rename_in_flight_foreign_cell_promises_no_claim(self):
+        # Round-5 self-review: a FOREIGN cell (no affinity) at the slot's
+        # position under a rename — the held-back note must not promise
+        # "the claim binds" (nothing will ever bind); the cell re-frames
+        # once the rename is recorded and the handles align.
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        diff = _diff(
+            self._base(),
+            _build(HEADER_DE, _slide("s1", "de", "Titel"), self.A, self.B),
+            _build(HEADER_EN, _slide("s1", "en", "Title"), self.A, foreign),
+        )
+        slot = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert slot.action == "ambiguous_alignment"
+        assert "no content affinity" in slot.detail
+        assert "held back" in slot.detail
+        assert "re-frames once the rename is recorded" in slot.detail
+        assert "claim binds" not in slot.detail

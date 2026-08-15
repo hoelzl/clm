@@ -3244,10 +3244,14 @@ class _Differ:
             )
         if id(pen_member) in self._pool_news_suppressed:
             if rendered == _pos_key_regrouped(handle, group):
+                # Reached from the ``unrelated`` branch (the rename variant
+                # of ``misplaced`` names the row's fate itself): no claim
+                # will ever bind — the cell re-frames once the rename is
+                # recorded and the handles align.
                 return (
                     " The new cell's own row is held back this pass (it renders "
-                    "this slot's handle under the slide's new anchor) and the "
-                    "claim binds once the rename is recorded"
+                    "this slot's handle under the slide's new anchor) and "
+                    "re-frames once the rename is recorded"
                 )
             return (
                 " The new cell's own row is suppressed this pass (it shares "
@@ -3373,14 +3377,14 @@ class _Differ:
                 and pen_member.key.render() == _pos_key_regrouped(handle, group)
             )
             if renamed_at_position:
-                own_row = self._pool_own_row_note(pen_member, handle, group)
                 detail = (
                     f"the {pending} twin landed at this slot's recorded position "
                     f"while this slide was being renamed — the engine cannot "
                     f"claim it until the rename is recorded; no action needed — "
                     f"re-report once the rename lands and a byte-identical twin "
-                    f"records mechanically (an edited twin frames for review)."
-                    f"{own_row}"
+                    f"records mechanically (an edited twin frames for review). "
+                    f"The new cell's own row is held back this pass (it renders "
+                    f"this slot's handle under the slide's new anchor)"
                 )
             else:
                 own_row = self._pool_own_row_note(pen_member, handle, group)
