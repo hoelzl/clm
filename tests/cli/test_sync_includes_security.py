@@ -139,6 +139,19 @@ class TestLedgerPathValidationRefused:
             pytest.param("C:/Users/somebody/outside.txt", id="drive-forward"),
             pytest.param("C:\\Users\\somebody\\outside.txt", id="drive-backslash"),
             pytest.param("/etc/motd", id="posix-absolute"),
+            # Windows extended-length prefix: after separator normalization
+            # it starts with "/" and is refused as absolute (cross-platform).
+            pytest.param("\\\\?\\C:\\outside.txt", id="extended-length"),
+            # Drive-relative "C:" carries a drive, so `topic_dir / "C:"`
+            # leaves the topic dir on Windows (POSIX treats it as a plain
+            # filename — skip there).
+            pytest.param(
+                "C:",
+                id="drive-relative",
+                marks=pytest.mark.skipif(
+                    sys.platform != "win32", reason="drive-relative only escapes on Windows"
+                ),
+            ),
         ],
     )
     def test_remove_refuses_absolute_ledger_entries(self, tmp_path, as_path):
@@ -199,6 +212,27 @@ class TestLedgerSymlinkEscapes:
         # Ledger kept; the link itself also stays (refused before deletion).
         assert (topic_dir / LEDGER_NAME).is_file()
         assert (topic_dir / "link").is_symlink()
+
+    def test_remove_refuses_symlinked_intermediate_dir(self, tmp_path):
+        """`vendor/pkg` where vendor -> outside dir: the entry's parent
+        chain resolves outside; must be refused before deleting pkg."""
+        topic_dir, spec = _materialize(tmp_path)
+        link_target = tmp_path / "outside_target"
+        (link_target / "pkg").mkdir(parents=True)
+        (link_target / "pkg" / "treasure.txt").write_text(
+            "SENTINEL-INTERMEDIATE\n", encoding="utf-8"
+        )
+        os.symlink(link_target, topic_dir / "vendor", target_is_directory=True)
+        _patch_entry(topic_dir, as_path="vendor/pkg")
+
+        result = _remove(tmp_path, spec)
+
+        assert result.exit_code != 0, result.output
+        assert (link_target / "pkg" / "treasure.txt").read_text(
+            encoding="utf-8"
+        ) == "SENTINEL-INTERMEDIATE\n"
+        assert (topic_dir / LEDGER_NAME).is_file()
+        assert (topic_dir / "vendor").is_symlink()
 
     def test_remove_symlink_entry_itself_is_honored(self, tmp_path):
         """Positive pin: removing a legit symlink materialization unlinks
