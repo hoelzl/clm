@@ -392,6 +392,17 @@ way layout and owner changes get their own rows):
   `confirm`/`keep_twin` answered in the same document as a co-framed
   mechanical `mirror_tags` still lands in one pass — the mirror executes
   first and the guard sees the reconciled state.
+- **Confirm shared-divergence guard** (CLM {version}, Y9): `confirm` is
+  likewise **rejected when the member is shared (neither side carries
+  `lang`) and its sides diverge byte-wise** — a shared member records as
+  byte-identical twins, so confirming diverged bytes would bank the
+  divergence as verified (the shape the structural `record` gate refuses;
+  the confirm path never consulted it — a separated voiceover companion
+  could be blessed this way). Answer with a `body` (naming the stale
+  `side`) or align the cells by hand, then re-report. Localized pairs may
+  diverge (that is what translation is), and `j2` header members are
+  exempt (the `header_de`/`header_en` macros legitimately differ per
+  half).
 
 ## Order parity (order is language-independent, like tags)
 

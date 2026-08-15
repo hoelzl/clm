@@ -43,7 +43,7 @@ from clm.slides.doc_report import (
     pair_payload,
     report_id_for,
 )
-from clm.slides.sync_diff import DeckDiff
+from clm.slides.sync_diff import FRAMED_ACTIONS, DeckDiff, diff_outcome
 from clm.slides.sync_wire import REQUIRE_REPORT_ID, WIRE_SCHEMA
 
 __all__ = ["run_apply_v3", "run_record_v3", "run_report_v3"]
@@ -570,6 +570,29 @@ def _record_one(
     ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
     ledger = doc_ledger.load(ledger_path)
     deck_key = doc_ledger.deck_key_for(bundle.de_path)
+    deck_ledger = ledger.decks.get(deck_key)
+    if deck_ledger is not None:
+        # Y9: a warm deck whose diff still carries FRAMED items is blessed
+        # wholesale here — the structural gate cannot see them (the
+        # localized-pair frames are structurally clean). Warn, never
+        # refuse: record is the trust verb, but the caller should know it
+        # is short-circuiting review. A cold deck has no baseline — the
+        # first record IS the bootstrap, nothing is "pending" against it.
+        base = doc_ledger.baseline_from_ledger(deck_ledger)
+        framed = [
+            item
+            for item in diff_outcome(bundle.outcome, base).items
+            if item.action in FRAMED_ACTIONS
+        ]
+        if framed:
+            row["pending_framed"] = [f"{item.action} {item.key}" for item in framed]
+            click.echo(
+                f"warning: {bundle.de_path.name}: record blesses {len(framed)} "
+                f"pending framed item(s) wholesale: "
+                + ", ".join(row["pending_framed"])
+                + " — review them with `clm slides sync report` first",
+                err=True,
+            )
     recorded, migrations = doc_ledger.record_deck_snapshot(
         ledger,
         deck_key,

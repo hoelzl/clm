@@ -1662,6 +1662,30 @@ def _reject_divergent_tags(de_cell: SideCell, en_cell: SideCell) -> None:
         )
 
 
+def _reject_divergent_shared(de_cell: SideCell, en_cell: SideCell) -> None:
+    """The confirm shared-member guard (Y9): a SHARED member (neither side
+    carries ``lang``) records as byte-identical twins — confirming a
+    byte-diverged shared pair banks the divergence as verified (observed
+    on separated voiceover companions, whose structural record gate the
+    confirm path never consults). Localized pairs may diverge — that is
+    what translation IS. ``j2`` cells are excluded: the header macros
+    legitimately differ per half (``header_de``/``header_en``), and the
+    structural verify gate excludes them from byte comparison for the
+    same reason. Runs after :func:`_reject_divergent_tags`, so a
+    fingerprint miss here is body/owner/kind, never tags."""
+    if (
+        de_cell.lang_attr is None
+        and en_cell.lang_attr is None
+        and de_cell.cell_type != "j2"
+        and content_fingerprint(de_cell) != content_fingerprint(en_cell)
+    ):
+        raise _ItemError(
+            "the sides of this shared member diverge — a shared member "
+            "records as byte-identical twins; answer with a body (naming "
+            "the stale side) or align the cells, then re-run report"
+        )
+
+
 def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
     action = item.action
     if choice == "mark_twin":
@@ -1704,6 +1728,7 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
                 "lang attributes) — complete or revert the transition first"
             )
         _reject_divergent_tags(de_cell, en_cell)
+        _reject_divergent_shared(de_cell, en_cell)
         return  # confirmation is a pure ledger record; nothing mutates
     if choice in ("de", "en"):
         side: Lang = choice  # type: ignore[assignment]

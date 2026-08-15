@@ -1713,6 +1713,121 @@ class TestLoneCandidateAffinity:
         deck.assert_converged()
 
 
+class TestConfirmSharedDivergenceGuard:
+    """Y9 (adversarial review 2026-07-24): ``verify_cold``'s ``confirm``
+    banked a byte-diverged SHARED member as verified — observed on
+    separated voiceover companions, whose structural record gate the
+    confirm path never consults. A shared member records as byte-identical
+    twins; confirming diverged bytes is a lie the ledger then trusts.
+    Localized pairs may diverge — that is what translation is."""
+
+    @staticmethod
+    def _shared_vo(slug: str, for_slide: str, text: str) -> str:
+        # A SHARED companion cell: tags voiceover, no lang attribute.
+        return (
+            f'# %% [markdown] tags=["voiceover"] slide_id="{slug}" '
+            f'for_slide="{for_slide}"\n#\n# - {text}\n\n'
+        )
+
+    def test_confirm_rejects_byte_diverged_shared_companion(self, tmp_path: Path):
+        # The companions appear AFTER the record: the diverged shared
+        # member is cold and frames verify_cold.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Erklaere die Schleife")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Completely different narration")),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("verify_cold", "id:s0-vo")]
+        outcome = deck.apply(_decision("id:s0-vo", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:s0-vo")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "shared member" in result.reason
+        # Nothing was banked: the member re-frames cold on the next report.
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("verify_cold", "id:s0-vo")]
+        # The tested escape: the body answer naming the stale twin aligns
+        # the pair; the next confirm records and the deck converges.
+        outcome = deck.apply(_decision("id:s0-vo", body="# - Erklaere die Schleife", side="en"))
+        assert outcome.all_applied, outcome.to_payload()
+        outcome = deck.apply(_decision("id:s0-vo", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_confirm_accepts_diverged_localized_pair(self, tmp_path: Path):
+        # Preserved: a localized pair's halves MAY differ — translation.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        deck.edit_de(
+            '# {{ header_de("Titel DE") }}',
+            '# {{ header_de("Titel DE") }}\n\n# %% [markdown] lang="de" slide_id="m"\n# DE Text\n',
+        )
+        deck.edit_en(
+            '# {{ header_en("Title EN") }}',
+            '# {{ header_en("Title EN") }}\n\n# %% [markdown] lang="en" slide_id="m"\n# EN text\n',
+        )
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("verify_cold", "id:m")]
+        outcome = deck.apply(_decision("id:m", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_confirm_accepts_diverged_j2_header(self, tmp_path: Path):
+        # Preserved: j2 header macros legitimately differ per half
+        # (header_de/header_en) — the structural gate excludes them from
+        # byte comparison, and the confirm guard does too.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        _, diff = deck.diff()  # no ledger: everything is cold
+        assert any(i.key == "pos:~header/j2/0" for i in diff.items), [
+            (i.key, i.action) for i in diff.items
+        ]
+        decisions = {i.key: doc_apply.Decision(key=i.key, choice="confirm") for i in diff.items}
+        outcome = deck.apply(decisions)
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    def test_confirm_accepts_identical_shared_companion(self, tmp_path: Path):
+        # Preserved: the normal cold ceremony — byte-identical shared pair.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Same narration")),
+            encoding="utf-8",
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(self._shared_vo("s0-vo", "s0", "Same narration")),
+            encoding="utf-8",
+        )
+        outcome = deck.apply(_decision("id:s0-vo", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename
     recorded through the sync loop must leave ZERO dangling `id:<old>`
