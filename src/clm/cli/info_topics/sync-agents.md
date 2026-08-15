@@ -305,10 +305,11 @@ frame names the rename instead: no action needed — the candidate's own row
 is held back for the pass and the claim binds once the rename is recorded.
 Without affinity the cell is treated as a genuine add, not the twin (same
 mint-or-remove reconciliation). The cell's own row is suppressed for the
-pass only when pool ordinals make it share a framed slot's handle — the
-frame names whose handle; at another ordinal it frames separately. When
-the lone cell was instead claimed as *another* pending slot's landed twin,
-the frame says so — resolve that slot first.
+pass when pool ordinals make it share a framed slot's handle, or held
+back while a slide rename is in flight (it renders the slot's handle
+under the new anchor) — the frame names whose handle; at another ordinal
+it frames separately. When the lone cell was instead claimed as *another*
+pending slot's landed twin, the frame says so — resolve that slot first.
 
 ### Parse refusals: read the code, not the header
 

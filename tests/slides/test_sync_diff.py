@@ -2434,8 +2434,9 @@ class TestLoneCandidateAffinity:
     def test_rename_in_flight_foreign_cell_promises_no_claim(self):
         # Round-5 self-review: a FOREIGN cell (no affinity) at the slot's
         # position under a rename — the held-back note must not promise
-        # "the claim binds" (nothing will ever bind); the cell re-frames
-        # once the rename is recorded and the handles align.
+        # "the claim binds" (nothing will ever bind). Round 6: nor does
+        # the row "re-frame" once the rename records — the handles then
+        # align and the raw-alias route keeps it suppressed.
         foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
         diff = _diff(
             self._base(),
@@ -2446,5 +2447,6 @@ class TestLoneCandidateAffinity:
         assert slot.action == "ambiguous_alignment"
         assert "no content affinity" in slot.detail
         assert "held back" in slot.detail
-        assert "re-frames once the rename is recorded" in slot.detail
+        assert "stays suppressed until the pool's membership changes" in slot.detail
         assert "claim binds" not in slot.detail
+        assert "re-frames once the rename is recorded" not in slot.detail

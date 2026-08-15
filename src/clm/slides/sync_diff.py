@@ -3246,12 +3246,14 @@ class _Differ:
             if rendered == _pos_key_regrouped(handle, group):
                 # Reached from the ``unrelated`` branch (the rename variant
                 # of ``misplaced`` names the row's fate itself): no claim
-                # will ever bind — the cell re-frames once the rename is
-                # recorded and the handles align.
+                # will ever bind. Nor does the row re-frame when the
+                # rename records — the handles then align and the raw-alias
+                # route keeps it suppressed (round 6).
                 return (
                     " The new cell's own row is held back this pass (it renders "
-                    "this slot's handle under the slide's new anchor) and "
-                    "re-frames once the rename is recorded"
+                    "this slot's handle under the slide's new anchor); once the "
+                    "rename is recorded the handles align and it stays "
+                    "suppressed until the pool's membership changes"
                 )
             return (
                 " The new cell's own row is suppressed this pass (it shares "
