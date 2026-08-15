@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–7 DONE; next is item 8/Y8) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (items 1–8 DONE; next is item 9/Y9) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -715,7 +715,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4), 6 (Y6, PR #829), 7 (Y7, PR #831) DONE; next is item 8 (Y8)
+### Phase 3 — Sync engine correctness  ▸ STATUS: items 1 (Y2 + D8), 2 (Y1, PR #824), 3 (Y3 + D9), 4 (Y5, PR #825), 5 (Y4), 6 (Y6, PR #829), 7 (Y7, PR #831), 8 (Y8, PR #833) DONE; next is item 9 (Y9)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -949,11 +949,41 @@ the other bugs consume.
    CLEAN. The strip-id variant's copy side already frames `verify_cold` in
    ledger mode; in snapshot-baseline flows it stays a mechanical
    (additive-only) `copy_new_shared` — recorded as accepted residue.
-8. **Y8** ▸ Re-verified OPEN 2026-08-14: the lone-candidate claim
-   (`sync_diff.py:2422-2423`) still requires no content affinity (it remains
-   framed downstream, so misleading rather than silent). Original plan:
-   require content affinity before `_align_pool`'s lone-candidate claim
-   (`:1693-1697`).
+8. **Y8 — lone-candidate affinity.** ▸ **DONE 2026-08-15 (PR #833, seven
+   adversarial rounds).** `_align_pool`'s lone-candidate claim now requires
+   content affinity (the budgeted `_BodySimilarity` oracle) AND binds only
+   at the slot's own rendered handle; a lone no-affinity cell frames
+   `ambiguous_alignment` ("unrelated"), a matching cell at another position
+   frames it as "misplaced", and a slide renamed in the same pass frames a
+   rename variant (no action needed — the candidate's row is held back and
+   the claim binds once the rename records). The candidate's news row is
+   suppressed when it would render on a marked slot's handle — raw or
+   regrouped — with the frame naming the row's fate. Tests:
+   `TestLoneCandidateAffinity` in `tests/slides/test_sync_diff.py` (10) and
+   `tests/slides/test_doc_apply.py` (5). The rounds found what the plan's
+   one-liner hid: **round 2, Important** and **round 3, Critical** — a
+   cross-position claim (affine OR byte-identical) livelocks the pool in
+   ledger mode: the record/divergence resolution writes against a cell the
+   fresh-snapshot `rerecord_pool` pairs with a DIFFERENT slot,
+   `_drop_unresolved_from_pools` silently drops the slot's ledger entry,
+   and `record_symmetric_add` reports success forever (the byte variant was
+   pinned as correct by a round-1 test that had never been RED-checked
+   against the livelock geometry — check WHAT a preserved-behavior pin
+   blesses); **round 5, Important** — under a group rename the candidate's
+   own row renders under the new token and escaped the key-based deferral
+   guard: false `recorded` verdict, then erasure (hold it back via the
+   regrouped handle so the claim can bind); rounds 1/4/6 were
+   wording/handle-honesty (conditional suppression notes, rename naming,
+   slashy group ids, no false "re-frames" promises). Round 7 CLEAN
+   (1400-scenario seeded fuzz: every row-fate sentence matched the item
+   list). Pre-existing follow-ups surfaced, NOT charged to Y8: (i) a lone
+   cell affine to the FIRST of two pending slots leaves the second slot's
+   mechanical `copy_new_shared` executing while the claimed cell sits
+   unrecorded — the first slot's frame degrades into a `verify_cold` loop
+   (byte-identical pass-1 on master); (ii) rename + non-aliasing foreign
+   cell degrades to a perpetual one-sided `verify_cold` via
+   `_drop_unresolved_from_pools` (same end state on master, where it also
+   reports a false `recorded` verdict — Y8's head fixes that verdict).
 9. **Y9** ▸ Re-verified OPEN 2026-08-14: `record` (`sync_v3.py:460-592`) still
    never consults the diff — no pending-framed warning; the `confirm` path
    (`doc_apply.py:1584-1601`) still has no byte-divergence rejection for a
