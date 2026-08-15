@@ -2323,21 +2323,63 @@ class TestLoneCandidateAffinity:
         assert "suppressed" not in slot.detail
 
     def test_unrelated_mark_loses_to_another_slots_claim(self):
-        # Round-1 review: two pending-twin slots, ONE lone new cell with
-        # affinity to the SECOND slot only. The first slot's no-affinity
-        # mark must not announce a suppression that never happens (a
-        # claimed cell leaves the news — its only row is the claiming
-        # slot's frame) or contradict that frame: it reframes as
-        # claimed-elsewhere.
+        # Round-1 review: two pending-twin slots, ONE lone new cell
+        # byte-identical to the SECOND slot's recorded cell. The first
+        # slot's no-affinity mark must not announce a suppression that
+        # never happens (a claimed cell leaves the news — its only row is
+        # the claiming slot's frame) or contradict that frame: it
+        # reframes as claimed-elsewhere.
         r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
-        c = '# %% tags=["keep"]\ngamma = compute_third_value(5)\n\n'
         base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
-        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, c))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, r2))
         slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
         slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
         assert (slot_b.action, slot_r2.action) == (
             "ambiguous_alignment",
-            "pending_divergence",
+            "record_symmetric_add",
         ), [(i.key, i.action, i.detail) for i in diff.items]
         assert "another pending slot" in slot_b.detail
         assert "suppressed" not in slot_b.detail
+
+    def test_affinity_claim_requires_the_slots_own_position(self):
+        # Round-2 review (Important): a lone candidate body-similar to a
+        # LATER slot's recorded cell but sitting at a DIFFERENT pool
+        # position must not be claimed — the divergence resolution would
+        # propagate into a cell the fresh-snapshot rerecord pairs with the
+        # wrong slot (the pool livelock). The affine slot frames
+        # "misplaced"; the aliasing slot frames "unrelated".
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(5)\n\n'
+        base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, c))
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
+        assert (slot_b.action, slot_r2.action) == (
+            "ambiguous_alignment",
+            "ambiguous_alignment",
+        )
+        assert "no content affinity" in slot_b.detail
+        assert "different pool position" in slot_r2.detail
+
+    def test_two_marks_one_row_the_note_names_the_aliasing_slot(self):
+        # Round-2 review (Minor): two pending-twin slots, one lone
+        # no-affinity candidate. The aliasing slot suppresses the row; the
+        # other slot's frame must not claim it "frames separately".
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        foreign = '# %% tags=["keep"]\nimport os\n\nresult = run_pipeline()\n\n'
+        base = _snapshot(self._de(self.A, self.B, r2), self._en(self.A))
+        diff = _diff(base, self._de(self.A, self.B, r2), self._en(self.A, foreign))
+        slot_b = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        slot_r2 = next(i for i in diff.items if i.key == "pos:s0/code/2")
+        assert (slot_b.action, slot_r2.action) == (
+            "ambiguous_alignment",
+            "ambiguous_alignment",
+        ), [(i.key, i.action, i.detail) for i in diff.items]
+        assert "it shares this row's handle" in slot_b.detail
+        assert "another pending slot's handle" in slot_r2.detail
+        assert "frames separately" not in slot_r2.detail
+        # The candidate's single row is suppressed — exactly the two frames.
+        assert len(diff.items) == 2

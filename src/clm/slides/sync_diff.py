@@ -2764,14 +2764,23 @@ class _Differ:
                 if cell is not None and content_fingerprint(cell) in want:
                     claimed = candidate
                     break
+            lone_affine = False
             if claimed is None and len(news[pending]) == 1:
                 candidate = news[pending][0]
                 cand_cell = candidate.side(pending)
-                if (
+                lone_affine = (
                     rec_cell is not None
                     and cand_cell is not None
                     and self._pool_similarity.similar(rec_cell.body, cand_cell.body)
-                ):
+                )
+                # Y8 round 2: the affinity claim binds only at the slot's
+                # OWN rendered handle. A cross-position claim's divergence
+                # resolution propagates into a cell the fresh-snapshot
+                # rerecord then pairs with a DIFFERENT slot — the pool
+                # livelocks (the slot's ledger entry is dropped as
+                # unresolved and the record reports success forever
+                # without anything sticking).
+                if lone_affine and candidate.key.render() == entry.key:
                     claimed = candidate
             if claimed is not None:
                 news[pending].remove(claimed)
@@ -2779,32 +2788,48 @@ class _Differ:
             elif len(news[pending]) > 1:
                 status[pending][idx] = ("ambiguous", None)
             elif news[pending]:
-                # Exactly one candidate with no content affinity (Y8): a
-                # genuinely new cell, NOT the twin. The slot frames instead
-                # of copying — while the foreign cell sits unrecorded in
-                # the pending side's pool, the positional pairing makes the
-                # twin's copy target occupied and apply would refuse it.
-                # The candidate rides the status so the slot's frame can
-                # suppress its aliasing news row.
-                status[pending][idx] = ("unrelated", news[pending][0])
+                # Exactly one candidate, not claimed. ``misplaced``: body
+                # similarity says it could be the twin, but it landed away
+                # from the slot's recorded position — claiming it would
+                # mis-pair the pool's recording (above). ``unrelated``:
+                # no content affinity (Y8) — a genuinely new cell, NOT the
+                # twin. Either way the slot frames instead of copying:
+                # while the cell sits unrecorded in the pending side's
+                # pool, the positional pairing makes the twin's copy
+                # target occupied and apply would refuse it. The candidate
+                # rides the status so the frame can name its row's fate.
+                status[pending][idx] = (
+                    "misplaced" if lone_affine else "unrelated",
+                    news[pending][0],
+                )
 
-        # A slot's no-affinity ``unrelated`` mark loses to a LATER slot's
+        # A slot's ``unrelated``/``misplaced`` mark loses to a LATER slot's
         # claim of the same lone candidate (claim-loop order): for the
         # earlier slot the cell was never available. Reframe it so its
         # frame neither contradicts the claiming slot's nor announces a
         # suppression that never happens (a claimed cell left the news —
         # its only row is the claiming slot's frame).
+        #
+        # The row suppression itself is computed HERE, over all marks at
+        # once, so every slot's frame text reads the final set — a later
+        # slot's suppression must not contradict an earlier slot's
+        # "frames separately" (round 2). A marked candidate's own news row
+        # is suppressed when it would render on a marked slot's handle
+        # (pool ordinals alias — an answerless frame beside an answerable
+        # cold row on one handle defers the cold row's recording forever,
+        # the #654 placement-suppression precedent); at any other ordinal
+        # there is no aliasing and its row frames normally.
         for idx, entry in enumerate(base_entries):
             if not entry.one_sided:
                 continue
             pending_side: Lang = "de" if entry.de_fp is None else "en"
             state, marked = status[pending_side][idx]
-            if (
-                state == "unrelated"
-                and marked is not None
-                and all(marked is not m for m in news[pending_side])
-            ):
+            if state not in ("unrelated", "misplaced") or marked is None:
+                continue
+            if all(marked is not m for m in news[pending_side]):
                 status[pending_side][idx] = ("claimed_elsewhere", None)
+            elif marked.key.render() == entry.key:
+                self._pool_news_suppressed.add(id(marked))
 
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
@@ -3171,6 +3196,29 @@ class _Differ:
             twin=pair_twin,
         )
 
+    def _pool_own_row_note(self, pen_member: Member | None, handle: str) -> str:
+        """The frame-text note naming a marked candidate's row fate (Y8).
+
+        The suppression set is final by classification time (computed over
+        all marks in :meth:`_align_pool`), so the note can distinguish:
+        suppressed because the row would render on THIS frame's handle,
+        suppressed because it renders on ANOTHER marked slot's handle, or
+        not suppressed at all.
+        """
+        if pen_member is None:
+            return ""
+        if pen_member.key.render() == handle:
+            return (
+                " The new cell's own row is suppressed this pass (it shares this "
+                "row's handle) and re-frames on the next report"
+            )
+        if id(pen_member) in self._pool_news_suppressed:
+            return (
+                " The new cell's own row is suppressed this pass (it shares "
+                "another pending slot's handle) and re-frames on the next report"
+            )
+        return " The new cell's own row frames separately this pass"
+
     def _classify_pool_slot_base_one_sided(
         self,
         group: str,
@@ -3242,22 +3290,8 @@ class _Differ:
             # against a genuinely new cell. Frame the slot instead: the
             # twin's copy cannot execute while the foreign cell sits
             # unrecorded in the pool (the positional pairing occupies the
-            # copy's target). Suppress the candidate's own news row only
-            # when it would render on THIS frame's handle (pool ordinals
-            # alias) — an answerless frame beside an answerable cold row on
-            # one handle would defer the cold row's recording forever; at a
-            # different ordinal there is no aliasing and its row frames
-            # normally (suppressing it would strand its byte-identical
-            # sibling's record_symmetric_add pair).
-            aliases = pen_member is not None and pen_member.key.render() == handle
-            if aliases:
-                self._pool_news_suppressed.add(id(pen_member))
-            own_row = (
-                " The new cell's own row is suppressed this pass (it shares this "
-                "row's handle) and re-frames on the next report"
-                if aliases
-                else " The new cell's own row frames separately this pass"
-            )
+            # copy's target).
+            own_row = self._pool_own_row_note(pen_member, handle)
             self.emit(
                 handle,
                 "conflict",
@@ -3270,6 +3304,33 @@ class _Differ:
                 f"twin copies once the pool's membership is unambiguous. If the "
                 f"cell IS the twin rewritten, align the cells by hand — the "
                 f"engine cannot claim it without content affinity.{own_row}",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "misplaced":
+            # Y8 round 2: the lone new cell IS body-similar to the recorded
+            # cell but landed away from this slot's recorded position.
+            # Claiming it would let the divergence resolution propagate
+            # into a cell the fresh-snapshot rerecord pairs with a
+            # DIFFERENT slot — the pool livelocks (the slot's ledger entry
+            # is dropped as unresolved while the record reports success).
+            # Frame the honest reconciliations instead.
+            own_row = self._pool_own_row_note(pen_member, handle)
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                f"the {pending} twin is still missing and the lone unmatched new "
+                f"cell of this pool on that side shows content affinity to the "
+                f"recorded cell but landed at a different pool position — the "
+                f"engine cannot claim it there (recording would mis-pair the "
+                f"pool); mint a slide_id on the new cell (or remove it) and "
+                f"re-report. If the cell IS the twin rewritten, align the cells "
+                f"by hand — move it to this slot's recorded position or mint "
+                f"matching slide_ids — and re-report.{own_row}",
                 group=group,
                 member=member,
                 base=entry,

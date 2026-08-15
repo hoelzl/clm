@@ -1599,6 +1599,44 @@ class TestLoneCandidateAffinity:
         assert "run_pipeline" in de  # the new cell mirrored to DE
         deck.assert_converged()
 
+    def test_cross_position_affinity_frames_and_converges(self, tmp_path: Path):
+        # Round-2 review (Important): a lone new cell body-similar to a
+        # LATER pending slot's recorded cell but sitting at a different
+        # pool position must NOT be claimed — claiming it livelocked the
+        # pool (the divergence resolution propagated into a cell the
+        # rerecord paired with the wrong slot). Both slots frame; minting
+        # a slide_id reconciles everything mechanically.
+        r2 = '# %% tags=["keep"]\ngamma = compute_third_value(4)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.A, self.B, r2),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.A),
+        )
+        deck.record()
+        c = '# %% tags=["keep"]\ngamma = compute_third_value(5)\n'
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), self.A, c)
+        _, diff = deck.diff()
+        # No claim across positions: two answerless frames, nothing else.
+        assert not any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]
+        assert [(i.outcome, i.action) for i in diff.items] == [
+            ("conflict", "ambiguous_alignment"),
+            ("conflict", "ambiguous_alignment"),
+        ]
+        outcome = deck.apply()
+        assert not outcome.wrote  # decision-free: nothing mutates
+        # The documented reconciliation: mint a slide_id on the new cell —
+        # it leaves the positional pool and every copy executes.
+        deck.edit_en('# %% tags=["keep"]\ngamma', '# %% tags=["keep"] slide_id="c-gamma"\ngamma')
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert "compute_third_value(5)" in en  # the new cell was NOT overwritten
+        assert "compute_second_value(2)" in en  # the first twin copied verbatim
+        assert "compute_third_value(4)" in en  # the affine twin copied verbatim
+        deck.assert_converged()
+
 
 class TestGroupRenameLedgerIntegrity:
     """Issue #718 (the #656 field report): a both-halves anchor rename

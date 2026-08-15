@@ -286,8 +286,12 @@ is a body-similarity heuristic — ratio ≥ 0.9 over bodies of ≥ 10 stripped
 characters, budgeted per report — so a *near-identical boilerplate* cell
 can still read as the twin (its frame goes to review, never silent) and a
 *tiny* genuinely-landed twin reads as unrelated (align the cells by hand).
-The cell's own row is suppressed for the pass only when pool ordinals make
-it share the slot's handle; at another ordinal it frames separately. When
+The affinity claim also binds only at the slot's **own pool position**: a
+body-similar cell at a *different* position frames the same action with a
+"landed at a different pool position" reading (claiming it there would
+mis-pair the pool's recording). The cell's own row is suppressed for the
+pass only when pool ordinals make it share a framed slot's handle — the
+frame names whose handle; at another ordinal it frames separately. When
 the lone cell was instead claimed as *another* pending slot's landed twin,
 the frame says so — resolve that slot first); carries **no** answers:
 reconcile by editing, minting ids, then re-report),
