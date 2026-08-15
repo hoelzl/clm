@@ -171,9 +171,10 @@ def decision_vocabulary(action: str) -> tuple[str, ...]:
 def item_answers(item: DiffItem) -> tuple[str, ...]:
     """The key-aware answer vocabulary the report advertises for one item.
 
-    Identical to :func:`decision_vocabulary` except for ``verify_cold``, where
-    two narrowings keep the advertisement honest — the design's standing rule
-    is that advertising an answer the executor then rejects is a defect:
+    Identical to :func:`decision_vocabulary` except for ``verify_cold`` and
+    ``verify_translation``, where narrowings keep the advertisement honest —
+    the design's standing rule is that advertising an answer the executor
+    then rejects is a defect:
 
     * A ``body`` recovery targets a named ``side`` and can only be placed on
       an **id-keyed** two-sided member. A *positional* cold member has no
@@ -184,25 +185,33 @@ def item_answers(item: DiffItem) -> tuple[str, ...]:
       member with only one side. Advertising it sent agents into a rejection
       that then blocked the whole positional pool (finding M6). The item stays
       framed, with ``resolution: manual`` and a detail naming the repair.
-    * A **byte-diverged shared** cold pair drops ``confirm`` (Y9): the
-      executor's ``_reject_divergent_shared`` refuses it (a shared member
-      records as byte-identical twins). An id-keyed member keeps ``body``;
-      a positional one keeps nothing — hand-align (or mint a ``slide_id``)
-      and re-report.
+    * A **byte-diverged shared** pair drops ``confirm`` (Y9): the executor's
+      ``_reject_divergent_shared`` refuses it (a shared member records as
+      byte-identical twins). This covers ``verify_translation`` too — it is
+      reachable on a shared member via an id-stamp on one half plus a
+      tag-order divergence on the idless twin (round 2). When the bodies
+      agree and only the header diverges (tag order, owner, kind), ``body``
+      drops too — it rewrites only body lines, so advertising it would loop
+      the frame forever. What remains: ``body`` for a genuinely
+      body-diverged id-keyed member; nothing (``resolution: manual`` —
+      hand-align, or mint a ``slide_id``, and re-report) otherwise.
     """
     answers = decision_vocabulary(item.action)
-    if item.action != "verify_cold":
+    if item.action not in ("verify_cold", "verify_translation"):
         return answers
-    if item.member is not None and item.member.is_one_sided:
+    member = item.member
+    if item.action == "verify_cold" and member is not None and member.is_one_sided:
         return ()
     if (
-        item.member is not None
-        and item.member.de is not None
-        and item.member.en is not None
-        and _shared_pair_diverged(item.member.de, item.member.en)
+        member is not None
+        and member.de is not None
+        and member.en is not None
+        and _shared_pair_diverged(member.de, member.en)
     ):
         answers = tuple(a for a in answers if a != "confirm")
-    if not item.key.startswith("id:"):
+        if member.de.body == member.en.body:
+            answers = tuple(a for a in answers if a != "body")
+    if item.action == "verify_cold" and not item.key.startswith("id:"):
         return tuple(a for a in answers if a != "body")
     return answers
 

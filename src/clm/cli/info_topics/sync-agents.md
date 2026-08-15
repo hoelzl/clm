@@ -399,15 +399,15 @@ way layout and owner changes get their own rows):
   divergence as verified (the shape the structural `record` gate refuses;
   the confirm path never consulted it — a separated voiceover companion
   could be blessed this way). The report never advertises `confirm` for
-  that shape (the standing no-dead-answers rule): an id-keyed member
-  keeps the `body` answer (name the stale `side`), a *positional* one
-  advertises nothing and renders `resolution: manual` — hand-align (or
-  mint a `slide_id`) and re-report. The rejection message splits body
-  from header divergence: a `body` answer rewrites only body lines, so a
-  header-only divergence (tag order, `for_slide`, `vo_anchor`) is
-  align-by-hand. Localized pairs may diverge (that is what translation
-  is), and `j2` header members are exempt (the `header_de`/`header_en`
-  macros legitimately differ per half).
+  that shape (the standing no-dead-answers rule), and never advertises
+  `body` when the divergence is header-only (tag order, `for_slide`,
+  `vo_anchor` — a body answer rewrites only body lines, so it would loop
+  the frame): a body-diverged id-keyed member keeps the `body` answer
+  (name the stale `side`); everything else renders `resolution: manual` —
+  hand-align (or mint a `slide_id`) and re-report. The rejection message
+  splits the same two cases. Localized pairs may diverge (that is what
+  translation is), and `j2` header members are exempt (the
+  `header_de`/`header_en` macros legitimately differ per half).
 
 ## Order parity (order is language-independent, like tags)
 

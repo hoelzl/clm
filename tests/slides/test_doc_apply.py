@@ -1870,12 +1870,39 @@ class TestConfirmSharedDivergenceGuard:
         _, diff = deck.diff()
         item = next(i for i in diff.items if i.key == "id:tg")
         assert item.action == "verify_cold"
+        # Header-only divergence: body is no escape either — nothing is
+        # advertised, the item renders resolution "manual".
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
         outcome = deck.apply(_decision("id:tg", choice="confirm"))
         result = next(r for r in outcome.results if r.key == "id:tg")
         assert result.status == "rejected", outcome.to_payload()
         assert "cell header" in result.reason
         assert "answer with a body (naming" not in result.reason
         assert "align the cells by hand" in result.reason
+
+    def test_shared_verify_translation_advertises_no_confirm(self, tmp_path: Path):
+        # Round 2 (Important): verify_translation IS reachable on a shared
+        # member — an id-stamp on one half plus a tag-ORDER divergence on
+        # the idless twin (the lens adopts the body-equal twin, the stamp
+        # pairing is unverified on header bytes) — so the narrowing must
+        # cover it too, one action over.
+        cell = '# %% tags=["keep", "draft"]\nb = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), cell),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), cell),
+        )
+        deck.record()
+        deck.edit_de('# %% tags=["keep", "draft"]', '# %% tags=["keep", "draft"] slide_id="st"')
+        deck.edit_en('# %% tags=["keep", "draft"]', '# %% tags=["draft", "keep"]')
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.action == "verify_translation")
+        assert item.key == "id:st", [(i.key, i.action) for i in diff.items]
+        # Header-only divergence (tag order): neither confirm nor body is
+        # an escape — nothing is advertised, resolution is manual.
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
 
     def test_confirm_accepts_identical_shared_companion(self, tmp_path: Path):
         # Preserved: the normal cold ceremony — byte-identical shared pair.
