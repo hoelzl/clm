@@ -1936,7 +1936,41 @@ class TestConfirmSharedDivergenceGuard:
         outcome = deck.apply(_decision("id:sh1", choice="confirm"))
         result = next(r for r in outcome.results if r.key == "id:sh1")
         assert result.status == "rejected", outcome.to_payload()
-        assert "outside the body lines" in result.reason
+        assert "without a usable body answer" in result.reason
+
+    def test_whitespace_only_divergence_is_not_body_answerable(self, tmp_path: Path):
+        # Round 4 (Minor): the body validator rejects both whitespace-only
+        # sources, so their textual difference must not advertise `body`.
+        tail = '# %% tags=["keep"] slide_id="tail-ws"\ny = 2\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), tail),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), tail),
+        )
+        deck.record()
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["keep"] slide_id="ws"\n \n\n',
+            tail,
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["keep"] slide_id="ws"\n\t\n\n',
+            tail,
+        )
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:ws")
+        assert item.action == "verify_cold", [(i.key, i.action) for i in diff.items]
+        assert doc_apply.item_answers(item) == ()
+        assert doc_apply.item_resolution(item) == "manual"
+        assert "body answer" not in item.detail
+        assert "align the cells by hand" in item.detail
+        outcome = deck.apply(_decision("id:ws", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:ws")
+        assert result.status == "rejected", outcome.to_payload()
+        assert "both bodies are empty/whitespace-only" in result.reason
 
     def test_shared_diverged_cold_detail_carries_the_repair(self, tmp_path: Path):
         # Round 3 (Minor): the M6 doctrine — an empty advertisement means

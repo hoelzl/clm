@@ -65,6 +65,7 @@ from clm.slides.doc_identity import (
     DeckBaseline,
     MemberBaseline,
     baseline_from_deck,
+    body_reconciliation_available,
     content_fingerprint,
     pre_fork_fingerprint,
     shared_pair_diverged,
@@ -128,12 +129,16 @@ def _cold_detail(member: Member, base_text: str) -> str:
             and member.en is not None
             and shared_pair_diverged(member.de, member.en)
         ):
+            body_escape = body_reconciliation_available(member.de, member.en)
             repair = (
                 "mint a slide_id on both halves so the pair can be answered, "
                 "or align the cells by hand"
                 if member.key.scheme == "pos"
-                else "align the cells by hand (when only the bodies differ, a "
-                "body answer naming the stale side works too)"
+                else (
+                    "answer with a body naming the stale side, or align the cells by hand"
+                    if body_escape
+                    else "align the cells by hand"
+                )
             )
             return (
                 f"{base_text}, and the halves of this shared member diverge "

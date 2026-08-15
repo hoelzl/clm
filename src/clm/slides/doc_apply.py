@@ -48,6 +48,7 @@ from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, MemberKey, SideCell
 from clm.slides.doc_identity import (
     DeckBaseline,
+    body_reconciliation_available,
     content_fingerprint,
     iter_with_groups,
     member_group_token,
@@ -211,7 +212,7 @@ def item_answers(item: DiffItem) -> tuple[str, ...]:
         and shared_pair_diverged(member.de, member.en)
     ):
         answers = tuple(a for a in answers if a != "confirm")
-        if member.de.body.rstrip("\n") == member.en.body.rstrip("\n"):
+        if not body_reconciliation_available(member.de, member.en):
             answers = tuple(a for a in answers if a != "body")
     if item.action == "verify_cold" and not item.key.startswith("id:"):
         return tuple(a for a in answers if a != "body")
@@ -1699,17 +1700,17 @@ def _reject_divergent_shared(de_cell: SideCell, en_cell: SideCell) -> None:
     separator counts — align-by-hand)."""
     if not shared_pair_diverged(de_cell, en_cell):
         return
-    if de_cell.body.rstrip("\n") != en_cell.body.rstrip("\n"):
+    if body_reconciliation_available(de_cell, en_cell):
         raise _ItemError(
             "the sides of this shared member diverge — a shared member "
             "records as byte-identical twins; answer with a body (naming "
             "the stale side) or align the cells by hand, then re-run report"
         )
     raise _ItemError(
-        "the sides of this shared member diverge outside the body lines "
-        "(cell header — tag order, owner, kind — or trailing separators) — "
-        "a body answer rewrites only body lines and cannot fix those; "
-        "align the cells by hand, then re-run report"
+        "the sides of this shared member diverge without a usable body "
+        "answer (cell header — tag order, owner, kind — trailing separators, "
+        "or both bodies are empty/whitespace-only) — a body answer cannot "
+        "reconcile those bytes; align the cells by hand, then re-run report"
     )
 
 

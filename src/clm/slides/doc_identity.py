@@ -96,6 +96,21 @@ def shared_pair_diverged(de_cell: SideCell, en_cell: SideCell) -> bool:
     )
 
 
+def body_reconciliation_available(de_cell: SideCell, en_cell: SideCell) -> bool:
+    """Whether a ``body`` decision can reconcile this pair (Y9).
+
+    The bodies must differ beyond trailing separators (which
+    ``_replace_body`` preserves on the target), and at least one side must
+    contain non-whitespace content (the body validator rejects an empty or
+    whitespace-only answer). Keeping this predicate beside the shared-pair
+    fingerprint makes the report vocabulary, repair detail, and executor
+    message share the exact boundary.
+    """
+    return de_cell.body.rstrip("\n") != en_cell.body.rstrip("\n") and bool(
+        de_cell.body.strip() or en_cell.body.strip()
+    )
+
+
 def pair_signature(cell: SideCell) -> str:
     """The content fingerprint additionally modulo the ``for_slide`` attribute.
 
