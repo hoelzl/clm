@@ -9,6 +9,288 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.26.0] - 2026-08-16
+
+### Added
+
+- **The #681 HTTP-replay test course: record → replay → byte-identical is now
+  covered end-to-end.** A bundled replay course
+  (`tests/test-data/.../module_060_http_replay`, spec
+  `test-spec-http-replay.xml`) requests the three shapes that historically
+  break the transport — an OpenAI-style JSON POST with a bearer token, a
+  chunked `text/event-stream` response, and a redirect carrying an auth
+  header — against a deterministic local stub
+  (`tests/e2e/http_replay_stub.py`). Two e2e gates: the full round trip
+  (record with the stub up, strict-replay a fresh copy with the stub down,
+  `--verify-against` proves byte-identical output) and a committed-cassette
+  replay (no server, no recording — the committed traces alone carry the
+  build). The re-record ritual is one command per side and documented in the
+  test module.
+
+- **`scripts/curate_test_course.py` + `scripts/test_course_manifest.json` —
+  the #682 public-corpus regeneration path.** Manifest-driven selection over
+  the course repos, deterministic structure-preserving sanitization (headers,
+  ids, tags and byte-equality relations preserved; prose replaced per
+  language), synthetic decks for the refusal shapes the live corpora no
+  longer carry, and a per-deck parity verifier (member keys,
+  langness/layout/kind/role, observations, refusal codes). The staged corpus
+  is reviewed by the maintainer before publication; CLM's gates retarget to
+  the published repo in a follow-up.
+
+- **CI-runnable pinned public corpus gates (#682).** The new
+  [ClmTestCourse](https://github.com/hoelzl/ClmTestCourse) repo (curated and
+  sanitized from the course repos, CC BY-NC-SA 4.0) is fetched at a pinned
+  commit by `scripts/fetch_test_corpus.py` and asserted on by
+  `tests/slides/test_public_corpus.py` — exact numbers, not ceilings: pair
+  population, the full refusal-code set, parse observations, `project ∘
+  parse` byte-identity, and the self-diff noise floor. CI runs it in the
+  integration suite; the private full-corpus run stays available locally via
+  `CLM_SYNC_CORPUS_DIR`. Course specs in the corpus make every spec-driven
+  surface exercisable against it.
+
+- **Re-layering prerequisites (#801, remediation Phase 7 / D11) — the gate on
+  the #802 re-layering is in place.** Four pieces: a golden double-build
+  characterization suite (`tests/e2e/test_e2e_golden_build.py` — the rich and
+  the minimal reference courses each built twice from scratch and byte-compared
+  via `--snapshot`/`--verify-against`; acceptance met with two consecutive
+  green runs on unchanged code); executable layer-boundary contracts
+  (`tests/test_architecture_contracts.py` — the complete 50-edge inventory (40 files)
+  of today's layering violations over the documented layer stack as a
+  shrink-only ratchet, plus pins on the
+  `Backend` surface and the worker payload schemas); real unmocked
+  build-pipeline tests in the fast suite
+  (`tests/build/test_pipeline_unmocked.py` — a data-only course through the
+  real stages and a PlantUML job round-tripping a real queue on a temp DB);
+  and per-module coverage floors on everything Phase 8 moves
+  (`scripts/check_coverage_floor.py`, checked in CI's unit job). Remediation
+  Phases 4–8 now have tracking issues (#798–#802).
+
+- **Layer contracts enforced (Phase 8 step S6 = A11, refs #802)**:
+  `import-linter` now runs in CI's lint job and as a pre-commit hook
+  (`uv run lint-imports`), enforcing the four-layer architecture — core below
+  infrastructure below workers, and no constrained layer may import the CLI or
+  extension packages (config in `pyproject.toml` `[tool.importlinter]`). The
+  Phase 7 violation-inventory ratchet reached zero with S5 and is replaced by
+  these contracts; the string-import dodge guard and the Backend/payload
+  schema pins remain in `tests/test_architecture_contracts.py`.
+
+### Changed
+
+- Rewrote `docs/developer-guide/architecture.md` to describe the architecture
+  that actually exists after the #802 re-layering: the enforced
+  `core ← infrastructure ← workers` stack with the CLI and extension packages
+  as unconstrained consumers on top, the contract seam in `clm.core`, the
+  import-linter enforcement story, honest build-orchestration attribution,
+  the WAL/network journal-mode policy, and a "Known Deviations and Pending
+  Work" list for the remaining #802 items. The previous revision described a
+  fictional layering (adversarial-review finding A10).
+
+- **BREAKING (install-time)**: `docker`, `fastapi`, `uvicorn`, and `watchdog`
+  are no longer core dependencies (#802 A12) — a bare install covers
+  Direct-mode builds only. Docker worker mode needs the new `[docker]` extra
+  (SDK + host-side Worker API server), `clm build --watch` the new `[watch]`
+  extra, and the `[web]` / `[recordings]` extras now carry their own server
+  stacks. Every affected entry point fails fast with a message naming the
+  missing extra; `[all]` includes the new extras. `DummyBackend` moved out of
+  the shipped package into `tests/`. See `clm info migration`.
+
+- **Internal re-layering (Phase 8 step A2, refs #802)**: `clm.cli.build_data_classes`
+  and `clm.cli.error_categorizer` moved to `clm.infrastructure.build_data_classes` and
+  `clm.infrastructure.error_categorizer`; `strip_ansi` moved from `clm.cli.text_utils`
+  to `clm.infrastructure.utils.text_utils`. The infrastructure layer no longer imports
+  from the CLI — backends type their reporter against the new structural
+  `BuildReporterProtocol` instead of the CLI's `BuildReporter`. Import paths only; no
+  CLI behavior change.
+
+- Extracted the build orchestration out of the `clm build` Click command into
+  a new `clm.build` package (#802/A4): `run_build(BuildConfig)` is the
+  programmatic equivalent of `clm build` — callable by MCP tools, the web
+  studio, and tests without importing any CLI module. The reporter, output
+  formatters, stray-file sweep, and git-dir mover moved from `clm.cli` to
+  `clm.build`; the CLI command is now a thin adapter (parsing, `.env`
+  loading, signals, logging setup, exit-code policy, watch runner).
+  `clm.build` joins the import-linter layer contracts above `clm.workers`.
+  CLI behavior is unchanged.
+
+- The `clm harvest autopilot` merge/propagation flow moved out of the CLI into
+  `clm.voiceover.autopilot`, and the `--transcript`/`--alignment` override
+  loaders into `clm.voiceover.overrides` (Phase 8 A5 of #802). The
+  cross-module private imports are gone: `langfuse_configured`
+  (`clm.infrastructure.llm.client`) and `decode_alignment`
+  (`clm.voiceover.cache`) are now public, and the MCP harvest tools no longer
+  import a CLI command's private helpers. CLI behavior is unchanged.
+
+- **Internal re-layering (Phase 8 step A6, refs #802)**: the course-domain path
+  vocabulary (`Lang`/`Format`/`Kind`, `OutputSpec`, `output_specs()`,
+  `output_path_for()`, the skip/ignore rules, slide file-family detection, image
+  dir constants and prog-lang/extension mapping) moved from
+  `clm.infrastructure.utils.path_utils` to `clm.core.utils.path_utils`. The
+  infrastructure module keeps only the filesystem helpers (`find_project_root`,
+  `atomic_write_all`, `atomic_write_bytes`). Import paths only; no CLI behavior
+  change.
+
+- **Config unification close-out (A7 of #802).** The `[tool.clm]` pyproject
+  table now has a single shared reader (`clm.core.utils.pyproject_settings`),
+  and `clm config show` / `clm config locate` display the authoring
+  sidecar-layout default with its source (env / pyproject / unset) alongside
+  the LLM cache dir; `config show` also gained `[Authoring]` and `[Git]`
+  sections and an `authoring` block in `--json`. New config-file settings,
+  each folding under its existing env var: `[external_tools] mitmdump`
+  (`CLM_MITMDUMP`; also stripped from repo-local configs like the other
+  executable paths), `[jupyter] cell_timeout_seconds` /
+  `replay_cell_timeout_seconds` (`CLM_CELL_TIMEOUT_SECONDS` /
+  `CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS`; the host now injects the resolved
+  values into **both** Direct and Docker notebook workers — Docker workers
+  previously never saw them), and `[git] token_auth` (`CLM_GIT_TOKEN_AUTH`).
+  The three-channel configuration model is documented in
+  `docs/user-guide/configuration.md` ("How the pieces fit together").
+
+- **One env name and one default for the jobs-DB path** (#802 A8). Direct
+  workers now receive the jobs database as `CLM_JOBS_DB_PATH` — the same
+  variable the host CLI resolves for `--jobs-db-path` — instead of a bare
+  `DB_PATH`, and the worker-side container default `/db/jobs.db` is gone: a
+  worker launched in SQLite mode without `CLM_JOBS_DB_PATH` refuses to start
+  instead of silently creating and polling an empty queue. The notebook
+  worker's cache path was renamed the same way (`CACHE_DB_PATH` →
+  `CLM_CACHE_DB_PATH`). Only hand-launched `python -m clm.workers.*`
+  invocations are affected; clm-managed workers get the value injected.
+  `clm workers reap` still recognizes the legacy `DB_PATH` spelling on
+  surviving workers launched by an older clm.
+
+- **Internal**: removed every cross-module underscore-private import (#802
+  Phase 8 A9). Shared seams now have public names in their defining modules —
+  `build_client` (LLM client factory), `summaries_by_hash` (export context),
+  `atomic_write_text` (cassette writes), `git_toplevel`,
+  `group_paths_into_units`, `twin_ids_for`, `lines_sans_id`, `is_shared_cell`,
+  `apply_slide_ids`, `format_exit_failure`, `build_course`, and the
+  `validate` command helpers. The duplicated cell-boundary predicate and
+  workshop-range membership check each collapsed onto their canonical copy.
+  A new architecture-contract test fails on any future
+  `from clm.x import _name` import, so the count stays at zero. No
+  user-facing behavior change.
+
+- **Internal re-layering (Phase 8 step S1 of the A1/A3 plan, refs #802)**: shared
+  vocabulary modules descended to their honest layer — prog-lang tables and
+  `comment_token_for_path` to `clm.core.utils.prog_lang_utils`, slide tags /
+  workshop scope / sidecar layout / deck markers / voiceover companion paths /
+  HTTP-replay trace to `clm.core.*`, the JupyterLite manifest helpers (and the
+  `jupyterlite-core` version pin) to `clm.core.utils.jupyterlite_manifest`,
+  diagram-tool locators to `clm.infrastructure.utils.diagram_tools`, and the C++
+  code analysis/emission pair to `clm.workers.notebook`. Import paths only; no
+  CLI behavior change.
+
+- **Internal re-layering (Phase 8 step S2 of the A1/A3 plan, refs #802)**: the
+  build contract seam descended from infrastructure into core — the `Operation`
+  hierarchy (`clm.core.operation`), the abstract `Backend` (`clm.core.backend`),
+  the worker payload/messaging package (`clm.core.messaging`, schemas
+  unchanged — payloads cross the worker boundary as JSON), `File`, the
+  copy-data classes, the build reporting data classes
+  (`clm.core.build_data_classes`) and the opt-in build profiler
+  (`clm.core.build_profiling`). `from clm.infrastructure import Backend,
+  Operation` keeps working via the lazy compatibility exports. Import paths
+  only; no CLI behavior change.
+
+- **Internal re-layering (Phase 8 step S3 of the A1/A3 plan, refs #802)**: the
+  HTTP-replay cassette staging maintenance left `Course` — the pre-build orphan
+  sweep and post-build mitmproxy merge are now functions in
+  `clm.infrastructure.http_replay_mitm.cassette_staging`, fed by the new public
+  `Course.http_replay_canonical_paths()`; the `http_replay_cassette` module
+  moved from `clm.workers.notebook` to `clm.infrastructure.http_replay_mitm`.
+  Sweeping is now the entry points' job (`clm build`'s pre-stage hook, watch
+  mode's `FileEventHandler`) instead of a `Course.process_*` side effect. No
+  CLI behavior change.
+
+- **Internal re-layering (Phase 8 step S4 of the A1/A3 plan, refs #802)**: the
+  effective worker-image identity registry moved to `clm.core.worker_identity`;
+  `clm.infrastructure.workers.image_identity` keeps all fingerprinting, records
+  identities into the core registry, and registers the singleton-config
+  resolver as the registry's fallback provider (eagerly at its own import and
+  lazily via `clm.infrastructure.__init__`). Payload builders read the registry
+  through core only. Cache-key behavior unchanged.
+
+- **Internal re-layering (Phase 8 step S5 of the A1/A3 plan, refs #802)**: the
+  slide-text model descended into a new `clm.core.slide_text` package —
+  `slide_parser` (from `clm.notebooks`), `raw_cells`, `anchor_primitives`,
+  `pairing` (from `clm.slides`), and the payload-time voiceover merge
+  (`voiceover_merge`, extracted from `clm.slides.voiceover_tools` with its
+  placement helpers made public). The authoring tools and the sync engine
+  import the shared model from core. **This empties the layer-violation
+  ratchet: the documented four-layer architecture now exists in the import
+  graph.** Import paths only; no CLI behavior change.
+
+### Removed
+
+- **`CLM_MAX_WORKER_STARTUP_CONCURRENCY` removed** (hard cut, A7 of #802). It
+  duplicated the existing `[worker_management] startup_parallel` config field
+  with a divergent default (10 vs the documented 5). Use the config field or
+  `CLM_WORKER_MANAGEMENT__STARTUP_PARALLEL`; see the removed → replacement
+  table in `clm info migration`.
+
+### Fixed
+
+- **`clm course migrate-generated-images` no longer enters `.claude/`.** The
+  agent-state directory can hold linked git worktrees whose `slides/` copies
+  belong to other sessions' checkouts; the root-scanning migration walked into
+  them and moved their files (found on repos carrying `.claude/worktrees/`).
+  Also fixed: `--dry-run` counted a render once per diagram *source*, so a
+  `.pu`/`.drawio` pair sharing one stem over-reported the move count relative
+  to the real run.
+
+- Test suite: pytest's live-log handler no longer destroys Click `CliRunner`
+  output capture. Emitting a log record inside `CliRunner.invoke()` used to
+  rebind `sys.stdout`/`sys.stderr` to pytest's capture objects for the rest of
+  the invocation (the handler suspends *and resumes* global capture around every
+  record), so every CLI write after that record went missing from
+  `result.output`. That failed six tests across the 2026-07-31 and 2026-08-08
+  nightlies and was latent in all ~90 `CliRunner` modules. Live logging is now
+  also skipped on xdist workers, where execnet swallows it anyway. Root-cause
+  analysis: `docs/claude/design/test-flakiness-root-causes.md` (#821).
+- `setup_logging()` retires only the root-logger handlers it installed itself,
+  instead of clearing and closing every handler on the root logger. The old
+  behaviour tore down (and closed) handlers belonging to an embedding
+  application — including pytest's, which is what made the capture bug above
+  look like a random 1-in-5 flake rather than a reproducible failure.
+- E2E worker-lifecycle tests join the `serial("workerpool")` group, honour
+  `CLM_E2E_TIMEOUT` instead of a hardcoded 120-second budget, and start 2
+  notebook workers rather than 8 — removing the oversubscription that produced
+  `JobsPendingTimeoutError` on a 4-core CI runner.
+
+- Fixed a data-loss hole in `clm slides sync` (adversarial review 2026-07-24, finding Y1): when a shared member's recorded baseline already carried a cross-side byte divergence, a one-sided removal was emitted as a mechanical `mirror_remove`, so `apply` could delete survivor content that never existed on the removed side. Both removal paths (id-keyed and positional pool) now frame a `remove_vs_edit` decision instead; `mirror_remove` still fires mechanically when the baseline's halves agreed.
+
+- Fixed an identity-corruption hole in `clm slides sync` (adversarial review 2026-07-24, finding Y5): `stamp_twin_id` was emitted mechanically for any positionally adopted id-less twin, even when the ledger had never recorded that pairing — a swapped pool order could stamp an id onto the wrong cell's text, and P2 makes a stamped id the member's permanent identity. The stamp now executes only when the pairing is ledger-known (the resolved ledger entry agrees with the stamped side's twin, by content fingerprint, or by pre-fork fingerprint — content modulo exactly the `lang` attribute — for the fork shape). A purely positional, never-recorded adoption frames a single `verify_translation` row with every other row for the member suppressed that pass, so no mechanical row (`record_fork`, `mirror_tags`, order mirrors) can execute or bank against a pool-order guess; confirming banks the pairing so the next report stamps mechanically (when the tag sets diverge cross-side, a `conflict_tags` row frames alongside and must be answered first). The text report now prints gated `id_stamp_pending_twin` observations, and the all-cold `record` hint names pending id-stamp pairings as part of the review it calls for.
+
+- Fixed a data-loss hole in `clm slides sync` (adversarial review 2026-07-24, finding Y6): when the recorded baseline's deck or companion preambles already differed between the languages, a one-sided preamble edit was emitted as a mechanical `propagate_preamble`, so `apply` replaced the entire twin preamble verbatim without a decision (a trivial DE kernel-metadata edit wiped the EN preamble). The one-side-moved branch now frames a `pending_divergence` decision instead, matching the guard shared cells already had; `propagate_preamble` still fires mechanically when the baseline's preambles agreed. Answering such a preamble frame with `de`/`en` now also works end to end — it previously routed to the cell propagate and was rejected ("carries no member"), and its recording fell through to the member table instead of banking the preamble scope.
+
+- Fixed a silent data-loss path in `clm slides sync` (adversarial review 2026-07-24, finding Y7): renaming an id-keyed shared cell AND editing it on one half (a hand rename bypassing `clm slides rename-id`) defeated both suspicion checks and emitted mechanical `copy_new_shared` + `mirror_remove`, so a decision-free `apply` deleted the twin half's untouched cell — and the next report was clean, banking the loss invisibly. The removal now frames `remove_vs_edit` when the removed side holds an unpaired cell that could be the renamed (or id-stripped) member, and the copy side frames `stamp_vs_new` via a new per-half gap check (`_id_half_gap`) for id-keyed base cells, with a group-unscoped fallback while a one-sided anchor change is in flight. Genuine one-sided removals and genuinely new id'd cells keep their mechanical rows when no estranged or mid-transition cell of the pool is present.
+
+- Fixed a misleading frame in `clm slides sync` (adversarial review 2026-07-24, finding Y8): when a pending-twin pool cell's missing side gained exactly one new cell, the differ claimed it as the landed twin with no content affinity, and the resulting frame's `de`/`en` answer overwrote the new cell verbatim — even when it was a genuinely new, unrelated cell. The claim now requires body similarity to the recorded cell (ratio ≥ 0.9 over bodies of ≥ 10 stripped characters, budgeted per report — a near-identical boilerplate cell can still read as the twin, a tiny landed twin reads as unrelated and is aligned by hand) AND every landed-twin claim — byte-identical or body-similar — binds only at the slot's own pool position: a matching cell at a different position frames `ambiguous_alignment` with a "landed at a different pool position" reading (a cross-position claim mis-paired the pool's recording and livelocked the ledger) — a slide renamed in the same pass reads as cross-position to the gate, so the frame names the rename instead (no action needed — the cell's own row is held back for the pass, and the claim binds once the rename is recorded), as does a lone cell without affinity (mint a `slide_id` on it or remove it, then re-report — the pending twin then copies mechanically). The cell's own row is suppressed for the pass when pool ordinals make it share a framed slot's handle (or while a slide rename is in flight, when it renders the slot's handle under the new anchor) — the frame names whose — and when the lone cell is claimed as another pending slot's landed twin the earlier slot's frame says so instead of contradicting that claim.
+
+- Hardened `clm slides sync` trust paths (adversarial review 2026-07-24, finding Y9): `record` now warns when it blesses a deck whose diff still carries pending *framed* items (the structural verify gate cannot see the localized-pair frames — `verify_cold`, `verify_translation` — so they were previously banked wholesale and silently; the warning names each item on stderr and in a `pending_framed` JSON list; recording still proceeds), and `confirm` on `verify_cold`/`verify_translation` is now rejected when the member is shared (no `lang` attribute) and its sides diverge byte-wise — a shared member records as byte-identical twins, so confirming diverged bytes banked the divergence as verified (observed on separated voiceover companions). Localized pairs may still diverge, and `j2` header members are exempt (the `header_de`/`header_en` macros legitimately differ per half). The reconciliation for a rejected confirm: answer with a `body` naming the stale `side` when the bodies differ and at least one provides non-whitespace content, then confirm; when no usable body answer exists (tag order, owner, kind, trailing separator counts, or both bodies empty/whitespace-only), align by hand — the report advertises no answer for those shapes (`resolution: manual`, repair named in the item's detail).
+
+### Security
+
+- Redact LLM and Auphonic API keys and the OBS WebSocket password from `clm config show --json` unless the new `--reveal` flag is passed, and atomically persist new or refreshed Google OAuth tokens with mode `0600` while repairing permissions on existing caches where the platform enforces POSIX permissions.
+
+- **Fixed an arbitrary-delete vulnerability in `clm course sync-includes --remove`.** A hostile or corrupted `.clm-include` ledger entry (absolute path, `..` traversal — with either slash style — or a path through a symlinked directory) could make `--remove` delete files and directory trees outside the topic directory, because the recorded `as_path` was joined onto the topic directory without validation. Ledger entries are now validated with the canonical include-path rules shared with spec parsing, plus a symlink-correct containment check under the resolved topic directory; the whole removal plan is validated before the first deletion, an invalid entry refuses the entire run (exit 1, outside paths untouched, ledger preserved), and legitimate materializations — including symlink-mode entries — are removed exactly as before. (Adversarial review 2026-07-24, finding S4; tracked in #798.)
+
+---
+_security: fixed
+---
+
+MCP tool arguments are model-generated and therefore only semi-trusted:
+a prompt-injected transcript or slide body can steer the model into
+passing hostile paths. Every path-accepting MCP handler now resolves
+its path arguments under the configured `data_dir` (symlink-correct
+resolve-then-contain: the resolved target must equal `data_dir` or sit
+below it; absolute paths are allowed only when they resolve inside).
+This covers read tools (whose output reaches the model), mutating tools
+(normalize/extract/inline), the harvest family (`_resolve_under`), the
+`cache_root`/`transcript`/`alignment` overrides, and the
+`course_authoring_rules` slug. Refusals return the handlers' uniform
+`{"error": ...}` JSON naming the `data_dir` boundary. The CLI remains
+unrestricted (trusted operator input) and is the documented escape
+hatch for out-of-tree files.
+
 ## [1.25.0] - 2026-08-05
 
 ### Added
