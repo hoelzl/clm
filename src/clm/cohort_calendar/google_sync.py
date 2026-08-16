@@ -29,9 +29,12 @@ planning half — imports and tests without the ``[gcal]`` extra installed.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import importlib
 import json
 import logging
+import os
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -228,14 +231,60 @@ def _cache_oauth_credentials(creds: Any, token_cache: Path) -> None:
             suffix=".tmp",
             delete=False,
         ) as temporary:
-            temporary.write(creds.to_json())
             temporary_path = Path(temporary.name)
+            temporary.write(creds.to_json())
         temporary_path.chmod(0o600)
         temporary_path.replace(token_cache)
-        token_cache.chmod(0o600)
-    finally:
+    except Exception:
         if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                logger.warning("cannot remove temporary OAuth token cache: %s", cleanup_error)
+        raise
+
+
+def _load_cached_oauth_credentials(oauth2_credentials: Any, token_cache: Path) -> Any | None:
+    """Load and repair a regular cache through an identity-checked descriptor.
+
+    The no-follow and identity contract is proved by
+    ``test_oauth_token_swap_during_open_is_rejected_without_touching_target``.
+    """
+    try:
+        expected = os.lstat(token_cache)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(expected.st_mode):
+        raise GoogleSyncError(f"refusing OAuth token cache symbolic link: {token_cache}")
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(token_cache, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise GoogleSyncError(
+                f"refusing OAuth token cache symbolic link: {token_cache}"
+            ) from exc
+        raise GoogleSyncError(f"cannot open OAuth token cache {token_cache}: {exc}") from exc
+
+    try:
+        with os.fdopen(descriptor, encoding="utf-8") as token_file:
+            actual = os.fstat(token_file.fileno())
+            if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+                raise GoogleSyncError(f"OAuth token cache changed while opening: {token_cache}")
+            if not stat.S_ISREG(actual.st_mode):
+                raise GoogleSyncError(f"OAuth token cache is not a regular file: {token_cache}")
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(token_file.fileno(), 0o600)
+            data = json.load(token_file)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+    try:
+        return oauth2_credentials.Credentials.from_authorized_user_info(data, SCOPES)
+    except ValueError:
+        return None
 
 
 def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
@@ -248,17 +297,7 @@ def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
     flow_module = _import_gcal("google_auth_oauthlib.flow")
     transport = _import_gcal("google.auth.transport.requests")
 
-    creds = None
-    if token_cache.is_symlink():
-        raise GoogleSyncError(f"refusing OAuth token cache symbolic link: {token_cache}")
-    if token_cache.exists():
-        token_cache.chmod(0o600)
-        try:
-            creds = oauth2_credentials.Credentials.from_authorized_user_file(
-                str(token_cache), SCOPES
-            )
-        except ValueError:
-            creds = None  # corrupt/stale cache — fall through to the consent flow
+    creds = _load_cached_oauth_credentials(oauth2_credentials, token_cache)
     if creds is not None and creds.expired and creds.refresh_token:
         try:
             creds.refresh(transport.Request())
