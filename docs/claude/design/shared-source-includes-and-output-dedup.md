@@ -276,7 +276,11 @@ clm sync-includes [SPEC] [--mode=copy|symlink|hardlink] [--remove]
   require admin in some setups.
 - `hardlink`: file-by-file hardlinks. Cross-filesystem-fragile.
 - `--remove`: delete previously-synced copies (uses the `.clm-include`
-  marker).
+  marker). The ledger is validated against the canonical include-path
+  rules before anything is deleted (S4, #798): an entry that is absolute,
+  contains `..`, names the topic directory itself, or resolves through a
+  symlinked directory outside the topic refuses the whole run before the
+  first deletion — outside paths are never touched.
 
 Default is `copy` because that is the lowest-friction option for a
 student cloning the repo and not running CLM. The user can opt into
