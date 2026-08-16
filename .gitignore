@@ -294,3 +294,6 @@ tests/test-data/_volatile_specs/
 clm-http-replay-traces*/
 clm_telemetry.db
 .clm-test-corpus/
+
+# Agent scratch directory
+.scratch/
