@@ -3101,7 +3101,13 @@ Manage CLM configuration files.
 |------------|-------------|
 | `config init` | Create an example configuration file |
 | `config locate` | Show configuration file locations |
-| `config show` | Show current configuration values (effective DB paths + config sections). Add `--json` for machine-readable output. |
+| `config show` | Show current configuration values (effective DB paths + config sections). Add `--json` for machine-readable output; secret values are redacted by default. |
+
+`clm config show --json` replaces the LLM API key, Auphonic API key, and OBS
+WebSocket password with `**********`, so its output is safe to paste into bug
+reports and agent transcripts. `clm config show --json --reveal` explicitly
+includes those values; `--reveal` requires `--json` and its output must be
+handled as sensitive.
 
 **A project config may not set an executable path (CLM {version}).** Project
 config (`clm.toml` / `.clm/config.toml`) is found by walking up from the working

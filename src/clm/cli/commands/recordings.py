@@ -837,7 +837,7 @@ def _get_obs_config() -> tuple[str, int, str]:
         from clm.infrastructure.config import get_config
 
         cfg = get_config().recordings
-        return cfg.obs_host, cfg.obs_port, cfg.obs_password
+        return cfg.obs_host, cfg.obs_port, cfg.obs_password.get_secret_value()
     except Exception:
         return "localhost", 4455, ""
 
@@ -874,7 +874,7 @@ def _get_auphonic_config() -> tuple[str, str]:
         from clm.infrastructure.config import get_config
 
         cfg = get_config().recordings.auphonic
-        return cfg.api_key, cfg.preset
+        return cfg.api_key.get_secret_value(), cfg.preset
     except Exception:
         return "", ""
 
@@ -1648,13 +1648,14 @@ def _build_auphonic_client():
     from clm.recordings.workflow.backends.auphonic_client import AuphonicClient
 
     config = _build_recordings_config().auphonic
-    if not config.api_key:
+    api_key = config.api_key.get_secret_value()
+    if not api_key:
         raise click.ClickException(
             "recordings.auphonic.api_key is not set. Configure it via TOML "
             "or CLM_RECORDINGS__AUPHONIC__API_KEY before running auphonic commands."
         )
     return AuphonicClient(
-        api_key=config.api_key,
+        api_key=api_key,
         base_url=config.base_url,
         chunk_size=config.upload_chunk_size,
     )

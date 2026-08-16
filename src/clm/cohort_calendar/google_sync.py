@@ -29,9 +29,13 @@ planning half — imports and tests without the ``[gcal]`` extra installed.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import importlib
 import json
 import logging
+import os
+import stat
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -209,32 +213,104 @@ def load_credentials(credentials_path: Path, *, token_cache: Path | None = None)
     )
 
 
+def _cache_oauth_credentials(creds: Any, token_cache: Path) -> None:
+    """Atomically persist OAuth credentials with private POSIX permissions.
+
+    Security contract: the cache replaces a final-component symlink rather than
+    following it. Proved by
+    ``test_oauth_token_cache_replaces_symlink_not_target``.
+    """
+    token_cache.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=token_cache.parent,
+            prefix=f".{token_cache.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(creds.to_json())
+        temporary_path.chmod(0o600)
+        temporary_path.replace(token_cache)
+    except Exception:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                logger.warning("cannot remove temporary OAuth token cache: %s", cleanup_error)
+        raise
+
+
+def _load_cached_oauth_credentials(oauth2_credentials: Any, token_cache: Path) -> Any | None:
+    """Load and repair a regular cache through an identity-checked descriptor.
+
+    The no-follow and identity contract is proved by
+    ``test_oauth_token_swap_during_open_is_rejected_without_touching_target``.
+    """
+    try:
+        expected = os.lstat(token_cache)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(expected.st_mode):
+        raise GoogleSyncError(f"refusing OAuth token cache symbolic link: {token_cache}")
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(token_cache, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise GoogleSyncError(
+                f"refusing OAuth token cache symbolic link: {token_cache}"
+            ) from exc
+        raise GoogleSyncError(f"cannot open OAuth token cache {token_cache}: {exc}") from exc
+
+    try:
+        with os.fdopen(descriptor, encoding="utf-8") as token_file:
+            actual = os.fstat(token_file.fileno())
+            if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+                raise GoogleSyncError(f"OAuth token cache changed while opening: {token_cache}")
+            if not stat.S_ISREG(actual.st_mode):
+                raise GoogleSyncError(f"OAuth token cache is not a regular file: {token_cache}")
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(token_file.fileno(), 0o600)
+            data = json.load(token_file)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+    try:
+        return oauth2_credentials.Credentials.from_authorized_user_info(data, SCOPES)
+    except ValueError:
+        return None
+
+
 def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
-    """Cached-token OAuth flow: refresh if possible, else run the browser consent."""
+    """Cached-token OAuth flow: refresh if possible, else run browser consent.
+
+    Existing cache symlinks are rejected rather than followed, as proved by
+    ``test_existing_oauth_token_symlink_is_rejected_without_touching_target``.
+    """
     oauth2_credentials = _import_gcal("google.oauth2.credentials")
     flow_module = _import_gcal("google_auth_oauthlib.flow")
     transport = _import_gcal("google.auth.transport.requests")
 
-    creds = None
-    if token_cache.exists():
-        try:
-            creds = oauth2_credentials.Credentials.from_authorized_user_file(
-                str(token_cache), SCOPES
-            )
-        except ValueError:
-            creds = None  # corrupt/stale cache — fall through to the consent flow
+    creds = _load_cached_oauth_credentials(oauth2_credentials, token_cache)
     if creds is not None and creds.expired and creds.refresh_token:
         try:
             creds.refresh(transport.Request())
         except Exception as exc:
             logger.info("token refresh failed (%s); re-running the consent flow.", exc)
             creds = None
+        else:
+            _cache_oauth_credentials(creds, token_cache)
     if creds is None or not creds.valid:
         flow = flow_module.InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
         logger.info("Opening a browser for Google OAuth consent ...")
         creds = flow.run_local_server(port=0)
-        token_cache.parent.mkdir(parents=True, exist_ok=True)
-        token_cache.write_text(creds.to_json(), encoding="utf-8")
+        _cache_oauth_credentials(creds, token_cache)
         logger.info("OAuth token cached at %s", token_cache)
     return creds
 

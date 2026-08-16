@@ -452,7 +452,7 @@ async def _course_context_summaries(
             model=model or llm_config.model,
             temperature=llm_config.temperature,
             api_base=llm_config.api_base or None,
-            api_key=llm_config.api_key or None,
+            api_key=llm_config.api_key.get_secret_value() or None,
             max_concurrent=llm_config.max_concurrent,
             cache=cache,
             no_cache=no_cache,

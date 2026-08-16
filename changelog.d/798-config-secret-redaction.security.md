@@ -1,0 +1,1 @@
+- Redact LLM and Auphonic API keys and the OBS WebSocket password from `clm config show --json` unless the new `--reveal` flag is passed, and atomically persist new or refreshed Google OAuth tokens with mode `0600` while repairing permissions on existing caches where the platform enforces POSIX permissions.

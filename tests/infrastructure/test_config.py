@@ -5,9 +5,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from clm.infrastructure.config import (
+    AuphonicConfig,
     ClmConfig,
+    LLMConfig,
+    RecordingsConfig,
     create_example_config,
     find_config_files,
     get_config,
@@ -92,6 +96,48 @@ class TestConfigDefaults:
         config = ClmConfig()
         assert config.workers.worker_type == ""
         assert config.workers.worker_id == ""
+
+    def test_secret_fields_use_secret_str(self):
+        llm = LLMConfig(api_key="llm-secret")
+        auphonic = AuphonicConfig(api_key="auphonic-secret")
+        recordings = RecordingsConfig(obs_password="obs-secret")
+
+        assert isinstance(llm.api_key, SecretStr)
+        assert isinstance(auphonic.api_key, SecretStr)
+        assert isinstance(recordings.obs_password, SecretStr)
+        assert llm.api_key.get_secret_value() == "llm-secret"
+        assert auphonic.api_key.get_secret_value() == "auphonic-secret"
+        assert recordings.obs_password.get_secret_value() == "obs-secret"
+
+    def test_secret_fields_validate_string_assignment(self):
+        llm = LLMConfig()
+        auphonic = AuphonicConfig()
+        recordings = RecordingsConfig()
+
+        llm.api_key = "updated-llm"  # type: ignore[assignment]
+        auphonic.api_key = "updated-auphonic"  # type: ignore[assignment]
+        recordings.obs_password = "updated-obs"  # type: ignore[assignment]
+
+        assert llm.api_key.get_secret_value() == "updated-llm"
+        assert auphonic.api_key.get_secret_value() == "updated-auphonic"
+        assert recordings.obs_password.get_secret_value() == "updated-obs"
+
+    def test_main_config_validates_whole_section_assignment(self):
+        config = ClmConfig()
+
+        config.llm = {"api_key": "assigned-llm"}  # type: ignore[assignment]
+        config.recordings = {  # type: ignore[assignment]
+            "obs_password": "assigned-obs",
+            "auphonic": {"api_key": "assigned-auphonic"},
+        }
+
+        assert config.llm.api_key.get_secret_value() == "assigned-llm"
+        assert config.recordings.auphonic.api_key.get_secret_value() == "assigned-auphonic"
+        assert config.recordings.obs_password.get_secret_value() == "assigned-obs"
+        dumped = config.model_dump(mode="json")
+        assert dumped["llm"]["api_key"] == "**********"
+        assert dumped["recordings"]["auphonic"]["api_key"] == "**********"
+        assert dumped["recordings"]["obs_password"] == "**********"
 
 
 class TestEnvironmentVariables:
