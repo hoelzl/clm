@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3 DONE; Phase 3a: S5+S4 DONE, S8 remaining | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3 DONE; Phase 3a: S5+S4+S8 DONE | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1093,7 +1093,7 @@ migrated to the new decision format.
 
 ---
 
-### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: S5 DONE 2026-07-26; S4 DONE 2026-08-16 (PR #837, merge e448aaaf); S8 remaining
+### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: S5 DONE 2026-07-26; S4 DONE 2026-08-16 (PR #837, merge e448aaaf); S8 DONE 2026-08-16 (PR #840, merge aa570c1c)
 
 **Why it is here.** Pulled out of Phase 4 by the maintainer on 2026-07-26. S5 is
 the same finding class as Phase 0's cassette RCE — content that arrives with a
@@ -1189,13 +1189,26 @@ CLM owns, and secrets stay out of logs and commits.
    unchanged: empty-parent shells stay behind after nested removal;
    any `..` segment is refused (strict, spec-parity) — `a/../pkg` is
    rejected, matching the spec parser.
-2. **S8 — MCP containment.** `src/clm/mcp/tools.py:939-942`: `_resolve_under` is
-   a bare join. Lift the correct implementation from
-   `src/clm/web/studio/service.py:131-141` (resolve-then-parents-membership —
-   symlink-correct and not spoofable by a sibling prefix) and apply it to every
-   mutating handler (`:536`, `:612-614`, `:668`, `:734`, `:777`, `:864-866`,
-   `:924-926`, `:1554`). Apply to read-only handlers too: they hand file contents
-   to a model, which is a prompt-injection exfiltration path.
+2. **S8 — MCP containment.** ▸ **DONE 2026-08-16** (PR #840, merge aa570c1c;
+   refs umbrella #798). The pre-fix `_resolve_under` was a bare join and
+   every handler inlined the same `is_absolute() ? pass : join` — reproduced
+   live: absolute/traversal escapes on read tools (content exfil to the
+   model), mutating tools (normalize rewriting, voiceover companion unlink),
+   the harvest family including `cache_root`/`transcript`/`alignment`
+   overrides, and the `authoring_rules` slug (`specs_dir / "../…"`). Fixed
+   with one contained resolver (`_contained_path`/`_resolve_under`,
+   resolve-then-parents-membership lifted from
+   `web/studio/service.py:131-141` as prescribed) applied to all 21
+   path-accepting handlers; absolute paths stay legal **iff** they resolve
+   inside `data_dir` (`topic_resolve` round-trips them to agents);
+   refusals return the uniform `{"error": …}` JSON naming the boundary; the
+   CLI (trusted operator) is the documented out-of-tree escape hatch. Tests:
+   `tests/mcp/test_path_containment.py`, RED-first (18 RED on the pre-fix
+   overlay; positive pins for absolute-inside/relative/round-trip; 2
+   symlink-escape tests Linux-CI-only). Known pre-existing, deferred:
+   nonexistent-inside/dir-target inputs raise raw exceptions instead of
+   JSON in some handlers (identical pre-fix behavior, FastMCP wraps them as
+   ToolError — severity-Minor polish, not a containment gap).
 3. **S11 — spec-driven writes.** Sanitize `<dir-group><name>` and `<subdir>`
    (`src/clm/core/dir_group.py:75-84,94`) the way section names already are —
    the asymmetry is an oversight, not a design. Validate `<output-target><path>`
