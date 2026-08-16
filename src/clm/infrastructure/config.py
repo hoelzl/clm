@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import platformdirs
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -644,6 +644,8 @@ class WorkersManagementConfig(BaseModel):
 class LLMConfig(BaseModel):
     """LLM configuration for summarization."""
 
+    model_config = ConfigDict(validate_assignment=True, hide_input_in_errors=True)
+
     model: str = Field(
         default="anthropic/claude-sonnet-4-6",
         description="LLM model identifier",
@@ -756,6 +758,8 @@ class AuphonicConfig(BaseModel):
     the TOML file).
     """
 
+    model_config = ConfigDict(validate_assignment=True, hide_input_in_errors=True)
+
     api_key: SecretStr = Field(
         default_factory=lambda: SecretStr(""),
         description="Auphonic API key (Authorization: Bearer <api_key>)",
@@ -815,6 +819,8 @@ class RecordingsConfig(BaseModel):
     Controls OBS output watching, course recording assignment, and
     audio processing pipeline settings.
     """
+
+    model_config = ConfigDict(validate_assignment=True, hide_input_in_errors=True)
 
     root_dir: str = Field(
         default="",
@@ -929,6 +935,7 @@ class ClmConfig(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
         case_sensitive=False,
+        hide_input_in_errors=True,
     )
 
     retention: RetentionConfig = Field(

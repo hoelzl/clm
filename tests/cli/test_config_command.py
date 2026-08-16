@@ -233,6 +233,39 @@ class TestConfigShow:
         assert result.exit_code != 0
         assert "--reveal requires --json" in result.output
 
+    @pytest.mark.parametrize(
+        ("config_text", "env_name"),
+        [
+            ('[llm]\napi_key = ["{secret}"]\n', "CLM_LLM__API_KEY"),
+            (
+                '[recordings.auphonic]\napi_key = ["{secret}"]\n',
+                "CLM_RECORDINGS__AUPHONIC__API_KEY",
+            ),
+            (
+                '[recordings]\nobs_password = ["{secret}"]\n',
+                "CLM_RECORDINGS__OBS_PASSWORD",
+            ),
+        ],
+    )
+    def test_show_config_validation_error_does_not_echo_malformed_secret(
+        self,
+        isolated_config_dirs,
+        monkeypatch: pytest.MonkeyPatch,
+        config_text: str,
+        env_name: str,
+    ):
+        secret = "malformed-s12-secret"
+        project_cfg = isolated_config_dirs["project"]
+        project_cfg.parent.mkdir(parents=True, exist_ok=True)
+        project_cfg.write_text(config_text.format(secret=secret), encoding="utf-8")
+        monkeypatch.delenv(env_name, raising=False)
+
+        result = CliRunner().invoke(cli, ["config", "show", "--json"])
+
+        assert result.exit_code != 0
+        assert secret not in result.output
+        assert secret not in str(result.exception)
+
     def test_show_reports_pyproject_sidecar_layout(
         self, isolated_config_dirs, tmp_path, monkeypatch
     ):

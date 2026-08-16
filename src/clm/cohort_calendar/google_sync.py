@@ -32,6 +32,7 @@ import datetime as dt
 import importlib
 import json
 import logging
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,34 @@ def load_credentials(credentials_path: Path, *, token_cache: Path | None = None)
     )
 
 
+def _cache_oauth_credentials(creds: Any, token_cache: Path) -> None:
+    """Atomically persist OAuth credentials with private POSIX permissions.
+
+    Security contract: the cache replaces a final-component symlink rather than
+    following it. Proved by
+    ``test_oauth_token_cache_replaces_symlink_not_target``.
+    """
+    token_cache.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=token_cache.parent,
+            prefix=f".{token_cache.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(creds.to_json())
+            temporary_path = Path(temporary.name)
+        temporary_path.chmod(0o600)
+        temporary_path.replace(token_cache)
+        token_cache.chmod(0o600)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
     """Cached-token OAuth flow: refresh if possible, else run the browser consent."""
     oauth2_credentials = _import_gcal("google.oauth2.credentials")
@@ -217,6 +246,7 @@ def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
 
     creds = None
     if token_cache.exists():
+        token_cache.chmod(0o600)
         try:
             creds = oauth2_credentials.Credentials.from_authorized_user_file(
                 str(token_cache), SCOPES
@@ -226,6 +256,7 @@ def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
     if creds is not None and creds.expired and creds.refresh_token:
         try:
             creds.refresh(transport.Request())
+            _cache_oauth_credentials(creds, token_cache)
         except Exception as exc:
             logger.info("token refresh failed (%s); re-running the consent flow.", exc)
             creds = None
@@ -233,9 +264,7 @@ def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
         flow = flow_module.InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
         logger.info("Opening a browser for Google OAuth consent ...")
         creds = flow.run_local_server(port=0)
-        token_cache.parent.mkdir(parents=True, exist_ok=True)
-        token_cache.write_text(creds.to_json(), encoding="utf-8")
-        token_cache.chmod(0o600)
+        _cache_oauth_credentials(creds, token_cache)
         logger.info("OAuth token cached at %s", token_cache)
     return creds
 

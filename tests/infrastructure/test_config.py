@@ -109,6 +109,19 @@ class TestConfigDefaults:
         assert auphonic.api_key.get_secret_value() == "auphonic-secret"
         assert recordings.obs_password.get_secret_value() == "obs-secret"
 
+    def test_secret_fields_validate_string_assignment(self):
+        llm = LLMConfig()
+        auphonic = AuphonicConfig()
+        recordings = RecordingsConfig()
+
+        llm.api_key = "updated-llm"  # type: ignore[assignment]
+        auphonic.api_key = "updated-auphonic"  # type: ignore[assignment]
+        recordings.obs_password = "updated-obs"  # type: ignore[assignment]
+
+        assert llm.api_key.get_secret_value() == "updated-llm"
+        assert auphonic.api_key.get_secret_value() == "updated-auphonic"
+        assert recordings.obs_password.get_secret_value() == "updated-obs"
+
 
 class TestEnvironmentVariables:
     """Test environment variable configuration."""

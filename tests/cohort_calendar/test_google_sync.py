@@ -452,6 +452,84 @@ class TestLoadCredentials:
 
         assert result is credentials
         assert token_cache.read_text(encoding="utf-8") == '{"refresh_token": "secret"}'
-        assert chmod_calls == [(token_cache, 0o600)]
+        assert chmod_calls[-1] == (token_cache, 0o600)
         if os.name != "nt":
             assert stat.S_IMODE(token_cache.stat().st_mode) == 0o600
+
+    def test_existing_oauth_token_cache_permissions_are_repaired(self, tmp_path, monkeypatch):
+        token_cache = tmp_path / "token.json"
+        token_cache.write_text('{"refresh_token": "existing"}', encoding="utf-8")
+        credentials = SimpleNamespace(valid=True, expired=False, refresh_token="existing")
+        loader = SimpleNamespace(from_authorized_user_file=lambda *_args, **_kwargs: credentials)
+        modules = {
+            "google.oauth2.credentials": SimpleNamespace(Credentials=loader),
+            "google_auth_oauthlib.flow": SimpleNamespace(InstalledAppFlow=object()),
+            "google.auth.transport.requests": SimpleNamespace(Request=object),
+        }
+        monkeypatch.setattr(gs, "_import_gcal", modules.__getitem__)
+        chmod_calls = []
+        real_chmod = Path.chmod
+
+        def record_chmod(path: Path, mode: int) -> None:
+            chmod_calls.append((path, mode))
+            real_chmod(path, mode)
+
+        monkeypatch.setattr(Path, "chmod", record_chmod)
+
+        result = gs._oauth_user_credentials(tmp_path / "client.json", token_cache)
+
+        assert result is credentials
+        assert chmod_calls == [(token_cache, 0o600)]
+
+    def test_refreshed_oauth_token_is_persisted_privately(self, tmp_path, monkeypatch):
+        token_cache = tmp_path / "token.json"
+        token_cache.write_text('{"access_token": "stale"}', encoding="utf-8")
+
+        class Credentials:
+            valid = False
+            expired = True
+            refresh_token = "refresh"
+
+            def refresh(self, _request) -> None:
+                self.valid = True
+
+            def to_json(self) -> str:
+                return '{"access_token": "fresh"}'
+
+        credentials = Credentials()
+        loader = SimpleNamespace(from_authorized_user_file=lambda *_args, **_kwargs: credentials)
+        modules = {
+            "google.oauth2.credentials": SimpleNamespace(Credentials=loader),
+            "google_auth_oauthlib.flow": SimpleNamespace(InstalledAppFlow=object()),
+            "google.auth.transport.requests": SimpleNamespace(Request=object),
+        }
+        monkeypatch.setattr(gs, "_import_gcal", modules.__getitem__)
+        chmod_calls = []
+        real_chmod = Path.chmod
+
+        def record_chmod(path: Path, mode: int) -> None:
+            chmod_calls.append((path, mode))
+            real_chmod(path, mode)
+
+        monkeypatch.setattr(Path, "chmod", record_chmod)
+
+        result = gs._oauth_user_credentials(tmp_path / "client.json", token_cache)
+
+        assert result is credentials
+        assert token_cache.read_text(encoding="utf-8") == '{"access_token": "fresh"}'
+        assert chmod_calls[-1] == (token_cache, 0o600)
+
+    @pytest.mark.skipif(os.name == "nt", reason="Creating file symlinks needs Windows privileges")
+    def test_oauth_token_cache_replaces_symlink_not_target(self, tmp_path):
+        victim = tmp_path / "victim.json"
+        victim.write_text("bystander", encoding="utf-8")
+        token_cache = tmp_path / "token.json"
+        token_cache.symlink_to(victim)
+        credentials = SimpleNamespace(to_json=lambda: '{"refresh_token": "private"}')
+
+        gs._cache_oauth_credentials(credentials, token_cache)
+
+        assert victim.read_text(encoding="utf-8") == "bystander"
+        assert token_cache.read_text(encoding="utf-8") == '{"refresh_token": "private"}'
+        assert not token_cache.is_symlink()
+        assert stat.S_IMODE(token_cache.stat().st_mode) == 0o600
