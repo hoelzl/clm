@@ -273,12 +273,18 @@ class TestHandleCourseOutline:
 
 @pytest.fixture()
 def real_spec(tmp_path):
-    """The repo's test-spec-1 (absolute), with topics that actually resolve.
+    """A self-contained copy of the repo's test-spec-1 tree (topics resolve).
 
-    data_dir is only used for the summary cache here (spec path is absolute),
-    so a throwaway tmp_path is fine.
+    The spec and its slides tree are copied under tmp_path so that both
+    data_dir and the spec live in the same throwaway course root — the MCP
+    handlers contain every path argument under data_dir (S8), so a spec
+    outside it would now be refused.
     """
-    spec_path = Path("tests/test-data/course-specs/test-spec-1.xml").resolve()
+    import shutil
+
+    src_root = Path("tests/test-data")
+    shutil.copytree(src_root, tmp_path, dirs_exist_ok=True)
+    spec_path = (tmp_path / "course-specs" / "test-spec-1.xml").resolve()
     return tmp_path, spec_path
 
 
