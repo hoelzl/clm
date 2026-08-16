@@ -2968,8 +2968,14 @@ harvest cutover (no aliases — see `clm info migration`).
 | `harvest_cache_list` | List entries in the harvest artifact cache |
 | `harvest_trace_show` | Read a merge-trace log and return entries as JSON |
 
-All tools accept paths relative to the data directory or as absolute paths.
-Most return JSON; `slides_language_view` returns annotated plain text.
+All tools accept paths relative to the data directory or as absolute paths;
+every path argument (including `cache_root`/`transcript`/`alignment`
+overrides and the `authoring_rules` spec argument) is contained under the
+data directory — absolute paths must resolve inside it, and `..` segments or
+symlink traversal are refused with a JSON `{"error": ...}` naming the
+boundary. Use the CLI (trusted operator input) for files outside the data
+directory. Most return JSON; `slides_language_view` returns annotated plain
+text.
 
 ### `clm status`
 

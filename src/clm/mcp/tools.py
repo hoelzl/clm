@@ -56,6 +56,41 @@ from clm.slides.voiceover_tools import inline_voiceover as _inline_voiceover
 logger = logging.getLogger(__name__)
 
 
+class _PathOutsideDataDir(Exception):
+    """A model-supplied path escapes ``data_dir`` (message = the boundary)."""
+
+
+def _contained_path(data_dir: Path, p: str | Path, *, label: str = "path") -> Path:
+    """Resolve *p* under *data_dir*, refusing anything that escapes it.
+
+    Threat model: MCP tool arguments are model-generated and can be steered
+    by prompt injection, so every path a handler accepts is untrusted input.
+    Absolute paths are allowed **only** when they resolve inside ``data_dir``
+    (``topic_resolve`` returns absolute paths that agents legitimately
+    round-trip). Resolution is symlink-correct (``Path.resolve``) and the
+    membership check uses real path components (``parents``), never string
+    prefixes — a sibling ``course2`` cannot spoof ``course``.
+
+    Raises:
+        _PathOutsideDataDir: the resolved candidate is outside ``data_dir``.
+    """
+    root = data_dir.expanduser().resolve()
+    candidate = Path(p).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    if candidate != root and root not in candidate.parents:
+        raise _PathOutsideDataDir(
+            f"{label} '{p}' resolves outside the data directory ({root}); "
+            "MCP tools may only access files under it"
+        )
+    return candidate
+
+
+def _error_payload(exc: _PathOutsideDataDir) -> str:
+    return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
+
+
 # ---------------------------------------------------------------------------
 # In-memory cache (keyed by directory mtime)
 # ---------------------------------------------------------------------------
@@ -164,10 +199,13 @@ async def handle_resolve_topic(
     course_topic_bindings: set[tuple[str, str | None]] | None = None
     if course_spec:
         try:
-            spec = CourseSpec.from_file(Path(course_spec))
+            spec_file = _contained_path(data_dir, course_spec, label="course_spec")
+            spec = CourseSpec.from_file(spec_file)
             course_topic_bindings = spec.topic_bindings()
         except CourseSpecError:
             logger.warning("Failed to parse course spec: %s", course_spec)
+        except _PathOutsideDataDir as exc:
+            return _error_payload(exc)
 
     result = _resolve_topic(
         topic_id,
@@ -217,7 +255,12 @@ async def handle_search_slides(
         JSON string with search results.
     """
     slides_dir = data_dir / "slides"
-    spec_path = Path(course_spec) if course_spec else None
+    spec_path = None
+    if course_spec:
+        try:
+            spec_path = _contained_path(data_dir, course_spec, label="course_spec")
+        except _PathOutsideDataDir as exc:
+            return _error_payload(exc)
 
     results = _search_slides(
         query,
@@ -264,9 +307,10 @@ async def handle_course_outline(
     """
     from clm.cli.commands.export.outline import generate_outline_json
 
-    spec_path = Path(spec_file)
-    if not spec_path.is_absolute():
-        spec_path = data_dir / spec_path
+    try:
+        spec_path = _contained_path(data_dir, spec_file, label="spec_file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     course = _get_cached_course(spec_path)
 
@@ -345,11 +389,15 @@ async def handle_course_context(
             {"error": f"unknown level {level!r}; use titles, summary, or full"}, indent=2
         )
 
-    spec_path = Path(spec_file)
-    if not spec_path.is_absolute():
-        spec_path = data_dir / spec_path
+    try:
+        spec_path = _contained_path(data_dir, spec_file, label="spec_file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
-    course = _get_cached_course(spec_path)
+    try:
+        course = _get_cached_course(spec_path)
+    except FileNotFoundError:
+        return json.dumps({"error": f"course spec not found: {spec_path}"}, indent=2)
 
     try:
         units = load_scoped_units(
@@ -466,9 +514,10 @@ async def handle_validate_spec(
     Returns:
         JSON string with validation results.
     """
-    spec_path = Path(course_spec)
-    if not spec_path.is_absolute():
-        spec_path = data_dir / spec_path
+    try:
+        spec_path = _contained_path(data_dir, course_spec, label="course_spec")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     slides_dir = data_dir / "slides"
     result = _validate_spec(spec_path, slides_dir, include_disabled=include_disabled)
@@ -534,9 +583,10 @@ async def handle_validate_slides(
     Returns:
         JSON string with validation results.
     """
-    target = Path(path)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, path, label="path")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     if target.is_file() and target.suffix == ".xml":
         slides_dir = data_dir / "slides"
@@ -614,9 +664,10 @@ async def handle_normalize_slides(
     Returns:
         JSON string with normalization results.
     """
-    target = Path(path)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, path, label="path")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     if target.is_file() and target.suffix == ".xml":
         slides_dir = data_dir / "slides"
@@ -670,9 +721,10 @@ async def handle_get_language_view(
     Returns:
         Filtered file content with ``[original line N]`` annotations.
     """
-    target = Path(file)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, file, label="file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     return _get_language_view(
         target,
@@ -732,9 +784,10 @@ async def handle_suggest_sync(
     Returns:
         JSON string with sync suggestions.
     """
-    target = Path(file)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, file, label="file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     result = _suggest_sync(target, source_language=source_language)
     return json.dumps(_sync_result_to_dict(result), indent=2)
@@ -781,9 +834,10 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         rows, and ``is_clean`` / ``needs_model`` / ``needs_agent``), or an
         ``{"error": …}`` object.
     """
-    target = Path(file)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, file, label="file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     pair = _resolve_split_pair(target)
     if pair is None:
@@ -869,9 +923,10 @@ async def handle_extract_voiceover(
         ``"paired": true``), or a ``{"error": ...}`` object when an existing
         companion would be clobbered without ``force`` or the pair is invalid.
     """
-    target = Path(file)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, file, label="file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     if both and single:
         return json.dumps({"error": "both and single are mutually exclusive"}, indent=2)
@@ -929,9 +984,10 @@ async def handle_inline_voiceover(
     Returns:
         JSON string with inline results.
     """
-    target = Path(file)
-    if not target.is_absolute():
-        target = data_dir / target
+    try:
+        target = _contained_path(data_dir, file, label="file")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     result = _inline_voiceover(target, dry_run=dry_run)
     return json.dumps(_inline_result_to_dict(result), indent=2)
@@ -944,10 +1000,24 @@ async def handle_inline_voiceover(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_under(data_dir: Path, p: str) -> Path:
-    """Resolve ``p`` as absolute, or relative to ``data_dir`` otherwise."""
-    target = Path(p)
-    return target if target.is_absolute() else data_dir / target
+def _resolve_under(data_dir: Path, p: str, *, label: str = "path") -> Path:
+    """Resolve ``p`` under ``data_dir`` with S8 containment (symlink-correct).
+
+    Relative paths join ``data_dir``; absolute paths are kept (they must name
+    something *inside* ``data_dir``). The result is resolved and must stay
+    equal to or below the resolved ``data_dir`` — symlink traversal, ``..``
+    segments, and sibling-prefix tricks all refuse with ``_PathOutsideDataDir``.
+    """
+    candidate = Path(p).expanduser()
+    if not candidate.is_absolute():
+        candidate = data_dir / candidate
+    root = data_dir.resolve()
+    resolved = candidate.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise _PathOutsideDataDir(
+            f"{label} {p!r} escapes the data directory {data_dir} — use a path inside it"
+        )
+    return resolved
 
 
 async def handle_harvest_transcribe(
@@ -984,11 +1054,17 @@ async def handle_harvest_transcribe(
     from clm.voiceover.cache import CachePolicy, cached_transcribe
     from clm.voiceover.transcribe import transcribe_video
 
-    video_path = _resolve_under(data_dir, video)
+    try:
+        video_path = _resolve_under(data_dir, video, label="video")
+        cache_root_path = (
+            _resolve_under(data_dir, cache_root, label="cache_root") if cache_root else None
+        )
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
     policy = CachePolicy(
         enabled=not no_cache,
         refresh=refresh_cache,
-        cache_root=Path(cache_root) if cache_root else None,
+        cache_root=cache_root_path,
     )
 
     transcript, hit = cached_transcribe(
@@ -1062,12 +1138,18 @@ async def handle_harvest_identify_rev(
     from clm.voiceover.identify import identify_rev
     from clm.voiceover.rev_scorer import DEFAULT_ACCEPT_THRESHOLD
 
-    sf = _resolve_under(data_dir, slide_file)
-    vids = [_resolve_under(data_dir, v) for v in videos]
+    try:
+        sf = _resolve_under(data_dir, slide_file, label="slide_file")
+        vids = [_resolve_under(data_dir, v, label="video") for v in videos]
+        cache_root_path = (
+            _resolve_under(data_dir, cache_root, label="cache_root") if cache_root else None
+        )
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
     policy = CachePolicy(
         enabled=not no_cache,
         refresh=refresh_cache,
-        cache_root=Path(cache_root) if cache_root else None,
+        cache_root=cache_root_path,
     )
 
     try:
@@ -1121,8 +1203,11 @@ async def handle_harvest_compare(
     """
     from clm.voiceover.compare import run_compare_async
 
-    src = _resolve_under(data_dir, source)
-    tgt = _resolve_under(data_dir, target)
+    try:
+        src = _resolve_under(data_dir, source, label="source")
+        tgt = _resolve_under(data_dir, target, label="target")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
     report = await run_compare_async(
         source=src, target=tgt, lang=lang, model=model, api_base=api_base
     )
@@ -1173,8 +1258,11 @@ async def handle_harvest_backfill_dry(
     import shlex
     import sys
 
-    sf = _resolve_under(data_dir, slide_file)
-    vids = [_resolve_under(data_dir, v) for v in videos]
+    try:
+        sf = _resolve_under(data_dir, slide_file, label="slide_file")
+        vids = [_resolve_under(data_dir, v, label="video") for v in videos]
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
 
     cmd: list[str] = [
         sys.executable,
@@ -1241,7 +1329,13 @@ async def handle_harvest_cache_list(
     """
     from clm.voiceover.cache import CachePolicy, iter_entries
 
-    policy = CachePolicy(cache_root=Path(cache_root) if cache_root else None)
+    try:
+        cache_root_path = (
+            _resolve_under(data_dir, cache_root, label="cache_root") if cache_root else None
+        )
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
+    policy = CachePolicy(cache_root=cache_root_path)
     root = policy.resolve_root(data_dir)
 
     if not root.exists():
@@ -1275,7 +1369,10 @@ async def handle_harvest_trace_show(
     """
     from clm.voiceover.trace_log import read_trace_entries
 
-    target = _resolve_under(data_dir, path)
+    try:
+        target = _resolve_under(data_dir, path, label="path")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
     entries = read_trace_entries(target)
     schema_tags = sorted({e.get("schema", "<v0>") for e in entries})
     payload = {
@@ -1325,8 +1422,11 @@ def _assemble_harvest_report(
         load_transcript_override,
     )
 
-    slides_path = _resolve_under(data_dir, slides)
-    video_paths = [_resolve_under(data_dir, v) for v in videos]
+    try:
+        slides_path = _resolve_under(data_dir, slides, label="slides")
+        video_paths = [_resolve_under(data_dir, v, label="video") for v in videos]
+    except _PathOutsideDataDir as exc:
+        raise _HarvestInputError(exc.args[0]) from exc
 
     try:
         bundle = load_bundle(slides_path)
@@ -1344,19 +1444,29 @@ def _assemble_harvest_report(
     # The recorded-language view the OCR matcher and aligner key on.
     slide_groups = parse_slides(slides_path, lang)
 
+    try:
+        cache_root_path = (
+            _resolve_under(data_dir, cache_root, label="cache_root") if cache_root else None
+        )
+        transcript_override = (
+            load_transcript_override(_resolve_under(data_dir, transcript, label="transcript"))
+            if transcript
+            else None
+        )
+        alignment_override = (
+            load_alignment_override(_resolve_under(data_dir, alignment, label="alignment"))
+            if alignment
+            else None
+        )
+    except _PathOutsideDataDir as exc:
+        raise _HarvestInputError(exc.args[0]) from exc
     policy = CachePolicy(
         enabled=not no_cache,
         refresh=refresh_cache,
-        cache_root=Path(cache_root) if cache_root else None,
+        cache_root=cache_root_path,
     )
 
     try:
-        transcript_override = (
-            load_transcript_override(_resolve_under(data_dir, transcript)) if transcript else None
-        )
-        alignment_override = (
-            load_alignment_override(_resolve_under(data_dir, alignment)) if alignment else None
-        )
         artifacts = run_pipeline(
             slides_path,
             video_paths,
@@ -1555,13 +1665,21 @@ async def handle_course_authoring_rules(
     Returns:
         JSON string with authoring rules.
     """
-    # Resolve relative slide_path against data_dir
+    # Resolve slide_path under data_dir with S8 containment
     resolved_slide: str | None = None
     if slide_path:
-        sp = Path(slide_path)
-        if not sp.is_absolute():
-            sp = data_dir / sp
-        resolved_slide = str(sp)
+        try:
+            resolved_slide = str(_contained_path(data_dir, slide_path, label="slide_path"))
+        except _PathOutsideDataDir as exc:
+            return _error_payload(exc)
+    # The course_spec slug/path must stay under data_dir too — a "../…"
+    # slug would otherwise read authoring rules from outside the course
+    # tree (library seam joins it onto course-specs/ unvalidated).
+    if course_spec:
+        try:
+            _contained_path(data_dir, course_spec, label="course_spec")
+        except _PathOutsideDataDir as exc:
+            return _error_payload(exc)
 
     result = _get_authoring_rules(
         data_dir,
