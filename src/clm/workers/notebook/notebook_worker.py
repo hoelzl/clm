@@ -35,12 +35,18 @@ JOBS_DB_PATH = resolve_jobs_db_path()  # None unless CLM_JOBS_DB_PATH was inject
 CACHE_DB_PATH = Path(os.environ.get("CLM_CACHE_DB_PATH", "clm_cache.db"))
 API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
-# Logging setup
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s - notebook-worker - %(levelname)s - %(message)s",
-)
+# Logging setup: configured in main() so importing this module stays pure —
+# library code and tests import NotebookWorker/its helpers in-process, and an
+# import-time basicConfig would fight (and silently no-op) other setups.
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Set up stderr logging for the worker subprocess (idempotent)."""
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format="%(asctime)s - notebook-worker - %(levelname)s - %(message)s",
+    )
 
 
 class NotebookWorker(Worker):
@@ -326,6 +332,7 @@ class NotebookWorker(Worker):
 
 def main():
     """Main entry point for notebook worker."""
+    _configure_logging()
     # Determine mode based on environment
     if API_URL:
         logger.info(f"Starting notebook worker in API mode (URL: {API_URL})")

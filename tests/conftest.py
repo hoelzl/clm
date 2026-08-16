@@ -1225,6 +1225,12 @@ def _dump_job_queue_state(db_path: Path) -> str:
 def _dump_worker_logs(workspace_path: Path) -> str:
     """Dump any worker log files that might exist.
 
+    Worker subprocesses spawned by the executor redirect their stderr to
+    ``CLM_LOG_DIR/workers/<worker>-<n>.log`` — under pytest that's the
+    per-test isolated log dir (``_isolate_clm_log_dir``), not the workspace.
+    Harvest both surfaces so a failed integration test shows what its
+    workers actually said (boot lines, registration, job processing).
+
     Args:
         workspace_path: Path to the workspace directory
 
@@ -1247,6 +1253,24 @@ def _dump_worker_logs(workspace_path: Path) -> str:
                         lines.append(f"[... {len(log_lines) - 100} lines omitted ...]")
                         log_lines = log_lines[-100:]
                     lines.extend(log_lines)
+            except Exception as e:
+                lines.append(f"\nError reading {log_file}: {e}")
+
+    # Harvest worker logs from the isolated CLM_LOG_DIR as well (the executor
+    # writes ``workers/<name>-<n>.log`` there; before the logging fix these
+    # files were empty, which is why failed worker tests had nothing to show)
+    log_dir = os.environ.get("CLM_LOG_DIR")
+    if log_dir:
+        workers_dir = Path(log_dir) / "workers"
+        for log_file in sorted(workers_dir.glob("*.log")) if workers_dir.is_dir() else []:
+            try:
+                content = log_file.read_text(encoding="utf-8", errors="replace")
+                lines.append(f"\n--- workers/{log_file.name} ---")
+                log_lines = content.strip().split("\n") if content.strip() else ["<empty>"]
+                if len(log_lines) > 100:
+                    lines.append(f"[... {len(log_lines) - 100} lines omitted ...]")
+                    log_lines = log_lines[-100:]
+                lines.extend(log_lines)
             except Exception as e:
                 lines.append(f"\nError reading {log_file}: {e}")
 

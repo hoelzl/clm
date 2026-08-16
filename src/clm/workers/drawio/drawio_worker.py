@@ -27,12 +27,17 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 JOBS_DB_PATH = resolve_jobs_db_path()  # None unless CLM_JOBS_DB_PATH was injected
 API_URL = os.environ.get("CLM_API_URL")  # If set, use REST API mode
 
-# Logging setup
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s - drawio-worker - %(levelname)s - %(message)s",
-)
+# Logging setup: configured in main() so importing this module stays pure
+# (tests import DrawioWorker in-process; see _configure_logging).
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Set up stderr logging for the worker subprocess (idempotent)."""
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format="%(asctime)s - drawio-worker - %(levelname)s - %(message)s",
+    )
 
 
 class DrawioWorker(Worker):
@@ -210,6 +215,7 @@ class DrawioWorker(Worker):
 
 def main():
     """Main entry point for DrawIO worker."""
+    _configure_logging()
     # Determine mode based on environment
     if API_URL:
         logger.info(f"Starting DrawIO worker in API mode (URL: {API_URL})")
