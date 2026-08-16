@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
+from pydantic import SecretStr
 
 from clm.__version__ import __version__
 from clm.infrastructure.web_security import install_web_security
@@ -265,7 +266,7 @@ def create_app(
         processing_backend=processing_backend,
         raw_suffix=raw_suffix,
         auphonic=AuphonicConfig(
-            api_key=auphonic_api_key,
+            api_key=SecretStr(auphonic_api_key),
             preset=auphonic_preset,
         ),
     )

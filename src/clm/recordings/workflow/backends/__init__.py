@@ -65,17 +65,18 @@ def make_backend(
         return ExternalAudioFirstBackend(root_dir=root_dir, raw_suffix=raw_suffix)
     if name == "auphonic":
         auphonic_cfg = config.auphonic
+        api_key = auphonic_cfg.api_key.get_secret_value()
         # RecordingsConfig's model_validator enforces api_key when the
         # auphonic backend is selected, but defend against callers who
         # construct this dict programmatically without going through
         # validation.
-        if not auphonic_cfg.api_key:
+        if not api_key:
             raise ValueError(
                 "Cannot construct AuphonicBackend without recordings.auphonic.api_key. "
                 "Set it via the TOML config or CLM_RECORDINGS__AUPHONIC__API_KEY."
             )
         client = AuphonicClient(
-            api_key=auphonic_cfg.api_key,
+            api_key=api_key,
             base_url=auphonic_cfg.base_url,
             chunk_size=auphonic_cfg.upload_chunk_size,
         )

@@ -117,7 +117,10 @@ Two invariants hold everywhere: **worker processes never read config files**
 environment, for Direct and Docker workers alike), and **a repo-local config
 file may not choose which program CLM runs** (see External Tools below).
 `clm config show` (or `--json`) displays the effective value of everything
-above, with its source.
+above, with its source. JSON output redacts configured secrets by default so it
+can be pasted into bug reports safely. Use `clm config show --json --reveal`
+only when the cleartext LLM key, Auphonic key, and OBS password are explicitly
+needed; treat that output as sensitive.
 
 ### Configuration Files
 
@@ -138,6 +141,12 @@ clm config init --location=project
 
 # View current configuration
 clm config show
+
+# Machine-readable output (secrets redacted by default)
+clm config show --json
+
+# Explicitly include secrets (unsafe for logs and bug reports)
+clm config show --json --reveal
 
 # Find configuration files
 clm config locate

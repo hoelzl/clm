@@ -84,14 +84,22 @@ def config_init(location, force):
     is_flag=True,
     help="Emit the effective configuration as JSON (machine-readable).",
 )
+@click.option(
+    "--reveal",
+    is_flag=True,
+    help="Reveal secret values in --json output (unsafe for logs and bug reports).",
+)
 @click.pass_context
-def config_show(ctx, as_json):
+def config_show(ctx, as_json, reveal):
     """Show current configuration values.
 
     This command displays the current configuration, including values
     from all sources (config files and environment variables). Pass
     ``--json`` for a machine-readable dump of the effective configuration.
     """
+    if reveal and not as_json:
+        raise click.UsageError("--reveal requires --json")
+
     from clm.infrastructure.config import get_config
 
     cfg = get_config(reload=True)
@@ -123,6 +131,15 @@ def config_show(ctx, as_json):
         # recordings) as the effective env/file/default-folded values; the
         # databases, LLM-cache location, and authoring sidecar-layout are
         # resolved outside ClmConfig, so they are added explicitly.
+        config_values = cfg.model_dump(mode="json")
+        if reveal:
+            config_values["llm"]["api_key"] = cfg.llm.api_key.get_secret_value()
+            config_values["recordings"]["auphonic"]["api_key"] = (
+                cfg.recordings.auphonic.api_key.get_secret_value()
+            )
+            config_values["recordings"]["obs_password"] = (
+                cfg.recordings.obs_password.get_secret_value()
+            )
         payload = {
             "databases": databases,
             "llm_cache": {
@@ -135,7 +152,7 @@ def config_show(ctx, as_json):
                 "source": sidecar.source,
                 "pyproject": str(sidecar.pyproject_path) if sidecar.pyproject_path else None,
             },
-            **cfg.model_dump(mode="json"),
+            **config_values,
         }
         click.echo(json.dumps(payload, indent=2, default=str))
         return

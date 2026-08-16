@@ -235,6 +235,7 @@ def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
         creds = flow.run_local_server(port=0)
         token_cache.parent.mkdir(parents=True, exist_ok=True)
         token_cache.write_text(creds.to_json(), encoding="utf-8")
+        token_cache.chmod(0o600)
         logger.info("OAuth token cached at %s", token_cache)
     return creds
 

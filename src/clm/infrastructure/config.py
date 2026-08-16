@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import platformdirs
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -649,8 +649,8 @@ class LLMConfig(BaseModel):
         description="LLM model identifier",
     )
 
-    api_key: str = Field(
-        default="",
+    api_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
         description="API key (if not set via provider env var)",
     )
 
@@ -756,8 +756,8 @@ class AuphonicConfig(BaseModel):
     the TOML file).
     """
 
-    api_key: str = Field(
-        default="",
+    api_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
         description="Auphonic API key (Authorization: Bearer <api_key>)",
     )
     preset: str = Field(
@@ -848,8 +848,8 @@ class RecordingsConfig(BaseModel):
         default=4455,
         description="OBS WebSocket port",
     )
-    obs_password: str = Field(
-        default="",
+    obs_password: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
         description="OBS WebSocket password (empty = no authentication)",
     )
     processing_backend: str = Field(
@@ -889,7 +889,7 @@ class RecordingsConfig(BaseModel):
         ``auphonic`` backend without providing an API key — better to
         fail loudly before the first upload than after it.
         """
-        if self.processing_backend == "auphonic" and not self.auphonic.api_key:
+        if self.processing_backend == "auphonic" and not self.auphonic.api_key.get_secret_value():
             raise ValueError(
                 "recordings.processing_backend is set to 'auphonic' but "
                 "recordings.auphonic.api_key is empty. Set it via the TOML "

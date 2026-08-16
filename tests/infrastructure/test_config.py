@@ -5,9 +5,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from clm.infrastructure.config import (
+    AuphonicConfig,
     ClmConfig,
+    LLMConfig,
+    RecordingsConfig,
     create_example_config,
     find_config_files,
     get_config,
@@ -92,6 +96,18 @@ class TestConfigDefaults:
         config = ClmConfig()
         assert config.workers.worker_type == ""
         assert config.workers.worker_id == ""
+
+    def test_secret_fields_use_secret_str(self):
+        llm = LLMConfig(api_key="llm-secret")
+        auphonic = AuphonicConfig(api_key="auphonic-secret")
+        recordings = RecordingsConfig(obs_password="obs-secret")
+
+        assert isinstance(llm.api_key, SecretStr)
+        assert isinstance(auphonic.api_key, SecretStr)
+        assert isinstance(recordings.obs_password, SecretStr)
+        assert llm.api_key.get_secret_value() == "llm-secret"
+        assert auphonic.api_key.get_secret_value() == "auphonic-secret"
+        assert recordings.obs_password.get_secret_value() == "obs-secret"
 
 
 class TestEnvironmentVariables:

@@ -7,6 +7,7 @@ into ``tmp_path`` so the user's real config file is never touched.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -147,8 +148,6 @@ class TestConfigShow:
         assert "clm-llm.sqlite" in result.output
 
     def test_show_json_is_machine_readable(self, isolated_config_dirs):
-        import json
-
         runner = CliRunner()
         result = runner.invoke(cli, ["config", "show", "--json"])
         assert result.exit_code == 0, result.output
@@ -163,6 +162,76 @@ class TestConfigShow:
         assert "use_sqlite_queue" not in data.get("workers", {})
         # The authoring sidecar-layout is resolved outside ClmConfig too (A7).
         assert set(data["authoring"]) == {"sidecar_layout", "source", "pyproject"}
+
+    def test_show_json_redacts_all_configured_secrets(
+        self, isolated_config_dirs, monkeypatch: pytest.MonkeyPatch
+    ):
+        secrets = {
+            "llm": "s12-llm-cleartext",
+            "auphonic": "s12-auphonic-cleartext",
+            "obs": "s12-obs-cleartext",
+        }
+        project_cfg = isolated_config_dirs["project"]
+        project_cfg.parent.mkdir(parents=True, exist_ok=True)
+        project_cfg.write_text(
+            "[llm]\n"
+            f'api_key = "{secrets["llm"]}"\n'
+            "[recordings]\n"
+            f'obs_password = "{secrets["obs"]}"\n'
+            "[recordings.auphonic]\n"
+            f'api_key = "{secrets["auphonic"]}"\n',
+            encoding="utf-8",
+        )
+        for name in (
+            "CLM_LLM__API_KEY",
+            "CLM_RECORDINGS__AUPHONIC__API_KEY",
+            "CLM_RECORDINGS__OBS_PASSWORD",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        result = CliRunner().invoke(cli, ["config", "show", "--json"])
+
+        assert result.exit_code == 0, result.output
+        assert not any(secret in result.output for secret in secrets.values())
+        data = json.loads(result.output)
+        assert data["llm"]["api_key"] == "**********"
+        assert data["recordings"]["auphonic"]["api_key"] == "**********"
+        assert data["recordings"]["obs_password"] == "**********"
+
+    def test_show_json_reveal_outputs_configured_secrets_explicitly(
+        self, isolated_config_dirs, monkeypatch: pytest.MonkeyPatch
+    ):
+        project_cfg = isolated_config_dirs["project"]
+        project_cfg.parent.mkdir(parents=True, exist_ok=True)
+        project_cfg.write_text(
+            "[llm]\n"
+            'api_key = "revealed-llm"\n'
+            "[recordings]\n"
+            'obs_password = "revealed-obs"\n'
+            "[recordings.auphonic]\n"
+            'api_key = "revealed-auphonic"\n',
+            encoding="utf-8",
+        )
+        for name in (
+            "CLM_LLM__API_KEY",
+            "CLM_RECORDINGS__AUPHONIC__API_KEY",
+            "CLM_RECORDINGS__OBS_PASSWORD",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        result = CliRunner().invoke(cli, ["config", "show", "--json", "--reveal"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["llm"]["api_key"] == "revealed-llm"
+        assert data["recordings"]["auphonic"]["api_key"] == "revealed-auphonic"
+        assert data["recordings"]["obs_password"] == "revealed-obs"
+
+    def test_show_reveal_requires_json(self, isolated_config_dirs):
+        result = CliRunner().invoke(cli, ["config", "show", "--reveal"])
+
+        assert result.exit_code != 0
+        assert "--reveal requires --json" in result.output
 
     def test_show_reports_pyproject_sidecar_layout(
         self, isolated_config_dirs, tmp_path, monkeypatch
@@ -277,6 +346,13 @@ class TestConfigHelp:
         assert result.exit_code == 0
         assert "--location" in result.output
         assert "--force" in result.output
+
+    def test_show_help_lists_secret_output_flags(self):
+        result = CliRunner().invoke(cli, ["config", "show", "--help"])
+
+        assert result.exit_code == 0
+        assert "--json" in result.output
+        assert "--reveal" in result.output
 
     def test_init_rejects_invalid_location(self, isolated_config_dirs):
         runner = CliRunner()

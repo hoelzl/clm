@@ -787,7 +787,7 @@ def summary(
 
     effective_model = model or llm_config.model
     effective_api_base = api_base or llm_config.api_base or None
-    effective_api_key = llm_config.api_key or None
+    effective_api_key = llm_config.api_key.get_secret_value() or None
 
     if not dry_run:
         try:

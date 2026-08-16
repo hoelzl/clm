@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from click.testing import CliRunner
+from pydantic import SecretStr
 
 from clm.cli.commands import recordings as recordings_module
 from clm.cli.commands.recordings import (
@@ -39,7 +40,7 @@ class TestGetObsConfig:
         fake_cfg = MagicMock()
         fake_cfg.recordings.obs_host = "host.internal"
         fake_cfg.recordings.obs_port = 4456
-        fake_cfg.recordings.obs_password = "secret"
+        fake_cfg.recordings.obs_password = SecretStr("secret")
         fake_config_module.get_config = MagicMock(return_value=fake_cfg)
         monkeypatch.setitem(sys.modules, "clm.infrastructure.config", fake_config_module)
 
@@ -112,7 +113,7 @@ class TestGetWatcherConfig:
 class TestGetAuphonicConfig:
     def test_returns_config_values(self, monkeypatch: pytest.MonkeyPatch):
         fake_cfg = MagicMock()
-        fake_cfg.recordings.auphonic.api_key = "abc"
+        fake_cfg.recordings.auphonic.api_key = SecretStr("abc")
         fake_cfg.recordings.auphonic.preset = "my-preset"
         fake_config_module = MagicMock()
         fake_config_module.get_config = MagicMock(return_value=fake_cfg)
