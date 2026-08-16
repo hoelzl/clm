@@ -519,6 +519,47 @@ class TestLoadCredentials:
         assert token_cache.read_text(encoding="utf-8") == '{"access_token": "fresh"}'
         assert chmod_calls[-1] == (token_cache, 0o600)
 
+    def test_refresh_persistence_failure_does_not_restart_consent(self, tmp_path, monkeypatch):
+        token_cache = tmp_path / "token.json"
+        token_cache.write_text('{"access_token": "stale"}', encoding="utf-8")
+
+        class Credentials:
+            valid = False
+            expired = True
+            refresh_token = "refresh"
+
+            def refresh(self, _request) -> None:
+                self.valid = True
+
+        credentials = Credentials()
+        loader = SimpleNamespace(from_authorized_user_file=lambda *_args, **_kwargs: credentials)
+        consent_started = False
+
+        class InstalledAppFlow:
+            @staticmethod
+            def from_client_secrets_file(_path, _scopes):
+                nonlocal consent_started
+                consent_started = True
+                raise AssertionError("consent must not restart after a successful refresh")
+
+        modules = {
+            "google.oauth2.credentials": SimpleNamespace(Credentials=loader),
+            "google_auth_oauthlib.flow": SimpleNamespace(InstalledAppFlow=InstalledAppFlow),
+            "google.auth.transport.requests": SimpleNamespace(Request=object),
+        }
+        monkeypatch.setattr(gs, "_import_gcal", modules.__getitem__)
+
+        def fail_persistence(_creds, _token_cache):
+            raise PermissionError("cache is not writable")
+
+        monkeypatch.setattr(gs, "_cache_oauth_credentials", fail_persistence)
+
+        with pytest.raises(PermissionError, match="not writable"):
+            gs._oauth_user_credentials(tmp_path / "client.json", token_cache)
+
+        assert credentials.valid is True
+        assert consent_started is False
+
     @pytest.mark.skipif(os.name == "nt", reason="Creating file symlinks needs Windows privileges")
     def test_oauth_token_cache_replaces_symlink_not_target(self, tmp_path):
         victim = tmp_path / "victim.json"
@@ -533,3 +574,28 @@ class TestLoadCredentials:
         assert token_cache.read_text(encoding="utf-8") == '{"refresh_token": "private"}'
         assert not token_cache.is_symlink()
         assert stat.S_IMODE(token_cache.stat().st_mode) == 0o600
+
+    def test_existing_oauth_token_symlink_is_rejected_without_touching_target(
+        self, tmp_path, monkeypatch
+    ):
+        victim = tmp_path / "victim.json"
+        victim.write_text('{"refresh_token": "bystander"}', encoding="utf-8")
+        original_mode = stat.S_IMODE(victim.stat().st_mode)
+        token_cache = tmp_path / "token.json"
+        try:
+            token_cache.symlink_to(victim)
+        except OSError:
+            pytest.skip("Creating file symlinks needs Windows developer mode or privileges")
+        modules = {
+            "google.oauth2.credentials": SimpleNamespace(Credentials=object()),
+            "google_auth_oauthlib.flow": SimpleNamespace(InstalledAppFlow=object()),
+            "google.auth.transport.requests": SimpleNamespace(Request=object),
+        }
+        monkeypatch.setattr(gs, "_import_gcal", modules.__getitem__)
+
+        with pytest.raises(gs.GoogleSyncError, match="symbolic link"):
+            gs._oauth_user_credentials(tmp_path / "client.json", token_cache)
+
+        assert token_cache.is_symlink()
+        assert victim.read_text(encoding="utf-8") == '{"refresh_token": "bystander"}'
+        assert stat.S_IMODE(victim.stat().st_mode) == original_mode

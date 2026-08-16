@@ -935,6 +935,7 @@ class ClmConfig(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
         case_sensitive=False,
+        validate_assignment=True,
         hide_input_in_errors=True,
     )
 

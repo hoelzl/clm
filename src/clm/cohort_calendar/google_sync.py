@@ -239,12 +239,18 @@ def _cache_oauth_credentials(creds: Any, token_cache: Path) -> None:
 
 
 def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
-    """Cached-token OAuth flow: refresh if possible, else run the browser consent."""
+    """Cached-token OAuth flow: refresh if possible, else run browser consent.
+
+    Existing cache symlinks are rejected rather than followed, as proved by
+    ``test_existing_oauth_token_symlink_is_rejected_without_touching_target``.
+    """
     oauth2_credentials = _import_gcal("google.oauth2.credentials")
     flow_module = _import_gcal("google_auth_oauthlib.flow")
     transport = _import_gcal("google.auth.transport.requests")
 
     creds = None
+    if token_cache.is_symlink():
+        raise GoogleSyncError(f"refusing OAuth token cache symbolic link: {token_cache}")
     if token_cache.exists():
         token_cache.chmod(0o600)
         try:
@@ -256,10 +262,11 @@ def _oauth_user_credentials(client_secrets: Path, token_cache: Path) -> Any:
     if creds is not None and creds.expired and creds.refresh_token:
         try:
             creds.refresh(transport.Request())
-            _cache_oauth_credentials(creds, token_cache)
         except Exception as exc:
             logger.info("token refresh failed (%s); re-running the consent flow.", exc)
             creds = None
+        else:
+            _cache_oauth_credentials(creds, token_cache)
     if creds is None or not creds.valid:
         flow = flow_module.InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
         logger.info("Opening a browser for Google OAuth consent ...")

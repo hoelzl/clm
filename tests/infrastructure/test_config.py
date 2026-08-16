@@ -122,6 +122,23 @@ class TestConfigDefaults:
         assert auphonic.api_key.get_secret_value() == "updated-auphonic"
         assert recordings.obs_password.get_secret_value() == "updated-obs"
 
+    def test_main_config_validates_whole_section_assignment(self):
+        config = ClmConfig()
+
+        config.llm = {"api_key": "assigned-llm"}  # type: ignore[assignment]
+        config.recordings = {  # type: ignore[assignment]
+            "obs_password": "assigned-obs",
+            "auphonic": {"api_key": "assigned-auphonic"},
+        }
+
+        assert config.llm.api_key.get_secret_value() == "assigned-llm"
+        assert config.recordings.auphonic.api_key.get_secret_value() == "assigned-auphonic"
+        assert config.recordings.obs_password.get_secret_value() == "assigned-obs"
+        dumped = config.model_dump(mode="json")
+        assert dumped["llm"]["api_key"] == "**********"
+        assert dumped["recordings"]["auphonic"]["api_key"] == "**********"
+        assert dumped["recordings"]["obs_password"] == "**********"
+
 
 class TestEnvironmentVariables:
     """Test environment variable configuration."""
