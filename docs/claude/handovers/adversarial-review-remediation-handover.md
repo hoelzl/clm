@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3 DONE; next is Phase 3a's S4/S8 ride-alongs | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3 DONE; Phase 3a: S5+S4 DONE, S8 remaining | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1093,7 +1093,7 @@ migrated to the new decision format.
 
 ---
 
-### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: S5 DONE 2026-07-26; S4/S8 ride-alongs not started
+### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: S5 DONE 2026-07-26; S4 DONE 2026-08-16 (PR #837, merge e448aaaf); S8 remaining
 
 **Why it is here.** Pulled out of Phase 4 by the maintainer on 2026-07-26. S5 is
 the same finding class as Phase 0's cassette RCE — content that arrives with a
@@ -1161,12 +1161,34 @@ CLM owns, and secrets stay out of logs and commits.
 
 **Work**
 
-1. **S4 — `.clm-include` `rmtree`.** `src/clm/cli/commands/course/sync_includes.py:429-436`:
-   validate `as_path` before use. `Path.__truediv__` discards the left operand
-   when the right is absolute — that is the whole bug. The correct normalizer
-   already exists for spec `<include>` paths (`course_spec.py:88-140`): normalize
-   separators, reject absolute, reject any `..` part, then `resolve()` and confirm
-   containment under `topic_dir`. **Reuse it; do not write a second one.**
+1. **S4 — `.clm-include` `rmtree`.** ▸ **DONE 2026-08-16** (PR #837, merge
+   e448aaaf; refs umbrella #798). The pre-fix code joined the ledger's
+   `as_path` onto `topic_dir` unvalidated — reproduced live: absolute
+   paths (native/forward-slash drive forms), `..` traversal (both slash
+   styles, file and tree), and paths through symlinked dirs all deleted
+   outside sentinels with exit 0. The fix reuses the spec parser's
+   normalizer via a new public seam (`clm.core.course_spec.normalize_
+   include_path`, renamed from the private helper with a `root_label`
+   param and an `IncludePathError(CourseSpecError)` subclass — Phase 8
+   A9 forbids cross-module private imports, so the seam went public in
+   its defining module; spec-side messages are byte-identical except the
+   empty-path hint wording), plus symlink-correct containment: resolve
+   the target's **parent chain** and require `is_relative_to` the
+   resolved topic dir (never string prefixes) — the final component
+   stays lexical so a legitimate `--mode=symlink` entry unlinks the link
+   itself, and NTFS junctions are unlinked the same way
+   (`Path.is_junction`; `rmtree` refuses reparse points — found in
+   review). Removal is now plan-then-execute across ALL topics before
+   ANY deletion: a hostile entry refuses the whole run (exit 1, ledger
+   kept, no partial deletion). Tests: `tests/cli/test_sync_includes_
+   security.py` (RED-first, 13 intended failures on 38cdf5c4 verified
+   via serial PYTHONPATH overlay with `__file__` checked); drive-path
+   refusals are Windows-only params (on POSIX `C:/x` is a contained
+   relative path). Review: 2 verified findings fixed (PR-body overclaim;
+   junction crash), then a 22-geometry probe matrix CLEAN. Deliberately
+   unchanged: empty-parent shells stay behind after nested removal;
+   any `..` segment is refused (strict, spec-parity) — `a/../pkg` is
+   rejected, matching the spec parser.
 2. **S8 — MCP containment.** `src/clm/mcp/tools.py:939-942`: `_resolve_under` is
    a bare join. Lift the correct implementation from
    `src/clm/web/studio/service.py:131-141` (resolve-then-parents-membership —
