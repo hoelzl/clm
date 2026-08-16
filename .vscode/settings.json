@@ -12,12 +12,19 @@
         "statusBar.background": "#c9b600",
         "statusBar.foreground": "#15202b",
         "statusBarItem.hoverBackground": "#968800",
-        "statusBarItem.remoteBackground": "#c9b600",
+        "statusBarItem.remoteBackground": "#008073",
         "statusBarItem.remoteForeground": "#15202b",
         "titleBar.activeBackground": "#c9b600",
         "titleBar.activeForeground": "#15202b",
         "titleBar.inactiveBackground": "#c9b60099",
-        "titleBar.inactiveForeground": "#15202b99"
+        "titleBar.inactiveForeground": "#15202b99",
+        "activityBarTop.activeBackground": "#fce400",
+        "activityBarTop.background": "#fce400",
+        "activityBarTop.foreground": "#15202b",
+        "activityBarTop.inactiveForeground": "#15202b99",
+        "commandCenter.foreground": "#15202b",
+        "statusBar.debuggingBackground": "#c9b600",
+        "statusBar.debuggingForeground": "#15202b"
     },
     "cSpell.words": [
         "localdata"
