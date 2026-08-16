@@ -49,11 +49,24 @@ from clm.mcp.tools import (
 # --------------------------------------------------------------------------- helpers
 
 
-def _err(result: str) -> str:
-    """The ``error`` field of a handler JSON result (fails if absent)."""
+def _err(result: str, *, require_boundary: bool = True) -> str:
+    """The ``error`` field of a handler JSON result (fails if absent).
+
+    With ``require_boundary=True`` (default) the message must name the
+    data-directory boundary — a refusal *because* of containment. A bare
+    ``"error" in data`` would also be satisfied by an incidental
+    FileNotFoundError (e.g. after a refactor breaks file reads), silently
+    un-pinning the security property; demanding the boundary phrase keeps
+    each refusal test discriminating.
+    """
     data = json.loads(result)
     assert "error" in data, f"expected an error payload, got: {result[:200]}"
-    return data["error"]
+    msg = data["error"]
+    if require_boundary:
+        assert "data directory" in msg or "data_dir" in msg, (
+            f"error is not a containment refusal (missing boundary phrase): {msg}"
+        )
+    return msg
 
 
 def _data_tree(tmp_path: Path) -> Path:
@@ -108,26 +121,26 @@ class TestReadContainment:
             "../outside/secret_deck.py", data_dir, language="de"
         )
         assert "Geheim" not in result
-        assert "error" in json.loads(result)
+        _err(result)
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows drive-path semantics")
     async def test_language_view_refuses_drive_paths(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         result = await handle_get_language_view("C:/Windows/win.ini", data_dir, language="de")
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_trace_show_refuses_absolute_outside(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         _, trace = _outside_sentinels(tmp_path)
         result = await handle_harvest_trace_show(str(trace), data_dir)
         assert "entries" not in json.loads(result)
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_trace_show_refuses_traversal(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         _outside_sentinels(tmp_path)
         result = await handle_harvest_trace_show("../outside/trace.jsonl", data_dir)
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_sibling_prefix_spoof_refused(self, tmp_path):
         """``course2`` next to ``course`` must not pass a string-prefix check."""
@@ -137,7 +150,7 @@ class TestReadContainment:
         deck = sibling / "deck.py"
         deck.write_text('# %% [markdown]\n# {{ header("x", "x") }}\n', encoding="utf-8")
         result = await handle_get_language_view(str(deck), data_dir, language="de")
-        assert "error" in json.loads(result)
+        _err(result)
 
 
 # --------------------------------------------------------------------- mutation containment
@@ -148,7 +161,7 @@ class TestMutateContainment:
         data_dir = _data_tree(tmp_path)
         deck, _ = _outside_sentinels(tmp_path)
         result = await handle_normalize_slides(str(deck), data_dir)
-        assert "error" in json.loads(result)
+        _err(result)
         assert "voiceover\n# Diese" in deck.read_text(encoding="utf-8")  # untouched
 
     async def test_normalize_refuses_traversal_and_leaves_file(self, tmp_path):
@@ -157,20 +170,20 @@ class TestMutateContainment:
         _deck_needing_normalization(deck)
         before = deck.read_text(encoding="utf-8")
         result = await handle_normalize_slides("../outside/secret_deck.py", data_dir)
-        assert "error" in json.loads(result)
+        _err(result)
         assert deck.read_text(encoding="utf-8") == before  # NOT rewritten
 
     async def test_inline_voiceover_refuses_absolute_outside(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         deck, _ = _outside_sentinels(tmp_path)
         result = await handle_inline_voiceover(str(deck), data_dir, dry_run=True)
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_validate_refuses_absolute_outside(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         deck, _ = _outside_sentinels(tmp_path)
         result = await handle_validate_slides(str(deck), data_dir)
-        assert "error" in json.loads(result)
+        _err(result)
 
 
 # --------------------------------------------------------------------- harvest family
@@ -183,7 +196,7 @@ class TestHarvestContainment:
         outside_video.parent.mkdir(exist_ok=True)
         outside_video.write_bytes(b"\0" * 16)
         result = await handle_harvest_transcribe(str(outside_video), data_dir)
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_compare_refuses_outside_source_and_target(self, tmp_path):
         data_dir = _data_tree(tmp_path)
@@ -194,14 +207,14 @@ class TestHarvestContainment:
             data_dir,
             lang="de",
         )
-        assert "error" in json.loads(result)
+        _err(result)
         result = await handle_harvest_compare(
             "slides/module_100_basics/topic_010_intro/slides_intro.py",
             str(deck),
             data_dir,
             lang="de",
         )
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_identify_rev_refuses_outside(self, tmp_path):
         data_dir = _data_tree(tmp_path)
@@ -209,7 +222,7 @@ class TestHarvestContainment:
         result = await handle_harvest_identify_rev(
             str(deck), ["../outside/video.mp4"], data_dir, lang="de"
         )
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_backfill_dry_refuses_outside(self, tmp_path):
         data_dir = _data_tree(tmp_path)
@@ -222,9 +235,9 @@ class TestHarvestContainment:
         data = json.loads(result)
         assert "error" in data or data.get("command", "").find("outside") == -1
 
-    async def test_report_refuses_outside_slides_videos_and_overrides(self, tmp_path):
+    async def test_report_refuses_outside_slides_and_videos(self, tmp_path):
         data_dir = _data_tree(tmp_path)
-        deck, trace = _outside_sentinels(tmp_path)
+        deck, _ = _outside_sentinels(tmp_path)
         # An existing inside video so a pre-fix run gets past part-existence
         # checks — the refusal must come from containment, not a missing file.
         inside_video = data_dir / "v.mp4"
@@ -232,26 +245,49 @@ class TestHarvestContainment:
         inside = "slides/module_100_basics/topic_010_intro/slides_intro.py"
         # slides outside
         r = await handle_harvest_report(str(deck), [str(inside_video)], data_dir, lang="de")
-        assert "error" in json.loads(r)
+        _err(r)
         # videos outside
         r = await handle_harvest_report(inside, [str(deck)], data_dir, lang="de")
-        assert "error" in json.loads(r)
+        _err(r)
+
+    async def test_report_refuses_outside_overrides_with_split_pair(self, tmp_path):
+        """The override refusals must be containment, not the incidental
+        split-twin error a lone stem produces.
+
+        ``slides_intro.py`` (no twin) never reaches the override validation —
+        the bundle loader refuses it first with "is not a split deck
+        half/stem". A real split pair (``slides_intro.de.py`` +
+        ``slides_intro.en.py``) gets past the twin check, so an outside
+        transcript/alignment is refused *by containment*.
+        """
+        data_dir = _data_tree(tmp_path)
+        _, trace = _outside_sentinels(tmp_path)
+        inside_video = data_dir / "v.mp4"
+        inside_video.write_bytes(b"\0" * 16)
+        topic = data_dir / "slides" / "module_100_basics" / "topic_010_intro"
+        (topic / "slides_intro.de.py").write_text(
+            '# %% [markdown]\n# {{ header("Intro", "Intro") }}\n', encoding="utf-8"
+        )
+        (topic / "slides_intro.en.py").write_text(
+            '# %% [markdown]\n# {{ header("Intro", "Intro") }}\n', encoding="utf-8"
+        )
+        inside = "slides/module_100_basics/topic_010_intro/slides_intro.de.py"
         # transcript override outside
         r = await handle_harvest_report(
             inside, [str(inside_video)], data_dir, lang="de", transcript=str(trace)
         )
-        assert "error" in json.loads(r)
+        _err(r)
         # alignment override outside
         r = await handle_harvest_report(
             inside, [str(inside_video)], data_dir, lang="de", alignment=str(trace)
         )
-        assert "error" in json.loads(r)
+        _err(r)
 
     async def test_cache_list_refuses_outside_cache_root(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         outside_root = tmp_path / "outside" / "cache"
         result = await handle_harvest_cache_list(data_dir, cache_root=str(outside_root))
-        assert "error" in json.loads(result)
+        _err(result)
 
 
 # --------------------------------------------------------------------- spec/slug params
@@ -273,7 +309,7 @@ class TestSpecParamContainment:
         data_dir = _data_tree(tmp_path)
         deck, _ = _outside_sentinels(tmp_path)
         result = await handle_course_authoring_rules(data_dir, slide_path=str(deck))
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_resolve_topic_spec_param_resolves_under_data_dir(self, tmp_path):
         """Pre-fix bug: a relative course_spec resolved against CWD, not data_dir."""
@@ -307,7 +343,7 @@ class TestSymlinkContainment:
         link.symlink_to(deck)
         result = await handle_get_language_view(str(link), data_dir, language="de")
         assert "Geheim" not in result
-        assert "error" in json.loads(result)
+        _err(result)
 
     async def test_normalize_refuses_symlinked_dir(self, tmp_path):
         data_dir = _data_tree(tmp_path)
@@ -319,7 +355,7 @@ class TestSymlinkContainment:
         vendor = data_dir / "vendor"
         vendor.symlink_to(outside, target_is_directory=True)
         result = await handle_normalize_slides("vendor/deck.py", data_dir)
-        assert "error" in json.loads(result)
+        _err(result)
         assert deck.read_text(encoding="utf-8") == before
 
 
