@@ -307,6 +307,66 @@ class TestLedgerJunctionEntries:
         assert not (topic_dir / LEDGER_NAME).exists()
 
 
+class TestRefusalMessageContract:
+    def test_refusal_message_names_the_topic_directory_boundary(self, tmp_path):
+        """The ``root_label`` plumbing is load-bearing: the refusal must say
+        the deletion boundary is the *topic directory* (not the course root),
+        so operators can tell the two validators apart."""
+        topic_dir = _make_topic(tmp_path, "module_100", "topic_010_intro")
+        _make_include_source(tmp_path)
+        spec = _write_spec(
+            tmp_path,
+            "<sections><section>\n  <name><de>S</de><en>S</en></name>\n"
+            "  <topics><topic>\n    intro\n"
+            '    <include source="examples/pkg" as="pkg"/>\n'
+            "  </topic></topics>\n</section></sections>",
+        )
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
+        assert result.exit_code == 0, result.output
+        _patch_entry(topic_dir, as_path="../../outside_evil.txt")
+        result = _invoke(
+            "course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove"
+        )
+        assert result.exit_code == 1
+        combined = (result.stderr or "") + (result.output or "")
+        assert "topic directory" in combined
+        assert "course root" not in combined
+
+
+class TestUnresolvedTopicRemove:
+    def test_unresolved_topic_ledger_is_not_processed(self, tmp_path):
+        """A topic that does not resolve is skipped before planning; a
+        hostile ledger inside it is ignored (exit 0, nothing deleted).
+        Pre-existing behavior — pinned so a future refactor that starts
+        planning unresolved topics cannot silently change it."""
+        topic_dir = _make_topic(tmp_path, "module_100", "topic_010_intro")
+        _make_include_source(tmp_path)
+        spec = _write_spec(
+            tmp_path,
+            "<sections><section>\n  <name><de>S</de><en>S</en></name>\n"
+            "  <topics><topic>\n    ghost_topic_xyz\n"
+            '    <include source="examples/pkg" as="pkg"/>\n'
+            "  </topic></topics>\n</section></sections>",
+        )
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
+        assert result.exit_code == 0, result.output
+        # A ledger in a skipped topic is neither processed nor cleaned up.
+        ledger = topic_dir / LEDGER_NAME
+        ledger.write_text(
+            json.dumps(
+                {"entries": [{"source": "examples/pkg", "as_path": "../../evil", "mode": "copy"}]}
+            ),
+            encoding="utf-8",
+        )
+        result = _invoke(
+            "course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove"
+        )
+        assert result.exit_code == 0
+        assert ledger.exists()
+        combined = (result.output or "") + (result.stderr or "")
+        assert "did not resolve" in combined or "unresolved topic" in combined
+
+
 class TestMixedLedgerNoPartialDeletion:
     def test_invalid_entry_prevents_deleting_valid_ones(self, tmp_path):
         """If one entry is invalid, earlier VALID entries must not already be
