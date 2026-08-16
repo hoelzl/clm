@@ -1154,7 +1154,7 @@ keep the security change reviewable in one sitting, and neither is blocked.
 
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: not started (S5 pulled forward to Phase 3a) ▸ TRACKED: #798
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress (S12 done; S5 pulled forward to Phase 3a) ▸ TRACKED: #798
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -1246,11 +1246,29 @@ CLM owns, and secrets stay out of logs and commits.
    - Also move the mitmproxy CA **private key** out of the course-repo working
      tree (`build.py:313-316`), or ignore it explicitly. `umask_secret()` is a
      no-op on Windows, and with `CLM_JOBS_DB_PATH=Z:\…` the key lands on a share.
-7. **S12 — secrets in config output.** `config.py:504,600,692`: make the LLM key,
-   Auphonic key and OBS password `SecretStr`. `clm config show --json` is exactly
-   what gets pasted into bug reports and agent transcripts. Add `--reveal` if you
-   need the values. Also `chmod 0600` the Google refresh token
-   (`cohort_calendar/google_sync.py:236-238`).
+7. **S12 — secrets in config output.** ▸ **DONE 2026-08-16** (PR #843, merge
+   899b9eea; refs umbrella #798). The LLM key, Auphonic key and OBS password are
+   now `SecretStr`; `clm config show --json` preserves the config shape but masks
+   all three, and cleartext requires the deliberate `--json --reveal`
+   combination. Direct and whole-section assignment revalidate the secret types,
+   malformed config errors hide secret inputs, and audited production consumers
+   unwrap only at their external API boundary. Google OAuth cache writes now use
+   a private same-directory temporary plus atomic replacement; existing-cache
+   reads use `lstat`, `O_NOFOLLOW` where available, descriptor identity/type
+   checks, descriptor-based `fchmod(0600)`, and JSON parsing from that same
+   descriptor. This prevents symlink/read-swap chmod or disclosure of an
+   unrelated target, keeps write swaps contained to replacement of the cache
+   path, persists successful refreshes without restarting consent on persistence
+   failure, and removes partial-write temporaries. Tests: config regression cases
+   in `tests/cli/test_config_command.py` and `tests/infrastructure/test_config.py`;
+   token permission, refresh, failure, symlink, swap and partial-write cases in
+   `tests/cohort_calendar/test_google_sync.py`. RED discrimination against the
+   pre-fix tree covered all three JSON leaks; subsequent differentiated review
+   rounds found and drove the assignment/error/refresh/symlink/TOCTOU fixes. The
+   final exact-candidate reviewer completed its focused and Windows/WSL probe
+   matrix but its provider safety filter blocked only the prose verdict; the PR
+   records that limitation and the clean probe/CI evidence rather than claiming
+   an agent CLEAN response.
 
 **Acceptance**: a spec or ledger containing `..` or an absolute path cannot write
 or delete outside the output root; MCP tools refuse paths outside `data_dir`; a
