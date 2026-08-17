@@ -236,6 +236,7 @@ async def main_build(
     no_html: bool = False,
     no_diagrams: bool = False,
     explain_rebuilds: bool = False,
+    allow_unowned_output: bool = False,
 ) -> BuildSummary | None:
     """Adapt the ``clm build`` invocation onto the engine's ``run_build``.
 
@@ -317,6 +318,7 @@ async def main_build(
         inline_images=inline_images,
         incremental=incremental,
         clean=clean,
+        allow_unowned_output=allow_unowned_output,
         sweep=effective_sweep,
         selected_sections=selected_sections,
         fail_on_missing_xref=fail_on_missing_xref,
@@ -462,6 +464,17 @@ async def main_build(
         "wipe. The default build flow no longer wipes — it relies on "
         "hash-aware writes plus a post-build sweep. Use --clean for "
         "emergency recovery from a corrupted output tree."
+    ),
+)
+@click.option(
+    "--allow-unowned-output",
+    is_flag=True,
+    help=(
+        "Allow the destructive output operations (--clean's wipe and the "
+        "post-build stray-file sweep) to run in an output root clm cannot "
+        "prove it owns — one that already held files at build start and "
+        "carries no .clm-manifest.json from an earlier build. Without this "
+        "flag such a root is refused and nothing under it is deleted."
     ),
 )
 @click.option(
@@ -723,6 +736,7 @@ def build(
     ignore_cache,
     clear_cache,
     clean,
+    allow_unowned_output,
     incremental,
     no_sweep,
     only_sections,
@@ -897,6 +911,7 @@ def build(
             no_html=no_html,
             no_diagrams=no_diagrams,
             explain_rebuilds=resolved_explain_rebuilds,
+            allow_unowned_output=allow_unowned_output,
         )
     )
 

@@ -77,6 +77,16 @@ class SweepReport:
     dry_run: bool = False
     """Set to ``True`` when no filesystem changes were performed."""
 
+    refused_roots: list[Path] = Factory(list)
+    """Roots left completely untouched because CLM cannot prove it owns them.
+
+    A root listed here was passed in ``unowned_roots`` *and* the walk
+    found something to delete; nothing under it was removed (finding
+    S11, #798). A root with no ownership evidence whose contents are
+    fully accounted for by the registries is not refused — there was
+    nothing to delete in the first place.
+    """
+
 
 @define
 class _SweepState:
@@ -86,6 +96,29 @@ class _SweepState:
     removed_dirs: list[Path] = field(factory=list)
     skipped_subtrees: list[Path] = field(factory=list)
     kept_due_to_pattern: int = 0
+
+
+@define
+class _SweepPlan:
+    """What a walk of one root would delete, before anything is deleted.
+
+    The sweep plans a whole root before touching it so an unowned root
+    can be refused *without* a half-finished deletion — the same
+    plan-then-execute shape the ``.clm-include`` removal uses (S4).
+    """
+
+    files: list[Path] = field(factory=list)
+    """Files (and symlinks) to unlink."""
+
+    dirs: list[Path] = field(factory=list)
+    """Directories to remove, deepest first."""
+
+    skipped_subtrees: list[Path] = field(factory=list)
+    kept_due_to_pattern: int = 0
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.files and not self.dirs
 
 
 def _matches_keep_pattern(rel_path: str, patterns: Iterable[str]) -> bool:
@@ -131,8 +164,12 @@ def sweep_stray_files(
     keep_patterns: Iterable[str] = DEFAULT_KEEP_PATTERNS,
     dry_run: bool = False,
     skip_reason: str | None = None,
+    unowned_roots: Iterable[Path] = (),
 ) -> SweepReport:
     """Walk each root and delete files not in the registries' tracked sets.
+
+    Each root is planned in full before anything is deleted, so a root
+    CLM cannot prove it owns is refused whole rather than half-swept.
 
     Args:
         root_dirs: Output roots to walk. Each is treated independently;
@@ -153,6 +190,14 @@ def sweep_stray_files(
             reason is surfaced in the report. Used by callers that
             detect stage errors or other guard conditions and want a
             uniform "no-op" report.
+        unowned_roots: Roots for which the caller could not establish
+            ownership evidence (see
+            :func:`clm.build.output_ownership.snapshot_output_ownership`).
+            Such a root is swept only if the plan is empty — the
+            registries then account for everything on disk, which is
+            itself the missing evidence. Otherwise the root is left
+            untouched and listed in ``refused_roots``. Empty by default,
+            so callers with no snapshot get the pre-gate behavior.
     """
     if skip_reason is not None:
         return SweepReport(skipped=True, skip_reason=skip_reason, dry_run=dry_run)
@@ -161,7 +206,9 @@ def sweep_stray_files(
     if image_registry is not None:
         expected.update(image_registry.tracked_paths)
 
+    unowned = set(unowned_roots)
     state = _SweepState()
+    refused: list[Path] = []
 
     for root in root_dirs:
         if not root.exists():
@@ -169,14 +216,31 @@ def sweep_stray_files(
         if not root.is_dir():
             logger.warning("Sweep: skipping non-directory root %s", root)
             continue
-        _sweep_directory(
+
+        plan = _SweepPlan()
+        _plan_directory(
             root,
             root,
             expected,
             keep_patterns=tuple(keep_patterns),
-            dry_run=dry_run,
-            state=state,
+            plan=plan,
         )
+
+        if root in unowned and not plan.is_empty:
+            logger.error(
+                "Sweep refused in %s: clm cannot verify it owns this "
+                "directory, and the sweep would have deleted %d file(s) and "
+                "%d directory/ies. Nothing was removed.",
+                root,
+                len(plan.files),
+                len(plan.dirs),
+            )
+            refused.append(root)
+            continue
+
+        state.kept_due_to_pattern += plan.kept_due_to_pattern
+        state.skipped_subtrees.extend(plan.skipped_subtrees)
+        _execute_plan(plan, dry_run=dry_run, state=state)
 
     return SweepReport(
         deleted_files=state.deleted_files,
@@ -184,23 +248,55 @@ def sweep_stray_files(
         skipped_subtrees=state.skipped_subtrees,
         kept_due_to_pattern=state.kept_due_to_pattern,
         dry_run=dry_run,
+        refused_roots=refused,
     )
 
 
-def _sweep_directory(
+def _execute_plan(plan: _SweepPlan, *, dry_run: bool, state: _SweepState) -> None:
+    """Carry out a planned sweep, recording what was actually removed.
+
+    Files go first, then directories deepest-first (the order
+    :func:`_plan_directory` produced them in). A failure is logged and
+    skipped: the containing directory's ``rmdir`` then fails too, which
+    is the same outcome the pre-plan implementation reached by marking
+    the parent non-empty.
+    """
+    if dry_run:
+        state.deleted_files.extend(plan.files)
+        state.removed_dirs.extend(plan.dirs)
+        return
+
+    for file_path in plan.files:
+        try:
+            file_path.unlink()
+        except OSError as exc:
+            logger.warning("Sweep: cannot remove %s: %s", file_path, exc)
+            continue
+        state.deleted_files.append(file_path)
+
+    for dir_path in plan.dirs:
+        try:
+            dir_path.rmdir()
+        except OSError as exc:
+            logger.warning("Sweep: cannot remove empty dir %s: %s", dir_path, exc)
+            continue
+        state.removed_dirs.append(dir_path)
+
+
+def _plan_directory(
     directory: Path,
     root: Path,
     expected: set[Path],
     *,
     keep_patterns: tuple[str, ...],
-    dry_run: bool,
-    state: _SweepState,
+    plan: _SweepPlan,
 ) -> bool:
-    """Recursively sweep ``directory``. Returns True iff it became empty.
+    """Recursively plan the sweep of ``directory``. True iff it will empty.
 
-    A directory becomes empty if all entries it contains were deleted
-    by the sweep (or it was empty to begin with). The caller may then
-    remove it.
+    A directory will become empty if every entry it contains is planned
+    for deletion (or it was empty to begin with). The caller may then
+    plan its removal — appended after its children, so ``plan.dirs`` is
+    in deepest-first order.
 
     Subtrees containing a nested ``.git/`` are skipped entirely.
     """
@@ -230,33 +326,25 @@ def _sweep_directory(
             continue
 
         if _matches_keep_pattern(rel_posix, keep_patterns):
-            state.kept_due_to_pattern += 1
+            plan.kept_due_to_pattern += 1
             became_empty = False
             continue
 
         if is_dir:
             if _has_nested_git(entry_path):
                 logger.debug("Sweep: skipping nested git repo at %s", entry_path)
-                state.skipped_subtrees.append(entry_path)
+                plan.skipped_subtrees.append(entry_path)
                 became_empty = False
                 continue
-            child_empty = _sweep_directory(
+            child_empty = _plan_directory(
                 entry_path,
                 root,
                 expected,
                 keep_patterns=keep_patterns,
-                dry_run=dry_run,
-                state=state,
+                plan=plan,
             )
             if child_empty:
-                if not dry_run:
-                    try:
-                        entry_path.rmdir()
-                    except OSError as exc:
-                        logger.warning("Sweep: cannot remove empty dir %s: %s", entry_path, exc)
-                        became_empty = False
-                        continue
-                state.removed_dirs.append(entry_path)
+                plan.dirs.append(entry_path)
             else:
                 became_empty = False
             continue
@@ -265,14 +353,7 @@ def _sweep_directory(
             if entry_path in expected:
                 became_empty = False
                 continue
-            if not dry_run:
-                try:
-                    entry_path.unlink()
-                except OSError as exc:
-                    logger.warning("Sweep: cannot remove %s: %s", entry_path, exc)
-                    became_empty = False
-                    continue
-            state.deleted_files.append(entry_path)
+            plan.files.append(entry_path)
             continue
 
         # Anything else (block device, fifo, …) — leave alone.

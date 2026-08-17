@@ -7,7 +7,7 @@ from attrs import evolve, frozen
 from clm.core.course_spec import DirGroupSpec
 from clm.core.operation import Operation
 from clm.core.utils.path_utils import output_path_for
-from clm.core.utils.text_utils import Text
+from clm.core.utils.text_utils import Text, sanitize_relative_name
 
 if TYPE_CHECKING:
     from clm.core.course import Course
@@ -78,7 +78,13 @@ class DirGroup:
                 self.course.output_dir_name[lang],
                 skip_toplevel=skip_toplevel,
             )
-            / self.name[lang]
+            # Sanitized like a section name, but per segment (finding
+            # S11, #798): the name comes from the spec and is joined onto
+            # the output root, so ``<name>..</name>`` would otherwise
+            # write — and let the sweep delete — one level above the
+            # output tree. Multi-segment names (``Code/Solutions``) keep
+            # nesting; only traversal is neutralized.
+            / sanitize_relative_name(self.name[lang])
         )
 
     def output_dirs(

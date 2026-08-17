@@ -85,13 +85,19 @@ class TestOutputTargetFromSpec:
         assert target.formats == frozenset({"html", "notebook"})
         assert target.languages == frozenset({"en"})
 
-    def test_from_spec_absolute_path(self, tmp_path):
-        """Test creating OutputTarget with absolute path."""
-        abs_path = tmp_path / "absolute_output"
-        spec = OutputTargetSpec(name="abs", path=str(abs_path))
-        target = OutputTarget.from_spec(spec, tmp_path)
+    def test_from_spec_refuses_absolute_path(self, tmp_path):
+        """Absolute ``<path>`` values are refused (finding S11, #798).
 
-        assert target.output_root == abs_path.resolve()
+        They used to be honoured verbatim, which put the sweep and the
+        ``--clean`` wipe wherever the spec pointed. Output trees now live
+        below the course root; ``--output-dir`` is the way to build
+        elsewhere. See ``tests/core/test_spec_write_containment.py``.
+        """
+        from clm.core.course_spec import CourseSpecError
+
+        spec = OutputTargetSpec(name="abs", path=str(tmp_path / "absolute_output"))
+        with pytest.raises(CourseSpecError):
+            OutputTarget.from_spec(spec, tmp_path)
 
 
 class TestOutputTargetFiltering:

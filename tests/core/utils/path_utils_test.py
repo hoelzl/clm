@@ -359,8 +359,9 @@ class TestOutputSpecsWithExplicitTarget:
 
     def test_output_specs_with_explicit_target_skips_toplevel(self, course_1, tmp_path):
         """Test that output_specs with explicit target skips public/speaker directories."""
-        # Create an explicit target
-        spec = OutputTargetSpec(name="test", path=str(tmp_path / "output"))
+        # Create an explicit target. The path is course-root relative:
+        # absolute output paths are refused since S11 (#798).
+        spec = OutputTargetSpec(name="test", path="output")
         target = OutputTarget.from_spec(spec, tmp_path)
         assert target.is_explicit is True
 

@@ -513,9 +513,9 @@ Copy additional directories (e.g., code examples) to output.
 
 | Element/Attribute | Required | Description |
 |-------------------|----------|-------------|
-| `<name>` | Yes | Output directory name (bilingual or simple; empty = course root) |
-| `<path>` | Yes | Source path relative to course root |
-| `<subdirs>` | No | Specific subdirectories to copy (omit to copy all) |
+| `<name>` | Yes | Output directory name (bilingual or simple; empty = course root). May nest (`Code/Solutions`); each segment is sanitized the way section names are, so it always stays inside the output tree. |
+| `<path>` | Yes | Source path relative to course root. Absolute paths and `..` segments are a spec error (since {version}). |
+| `<subdirs>` | No | Specific subdirectories to copy (omit to copy all). Same rule as `<path>`: course-relative, no `..`. |
 | `include-root-files` | No | Also copy files from base path (default: `false`) |
 | `recursive` | No | Recurse into subdirectories (default: `true`) |
 
@@ -686,11 +686,36 @@ Define multiple output directories with content filters.
 |---------|----------|-------------|
 | `name` (attr) | Yes | Unique target identifier |
 | `distribute` (attr) | No | `true`/`false`. `false` marks the target as a **private build input** that `clm git` (without `--target`) never turns into a distributed repo. **Default**: `false` for any target named as a `<release-channels source-target>` (its content reaches students only via `clm release sync`), `true` for everything else. An explicit `--target NAME` always wins over the skip. (Issue #292) |
-| `<path>` | Yes | Output directory (relative or absolute) |
+| `<path>` | Yes | Output directory, **relative to the course root**. See the containment rules below. |
 | `<kinds>` | No | Filter by output kind (omit for all) |
 | `<formats>` | No | Filter by output format (omit for all) |
 | `<languages>` | No | Filter by language (omit for all) |
 | `<remote-path>` | No | Override course-level remote path for this target (e.g., GitLab group) |
+
+#### `<path>` containment rules (since {version})
+
+`clm build` owns everything under an output root: it sweeps files it did
+not write, and `--clean` wipes the root outright. A spec therefore cannot
+point a target anywhere it likes. Since {version} a `<path>` is refused
+at spec-validation time — before any job runs — when it
+
+- is **absolute** (`/srv/out`, `C:\out`) — build elsewhere with
+  `clm build --output-dir DIR`, which re-roots every target under
+  `<DIR>/<target-name>/`;
+- contains a **`..` segment**;
+- resolves onto the **course data directory itself** — the
+  `<path>.</path>` typo, which used to aim the sweep at your slides.
+
+The check is symlink-correct: a relative path that resolves back onto the
+course root through a symlink is refused too.
+
+Beyond the spec, the destructive operations verify at run time that the
+output root is CLM's before deleting anything: it must have been empty (or
+absent) when the build started, or carry the `.clm-manifest.json`
+provenance index a previous `clm build` wrote. A directory that fails both
+tests is refused with its path named, and nothing under it is deleted —
+see `clm info migration` for the one-time impact on output trees created
+before the manifest existed, and for the `--allow-unowned-output` override.
 
 #### Output kinds
 

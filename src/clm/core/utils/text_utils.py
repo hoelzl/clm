@@ -64,10 +64,58 @@ _STREAM_STRING_TRANSLATION_TABLE = str.maketrans(
 )
 
 
-def sanitize_file_name(text: str) -> str:
+# ``.`` and ``..`` survive the translation table (neither character is
+# replaced or deleted) but they are not names — they are the current and
+# parent directory. Every caller joins the result onto an output
+# directory, so returning ``..`` walks *out* of the output tree (finding
+# S11, #798). Map them to underscore runs of the same length: distinct
+# results, so two components that only differ in dot count do not
+# collide, and no traversal.
+_TRAVERSAL_REPLACEMENTS = {".": "_", "..": "__"}
+
+
+def _translate_file_name(text: str) -> str:
+    """The character-level half of :func:`sanitize_file_name`."""
     text = text.replace("C#", "CSharp")
-    sanitized_text = text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
-    return sanitized_text
+    return text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
+
+
+def is_traversal_name(text: str) -> bool:
+    """True when *text* would name the current or parent directory.
+
+    ``sanitize_file_name`` maps those to a safe replacement, so a caller
+    can no longer detect them by inspecting its output — but a caller
+    that wants to *refuse* such input rather than silently rename it
+    (the recordings dashboard does: a section name of ``":..:"`` is a
+    mistake worth reporting, not a directory called ``__``) needs the
+    question answered before the replacement. Note the sanitizer deletes
+    ``:`` and other punctuation first, which is what makes ``":..:"``
+    traversal at all.
+    """
+    return _translate_file_name(text) in _TRAVERSAL_REPLACEMENTS
+
+
+def sanitize_file_name(text: str) -> str:
+    sanitized_text = _translate_file_name(text)
+    return _TRAVERSAL_REPLACEMENTS.get(sanitized_text, sanitized_text)
+
+
+def sanitize_relative_name(name: str) -> str:
+    """Sanitize a spec-supplied name that may span several path segments.
+
+    ``<dir-group><name>`` is joined onto the output directory and may
+    legitimately nest (``Code/Solutions`` produces ``Code/Solutions/``),
+    so it cannot go through :func:`sanitize_file_name` whole — that
+    would collapse the separator into an underscore. Each segment is
+    sanitized individually instead, ``.`` segments are dropped, ``..``
+    segments become a safe name, and a leading separator is discarded:
+    the result is always a relative path below the directory it is
+    joined onto (finding S11, #798). An empty name stays empty, which
+    keeps its historical "no extra directory level" meaning.
+    """
+    normalized = name.replace("\\", "/")
+    segments = [segment for segment in normalized.split("/") if segment not in ("", ".")]
+    return "/".join(sanitize_file_name(segment) for segment in segments)
 
 
 def sanitize_path(path) -> Path:

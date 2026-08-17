@@ -15,6 +15,7 @@ from clm.core.course_spec import (
     VALID_LANGUAGES,
     JupyterLiteConfig,
     OutputTargetSpec,
+    validate_output_target_path,
 )
 
 # ``speaker`` is preserved in :data:`VALID_KINDS` as a deprecated input alias
@@ -87,13 +88,21 @@ class OutputTarget:
 
         Returns:
             OutputTarget with resolved absolute paths
+
+        Raises:
+            OutputPathError: When ``spec.path`` is absolute, contains a
+                ``..`` segment, or resolves onto the course data
+                directory. ``CourseSpec.validate`` reports the same rule
+                as a validation error, but not every ``Course``
+                construction path validates first (``clm git``, the
+                release tooling, the MCP server), so resolution refuses
+                too (finding S11, #798).
         """
-        # Resolve path (relative to course root or absolute)
-        path = Path(spec.path)
-        if not path.is_absolute():
-            output_root = course_root / path
-        else:
-            output_root = path
+        validate_output_target_path(spec.path, target_name=spec.name, course_root=course_root)
+
+        # Paths are course-root relative; ``validate_output_target_path``
+        # has already refused absolute ones.
+        output_root = course_root / Path(spec.path)
 
         # Convert None to "all" semantics
         kinds = frozenset(spec.kinds) if spec.kinds else ALL_KINDS

@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 from collections.abc import Iterable, Iterator
 from enum import Enum
 from fnmatch import fnmatch
@@ -157,6 +158,83 @@ def normalize_include_path(
                 f".gitignore patterns; pick a name without these characters."
             )
     return candidate.as_posix()
+
+
+class OutputPathError(CourseSpecError):
+    """An ``<output-target><path>`` names a directory CLM must not write to.
+
+    Spec-driven writes are contained the same way ``<include>`` paths are
+    (adversarial review S11, tracked in #798): the output tree is a
+    distinct directory *below* the course root, so a spec cannot aim the
+    post-build sweep or the ``--clean`` wipe at the course sources.
+    Subclasses :class:`CourseSpecError` so existing spec-parse callers
+    catch it unchanged.
+    """
+
+
+# ``Path("C:/x").is_absolute()`` is False on POSIX and
+# ``Path("/x").is_absolute()`` is False on Windows (no drive), so
+# ``is_absolute`` alone lets a spec authored on one platform escape
+# containment on the other. Detect the drive prefix explicitly.
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+def validate_output_target_path(
+    value: str,
+    *,
+    target_name: str,
+    course_root: Path | None = None,
+) -> None:
+    """Validate an ``<output-target><path>``, raising on refusal.
+
+    Three rules, checked in order:
+
+    1. The path is relative — absolute and drive-qualified forms are
+       refused on every platform.
+    2. It contains no ``..`` segment.
+    3. Resolved against *course_root*, it neither equals nor contains
+       the course data directory. This is the check that catches the
+       one-character ``<path>.</path>`` typo, and it is symlink-correct
+       (both sides are resolved) rather than a string comparison.
+
+    *course_root* is optional because not every caller has resolved one;
+    rules 1 and 2 always apply. An empty path is not this function's
+    business — :meth:`OutputTargetSpec.validate` already reports it.
+
+    Raises:
+        OutputPathError: When any rule is violated.
+    """
+    cleaned = value.strip()
+    if not cleaned:
+        return
+
+    normalized = cleaned.replace("\\", "/")
+    candidate = Path(normalized)
+    if candidate.is_absolute() or normalized.startswith("/") or _WINDOWS_DRIVE_RE.match(normalized):
+        raise OutputPathError(
+            f"Output target '{target_name}': <path>{cleaned}</path> is an "
+            f"absolute path. Output paths must be relative to the course "
+            f"root so a spec cannot direct writes (and the post-build "
+            f"sweep) outside the course."
+        )
+    if any(part == ".." for part in candidate.parts):
+        raise OutputPathError(
+            f"Output target '{target_name}': <path>{cleaned}</path> contains "
+            f"a '..' segment. Output paths must stay inside the course root."
+        )
+    if course_root is None:
+        return
+
+    resolved_root = course_root.resolve()
+    resolved_output = (course_root / candidate).resolve()
+    if resolved_output == resolved_root or resolved_output in resolved_root.parents:
+        raise OutputPathError(
+            f"Output target '{target_name}': <path>{cleaned}</path> resolves "
+            f"to {resolved_output}, which is (or contains) the course data "
+            f"directory {resolved_root}. The output tree must be a separate "
+            f"directory below the course root — the build sweeps and "
+            f"(with --clean) wipes everything under it."
+        )
 
 
 def _parse_includes(parent: ETree.Element, *, element_label: str) -> list[IncludeSpec]:
@@ -929,9 +1007,37 @@ class DirGroupSpec:
         name = parse_multilang_element(element.find("name"), context="<dir-group>/<name>")
         include_root_files = element.get("include-root-files", "").lower() == "true"
         recursive = element.get("recursive", "").lower() != "false"
+        # ``<path>`` is joined onto the course root and ``<subdir>`` onto
+        # both that source path and the output directory, so an absolute
+        # or ``..``-bearing value reads outside the course and writes
+        # outside the output tree (finding S11, #798). Same canonical
+        # validation ``<include source=…>`` uses.
+        raw_path = element_text(element, "path")
+        # An absent/empty ``<path>`` keeps its historical meaning (the
+        # course root itself); only non-empty values are validated, so
+        # this change refuses traversal without newly rejecting specs
+        # that were parsing before.
+        path = (
+            normalize_include_path(
+                raw_path,
+                attr_name="path",
+                element_label="<dir-group>/<path>",
+            )
+            if raw_path.strip()
+            else raw_path
+        )
+        if subdirs is not None:
+            subdirs = [
+                normalize_include_path(
+                    subdir,
+                    attr_name="subdir",
+                    element_label="<dir-group>/<subdirs>/<subdir>",
+                )
+                for subdir in subdirs
+            ]
         return cls(
             name=name,
-            path=element_text(element, "path"),
+            path=path,
             subdirs=subdirs,
             include_root_files=include_root_files,
             recursive=recursive,
@@ -1052,8 +1158,15 @@ class OutputTargetSpec:
             return None
         return [(item.text or "").strip() for item in container.findall(item_tag) if item.text]
 
-    def validate(self) -> list[str]:
+    def validate(self, course_root: Path | None = None) -> list[str]:
         """Validate the target specification.
+
+        Args:
+            course_root: Resolved course data directory, when the caller
+                knows it. Enables the overlap rule (an output path may
+                neither equal nor contain the data dir) on top of the
+                shape rules, which always run. See
+                :func:`validate_output_target_path`.
 
         Returns:
             List of validation error messages (empty if valid)
@@ -1065,6 +1178,13 @@ class OutputTargetSpec:
 
         if not self.path:
             errors.append(f"Output target '{self.name}' must have a <path> element")
+        else:
+            try:
+                validate_output_target_path(
+                    self.path, target_name=self.name, course_root=course_root
+                )
+            except OutputPathError as exc:
+                errors.append(str(exc))
 
         # Validate kinds
         if self.kinds:
@@ -2334,8 +2454,15 @@ class CourseSpec:
             f"Available sections:\n  {listing}"
         )
 
-    def validate(self) -> list[str]:
+    def validate(self, course_root: Path | None = None) -> list[str]:
         """Validate the entire course spec.
+
+        Args:
+            course_root: Resolved course data directory, when the caller
+                knows it (``clm build`` and ``clm validate-spec`` do).
+                Passing it enables the output-path overlap check — an
+                ``<output-target><path>`` may neither equal nor contain
+                the data dir (finding S11, #798).
 
         Returns:
             List of validation error messages (empty if valid)
@@ -2348,7 +2475,7 @@ class CourseSpec:
 
         for target in self.output_targets:
             # Validate individual target
-            errors.extend(target.validate())
+            errors.extend(target.validate(course_root))
 
             # Check for duplicate names
             if target.name in target_names:
