@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3 DONE; Phase 3a: S5+S4+S8 DONE | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 7, 8 DONE; Phase 4: S4/S8/S12 DONE, S11/S9/S10+D7 remain with **locked implementation contracts** (2026-08-17 — read the per-item contract blocks, do not re-derive the design decisions) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1154,7 +1154,7 @@ keep the security change reviewable in one sitting, and neither is blocked.
 
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress (S12 done; S5 pulled forward to Phase 3a) ▸ TRACKED: #798
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress — S4, S8, S12 DONE; remaining S11 → S9 → S10+D7 (recommended order; **implementation contracts locked with the owner 2026-08-17** — see each item) ▸ TRACKED: #798
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -1216,6 +1216,42 @@ CLM owns, and secrets stay out of logs and commits.
    (`text_utils.py:56-70`). Consider requiring a marker file (e.g.
    `.clm-manifest.json`) before the sweep will empty a directory — a
    one-character typo (`<path>.</path>`) currently reaches the sweep.
+
+   **Implementation contract (decision locked 2026-08-17: "overlap check +
+   ownership gate" — BOTH layers, not either/or).** Do not re-derive the
+   design; the open questions in the paragraph above are settled:
+
+   - **Layer 1 — parse-time spec validation.** An `<output-target><path>` is
+     rejected at spec load (validation error naming the element and value)
+     when it (a) is absolute, (b) contains a `..` segment, or (c) resolved
+     against the course root, **equals or contains the course data dir** —
+     the overlap check that catches `<path>.</path>` before anything runs.
+     `<dir-group><name>`/`<subdir>` go through the same sanitization pipeline
+     section names use. `sanitize_file_name` must never *return* `.` or `..`
+     (mapping them to a safe replacement is fine); the spec layer rejects
+     them explicitly where identity matters, so the error is attributable.
+   - **Layer 2 — destructive-op ownership gate.** `sweep_stray_files`
+     (`clm.build.output_sweep`, invoked from `engine.py` ~`:990-1013`) and the
+     `--clean` wipe may only act inside a target root that satisfies one of:
+     it was **empty or nonexistent at build start**, it contains
+     **`.clm-manifest.json`** (default-on since #295), or it is recorded as
+     clm-owned by a previous build's registry evidence. Anything else →
+     refuse with an error naming the directory and the remedy (empty it
+     yourself, or pass the explicit new override flag the implementer adds —
+     do NOT overload `--clean` as the override, `--clean` is precisely the
+     dangerous operation being gated). `.git` survival is unchanged. Snapshot
+     / `--verify-against` flows create fresh dirs, so they pass via the
+     empty-at-start rule — add a test proving that, since the provenance
+     manifest is suppressed in those flows.
+   - **Acceptance (RED first, each as a failing test before the fix):** a
+     spec with `<path>.</path>` fails validation before any job runs; a spec
+     with `<path>../elsewhere</path>` and `<path>C:\somewhere</path>`
+     likewise; a sweep pointed (by test harness) at a non-empty unmarked
+     directory refuses and deletes nothing; a normal incremental rebuild into
+     an existing marked output tree behaves exactly as today.
+   - Update `clm info spec-files` (`<output-target><path>` rules) and
+     `clm info migration` (the refusal + override flag are new behavior for
+     anyone whose output tree predates the manifest).
 4. **S5 — repo-supplied executables.** ▸ **moved to Phase 3a** (pulled forward
    2026-07-26 — same class as the Phase 0 RCE). Kept here as the reference text.
    `config.py:936-947` discovers config from
@@ -1234,6 +1270,19 @@ CLM owns, and secrets stay out of logs and commits.
    verified gaps in the `course.py:340` whole-volume guard: the `len(resolved)==1`
    early return skips it, `data_dir` has no guard at all, and
    `_build_has_docker_notebook_worker` returns `False` on any exception.
+
+   **Implementation contract (decision locked 2026-08-17: fixed non-root
+   UID).** `USER 1000:1000` in all three worker images (Dockerfiles under
+   `docker/`); ownership verification happens in the CI docker tier (Linux
+   runners — the docker job is a required check since #679) plus a Docker
+   Desktop/Windows smoke on the dev box; document the native-Linux
+   uid-remapping caveat (`docker run --user`) in `docs/user-guide/` rather
+   than parameterizing the image. Guard-gap semantics: the
+   `_build_has_docker_notebook_worker` exception path must **fail safe** —
+   treat an undeterminable state as "a docker notebook worker exists" (guard
+   applies) and log a warning, never silently disable the guard. Note the
+   image-identity cache keying (#744): rebuilt images re-render cached
+   notebooks — expected, mention it in the changelog fragment.
 6. **S9 — cassette scrubbing.** `cassette_format.py:72-74`: add `api-key`
    (Azure OpenAI), `x-goog-api-key` (Gemini), `proxy-authorization`,
    `x-amz-security-token`, `x-auth-token`; add `key`, `access_token`, `apikey`,
@@ -1246,6 +1295,37 @@ CLM owns, and secrets stay out of logs and commits.
    - Also move the mitmproxy CA **private key** out of the course-repo working
      tree (`build.py:313-316`), or ignore it explicitly. `umask_secret()` is a
      no-op on Windows, and with `CLM_JOBS_DB_PATH=Z:\…` the key lands on a share.
+
+   **Implementation contract (decisions locked 2026-08-17).**
+   - **Response side = header strip + JSON key-list redaction.** Always strip
+     `Set-Cookie` from recorded responses. For JSON response bodies
+     (content-type by prefix), recursively redact the **values** of an
+     exact-match key list — `access_token`, `refresh_token`, `id_token`,
+     `client_secret`, `api_key`, `apikey`, `authorization`, `password`,
+     `secret`, `session_token` — using the same placeholder the request-side
+     filter uses. **Exact key names only, never substring/prefix matching**:
+     LLM responses legitimately contain `completion_tokens` /
+     `total_tokens` fields, and clipping those would corrupt replayed usage
+     data. Non-JSON bodies are left untouched in this pass.
+   - **CA key location**: move the mitm confdir out of the course working
+     tree to the per-user clm data dir (sibling of `kernel-envs/`); one
+     stable CA per machine, nothing secret in any repo or on `Z:\`.
+   - **Re-record scope = "audit first, re-record if dirty".** In this PR:
+     re-record clm's own committed cassettes (the #681 e2e cassette via the
+     documented stub ritual in `tests/e2e/test_e2e_http_replay.py`, plus the
+     golden pin), and ship a scanner — extend
+     `src/clm/workers/notebook/cassette_doctor.py` with a mode that reports
+     any entry in an existing cassette matching the request+response filter
+     lists (file, interaction index, offending key; no rewriting). Course
+     repos are follow-up work: run the scanner over each repo and re-record
+     **only decks whose cassettes actually contain secrets** — do not
+     schedule blanket re-recording (needs live services per deck). File one
+     follow-up task per affected course repo with the scanner output
+     attached.
+   - **Acceptance:** a recording against a stub that returns `Set-Cookie`
+     and an OAuth-shaped token body commits a cassette containing neither;
+     a replayed LLM cassette still round-trips `completion_tokens` intact;
+     the scanner flags a seeded dirty cassette and passes a clean one.
 7. **S12 — secrets in config output.** ▸ **DONE 2026-08-16** (PR #843, merge
    899b9eea; refs umbrella #798). The LLM key, Auphonic key and OBS password are
    now `SecretStr`; `clm config show --json` preserves the config shape but masks
