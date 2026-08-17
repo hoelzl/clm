@@ -35,8 +35,9 @@ def mock_course():
     return course
 
 
-def _diagram_file(course, tmp_path: Path) -> ImageFile:
-    source = tmp_path / "topic" / "pu" / "diagram.pu"
+def _diagram_file(course, tmp_path: Path, name: str = "diagram.pu") -> ImageFile:
+    subdir = "drawio" if name.endswith(".drawio") else "pu"
+    source = tmp_path / "topic" / subdir / name
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("@startuml\n@enduml\n", encoding="utf-8")
     return ImageFile(course=course, path=source, topic=MagicMock())
@@ -75,6 +76,36 @@ class TestRenderTarget:
         mock_course.image_format = "svg"
         image = _diagram_file(mock_course, tmp_path)
         assert image.img_path.name == "diagram.svg"
+
+    def test_a_multi_dot_source_keeps_its_full_stem(self, mock_course, tmp_path):
+        """``embeddings.de.drawio`` renders to ``embeddings.de.png`` (issue #855).
+
+        The render extension is APPENDED to the stem; ``with_suffix`` used to
+        swallow the ``.de`` segment as if it were an extension, collapsing the
+        render onto ``embeddings.png``.
+        """
+        image = _diagram_file(mock_course, tmp_path, name="embeddings.de.drawio")
+        assert image.img_path == tmp_path / "topic" / "img-generated" / "embeddings.de.png"
+
+    def test_language_suffixed_twins_do_not_collide(self, mock_course, tmp_path):
+        """``.de``/``.en`` sibling sources render to DISTINCT targets (issue #855).
+
+        Before the fix both collapsed onto one ``embeddings.png`` — one render
+        silently lost per build, the survivor scheduling-dependent.
+        """
+        de = _diagram_file(mock_course, tmp_path, name="embeddings.de.drawio")
+        en = _diagram_file(mock_course, tmp_path, name="embeddings.en.drawio")
+        assert de.img_path != en.img_path
+        assert de.img_path.name == "embeddings.de.png"
+        assert en.img_path.name == "embeddings.en.png"
+
+    def test_a_multi_dot_committed_legacy_render_keeps_its_location(self, mock_course, tmp_path):
+        """The transitional legacy rule looks up the SUFFIXED name too."""
+        image = _diagram_file(mock_course, tmp_path, name="embeddings.de.drawio")
+        legacy = tmp_path / "topic" / "img" / "embeddings.de.png"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b"committed render")
+        assert image.img_path == legacy
 
 
 class TestOneOutputNamespace:

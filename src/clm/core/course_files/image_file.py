@@ -17,6 +17,22 @@ class ImageFile(CourseFile):
     """
 
     @property
+    def _render_name(self) -> str:
+        """The render's file name: the source's full stem + the image format.
+
+        The extension is APPENDED to the stem, never substituted via
+        ``with_suffix`` — for a multi-dot source like ``embeddings.de.drawio``
+        the stem is ``embeddings.de``, and ``with_suffix(".png")`` treated the
+        ``.de`` as an extension to replace, collapsing the ``.de``/``.en``
+        language twins onto one ``embeddings.png`` render (issue #855: one
+        render silently lost per build, last writer race-dependent, and the
+        ``img/embeddings.de.png`` the slides reference never produced).
+        ``clm course migrate-generated-images`` mirrors this computation and
+        must stay in lockstep.
+        """
+        return f"{self.path.stem}.{self.course.image_format}"
+
+    @property
     def generated_img_path(self) -> Path:
         """The #664 render target: ``<topic>/img-generated/<stem>.<ext>``.
 
@@ -26,9 +42,7 @@ class ImageFile(CourseFile):
         from clm.core.utils.path_utils import GENERATED_IMG_DIR
         from clm.core.utils.text_utils import sanitize_path
 
-        ext = f".{self.course.image_format}"
-        unsanitized = (self.path.parents[1] / GENERATED_IMG_DIR / self.path.stem).with_suffix(ext)
-        return sanitize_path(unsanitized)
+        return sanitize_path(self.path.parents[1] / GENERATED_IMG_DIR / self._render_name)
 
     @property
     def legacy_img_path(self) -> Path:
@@ -40,9 +54,7 @@ class ImageFile(CourseFile):
         """
         from clm.core.utils.text_utils import sanitize_path
 
-        ext = f".{self.course.image_format}"
-        unsanitized = (self.path.parents[1] / "img" / self.path.stem).with_suffix(ext)
-        return sanitize_path(unsanitized)
+        return sanitize_path(self.path.parents[1] / "img" / self._render_name)
 
     @property
     def img_path(self) -> Path:

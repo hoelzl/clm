@@ -89,8 +89,11 @@ def migrate_generated_images_cmd(root: Path, dry_run: bool) -> None:
             continue
         for ext in _RENDER_EXTENSIONS:
             # The exact computation ImageFile.legacy_img_path/generated_img_path
-            # perform, so the moved names match what the build looks for.
-            legacy = sanitize_path((topic_dir / "img" / source.stem).with_suffix(f".{ext}"))
+            # perform, so the moved names match what the build looks for. The
+            # extension is APPENDED to the full stem, not swapped in via
+            # with_suffix — a multi-dot source (``embeddings.de.drawio``) keeps
+            # its ``.de`` segment in the render name (issue #855).
+            legacy = sanitize_path(topic_dir / "img" / f"{source.stem}.{ext}")
             # Two sources can share one stem (a ``.pu`` and a ``.drawio``
             # sibling): the render is one file, and counting it once per
             # source made ``--dry-run`` over-report what the real run
@@ -98,9 +101,7 @@ def migrate_generated_images_cmd(root: Path, dry_run: bool) -> None:
             if legacy in seen_legacy:
                 continue
             seen_legacy.add(legacy)
-            target = sanitize_path(
-                (topic_dir / GENERATED_IMG_DIR / source.stem).with_suffix(f".{ext}")
-            )
+            target = sanitize_path(topic_dir / GENERATED_IMG_DIR / f"{source.stem}.{ext}")
             if not legacy.exists():
                 continue
             if target.exists():

@@ -1143,8 +1143,13 @@ committed DrawIO/PlantUML renders. The invariant is structural: nothing in
 `img/` is ever written by the build, everything in `img-generated/` only ever
 is. Both collapse onto the **same** output namespace — a render at
 `img-generated/compiler.svg` still lands at `<course>/img/compiler.svg` — so
-slide references keep saying `img/...` and never change. Keep committing the
-renders (a machine without the diagram toolchain needs them). Transitional
+slide references keep saying `img/...` and never change. The render name is
+the source's **full stem** plus the image format: a language-suffixed source
+`embeddings.de.drawio` renders to `embeddings.de.png`, so `.de`/`.en` diagram
+twins produce distinct files and slides reference the suffixed name (CLM
+{version}, #855; older versions collapsed both onto one `embeddings.png`).
+Keep committing the renders (a machine without the diagram toolchain needs
+them). Transitional
 rule for unmigrated repos: a diagram whose committed render still sits at the
 legacy `<topic>/img/<stem>.<ext>` location keeps rendering **there**; run
 `clm course migrate-generated-images` (see `clm info commands`) to move the
