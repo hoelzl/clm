@@ -54,6 +54,7 @@ Key options:
 | `--explain-rebuilds` | Log **why** each deck missed the build cache and is being rebuilt: `no cache entry`, `content hash changed` (source text or a dependency differs, with the cached vs. current hash), or `no cache entry for this output target` (new kind/format/language). Off by default so a normal build pays nothing — the reason probe runs only on a miss when this is set. Per-deck reasons go to the log file always, and to the console under `-O verbose`; the build summary also gains an aggregated **Rebuild reasons** breakdown (count per reason, most frequent first — also under `rebuild_reasons` in `-O json`). Also settable via `CLM_EXPLAIN_REBUILDS={1,true,yes,0,false,no}`. Use `clm cache explain FILE --spec SPEC` for a full per-artifact, per-cache-layer breakdown of a single deck (CLM {version}). |
 | `--clean` | Wipe each output root and regenerate from scratch (legacy flow; preserves nested `.git/`). Use for emergency recovery from a corrupted output tree. The default no longer wipes — see "Git-friendly output writes" below. |
 | `--no-sweep` | Disable the post-build stray-file sweep. Useful when iterating on a single section and you don't want orphans from other sections deleted. |
+| `--allow-unowned-output` | Let `--clean` and the post-build sweep delete inside an output root CLM cannot prove it owns (see "Output-root ownership" below). Without it, such a root is refused and nothing under it is deleted. |
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
 | `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. May be given multiple times; all occurrences accumulate. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
@@ -262,6 +263,34 @@ If you need the legacy wipe-and-rebuild flow — emergency recovery
 from a corrupted output tree, or a script that depends on a clean
 build — use `--clean`. Nested `.git/` directories are preserved
 across the wipe.
+
+#### Output-root ownership
+
+Both destructive operations — the sweep and the `--clean` wipe — delete
+files CLM did not write, so since {version} they first check that the
+output root is CLM's. A root qualifies when it
+
+- was **empty, or did not exist, when the build started**, or
+- carries a **`.clm-manifest.json`** provenance index from an earlier
+  `clm build` (written by default; `--no-provenance-manifest` skips it),
+- or — for the sweep only — contains nothing the build did not write,
+  in which case there is nothing to delete anyway.
+
+Otherwise the operation is refused: `--clean` fails the build before
+deleting anything; the sweep leaves that root untouched and reports it on
+stderr. Both name the directory and the remedy.
+
+A refused root also gets **no `.clm-manifest.json`** — the manifest is the
+evidence, so writing it would let the next build delete what this one
+declined to touch. Re-running the build therefore refuses again: move the
+files out of the way (or empty the directory), point
+`<output-target><path>` at a directory CLM owns, or — if the tree really is
+CLM's — pass `--allow-unowned-output` once. That run deletes the
+unaccounted-for files and writes the manifest, so the tree is marked from
+then on. (Combined with `--no-sweep` or `--incremental` it only marks the
+tree — there is no sweep to delete anything — so the leftovers go on the
+*next* build's sweep instead.) The flag is deliberately its own rather than an extra meaning for
+`--clean`, which is the dangerous operation being gated.
 
 #### Split-source build routing
 

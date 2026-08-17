@@ -284,6 +284,27 @@ class BuildConfig:
     # for emergency recovery from a corrupted output tree.
     clean: bool = False
 
+    # Escape hatch for the output-ownership gate (finding S11, #798).
+    # ``--clean`` and the post-build sweep delete files clm did not
+    # write, so both refuse to act in an output root that was neither
+    # empty at build start nor carries a ``.clm-manifest.json`` from an
+    # earlier build. Setting this to ``True`` (CLI:
+    # ``--allow-unowned-output``) proceeds anyway — deliberately its own
+    # flag, since ``--clean`` is the operation being gated.
+    allow_unowned_output: bool = False
+
+    # Output roots clm has no ownership evidence for. Populated at
+    # runtime (like ``resolved_section_selection`` above): set from the
+    # pre-build ownership snapshot, then narrowed to the roots the sweep
+    # actually refused — a sweep that ran and found nothing unexpected
+    # *is* the missing evidence. Read by the provenance-manifest step,
+    # which withholds the manifest for these roots: the manifest is the
+    # evidence the next build's gate reads, so writing it here would let
+    # that build delete what this one was not allowed to touch. It stays
+    # at the snapshot value when the sweep never runs (``--no-sweep``,
+    # ``--incremental``, a build with errors) — fail-safe by default.
+    unowned_output_roots: tuple[Path, ...] = ()
+
     # Stray-file sweep at end of build (Feature D2 of git-friendly output
     # writes). Default ``True`` since the new build flow no longer wipes
     # the output tree, so leftover files from renamed/removed sections

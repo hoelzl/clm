@@ -286,7 +286,7 @@ def _validate_component(value: str, *, field: str) -> str:
             control character, or sanitizes to nothing, to ``.``/``..``, or to
             anything still carrying a separator.
     """
-    from clm.core.utils.text_utils import sanitize_file_name
+    from clm.core.utils.text_utils import is_traversal_name, sanitize_file_name
 
     if not value or not value.strip():
         raise HTTPException(status_code=400, detail=f"{field} must not be empty")
@@ -294,7 +294,13 @@ def _validate_component(value: str, *, field: str) -> str:
         _reject_name(value, field)
 
     sanitized = sanitize_file_name(value)
-    if not sanitized.strip() or _is_relative_component(sanitized):
+    # ``is_traversal_name`` asks the question before the sanitizer's
+    # traversal replacement: since S11 (#798) ``sanitize_file_name`` maps
+    # ``.``/``..`` to ``_``/``__`` rather than handing back a relative
+    # component, so a name like ``":..:"`` can no longer escape — but it
+    # is still a mistake, and this route reports it instead of silently
+    # recording into a directory called ``__``.
+    if not sanitized.strip() or is_traversal_name(value) or _is_relative_component(sanitized):
         _reject_name(value, field)
     # Belt and braces: the sanitizer replaces both separators today, and this
     # holds it to that. If it ever stops, this fails closed instead of quietly

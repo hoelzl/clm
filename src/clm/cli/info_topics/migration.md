@@ -2,6 +2,68 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Spec-driven writes are contained; destructive output ops need proof of ownership (#798, {version})
+
+**Breaking for specs with an absolute `<output-target><path>`, and for
+output trees created before the provenance manifest existed.** A course
+spec drives what `clm build` writes *and deletes*: the post-build sweep
+removes everything under an output root that the build did not write, and
+`--clean` wipes the root outright. Two layers now bound that.
+
+**1. Spec validation (fails before any job runs).** An
+`<output-target><path>` is refused when it is absolute, contains a `..`
+segment, or resolves onto the course data directory itself (the
+`<path>.</path>` typo, which used to aim the sweep at your slides). The
+overlap check resolves symlinks, so a relative path that loops back onto
+the course root is caught too.
+
+- *Migration*: make the path course-root relative (`output/students`) and
+  move — or symlink — the tree under the course root. `clm build
+  --output-dir DIR` builds elsewhere for one run (it re-roots every target
+  under `<DIR>/<target-name>/`), but it is **not** a substitute for the
+  spec path: `clm git`, `clm release` and `clm recordings` resolve the
+  output tree from the spec and have no such flag, so a spec path and an
+  `--output-dir` that disagree leave them looking in different places.
+  A symlinked `output/` is fine: the rules bound what a *spec path* can
+  aim at, not where a filesystem link leads.
+
+`<dir-group><path>` and each `<subdir>` follow the same rule (course-root
+relative, no `..`), and `<dir-group><name>` is now sanitized per path
+segment the way section names always were: nesting (`Code/Solutions`)
+still works, but a `..` segment can no longer place — or delete — output
+one level above the output tree.
+
+**2. Ownership gate on the destructive operations.** `--clean` and the
+sweep only act inside an output root CLM can prove it owns: one that was
+empty (or absent) when the build started, or that carries the
+`.clm-manifest.json` provenance index written by an earlier build. The
+sweep additionally proceeds when it finds nothing on disk that the build
+did not write. Anything else is refused, naming the directory: `--clean`
+fails the build with nothing deleted; the sweep skips that root and
+leaves the stale files in place.
+
+- *Who this affects*: output trees built with `--no-provenance-manifest`,
+  or with a CLM older than 1.8 (before the manifest was written by
+  default), that also contain files the current build does not produce.
+- *Migration*: a refused build does **not** write the manifest into that
+  root — the manifest is the ownership evidence, so writing it would hand
+  the next build the permission this one declined. Re-running therefore
+  refuses again. Move the extra files out of the way (or empty the
+  directory), point `<output-target><path>` at a directory CLM owns, or —
+  if the tree really is CLM's — run `clm build --allow-unowned-output`
+  once: that build deletes the unaccounted-for files and writes the
+  manifest, and every later build is ungated. The flag is deliberately
+  separate from `--clean`, which is the operation being gated. Targets
+  that swept cleanly keep their manifests, so one refused tier does not
+  drag the rest of the build into the refusal.
+- *`--snapshot` / `--verify-against`*: `--snapshot DIR` builds into a
+  directory it already requires to be empty, so it always passes.
+  `--verify-against` builds into the **regular** output tree and is gated
+  like any other build — on a pre-manifest tree its sweep is refused
+  (and, since that flow suppresses the manifest, stays refused), which
+  surfaces as stale files reported as unexpected extras. Run one plain
+  build first.
+
 ## Multi-dot diagram sources render under their full stem (#855, {version})
 
 **Breaking only for diagram sources with a dot in the stem** (most commonly

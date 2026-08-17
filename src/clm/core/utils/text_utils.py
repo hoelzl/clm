@@ -64,10 +64,70 @@ _STREAM_STRING_TRANSLATION_TABLE = str.maketrans(
 )
 
 
-def sanitize_file_name(text: str) -> str:
+def _translate_file_name(text: str) -> str:
+    """The character-level half of :func:`sanitize_file_name`."""
     text = text.replace("C#", "CSharp")
-    sanitized_text = text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
+    return text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
+
+
+def _is_dots_only(name: str) -> bool:
+    """True when *name* is non-empty and made of dots and spaces only.
+
+    Such a name does not identify a file: ``.`` and ``..`` are the
+    current and parent directory everywhere, and on Windows *any* run of
+    dots collapses the same way (``out/...`` resolves to ``out``, and
+    trailing dots are stripped, so ``out/a..`` creates ``out/a``). The
+    recordings dashboard already judged names this way
+    (``value.strip(". ") == ""``); the sanitizer now agrees.
+    """
+    return bool(name) and name.strip(". ") == ""
+
+
+def is_traversal_name(text: str) -> bool:
+    """True when *text* would name a directory instead of a file.
+
+    ``sanitize_file_name`` maps such names to a safe replacement, so a
+    caller can no longer detect them by inspecting its output — but a
+    caller that wants to *refuse* the input rather than silently rename
+    it (the recordings dashboard does: a section name of ``":..:"`` is a
+    mistake worth reporting, not a directory called ``__``) needs the
+    question answered before the replacement. Note the sanitizer deletes
+    ``:`` and other punctuation first, which is what makes ``":..:"``
+    traversal at all.
+    """
+    return _is_dots_only(_translate_file_name(text))
+
+
+def sanitize_file_name(text: str) -> str:
+    sanitized_text = _translate_file_name(text)
+    if _is_dots_only(sanitized_text):
+        # Dots survive the translation table (the character is neither
+        # replaced nor deleted), and every caller joins the result onto
+        # an output directory — so ``..`` walks *out* of the output tree
+        # and, on Windows, so does any other run of dots (finding S11,
+        # #798). Replace the dots with underscores: the result is the
+        # same length, so names that differ only in dot count stay
+        # distinct, and none of them is a directory reference.
+        return sanitized_text.replace(".", "_")
     return sanitized_text
+
+
+def sanitize_relative_name(name: str) -> str:
+    """Sanitize a spec-supplied name that may span several path segments.
+
+    ``<dir-group><name>`` is joined onto the output directory and may
+    legitimately nest (``Code/Solutions`` produces ``Code/Solutions/``),
+    so it cannot go through :func:`sanitize_file_name` whole — that
+    would collapse the separator into an underscore. Each segment is
+    sanitized individually instead, ``.`` segments are dropped, ``..``
+    segments become a safe name, and a leading separator is discarded:
+    the result is always a relative path below the directory it is
+    joined onto (finding S11, #798). An empty name stays empty, which
+    keeps its historical "no extra directory level" meaning.
+    """
+    normalized = name.replace("\\", "/")
+    segments = [segment for segment in normalized.split("/") if segment not in ("", ".")]
+    return "/".join(sanitize_file_name(segment) for segment in segments)
 
 
 def sanitize_path(path) -> Path:

@@ -23,3 +23,13 @@ class SpecValidationFailure(Exception):
     :func:`clm.build.engine.report_validation_errors`). Carries only the
     summary message; the CLI converts it to ``click.ClickException``.
     """
+
+
+class UnownedOutputRootError(Exception):
+    """A destructive output operation was aimed at a directory CLM does not own.
+
+    Raised by :func:`clm.build.output_ownership.enforce_owned_roots`
+    before the ``--clean`` wipe touches anything (finding S11, #798).
+    The message names every offending directory and the two remedies:
+    empty the directory yourself, or pass ``--allow-unowned-output``.
+    """
