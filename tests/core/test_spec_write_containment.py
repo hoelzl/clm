@@ -17,6 +17,7 @@ operations) lives in ``tests/cli/test_output_ownership.py``.
 from __future__ import annotations
 
 import io
+import sys
 from pathlib import Path
 
 import pytest
@@ -169,12 +170,32 @@ class TestDirGroupPathValidation:
         spec = DirGroupSpec.from_element(self._element())
         assert spec.path == "code/examples"
 
-    @pytest.mark.parametrize("path", ["../outside", "code/../../outside", "/etc", "C:\\Windows"])
+    # A Windows drive path is only *absolute* on Windows: on POSIX,
+    # ``Path("C:/Windows")`` is a relative path that stays inside the
+    # course root (contained, no escape), so the refusal contract for
+    # that shape is Windows-specific — the same split the ``.clm-include``
+    # ledger validation documents (S4, tests/cli/test_sync_includes_
+    # security.py). These paths go through that shared validator, which
+    # deliberately has no drive rule; the ``<output-target><path>``
+    # validator does, because no output path is legitimately drive-
+    # qualified on any platform.
+    _WINDOWS_DRIVE_PARAM = pytest.param(
+        "C:\\Windows",
+        id="drive-backslash",
+        marks=pytest.mark.skipif(
+            sys.platform != "win32", reason="drive paths only escape on Windows"
+        ),
+    )
+
+    @pytest.mark.parametrize(
+        "path",
+        ["../outside", "code/../../outside", "/etc", _WINDOWS_DRIVE_PARAM],
+    )
     def test_escaping_source_path_is_rejected(self, path: str) -> None:
         with pytest.raises(CourseSpecError):
             DirGroupSpec.from_element(self._element(path=path))
 
-    @pytest.mark.parametrize("subdir", ["../outside", "/etc", "C:\\Windows"])
+    @pytest.mark.parametrize("subdir", ["../outside", "/etc", _WINDOWS_DRIVE_PARAM])
     def test_escaping_subdir_is_rejected(self, subdir: str) -> None:
         with pytest.raises(CourseSpecError):
             DirGroupSpec.from_element(self._element(subdir=subdir))
