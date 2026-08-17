@@ -179,6 +179,28 @@ def test_provision_distinct_interpreters_distinct_roots(kernel_root, tmp_path):
     assert root_a != root_b
 
 
+def test_provision_hash_is_case_normalised_per_platform(kernel_root, tmp_path):
+    """Path-spelling variants of ONE interpreter share one kernelspec dir.
+
+    The hash used to be taken over the raw path string, so `C:\\...` and
+    `c:/...` — the same venv reached from a lowercase-drive cwd vs an env var
+    — provisioned two duplicate kernelspec dirs (observed in the #853
+    incident forensics). The hash now goes through ``os.path.normcase``:
+    spelling variants collapse on Windows, while genuinely distinct
+    case-differing paths on POSIX keep distinct roots.
+    """
+    spelled_one_way = str(tmp_path / "venv" / "python")
+    spelled_other_way = spelled_one_way.swapcase()
+
+    root_a = provision_course_kernel(Path(spelled_one_way), validate=False)
+    root_b = provision_course_kernel(Path(spelled_other_way), validate=False)
+
+    if os.name == "nt":
+        assert root_a == root_b
+    else:
+        assert root_a != root_b
+
+
 def test_provision_missing_interpreter_raises(kernel_root, tmp_path):
     missing = tmp_path / "does-not-exist" / "python"
     with pytest.raises(RuntimeError, match="not found"):

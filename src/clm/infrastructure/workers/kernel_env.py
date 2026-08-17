@@ -211,7 +211,15 @@ def provision_course_kernel(python_exe: Path, *, validate: bool = True) -> Path:
             )
         _validate_ipykernel(resolved)
 
-    key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+    # Hash an os.path.normcase'd form of the path (ntpath lowercases and
+    # unifies separators, posixpath is the identity) so the same interpreter
+    # reached via different spellings — `C:\...` vs `c:/...` — shares one
+    # kernelspec dir instead of provisioning duplicate twins. Only the HASH
+    # is normalised; the argv below keeps the caller's spelling, and symlinks
+    # are deliberately NOT resolved: on POSIX `.venv/bin/python` is a symlink
+    # into the base interpreter, and resolving it would launch the kernel
+    # outside the venv.
+    key = hashlib.sha256(os.path.normcase(str(resolved)).encode("utf-8")).hexdigest()[:16]
     root = _kernel_envs_root() / key
     kernel_dir = root / "kernels" / "python3"
     kernel_dir.mkdir(parents=True, exist_ok=True)
