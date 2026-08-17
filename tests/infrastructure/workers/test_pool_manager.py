@@ -766,6 +766,98 @@ def test_monitor_health_leaves_live_busy_worker_alone(
     assert stale_warnings == []
 
 
+# ============================================================================
+# cleanup_stale_workers heartbeat guard (issue #853)
+#
+# Deleting the row of a live-but-untracked worker is what armed the zombie
+# incident: the rowless process kept polling the shared queue and (before the
+# matching get_next_job fix) claimed jobs from every session with the
+# ownership filters silently dropped. cleanup may only delete direct rows
+# whose heartbeats — BOTH channels — have gone stale.
+# ============================================================================
+
+
+def _seed_percell_heartbeat(db_path, worker_id, *, age_seconds=0):
+    """Insert a worker_heartbeats row (the busy notebook worker's channel)."""
+    jq = JobQueue(db_path)
+    try:
+        jq._get_conn().execute(
+            """
+            INSERT INTO worker_heartbeats (worker_id, heartbeat_at)
+            VALUES (?, datetime('now', ? || ' seconds'))
+            """,
+            (worker_id, str(-age_seconds)),
+        )
+    finally:
+        jq.close()
+
+
+def _worker_row_exists(db_path, worker_id):
+    jq = JobQueue(db_path)
+    try:
+        row = jq._get_conn().execute("SELECT id FROM workers WHERE id = ?", (worker_id,)).fetchone()
+        return row is not None
+    finally:
+        jq.close()
+
+
+def _cleanup_manager(db_path, workspace_path, worker_configs):
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-cleanup",
+        )
+    # A direct executor that cannot see any process — the cleaning build's
+    # executors never track another build's (or a hand-started) worker.
+    blind_executor = MagicMock()
+    blind_executor.is_worker_running.return_value = False
+    manager.executors["direct"] = blind_executor
+    return manager
+
+
+def test_cleanup_keeps_untracked_worker_with_fresh_heartbeat(
+    db_path, workspace_path, worker_configs
+):
+    """A worker no executor can see, but with a fresh heartbeat, is a LIVE
+    worker — cleanup must keep its row (issue #853)."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    worker = _seed_busy_worker(db_path, "session-other", "direct-live", heartbeat_age_seconds=0)
+
+    manager.cleanup_stale_workers()
+
+    assert _worker_row_exists(db_path, worker)
+
+
+def test_cleanup_keeps_busy_worker_with_fresh_percell_heartbeat(
+    db_path, workspace_path, worker_configs
+):
+    """The incident path: a busy worker mid-job stops writing
+    workers.last_heartbeat (that channel only updates between jobs), but its
+    per-cell worker_heartbeats row is fresh. Cleanup must consult BOTH
+    channels and keep the row (issue #853)."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    worker = _seed_busy_worker(db_path, "session-other", "direct-busy", heartbeat_age_seconds=600)
+    _seed_percell_heartbeat(db_path, worker, age_seconds=0)
+
+    manager.cleanup_stale_workers()
+
+    assert _worker_row_exists(db_path, worker)
+
+
+def test_cleanup_removes_worker_when_all_heartbeats_stale(db_path, workspace_path, worker_configs):
+    """Both heartbeat channels stale → the process is really gone; the stale
+    row is still reaped (cleanup keeps doing its job)."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    worker = _seed_busy_worker(db_path, "session-other", "direct-dead", heartbeat_age_seconds=600)
+    _seed_percell_heartbeat(db_path, worker, age_seconds=600)
+
+    manager.cleanup_stale_workers()
+
+    assert not _worker_row_exists(db_path, worker)
+
+
 def test_monitor_health_marks_stale_zero_cpu_docker_worker_hung(
     db_path, workspace_path, worker_configs
 ):

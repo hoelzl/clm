@@ -24,6 +24,7 @@ from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.workers.worker_base import (
     Worker,
     missing_jobs_db_error,
+    parse_worker_args,
     resolve_jobs_db_path,
 )
 from clm.workers.notebook.notebook_processor import NotebookProcessor
@@ -332,6 +333,9 @@ class NotebookWorker(Worker):
 
 def main():
     """Main entry point for notebook worker."""
+    # Refuse argv before anything else: a stray `--help` must print usage,
+    # never start a job-claiming worker (issue #853).
+    parse_worker_args("notebook")
     _configure_logging()
     # Determine mode based on environment
     if API_URL:
