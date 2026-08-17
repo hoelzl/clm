@@ -571,18 +571,25 @@ class TestWorkerManagementConfig:
         assert config.worker_management.auto_start is True
         assert config.worker_management.auto_stop is True
         assert config.worker_management.reuse_workers is True
+        # Issue #851: stall detection on by default; absolute cap unlimited.
+        assert config.worker_management.job_stall_timeout == 1200.0
+        assert config.worker_management.max_wait_for_completion == 0.0
 
     def test_worker_management_from_env(self, monkeypatch):
         """Test loading worker management config from environment."""
         monkeypatch.setenv("CLM_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE", "docker")
         monkeypatch.setenv("CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT", "3")
         monkeypatch.setenv("CLM_WORKER_MANAGEMENT__AUTO_START", "false")
+        monkeypatch.setenv("CLM_WORKER_MANAGEMENT__JOB_STALL_TIMEOUT", "300")
+        monkeypatch.setenv("CLM_WORKER_MANAGEMENT__MAX_WAIT_FOR_COMPLETION", "3600")
 
         config = ClmConfig()
 
         assert config.worker_management.default_execution_mode == "docker"
         assert config.worker_management.default_worker_count == 3
         assert config.worker_management.auto_start is False
+        assert config.worker_management.job_stall_timeout == 300.0
+        assert config.worker_management.max_wait_for_completion == 3600.0
 
     def test_get_worker_config_direct(self, monkeypatch):
         """Test getting worker configuration for direct mode."""

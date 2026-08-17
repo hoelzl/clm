@@ -63,7 +63,16 @@ class SqliteBackend(LocalOpsBackend):
     ignore_db: bool = False
     active_jobs: dict[int, dict] = field(factory=dict)  # job_id -> job info
     poll_interval: float = 0.5  # seconds
-    max_wait_for_completion_duration: float = 1200.0  # 20 minutes
+    # Progress-aware stall detector (issue #851): abort a wait only when NO
+    # job has completed for this many seconds. Every completion resets the
+    # clock, so a large-but-draining queue never trips it — only a genuinely
+    # wedged worker pool does. None/0 disables stall detection.
+    job_stall_timeout: float | None = 1200.0
+    # Optional absolute wall-clock cap on one ``wait_for_completion`` call.
+    # None/0 (the default) means unlimited. Before issue #851 this was a
+    # hardcoded 1200 s flat deadline, which deterministically aborted healthy
+    # large builds whose stage held more than 20 minutes of queued work.
+    max_wait_for_completion_duration: float | None = None
     progress_tracker: ProgressTracker | None = field(init=False, default=None)
     enable_progress_tracking: bool = True
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
@@ -770,6 +779,12 @@ class SqliteBackend(LocalOpsBackend):
         start_time = asyncio.get_event_loop().time()
         failed_jobs: list[dict[str, Any]] = []
         last_cleanup_time = start_time
+        # Stall detection state (issue #851): the time any job last left
+        # active_jobs, and how many have drained in this wait (for the
+        # cap-projection warning below).
+        last_progress_time = start_time
+        drained_count = 0
+        slow_drain_warned = False
 
         # Profiling: the inter-iteration gap of this poll loop. A healthy gap is
         # ~poll_interval; a multi-second gap means the loop was starved of the
@@ -980,16 +995,59 @@ class SqliteBackend(LocalOpsBackend):
                     cycle_gap, len(completed_jobs), len(self.active_jobs), self.poll_interval
                 )
 
-            # Check timeout
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > self.max_wait_for_completion_duration:
-                self._report_pending_jobs_timeout(elapsed)
+            now = asyncio.get_event_loop().time()
+            if completed_jobs:
+                last_progress_time = now
+                drained_count += len(completed_jobs)
+            elapsed = now - start_time
+
+            # Progress-aware stall detector (issue #851): abort only when no
+            # job has completed for job_stall_timeout seconds — a wedged
+            # worker pool — never merely because the queue holds more work
+            # than a fixed wall-clock window.
+            stall_timeout = self.job_stall_timeout or None
+            if stall_timeout is not None and (now - last_progress_time) > stall_timeout:
+                reason = (
+                    f"no worker job completed for {stall_timeout:.0f}s "
+                    f"({len(self.active_jobs)} job(s) still unfinished "
+                    f"after {elapsed:.0f}s)"
+                )
+                self._report_pending_jobs_timeout(reason)
                 raise JobsPendingTimeoutError(
-                    f"Jobs did not complete within "
-                    f"{self.max_wait_for_completion_duration} seconds. "
-                    f"{len(self.active_jobs)} job(s) still pending.",
+                    f"build stalled — {reason}",
                     pending_jobs=list(self.active_jobs.values()),
                 )
+
+            # Optional absolute cap (opt-in via config; unlimited by default).
+            max_wait = self.max_wait_for_completion_duration or None
+            if max_wait is not None and elapsed > max_wait:
+                reason = (
+                    f"the configured absolute completion cap of "
+                    f"{max_wait:.0f}s expired with {len(self.active_jobs)} "
+                    f"job(s) still unfinished"
+                )
+                self._report_pending_jobs_timeout(reason)
+                raise JobsPendingTimeoutError(
+                    f"completion cap exceeded — {reason}",
+                    pending_jobs=list(self.active_jobs.values()),
+                )
+
+            # Early heads-up when a configured cap is going to be missed at
+            # the observed drain rate — one warning, well before the abort,
+            # instead of a surprise failure at the deadline.
+            if max_wait is not None and not slow_drain_warned and elapsed > 60 and drained_count:
+                projected = len(self.active_jobs) * (elapsed / drained_count)
+                remaining_budget = max_wait - elapsed
+                if projected > remaining_budget:
+                    slow_drain_warned = True
+                    logger.warning(
+                        f"At the current completion rate the remaining "
+                        f"{len(self.active_jobs)} job(s) need ~{projected:.0f}s, "
+                        f"but only {remaining_budget:.0f}s remain before the "
+                        f"configured completion cap ({max_wait:.0f}s). Consider "
+                        f"more workers (e.g. --notebook-workers) or raising/"
+                        f"clearing worker_management.max_wait_for_completion."
+                    )
 
             # Wait before polling again
             await asyncio.sleep(self.poll_interval)
@@ -1025,42 +1083,72 @@ class SqliteBackend(LocalOpsBackend):
         logger.info("All jobs completed successfully")
         return True
 
-    def _report_pending_jobs_timeout(self, elapsed: float) -> None:
-        """Record one infrastructure error per still-pending job on timeout.
+    def _report_pending_jobs_timeout(self, reason: str) -> None:
+        """Record one infrastructure error per still-pending job on abort.
 
         Without this, a ``wait_for_completion`` timeout raised only a bare
         ``TimeoutError`` and never reached the build summary, so the build
         could report "completed successfully" and exit 0 despite stuck jobs
-        (issue #143, sub-bug A). Recording the errors here means the timeout
+        (issue #143, sub-bug A). Recording the errors here means the abort
         is visible in the summary and drives the non-zero exit policy.
+
+        Jobs a worker actually claimed (status ``processing``) keep the
+        "worker appears stuck on this file" framing; jobs that were still
+        queued get an honest "never started" message instead (issue #851) —
+        with fewer workers than jobs, most pending jobs simply never reached
+        a worker, and blaming each file individually (with per-file
+        ``jupyter execute`` debugging advice) sent users chasing hundreds of
+        non-bugs.
         """
         if not self.build_reporter:
             return
 
         from clm.core.build_data_classes import BuildError
 
-        for job_info in self.active_jobs.values():
+        assert self.job_queue is not None
+        statuses = self.job_queue.get_job_statuses_batch(list(self.active_jobs.keys()))
+
+        for job_id, job_info in self.active_jobs.items():
             input_file = str(job_info.get("input_file", "unknown"))
             job_type = job_info.get("job_type", "unknown")
+            status_data = statuses.get(job_id)
+            status = status_data[0] if status_data else "unknown"
+            if status == "processing":
+                category = "job_timeout"
+                message = (
+                    f"{job_type} job was claimed by a worker but had not "
+                    f"finished when the build gave up ({reason}); the "
+                    f"worker appears to be stuck processing this file."
+                )
+                guidance = (
+                    "The worker hung on this file rather than failing. "
+                    "Try running the notebook directly (e.g. via "
+                    "'jupyter execute') to confirm it completes outside "
+                    "CLM, then re-run the build. See issue #143."
+                )
+            else:
+                category = "job_never_started"
+                message = (
+                    f"{job_type} job never started: it was still queued "
+                    f"when the build gave up ({reason})."
+                )
+                guidance = (
+                    "This file is not at fault — no worker was free to "
+                    "claim the job before the build gave up. Re-run the "
+                    "build, and consider more workers (e.g. 'clm build "
+                    "--notebook-workers N' or "
+                    "worker_management.default_worker_count). "
+                    "See issue #851."
+                )
             self.build_reporter.report_error(
                 BuildError(
                     error_type="infrastructure",
-                    category="job_timeout",
+                    category=category,
                     severity="error",
                     file_path=input_file,
-                    message=(
-                        f"{job_type} job did not complete within "
-                        f"{self.max_wait_for_completion_duration:.0f}s "
-                        f"(waited {elapsed:.0f}s); the worker appears to be "
-                        f"stuck processing this file."
-                    ),
-                    actionable_guidance=(
-                        "The worker hung on this file rather than failing. "
-                        "Try running the notebook directly (e.g. via "
-                        "'jupyter execute') to confirm it completes outside "
-                        "CLM, then re-run the build. See issue #143."
-                    ),
-                    job_id=job_info.get("job_id"),
+                    message=message,
+                    actionable_guidance=guidance,
+                    job_id=job_id,
                     correlation_id=job_info.get("correlation_id"),
                 )
             )

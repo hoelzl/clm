@@ -397,6 +397,8 @@ a project `.env` automatically (pass `--no-env-file` to skip).
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CLM_MAX_WORKERS` | Hard cap on the effective worker count per type (the friendly short form of the `[worker_management] max_workers_cap` config field). Further clamped against CPU/RAM-derived caps at pool start. `--max-workers` on `clm build` overrides it. | (auto caps only) |
+| `CLM_WORKER_MANAGEMENT__JOB_STALL_TIMEOUT` | Progress-aware stall detector (issue #851): abort the build when **no** worker job completes for this many seconds while jobs are still outstanding. Every completion resets the clock, so a large queue that is still draining never trips it — only a genuinely wedged worker pool does. `0` disables stall detection. Config file: `[worker_management] job_stall_timeout`. | `1200` |
+| `CLM_WORKER_MANAGEMENT__MAX_WAIT_FOR_COMPLETION` | Optional absolute wall-clock cap in seconds on waiting for one build stage's job batch. `0` means unlimited; the stall detector above is the backstop. (Before issue #851 this was hardcoded to 1200 s, which aborted healthy large builds whose stage held more than 20 minutes of queued work.) Config file: `[worker_management] max_wait_for_completion`. | `0` (unlimited) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations | `50` |
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
 | `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` | Skip output-write deduplication for files larger than this many megabytes. Repeat writes to a large-file output are reported as a single summary collision counter rather than per-event warnings. Set to `0` to force every write through the large-file fast path (useful for tests). | `50` |

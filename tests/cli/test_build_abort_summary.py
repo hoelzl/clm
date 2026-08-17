@@ -216,3 +216,89 @@ class TestFormatExitFailure:
         assert "timed out" in message
         assert "See the error summary above" in message
         assert "orphaned" not in message
+
+
+def _abort_error(category: str, job_id: int, file_path: str):
+    from clm.core.build_data_classes import BuildError
+
+    return BuildError(
+        error_type="infrastructure",
+        category=category,
+        severity="error",
+        file_path=file_path,
+        message="job unfinished at abort",
+        actionable_guidance="",
+        job_id=job_id,
+    )
+
+
+class TestStallAbortExitMessage:
+    """Issue #851: when the build gave up waiting for worker jobs, the exit
+    message must lead with that cause — not relabel the collateral in-flight
+    orphan as 'worker died mid-job … see issue #617'."""
+
+    def test_stall_abort_message_leads_with_the_abort_not_617(self):
+        from clm.build.engine import format_exit_failure
+
+        summary = BuildSummary(duration=1.0, total_files=300, timed_out=True)
+        summary.errors.append(_abort_error("job_timeout", 1, "slides/inflight.de.py"))
+        for i in range(2, 5):
+            summary.errors.append(_abort_error("job_never_started", i, f"slides/q{i}.de.py"))
+
+        message = format_exit_failure(summary)
+
+        assert "gave up waiting" in message
+        assert "4 job(s) unfinished" in message
+        assert "1 claimed but unfinished" in message
+        assert "3 never claimed by a worker" in message
+        assert "#851" in message
+        assert "worker died mid-job" not in message
+        assert "#617" not in message
+
+    def test_abort_collateral_orphans_are_not_rerecorded(self):
+        """An in-flight job already reported by the abort must not be
+        re-stamped 'worker died mid-job' by the teardown sweep."""
+        from clm.build.engine import _record_teardown_orphans
+
+        summary = BuildSummary(duration=1.0, total_files=3)
+        summary.errors.append(_abort_error("job_timeout", 7, "slides/a.de.py"))
+
+        orphans = [
+            {"id": 7, "input_file": "slides/a.de.py", "status": "processing", "worker_id": 3},
+        ]
+        _record_teardown_orphans(summary, orphans)
+
+        assert summary.timed_out is True
+        assert [e.category for e in summary.errors] == ["job_timeout"]
+
+    def test_unexplained_orphans_still_get_the_617_message(self):
+        """Orphans with no abort behind them keep the #617 lifecycle-race
+        reporting: recorded as orphaned_job and named in the exit message."""
+        from clm.build.engine import _record_teardown_orphans, format_exit_failure
+
+        summary = BuildSummary(duration=1.0, total_files=3)
+        orphans = [
+            {"id": 9, "input_file": "slides/b.de.py", "status": "processing", "worker_id": 3},
+        ]
+        _record_teardown_orphans(summary, orphans)
+
+        message = format_exit_failure(summary)
+
+        assert "#617" in message
+        assert "slides/b.de.py" in message
+
+    def test_mixed_abort_and_unexplained_orphan_mentions_both(self):
+        from clm.build.engine import _record_teardown_orphans, format_exit_failure
+
+        summary = BuildSummary(duration=1.0, total_files=3, timed_out=True)
+        summary.errors.append(_abort_error("job_never_started", 2, "slides/q.de.py"))
+        orphans = [
+            {"id": 9, "input_file": "slides/b.de.py", "status": "processing", "worker_id": 3},
+        ]
+        _record_teardown_orphans(summary, orphans)
+
+        message = format_exit_failure(summary)
+
+        assert "gave up waiting" in message
+        assert "slides/b.de.py" in message
+        assert "#851" in message
