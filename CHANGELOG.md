@@ -9,6 +9,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.27.0] - 2026-08-17
+
+### Fixed
+
+- **Large healthy builds no longer abort at a hardcoded 20-minute completion
+  cap** (#851). Waiting for a stage's worker jobs is now governed by a
+  progress-aware stall detector: the build aborts only when *no* job has
+  completed for `worker_management.job_stall_timeout` seconds (default 1200;
+  every completion resets the clock), instead of when the whole batch exceeds
+  a flat 1200 s deadline — which deterministically killed any cold build
+  whose stage held more than 20 minutes of queued work. An absolute cap is
+  still available as `worker_management.max_wait_for_completion`, but it is
+  opt-in and unlimited by default; when set, the build warns early if the
+  observed completion rate cannot drain the batch in time.
+- On a stall/cap abort, jobs that were still queued are now reported honestly
+  as "never started" instead of "the worker appears to be stuck processing
+  this file" with per-file `jupyter execute` debugging advice — previously a
+  single-worker capacity abort blamed hundreds of innocent files
+  individually (#851). Only jobs a worker actually claimed keep the
+  stuck-worker framing (#143).
+- The exit-time failure message now leads with the abort cause (jobs gave up
+  / breakdown of claimed vs never-started) instead of relabeling the
+  collateral in-flight job "worker died mid-job (orphaned at pool shutdown)
+  … See issue #617"; the #617 message is reserved for orphans that are not
+  explained by the build's own abort (#851).
+- `clm build` warns up front when a course with more than 50 files runs on a
+  single notebook worker (the default), since notebook jobs then execute
+  serially (#851).
+
+- The course-kernel provisioning hash (`%LOCALAPPDATA%\clm\kernel-envs\<hash>`)
+  is now taken over an `os.path.normcase`'d form of the interpreter path, so
+  spelling variants of the same venv (`C:\...` vs `c:/...`, forward vs
+  backward slashes) share one kernelspec dir instead of provisioning
+  duplicate twins (follow-up to the #853 incident forensics). Symlinks are
+  deliberately not resolved — on POSIX `.venv/bin/python` links into the base
+  interpreter, and resolving it would launch the kernel outside the venv.
+
+- Hardened the worker/job-queue plumbing against leaked "zombie" workers
+  (#853). Worker modules (`python -m clm.workers.*`) now parse their command
+  line: `--help` prints the environment-variable contract and exits instead of
+  silently starting a real job-claiming worker, and any other argument is
+  rejected. A worker whose `workers` row has been deleted (pool stop or
+  stale-row cleanup) is no longer handed jobs with the session-ownership
+  filter silently dropped — it gets nothing, notices the missing row on its
+  next heartbeat/status write, and shuts itself down. `cleanup_stale_workers`
+  no longer deletes the row of a live worker it merely cannot see: rows whose
+  heartbeat (either the idle-loop channel or the per-cell
+  `worker_heartbeats` channel) is fresh are kept.
+
+- Language-suffixed diagram sources no longer collide on one render target
+  (#855). `embeddings.de.drawio` and `embeddings.en.drawio` both rendered to
+  `img-generated/embeddings.png` — `with_suffix` swallowed the `.de`/`.en`
+  segment as if it were an extension — so one render was silently lost per
+  build (last writer won, race-dependent) and the suffixed names slides
+  reference (`img/embeddings.de.png`) never existed in the output. Renders
+  now keep the source's full stem (`embeddings.de.drawio` →
+  `embeddings.de.png`); single-suffix sources are unchanged.
+  `clm course migrate-generated-images` mirrors the new naming. Multi-dot
+  diagrams re-render once after upgrading; see `clm info migration` for the
+  stale-collapsed-render cleanup step.
+
+- Hardened worker startup and the HTTP-replay proxy against races that
+  surfaced as flaky builds on busy machines
+  (`docs/claude/design/test-flakiness-root-causes.md` §11):
+  `cleanup_stale_workers` no longer deletes another build's seconds-old
+  `'created'` pre-registration (which killed that build's booting worker with
+  "Worker N does not exist in database" whenever two builds share one jobs
+  DB — the age-guarded stuck-created pass remains the only reaper of
+  pre-registrations); a booting worker now polls its activation rendezvous
+  for up to 10s instead of dying on the first missed read; and
+  `MitmproxyManager.start()` retries a lost listen-port bind race on a fresh
+  port (3 attempts) instead of failing the build, while config/dependency
+  failures still surface immediately and a caller-pinned port is never
+  retried. Also raised the contention-sensitive test-suite subprocess
+  budgets and made scrubbed-env e2e builds use per-test databases.
+
 ## [1.26.1] - 2026-08-17
 
 ### Added
