@@ -78,10 +78,22 @@ def check_worker_module_available(module_name: str) -> bool:
 NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clm.workers.notebook")
 
 # Skip all integration tests if notebook worker is not available
-pytestmark = pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE,
-    reason="Worker modules not available - these are integration tests requiring full worker setup",
-)
+# ``serial("workerpool")`` (module-wide): every test here spawns real direct
+# worker subprocesses (``python -m clm.workers.*``). Worker boot = full
+# interpreter start + clm import (~1.4 s cold), and boot latency scales with
+# the number of concurrent boots (measured: 16 parallel ≈ 4 s, 48 parallel
+# ≈ 10 s). Under ``-n auto`` on a many-core dev box dozens of these tests
+# land simultaneously, stretching boots past the 15 s registration poll — a
+# rotating TimeoutError flake CI never sees (it runs 4 xdist workers). The
+# load group serializes the boot herd without slowing the rest of the suite.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.serial("workerpool"),
+    pytest.mark.skipif(
+        not NOTEBOOK_WORKER_AVAILABLE,
+        reason="Worker modules not available - these are integration tests requiring full worker setup",
+    ),
+]
 
 
 @pytest.fixture

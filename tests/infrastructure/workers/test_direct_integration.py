@@ -157,10 +157,19 @@ DRAWIO_WORKER_AVAILABLE = check_worker_module_available("clm.workers.drawio")
 PLANTUML_WORKER_AVAILABLE = check_worker_module_available("clm.workers.plantuml")
 
 # Skip all integration tests if notebook worker is not available
-pytestmark = pytest.mark.skipif(
-    not NOTEBOOK_WORKER_AVAILABLE or not DRAWIO_WORKER_AVAILABLE or not PLANTUML_WORKER_AVAILABLE,
-    reason="Worker modules not available - these are true integration tests requiring full worker setup",
-)
+# ``serial("workerpool")`` (module-wide) — see test_lifecycle_integration.py
+# for the measured rationale: real worker subprocess boot latency must stay
+# well under the 15 s registration poll, so the boot herd is serialized.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.serial("workerpool"),
+    pytest.mark.skipif(
+        not NOTEBOOK_WORKER_AVAILABLE
+        or not DRAWIO_WORKER_AVAILABLE
+        or not PLANTUML_WORKER_AVAILABLE,
+        reason="Worker modules not available - these are true integration tests requiring full worker setup",
+    ),
+]
 
 
 @pytest.fixture

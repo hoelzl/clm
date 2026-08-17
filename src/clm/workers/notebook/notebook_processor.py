@@ -493,11 +493,13 @@ def _strip_internal_cell_metadata(cells: Iterable[Cell]) -> None:
 # Captures: prefix (before img/), filename (after img/), suffix (rest of tag)
 MEDIA_SRC_PATTERN = re.compile(r'(<(?:img|video)\s+[^>]*src=["\'])img/([^"\']+)(["\'][^>]*>)')
 
-# Logging setup
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s - notebook-processor - %(levelname)s - %(message)s",
-)
+# Logging: import-pure by design. This module is imported in-process by
+# library code (clm.build.engine) and tests, so it must not call
+# logging.basicConfig at import time — that would install a root handler and
+# silently no-op every later basicConfig (the worker entry point in
+# notebook_worker.main() owns runtime logging setup via _configure_logging).
+# Diagnostics instead go through the module logger, whose output surface
+# (stderr and level) is decided by the process that imports it.
 logger = logging.getLogger(__name__)
 
 

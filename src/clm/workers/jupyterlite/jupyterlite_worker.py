@@ -27,11 +27,17 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 JOBS_DB_PATH = resolve_jobs_db_path()  # None unless CLM_JOBS_DB_PATH was injected
 API_URL = os.environ.get("CLM_API_URL")
 
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s - jupyterlite-worker - %(levelname)s - %(message)s",
-)
+# Logging setup: configured in main() so importing this module stays pure
+# (tests import JupyterLiteWorker in-process; see _configure_logging).
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Set up stderr logging for the worker subprocess (idempotent)."""
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format="%(asctime)s - jupyterlite-worker - %(levelname)s - %(message)s",
+    )
 
 
 class JupyterLiteWorker(Worker):
@@ -114,6 +120,7 @@ class JupyterLiteWorker(Worker):
 
 def main() -> None:
     """Entry point for ``python -m clm.workers.jupyterlite``."""
+    _configure_logging()
     if API_URL:
         logger.info(f"Starting JupyterLite worker in API mode (URL: {API_URL})")
         worker_id = Worker.get_or_register_worker(

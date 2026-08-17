@@ -167,8 +167,19 @@ An optional argument names the **resource class** so that *different* heavy
 families don't serialize behind each other: same-class tests share one group
 (one worker, one-at-a-time); different classes get different groups that run on
 *different* workers concurrently. Current classes: `workerpool` (worker-thread /
-registration tests), `subproc` (CPython/mitmdump subprocess spawns), `port`
-(real socket binds). Bare `serial` (no arg) is a default catch-all group.
+registration tests *and* real direct-worker integration suites — see below),
+`subproc` (CPython/mitmdump subprocess spawns), `port` (real socket binds).
+Bare `serial` (no arg) is a default catch-all group.
+
+The `workerpool` class also covers the **real-worker integration suites**
+(`test_lifecycle_integration.py`, `test_direct_integration.py`, and the two
+`clm build` subprocess tests in `test_cli_subprocess.py`): spawning a direct
+worker costs a full interpreter start + clm import (~1.4 s cold), and boot
+latency scales with concurrent boots (measured on a 64-core box: 16 parallel
+≈ 4 s, 48 parallel ≈ 10 s). Under `-n auto` dozens of such tests can land at
+once and stretch boots past the 15 s registration poll — a rotating
+TimeoutError flake CI never sees (4 xdist workers there). Serializing the
+boot herd keeps them deterministic on any core count.
 
 ```python
 import pytest

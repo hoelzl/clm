@@ -484,3 +484,69 @@ cannot be silently disabled by a workflow edit.
   A collection-time assertion ("a test that calls `start_managed_workers` must
   carry `serial('workerpool')`") would close that, at the cost of a somewhat
   brittle static check. Not attempted.
+
+## 10. Defect C — direct-worker boot thundering herd under `-n auto` (2026-08-17)
+
+**Symptom.** On a 64-core Windows dev box, `pytest -m "not docker"` failed a
+*rotating* set of 3–8 tests run-to-run, always the same family:
+`test_lifecycle_integration.py`, `test_direct_integration.py`, and the
+`test_cli_subprocess.py::test_cli_progress_messages` build test. Two shapes:
+`TimeoutError: Worker ... did not reach idle within 15s` and one
+`subprocess.TimeoutExpired` (120 s) on `clm build`. CI (4-core runners) never
+saw it, and `-n 0` was always green. First observed during the 1.26.0 release
+gate; shipped anyway (CI green, content unrelated — see the PR #846
+discussion) and root-caused after.
+
+**Root cause — not a defect in the code under test.** A direct worker boot =
+full interpreter start + clm import (~1.34 s import cost, dominated by
+nbconvert/jupytext) + DB init + registration. Boot latency scales roughly
+linearly with *concurrent boots* (measured with a probe harness spawning real
+`python -m clm.workers.notebook` workers against a scratch jobs DB):
+
+| concurrent boots | boot latency (min–max) |
+|---|---|
+| 1 (idle box) | 1.4–1.9 s |
+| 16 | 3.7–4.0 s |
+| 48 | 8.4–10.3 s |
+
+`-n auto` on 64 cores = up to 64 xdist workers; the real-worker tests are
+`integration`-marked but `-m "not docker"` includes them, and when dozens land
+in the same instant the herd pushes boots past the tests' 15 s registration
+poll. Rotating set = which tests happened to coincide. CI's 4 xdist workers
+cap the herd at ~4 concurrent boots — hence never flaky there.
+
+**Fix — the established `serial` doctrine, applied to the missing family.**
+Module-wide `serial("workerpool")` on the two real-worker integration files
+(they already carried `integration`) plus `integration` + `serial("workerpool")`
+on the two `clm build` subprocess tests in `test_cli_subprocess.py`
+(`test_build_simple_course_subprocess`, `test_cli_progress_messages`), which
+spawn the same worker herd inside a real `clm build`. Side benefit: those two
+move out of the fast pre-push suite (they were the pre-push flake) while
+remaining covered by `-m "not docker"` and CI's integration tier. Verified: 5/5
+repro-loop runs green (previously ~40% failing), while a full fast suite ran
+concurrently on the same box; fast suite 9712 passed.
+
+**Comorbid diagnosability defect (fixed in passing).** The same investigation
+found why the failed tests had *nothing to show*: worker logs were empty (0
+bytes) even in passing runs. `src/clm/core/utils/__init__.py` called
+`logging.basicConfig(level=WARNING)` **at import time** (legacy from before
+1.0), so every worker entry point's own `basicConfig(level=INFO)` — which only
+adds a handler when the root logger has none — was a silent no-op. Workers ran
+INFO-silent in production (direct and Docker), and the executor's redirected
+stderr log files stayed empty. Fixed by making the whole tree import-pure:
+the `basicConfig` calls moved from module level into each entry point's
+`main()` (`notebook_worker`, `drawio_worker`, `plantuml_worker`,
+`jupyterlite_worker`), `notebook_processor.py` (imported in-process by
+`clm.build.engine`) lost its module-level config entirely, and
+`clm/core/utils/__init__.py` no longer configures anything. Worker logs now
+carry real boot/registration/job lines (pinned by
+`tests/infrastructure/workers/test_worker_logging_bootstrap.py`, which spawns a
+real worker and asserts its INFO boot lines reach the executor log file). The
+conftest failure diagnostic (`_dump_worker_logs`) now also harvests
+`CLM_LOG_DIR/workers/`, so a future registration-timeout failure prints what
+the worker actually said before stalling.
+
+**Lesson.** A timeout that is generous on CI and under serial execution is not
+generous under herd parallelism on big dev boxes: budget for boot-time
+scaling, or serialize the herd. And empty log files are themselves a bug —
+"the diagnostics are missing" is a defect to fix, not background noise.

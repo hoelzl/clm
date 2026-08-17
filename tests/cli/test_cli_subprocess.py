@@ -94,6 +94,8 @@ class TestCliBuildSubprocess:
         assert "--watch" in result.stdout
         assert "--log-level" in result.stdout
 
+    @pytest.mark.integration
+    @pytest.mark.serial("workerpool")
     def test_build_simple_course_subprocess(self, tmp_path):
         """Test building a simple course via subprocess with default SQLite backend"""
         spec_file = Path("test-data/course-specs/test-spec-2.xml")
@@ -349,6 +351,8 @@ class TestCliSubprocessOutputCapture:
         output = result.stdout + result.stderr
         assert "argument" in output.lower() or "error" in output.lower()
 
+    @pytest.mark.integration
+    @pytest.mark.serial("workerpool")
     def test_cli_progress_messages(self, tmp_path):
         """Test that CLI provides progress/status messages"""
         spec_file = Path("test-data/course-specs/test-spec-2.xml")
