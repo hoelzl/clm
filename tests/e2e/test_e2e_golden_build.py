@@ -48,6 +48,14 @@ _BUILD_TIMEOUT = 900
 def _build(course: Path, spec_name: str, *args: str) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLM_")}
     env.pop("CI", None)
+    # Keep the xdist worker's isolated log dir: a fully scrubbed build logs to
+    # the developer's GLOBAL %LOCALAPPDATA% clm log (interleaved with every
+    # other scrubbed test's builds), and the conftest failure diagnostics
+    # harvest CLM_LOG_DIR — so a failure here had nothing to dump (flake doc
+    # §11.2). The DB paths are already per-course via the explicit CLI options
+    # below.
+    if "CLM_LOG_DIR" in os.environ:
+        env["CLM_LOG_DIR"] = os.environ["CLM_LOG_DIR"]
     return subprocess.run(
         [
             sys.executable,

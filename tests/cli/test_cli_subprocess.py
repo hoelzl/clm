@@ -5,6 +5,15 @@ These tests run the actual `clm` command via subprocess, testing the
 full installation and end-to-end behavior as a real user would experience.
 
 Mark with @pytest.mark.e2e and @pytest.mark.slow as these tests are slower.
+
+Subprocess budgets are deliberately generous (see
+``docs/claude/design/test-flakiness-root-causes.md`` §11): a fresh ``clm``
+interpreter start costs ~1.3s idle but scales with machine load, and under
+``-n auto`` on a many-core box the rest of the suite keeps every core busy.
+A budget that is comfortable in isolation (the full-build test ran ~69s
+alone against its old 120s budget) flakes under contention. The budgets
+only bound the pathological case — ``subprocess.run`` returns the moment
+the command exits, so a generous ceiling costs nothing on the happy path.
 """
 
 import subprocess
@@ -12,6 +21,16 @@ import sys
 from pathlib import Path
 
 import pytest
+
+# Budget for plain CLI invocations (--help and friends): interpreter start +
+# click dispatch. ~1-2s idle; 60s survives a fully loaded machine.
+_CLI_TIMEOUT = 60
+
+# Budget for the two full-build subprocess tests: worker pool boot + a real
+# course build (~69s in isolation). Sits under the tests' explicit 600s
+# pytest-timeout so the inner subprocess expires first, with the build's
+# command line in the failure instead of a bare per-test timeout.
+_BUILD_TIMEOUT = 540
 
 
 @pytest.mark.e2e
@@ -25,7 +44,7 @@ class TestCliCommandExists:
             ["clm", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode == 0
         assert "build" in result.stdout
@@ -37,7 +56,7 @@ class TestCliCommandExists:
             ["clm", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode == 0
         assert "Usage:" in result.stdout
@@ -48,7 +67,7 @@ class TestCliCommandExists:
             [sys.executable, "-m", "clm.cli.main", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode == 0
         assert "build" in result.stdout
@@ -65,7 +84,7 @@ class TestCliBuildSubprocess:
             ["clm", "build"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode != 0
         assert "Missing argument" in result.stderr or "Missing argument" in result.stdout
@@ -76,7 +95,7 @@ class TestCliBuildSubprocess:
             ["clm", "build", "/nonexistent/path/spec.xml"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode != 0
 
@@ -86,7 +105,7 @@ class TestCliBuildSubprocess:
             ["clm", "build", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode == 0
         assert "--data-dir" in result.stdout
@@ -96,6 +115,7 @@ class TestCliBuildSubprocess:
 
     @pytest.mark.integration
     @pytest.mark.serial("workerpool")
+    @pytest.mark.timeout(600)
     def test_build_simple_course_subprocess(self, tmp_path):
         """Test building a simple course via subprocess with default SQLite backend"""
         spec_file = Path("test-data/course-specs/test-spec-2.xml")
@@ -124,7 +144,7 @@ class TestCliBuildSubprocess:
             ],
             capture_output=True,
             text=True,
-            timeout=120,  # Allow more time for full build
+            timeout=_BUILD_TIMEOUT,
             cwd=Path.cwd(),  # Run from repository root
         )
 
@@ -157,7 +177,7 @@ class TestDeleteDatabaseSubprocess:
             ["clm", "db", "delete", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode == 0
 
@@ -178,7 +198,7 @@ class TestDeleteDatabaseSubprocess:
             ],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
 
         assert result.returncode == 0
@@ -208,7 +228,7 @@ class TestDeleteDatabaseSubprocess:
             ],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
 
         assert result.returncode == 0
@@ -235,7 +255,7 @@ class TestCliSubprocessEnvironment:
             ["clm", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
             env=env,
         )
 
@@ -247,7 +267,7 @@ class TestCliSubprocessEnvironment:
         result_success = subprocess.run(
             ["clm", "--help"],
             capture_output=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result_success.returncode == 0
 
@@ -255,7 +275,7 @@ class TestCliSubprocessEnvironment:
         result_fail = subprocess.run(
             ["clm", "nonexistent_command"],
             capture_output=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result_fail.returncode != 0
 
@@ -267,7 +287,7 @@ class TestCliSubprocessEnvironment:
             ["clm", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
         assert result.returncode == 0
 
@@ -285,7 +305,7 @@ class TestCliSubprocessWithOptions:
             ["clm", "--jobs-db-path", str(db_path), "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
 
         assert result.returncode == 0
@@ -311,7 +331,7 @@ class TestCliSubprocessWithOptions:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=_CLI_TIMEOUT,
             )
 
             # Should not fail due to log level validation
@@ -330,7 +350,7 @@ class TestCliSubprocessOutputCapture:
             ["clm", "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
 
         assert result.returncode == 0
@@ -343,7 +363,7 @@ class TestCliSubprocessOutputCapture:
             ["clm", "build"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=_CLI_TIMEOUT,
         )
 
         assert result.returncode != 0
@@ -353,6 +373,7 @@ class TestCliSubprocessOutputCapture:
 
     @pytest.mark.integration
     @pytest.mark.serial("workerpool")
+    @pytest.mark.timeout(600)
     def test_cli_progress_messages(self, tmp_path):
         """Test that CLI provides progress/status messages"""
         spec_file = Path("test-data/course-specs/test-spec-2.xml")
@@ -378,7 +399,7 @@ class TestCliSubprocessOutputCapture:
             ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=_BUILD_TIMEOUT,
         )
 
         # Even if build fails, should have some output indicating progress

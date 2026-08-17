@@ -558,3 +558,122 @@ subcommands). When a *new* real-worker test family flakes, run it before
 re-deriving the methodology: ``boot`` rules out a non-herd slowdown, ``herd
 -n <xdist worker count>`` shows whether concurrency alone breaches the 15 s
 poll, ``repro -n 5`` measures the flake rate before and after a fix.
+
+## 11. Local `-m "not docker"` flakes on many-core boxes (2026-08-17, evening)
+
+**Symptom.** Seven consecutive full local runs (`-m "not docker"`, 16-core
+box) during the 1.27.0 release gate: `-n auto` and `-n 8` each showed 1–2
+failures per run from a rotating set; `-n 4` (CI's shape) and every isolated
+re-run were green. Nightlies over the same fortnight: 13/14 green. The same
+load-scaling signature as §10, in three distinct mechanisms.
+
+### 11.1 `test_cli_progress_messages` — inner budget below loaded wall clock
+*(4 failures / 7 runs — the dominant flake; CONFIRMED by traceback)*
+
+`subprocess.TimeoutExpired: … timed out after 120 seconds` on the inner
+`clm build`. §10's `serial("workerpool")` fix correctly serialised the
+worker-boot herd *within* the family, but serialisation cannot remove
+cross-family CPU contention: the build runs ~69 s in isolation, and with the
+other 15 xdist workers saturating the box its wall clock legitimately
+exceeds the 120 s inner budget. The budget composition was also inverted —
+inner `subprocess.run(timeout=120)` under the `integration` tier's 240 s
+per-test ceiling left less than 2× headroom over the isolated runtime.
+
+**Fix.** `tests/cli/test_cli_subprocess.py` now defines `_BUILD_TIMEOUT = 540`
+under an explicit `@pytest.mark.timeout(600)` on the two build tests (inner
+expires first, so the failure carries the build command), and `_CLI_TIMEOUT
+= 60` replaces the seventeen `timeout=10` plain-CLI budgets (same class:
+interpreter start under load). Generous ceilings are free on the happy path —
+`subprocess.run` returns the instant the command exits.
+
+### 11.2 `test_record_then_replay_is_byte_identical` — the shared-DB rendezvous
+*(2 occurrences / 8 runs; worker-log traceback CONFIRMED the failure site)*
+
+The replay build's notebook worker died at startup:
+
+```
+ValueError: Worker 127 does not exist in database
+```
+
+two seconds after the build pre-registered row 127 — while the build itself
+kept counting that row ("Found 1 pre-registered notebook worker(s)") through
+three 30 s activation waits. The worker and the build disagreed about the
+same rendezvous row.
+
+What the forensics established:
+
+1. **The test's hermeticity scrub created shared state.** `_build` strips
+   every `CLM_*` var, which also strips the per-test jobs-DB isolation — the
+   subprocess build fell back to the cwd default, `<repo>/clm_jobs.db`, ONE
+   file shared by every concurrently running scrubbed-build test (the DB
+   showed overlapping build sessions and a workers rowid sequence in the
+   hundreds). `test_e2e_golden_build.py` had already hit this class and
+   passes explicit per-course DB paths; the replay helper predated that
+   review. It also scrubbed `CLM_LOG_DIR`, so its workers logged to the
+   developer's GLOBAL clm log dir — which is why the conftest failure
+   diagnostics had nothing to dump.
+2. **The activation handshake was single-shot.** The pre-registration row is
+   written by the parent moments before `Popen`; the worker got exactly one
+   `UPDATE … WHERE status='created'` and died on `rowcount == 0`. Any
+   transient cross-process inconsistency — a racing deleter, a briefly
+   locked DB, WAL visibility under heavy load — was instantly fatal, against
+   the project's own generous-timeout-polling doctrine.
+3. **`cleanup_stale_workers` CAN legally delete a foreign fresh
+   pre-registration** (no session scoping; a 'created' row fails every
+   health signal; the 30 s age guard lives only in the separate
+   stuck-created pass). The 20:09 logs show no *other* cleanup ran in the
+   failure window, so this was not that night's trigger — but two concurrent
+   REAL builds sharing `Z:\clm_jobs.db` run exactly this pattern, so it is a
+   live production hole regardless.
+
+The precise mechanism that hid row 127 from the worker's connection while
+the build's connection kept seeing it was **not pinned down** (candidates:
+the deletion vector in 3 from an unlogged actor, or a WAL/visibility anomaly
+under load). The three fixes close every candidate path:
+
+- test side: `_build` sets per-course `CLM_JOBS_DB_PATH`/`CLM_CACHE_DB_PATH`
+  and keeps the xdist worker's `CLM_LOG_DIR` (diagnostics reach the dump);
+- production: `cleanup_stale_workers` skips 'created' rows entirely — the
+  age-guarded `_cleanup_stuck_created_workers` pass remains their only
+  reaper;
+- production: `activate_pre_registered_worker` polls the rendezvous for up
+  to 10 s (`ACTIVATION_POLL_TIMEOUT_SECONDS`) instead of failing on the
+  first miss; a row in a *wrong status* still fails immediately.
+
+**Related hardening (by inspection, same investigation).**
+`_pick_free_port` documents its probe-release-rebind TOCTOU as "acceptable"
+— written when nothing else on the host raced it. Under `-n auto`, 16 xdist
+workers bind ports constantly, and losing the race was FATAL:
+`MitmproxyManager.start()` launched mitmdump exactly once and surfaced
+"address already in use" as a build error. `start()` now retries a lost bind
+race on a *fresh* port (3 attempts, `_BIND_RETRY_ATTEMPTS`), classifying
+startup output via `_is_port_bind_failure` (EADDRINUSE / WinError 10048
+phrasings, deliberately narrow so config/dependency failures still surface
+immediately). A caller-pinned `listen_port` is never retried. Pinned by
+`TestBindRaceRetry` in `tests/infrastructure/test_http_replay_mitm_manager.py`.
+
+### 11.3 `test_channel_push_resolves_repo_from_spec` — evidence starvation
+*(2 occurrences / 8 runs; second occurrence captured — sync promoted zero
+files with exit code 0)*
+
+Not Defect A (live logging is off in local runs; the §7 guard holds), not
+fsmonitor (`core.fsmonitor` unset). The captured failure shows
+`git ls-files` returning only `{'.gitignore'}` after a `release sync
+--channel jan --push` that exited 0 — the sync promoted nothing, and the
+assertion carried no `result.output`, so WHY it promoted nothing is still
+unknown. The test helpers also made git-level failures unprovable: `_git`
+used `check=True`, and `CalledProcessError`'s message shows only the command
+and exit code, **discarding git's captured stderr**.
+
+**Fix (diagnosability, twice over).** `_git` now raises an `AssertionError`
+carrying rc/stdout/stderr, and the post-sync assertions carry the sync's own
+output. The next failure names its cause; re-attribute then rather than
+guessing now.
+
+**Lesson (extends §10's).** Serialisation fixes herd effects inside one
+family; it does nothing for cross-family CPU contention — inner subprocess
+budgets must assume a fully loaded box. Hermeticity scrubs must REPLACE
+shared defaults, not merely remove overrides, or they create the very
+cross-test coupling they exist to prevent. And every cross-process
+rendezvous over a file needs generous-timeout polling, never a single-shot
+read.

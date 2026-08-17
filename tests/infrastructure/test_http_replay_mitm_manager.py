@@ -327,3 +327,117 @@ class TestWaitForReadyDiagnostics:
         assert "exited during startup" in msg
         assert "rc=7" in msg
         assert "overloaded" not in msg.lower()
+
+
+class TestBindRaceRetry:
+    """A lost port-bind race is retried on a fresh port (flake doc §11).
+
+    ``_pick_free_port`` has an inherent TOCTOU window between releasing the
+    probe socket and mitmdump binding the port. Under heavy parallelism
+    (pytest-xdist workers binding their own ports) losing that race used to
+    be a FATAL startup error; ``start()`` now re-picks and relaunches, while
+    every other failure class still surfaces immediately.
+    """
+
+    @staticmethod
+    def _bind_error() -> proxy_manager.MitmproxyError:
+        return proxy_manager.MitmproxyError(
+            "mitmdump exited during startup (rc=1):\n"
+            "OSError: [WinError 10048] only one usage of each socket address "
+            "(protocol/network address/port) is normally permitted"
+        )
+
+    def _manager_with_counting_start_once(self, monkeypatch, failures: int):
+        """Manager whose _start_once fails ``failures`` times, then succeeds."""
+        monkeypatch.setattr(proxy_manager, "_locate_mitmdump", lambda: "mitmdump")
+        picked_ports: list[int] = []
+        monkeypatch.setattr(
+            proxy_manager,
+            "_pick_free_port",
+            lambda host: picked_ports.append(50000 + len(picked_ports)) or picked_ports[-1],
+        )
+        mgr = _manager()
+        calls: list[int] = []
+
+        def fake_start_once(mitmdump: str) -> None:
+            calls.append(mgr.listen_port)
+            if len(calls) <= failures:
+                raise self._bind_error()
+
+        monkeypatch.setattr(mgr, "_start_once", fake_start_once)
+        return mgr, calls, picked_ports
+
+    def test_lost_race_retries_on_a_fresh_port(self, monkeypatch) -> None:
+        mgr, calls, picked = self._manager_with_counting_start_once(monkeypatch, failures=2)
+
+        mgr.start()
+
+        assert len(calls) == 3
+        assert len(set(calls)) == 3, "every retry must pick a FRESH port"
+        assert mgr.listen_port == picked[-1]
+
+    def test_exhausted_retries_raise_the_bind_error(self, monkeypatch) -> None:
+        mgr, calls, _ = self._manager_with_counting_start_once(
+            monkeypatch, failures=MitmproxyManager._BIND_RETRY_ATTEMPTS
+        )
+
+        with pytest.raises(proxy_manager.MitmproxyError, match="10048"):
+            mgr.start()
+        assert len(calls) == MitmproxyManager._BIND_RETRY_ATTEMPTS
+
+    def test_non_bind_failures_are_never_retried(self, monkeypatch) -> None:
+        monkeypatch.setattr(proxy_manager, "_locate_mitmdump", lambda: "mitmdump")
+        mgr = _manager()
+        calls: list[None] = []
+
+        def fake_start_once(mitmdump: str) -> None:
+            calls.append(None)
+            raise proxy_manager.MitmproxyError(
+                "mitmdump exited during startup (rc=1):\nModuleNotFoundError: yaml"
+            )
+
+        monkeypatch.setattr(mgr, "_start_once", fake_start_once)
+
+        with pytest.raises(proxy_manager.MitmproxyError, match="ModuleNotFoundError"):
+            mgr.start()
+        assert len(calls) == 1, "a config/dependency failure must not burn retries"
+
+    def test_configured_port_is_never_retried(self, monkeypatch) -> None:
+        """The caller pinned the port; its unavailability is an error, not a race."""
+        monkeypatch.setattr(proxy_manager, "_locate_mitmdump", lambda: "mitmdump")
+        mgr = MitmproxyManager(cassette_path="unused.yaml", listen_port=48123)
+        calls: list[None] = []
+
+        def fake_start_once(mitmdump: str) -> None:
+            calls.append(None)
+            raise self._bind_error()
+
+        monkeypatch.setattr(mgr, "_start_once", fake_start_once)
+
+        with pytest.raises(proxy_manager.MitmproxyError):
+            mgr.start()
+        assert len(calls) == 1
+        assert mgr.listen_port == 48123
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "OSError: [Errno 98] Address already in use",
+            "EADDRINUSE",
+            "[WinError 10048] only one usage of each socket address",
+            "error while attempting to bind on address ('127.0.0.1', 8000)",
+        ],
+    )
+    def test_bind_failure_classifier_accepts_known_phrasings(self, text: str) -> None:
+        assert proxy_manager._is_port_bind_failure(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ModuleNotFoundError: No module named 'yaml'",
+            "mitmdump exited during startup (rc=1): bad option",
+            "did not become ready: host overloaded",
+        ],
+    )
+    def test_bind_failure_classifier_rejects_other_failures(self, text: str) -> None:
+        assert not proxy_manager._is_port_bind_failure(text)

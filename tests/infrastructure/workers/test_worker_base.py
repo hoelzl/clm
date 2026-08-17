@@ -735,10 +735,50 @@ class TestWorkerPreRegistration:
 
         assert status == "idle"
 
-    def test_activate_pre_registered_worker_not_found(self, db_path):
-        """Test activating a non-existent worker raises error."""
+    def test_activate_pre_registered_worker_not_found(self, db_path, monkeypatch):
+        """A worker whose row never appears still fails — after the poll budget.
+
+        The budget is shrunk so the test stays fast; the production default
+        (10s) exists to ride out transient cross-process visibility races
+        (flake doc §11.2), not to change the terminal outcome.
+        """
+        monkeypatch.setattr(Worker, "ACTIVATION_POLL_TIMEOUT_SECONDS", 0.3)
+        monkeypatch.setattr(Worker, "ACTIVATION_POLL_INTERVAL_SECONDS", 0.05)
         with pytest.raises(ValueError, match="does not exist in database"):
             Worker.activate_pre_registered_worker(db_path, 99999, "notebook")
+
+    def test_activate_pre_registered_worker_polls_until_row_appears(self, db_path):
+        """The activation rendezvous is polled, not single-shot (flake doc §11.2).
+
+        The parent writes the row moments before the subprocess boots; a row
+        that becomes visible a beat late must not be a fatal startup casualty.
+        """
+
+        def _register_late():
+            time.sleep(0.4)
+            queue = JobQueue(db_path)
+            try:
+                queue._get_conn().execute(
+                    "INSERT INTO workers (id, worker_type, container_id, status) "
+                    "VALUES (7777, 'notebook', 'late-row', 'created')"
+                )
+            finally:
+                queue.close()
+
+        writer = threading.Thread(target=_register_late)
+        writer.start()
+        try:
+            result = Worker.activate_pre_registered_worker(db_path, 7777, "notebook")
+        finally:
+            writer.join()
+
+        assert result == 7777
+        queue = JobQueue(db_path)
+        try:
+            row = queue._get_conn().execute("SELECT status FROM workers WHERE id = 7777").fetchone()
+        finally:
+            queue.close()
+        assert row[0] == "idle"
 
     def test_activate_pre_registered_worker_wrong_status(self, db_path):
         """Test activating a worker not in 'created' status raises error."""
