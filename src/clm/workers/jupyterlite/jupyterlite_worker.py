@@ -20,6 +20,7 @@ from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.worker_base import (
     Worker,
     missing_jobs_db_error,
+    parse_worker_args,
     resolve_jobs_db_path,
 )
 
@@ -120,6 +121,9 @@ class JupyterLiteWorker(Worker):
 
 def main() -> None:
     """Entry point for ``python -m clm.workers.jupyterlite``."""
+    # Refuse argv before anything else: a stray `--help` must print usage,
+    # never start a job-claiming worker (issue #853).
+    parse_worker_args("jupyterlite")
     _configure_logging()
     if API_URL:
         logger.info(f"Starting JupyterLite worker in API mode (URL: {API_URL})")

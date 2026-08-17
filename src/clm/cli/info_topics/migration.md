@@ -2,6 +2,25 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Worker modules reject command-line arguments (#853, {version})
+
+**Breaking only for hand-launched workers invoked with arguments.** The
+worker entry points (`python -m clm.workers.notebook` / `.drawio` /
+`.plantuml` / `.jupyterlite`) used to ignore `sys.argv` entirely, so a stray
+argument — even `--help` — silently started a real job-claiming worker.
+They now parse the command line: `--help` prints the environment-variable
+contract (`CLM_JOBS_DB_PATH`, `CLM_API_URL`, `CLM_WORKER_ID`, …) and exits,
+and any other argument is rejected with a usage error. Workers remain
+configured exclusively through environment variables; a bare invocation
+behaves exactly as before. clm-managed workers are unaffected — clm launches
+them without arguments.
+
+Two related safety nets in the same release (no migration needed): a worker
+whose `workers` row has been deleted is no longer handed any jobs and shuts
+itself down when it notices, and `cleanup_stale_workers` keeps rows whose
+heartbeat (either channel) is fresh instead of deleting live-but-untracked
+workers.
+
 ## Docker mode, `--watch`, and the web servers need extras ({version})
 
 **Breaking for installs that relied on the bare package carrying server

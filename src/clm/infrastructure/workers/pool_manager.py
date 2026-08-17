@@ -262,7 +262,7 @@ class WorkerPoolManager:
         # These are workers that were pre-registered but never activated
         removed_count = self._cleanup_stuck_created_workers(conn)
 
-        cursor = conn.execute("SELECT id, container_id FROM workers")
+        cursor = conn.execute("SELECT id, container_id, last_heartbeat FROM workers")
         workers = cursor.fetchall()
 
         if not workers:
@@ -289,7 +289,7 @@ class WorkerPoolManager:
         docker_client = None
 
         removed_count = 0
-        for worker_id, container_id in workers:
+        for worker_id, container_id, last_heartbeat in workers:
             # Check if this is a direct worker or docker worker
             is_direct = container_id.startswith("direct-")
 
@@ -298,6 +298,23 @@ class WorkerPoolManager:
                 if worker_id in healthy_ids:
                     logger.info(
                         f"Worker {worker_id} is direct worker {container_id}, still healthy, keeping it"
+                    )
+                    continue
+                elif self._worker_recently_heartbeat(conn, worker_id, last_heartbeat):
+                    # Invisible to this pool's executors (nothing here tracks
+                    # its process, and a hand-started worker has no WORKER_ID
+                    # env marker for the system-wide scan) — but a fresh
+                    # heartbeat proves a live process is behind the row.
+                    # Deleting a LIVE worker's row is what armed the #853
+                    # zombie: the rowless process kept polling, and (before
+                    # the matching get_next_job fix) claimed jobs with every
+                    # ownership filter silently dropped. Keep the row so the
+                    # worker stays visible and session-filtered; if its
+                    # process really dies, the heartbeat goes stale and the
+                    # next cleanup removes it.
+                    logger.info(
+                        f"Worker {worker_id} is direct worker {container_id}, not tracked "
+                        f"by this pool but heartbeat is fresh; keeping it (live worker)"
                     )
                     continue
                 else:
@@ -981,6 +998,43 @@ class WorkerPoolManager:
                 self._monitor_stop_event.wait(check_interval)
 
         logger.info("Health monitor stopped")
+
+    # Grace period for cleanup_stale_workers (issue #853): a direct worker row
+    # whose most recent heartbeat is younger than this belongs to a LIVE
+    # process and must not be deleted, even when no executor of the cleaning
+    # pool can see that process. Generous enough to ride out short busy
+    # stretches (idle workers heartbeat every ~2s; busy notebook workers
+    # write per-cell heartbeats to worker_heartbeats), small enough that rows
+    # left behind by crashed builds are still reaped on the next build.
+    STALE_WORKER_HEARTBEAT_GRACE_SECONDS = 120
+
+    def _worker_recently_heartbeat(self, conn, worker_id: int, last_heartbeat) -> bool:
+        """Whether a worker row shows a heartbeat fresher than the grace period.
+
+        Considers both heartbeat channels: ``workers.last_heartbeat`` (written
+        while idle-polling and between jobs) and the per-cell
+        ``worker_heartbeats`` store (written by busy notebook workers during
+        execution), so neither an idle nor a mid-job live worker looks dead.
+
+        Args:
+            conn: Open jobs-DB connection.
+            worker_id: The ``workers.id`` under scrutiny.
+            last_heartbeat: The row's ``last_heartbeat`` value (may be None).
+        """
+        candidates = [last_heartbeat] if last_heartbeat else []
+        try:
+            row = conn.execute(
+                "SELECT heartbeat_at FROM worker_heartbeats WHERE worker_id = ?",
+                (worker_id,),
+            ).fetchone()
+            if row is not None and row[0]:
+                candidates.append(row[0])
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Could not read worker_heartbeats for worker {worker_id}: {exc}")
+        return any(
+            not self._is_heartbeat_stale(hb, self.STALE_WORKER_HEARTBEAT_GRACE_SECONDS)
+            for hb in candidates
+        )
 
     def _is_heartbeat_stale(self, last_heartbeat: str, threshold_seconds: int) -> bool:
         """Check if heartbeat timestamp is older than threshold.

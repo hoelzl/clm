@@ -279,13 +279,29 @@ class JobQueue:
             # worker row whose session_id is NULL) is left unrestricted, so a
             # build whose workers happen to be unstamped can never deadlock on
             # its own jobs.
+            #
+            # A worker whose row is MISSING gets nothing at all (issue #853):
+            # a missing row means some clm process deregistered this worker
+            # (its pool stopped, or a later build's stale-row cleanup reaped
+            # it). Falling back to unrestricted claiming here is what turned
+            # one leaked worker process into a cross-build job thief — it
+            # poached and failed jobs from every session sharing the queue
+            # for a day. Deregistered means done: hand it no jobs, and let
+            # the worker's own heartbeat path notice the missing row and
+            # shut the process down.
             worker_session_id: str | None = None
             if worker_id is not None:
                 worker_row = conn.execute(
                     "SELECT session_id FROM workers WHERE id = ?", (worker_id,)
                 ).fetchone()
-                if worker_row is not None:
-                    worker_session_id = worker_row["session_id"]
+                if worker_row is None:
+                    logger.warning(
+                        f"Worker {worker_id} tried to claim a {job_type} job but has "
+                        f"no workers row (deregistered); refusing to hand out jobs."
+                    )
+                    conn.rollback()
+                    return None
+                worker_session_id = worker_row["session_id"]
 
             conditions = ["status = 'pending'", "job_type = ?", "attempts < max_attempts"]
             params: list[Any] = [job_type]

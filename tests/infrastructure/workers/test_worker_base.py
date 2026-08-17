@@ -15,6 +15,7 @@ from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.worker_base import (
     Worker,
     missing_jobs_db_error,
+    parse_worker_args,
     resolve_jobs_db_path,
 )
 
@@ -851,3 +852,138 @@ class TestResolveJobsDbPath:
         assert "CLM_JOBS_DB_PATH" in msg
         assert "notebook" in msg
         assert "CLM_API_URL" in msg
+
+
+# All (module path, worker type) pairs whose ``main()`` must guard argv.
+WORKER_MAIN_MODULES = [
+    ("clm.workers.notebook.notebook_worker", "notebook"),
+    ("clm.workers.drawio.drawio_worker", "drawio"),
+    ("clm.workers.plantuml.plantuml_worker", "plantuml"),
+    ("clm.workers.jupyterlite.jupyterlite_worker", "jupyterlite"),
+]
+
+
+class TestArgvGuard:
+    """Workers must never start when given command-line arguments (issue #853).
+
+    ``main()`` used to ignore ``sys.argv`` entirely, so
+    ``python -m clm.workers.notebook --help`` started a REAL worker that
+    joined whatever queue ``CLM_JOBS_DB_PATH`` named and kept claiming (and
+    failing) other builds' jobs long after the shell that spawned it was
+    gone.
+    """
+
+    def test_parse_worker_args_accepts_empty_argv(self):
+        parse_worker_args("notebook", [])
+
+    def test_parse_worker_args_help_exits_zero(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            parse_worker_args("notebook", ["--help"])
+
+        assert excinfo.value.code == 0
+        help_text = capsys.readouterr().out
+        # The help must teach the env-var contract, not just refuse.
+        assert "CLM_JOBS_DB_PATH" in help_text
+        assert "clm.workers.notebook" in help_text
+
+    def test_parse_worker_args_rejects_unknown_argument(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            parse_worker_args("notebook", ["--frobnicate"])
+
+        assert excinfo.value.code == 2
+        assert "usage" in capsys.readouterr().err.lower()
+
+    @pytest.mark.parametrize(("module_path", "worker_type"), WORKER_MAIN_MODULES)
+    def test_main_with_help_exits_before_starting(self, module_path, worker_type, monkeypatch):
+        """``main()`` with ``--help`` exits 0 without touching queue or env.
+
+        Environment is scrubbed so a regression fails fast (missing-jobs-DB
+        SystemExit with a string code) instead of actually starting a worker.
+        """
+        import importlib
+        import sys
+
+        monkeypatch.delenv("CLM_JOBS_DB_PATH", raising=False)
+        monkeypatch.delenv("CLM_API_URL", raising=False)
+        monkeypatch.setattr(sys, "argv", [f"clm.workers.{worker_type}", "--help"])
+
+        main = importlib.import_module(module_path).main
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+
+        assert excinfo.value.code == 0
+
+    @pytest.mark.parametrize(("module_path", "worker_type"), WORKER_MAIN_MODULES)
+    def test_main_rejects_unknown_argument(self, module_path, worker_type, monkeypatch):
+        import importlib
+        import sys
+
+        monkeypatch.delenv("CLM_JOBS_DB_PATH", raising=False)
+        monkeypatch.delenv("CLM_API_URL", raising=False)
+        monkeypatch.setattr(sys, "argv", [f"clm.workers.{worker_type}", "--frobnicate"])
+
+        main = importlib.import_module(module_path).main
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+
+        assert excinfo.value.code == 2
+
+
+class TestDeregisteredSelfShutdown:
+    """A worker whose registration row disappears must stop (issue #853).
+
+    Some clm process deleting the row (pool stop, stale-row cleanup) is the
+    system saying "this worker is done". Before this fix the process kept
+    polling forever — rowless, invisible to ``clm status``, and (until the
+    matching ``get_next_job`` guard) claiming jobs with every ownership
+    filter silently dropped.
+    """
+
+    @staticmethod
+    def _delete_worker_row(db_path: Path, worker_id: int) -> None:
+        queue = JobQueue(db_path)
+        try:
+            queue._get_conn().execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+        finally:
+            queue.close()
+
+    def test_heartbeat_detects_missing_row_and_stops(self, worker_id, db_path):
+        worker = MockWorker(worker_id, db_path)
+
+        worker._update_heartbeat()
+        assert worker.running is True, "heartbeat against an existing row must not stop"
+
+        self._delete_worker_row(db_path, worker_id)
+        worker._update_heartbeat()
+
+        assert worker.running is False
+
+    def test_status_update_detects_missing_row_and_stops(self, worker_id, db_path):
+        worker = MockWorker(worker_id, db_path)
+
+        worker._update_status("idle")
+        assert worker.running is True, "status update against an existing row must not stop"
+
+        self._delete_worker_row(db_path, worker_id)
+        worker._update_status("idle")
+
+        assert worker.running is False
+
+    def test_worker_exits_run_loop_when_deregistered(self, worker_id, db_path):
+        """End to end: delete the row under a live run loop → the loop exits."""
+        worker = MockWorker(worker_id, db_path)
+        # Undo the idle-poll throttle so the detection heartbeat fires promptly.
+        worker.heartbeat_interval = 0.05
+
+        thread = threading.Thread(target=worker.run)
+        thread.start()
+        try:
+            _wait_until(lambda: _read_worker_status(db_path, worker_id) == "idle")
+
+            self._delete_worker_row(db_path, worker_id)
+
+            _wait_until(lambda: not thread.is_alive())
+            assert worker.running is False
+        finally:
+            worker.stop()
+            thread.join(timeout=5)

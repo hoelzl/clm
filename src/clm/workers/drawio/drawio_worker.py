@@ -19,6 +19,7 @@ from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.worker_base import (
     Worker,
     missing_jobs_db_error,
+    parse_worker_args,
     resolve_jobs_db_path,
 )
 
@@ -215,6 +216,9 @@ class DrawioWorker(Worker):
 
 def main():
     """Main entry point for DrawIO worker."""
+    # Refuse argv before anything else: a stray `--help` must print usage,
+    # never start a job-claiming worker (issue #853).
+    parse_worker_args("drawio")
     _configure_logging()
     # Determine mode based on environment
     if API_URL:

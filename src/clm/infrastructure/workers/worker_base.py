@@ -11,6 +11,7 @@ The mode is determined by the presence of CLM_API_URL environment variable
 or the api_url parameter.
 """
 
+import argparse
 import asyncio
 import json
 import logging
@@ -71,6 +72,44 @@ def missing_jobs_db_error(worker_type: str) -> str:
         f"{JOBS_DB_PATH_ENV_VAR} at the jobs database of the clm invocation "
         "it should serve."
     )
+
+
+def parse_worker_args(worker_type: str, argv: list[str] | None = None) -> None:
+    """Reject any command-line arguments before a worker starts (issue #853).
+
+    Workers are configured exclusively through environment variables; they
+    take no arguments. Historically ``main()`` never looked at ``sys.argv``,
+    so ``python -m clm.workers.notebook --help`` silently started a *real*
+    worker — which then joined whatever queue ``CLM_JOBS_DB_PATH`` named and
+    kept claiming jobs long after the shell that spawned it was gone. Every
+    worker ``main()`` must call this first: ``--help`` prints the env-var
+    contract and exits 0, anything else exits with a usage error, and only a
+    bare invocation proceeds to start the worker.
+
+    Args:
+        worker_type: The worker's type ('notebook', 'drawio', 'plantuml',
+            'jupyterlite'); also names the module in the help text.
+        argv: Argument list override for tests. None = ``sys.argv[1:]``.
+    """
+    parser = argparse.ArgumentParser(
+        prog=f"python -m clm.workers.{worker_type}",
+        description=(
+            f"CLM {worker_type} worker: polls the CLM job queue and processes "
+            f"{worker_type} jobs until stopped. Normally launched by clm "
+            "itself (e.g. `clm build`), which injects the required "
+            "environment; it takes no command-line arguments."
+        ),
+        epilog=(
+            "Configuration (environment variables):\n"
+            f"  {JOBS_DB_PATH_ENV_VAR}   jobs database to poll (direct mode; required)\n"
+            "  CLM_API_URL        worker REST API base URL (Docker mode alternative)\n"
+            "  CLM_WORKER_ID      pre-registered worker row to activate (optional)\n"
+            "  WORKSPACE_PATH     output workspace root\n"
+            "  LOG_LEVEL          worker log level (default: INFO)\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.parse_args(argv)
 
 
 def _convert_path_to_container(host_path: str, host_base: str, container_base: str) -> Path:
@@ -308,7 +347,7 @@ class Worker(ABC):
                 self.job_queue.update_heartbeat(self.worker_id)
             else:
                 conn = self.job_queue._get_conn()
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE workers
                     SET last_heartbeat = CURRENT_TIMESTAMP
@@ -316,6 +355,8 @@ class Worker(ABC):
                     """,
                     (self.worker_id,),
                 )
+                if cursor.rowcount == 0:
+                    self._handle_deregistered("heartbeat")
             self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
@@ -443,9 +484,42 @@ class Worker(ABC):
 
         try:
             conn = self.job_queue._get_conn()
-            conn.execute("UPDATE workers SET status = ? WHERE id = ?", (status, self.worker_id))
+            cursor = conn.execute(
+                "UPDATE workers SET status = ? WHERE id = ?", (status, self.worker_id)
+            )
+            if cursor.rowcount == 0:
+                self._handle_deregistered("status update")
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update status: {e}")
+
+    def _handle_deregistered(self, via: str) -> None:
+        """Stop the worker once its registration row is gone (issue #853).
+
+        A missing ``workers`` row means some clm process deregistered this
+        worker — its owning pool stopped, or a later build's stale-row
+        cleanup reaped it. Continuing to run would leak a rowless worker
+        process that polls the shared queue forever, invisible to `clm
+        status` and to every ownership rule (``get_next_job`` refuses to
+        hand such a worker jobs, so all it could do is spin). Exit
+        gracefully instead; any in-flight job has already been finished by
+        the time this fires, because heartbeat/status writes happen between
+        jobs.
+
+        Args:
+            via: Which write detected the missing row (for the log line).
+        """
+        if not self.running:
+            return
+        logger.info(
+            f"Worker {self.worker_id} ({self.worker_type}) has been deregistered "
+            f"(workers row gone; detected via {via}); shutting down."
+        )
+        self._log_event(
+            "worker_stopping",
+            f"Worker {self.worker_id} deregistered externally; shutting down",
+            {"detected_via": via},
+        )
+        self.running = False
 
     def _deregister(self):
         """Remove worker from database on graceful shutdown.

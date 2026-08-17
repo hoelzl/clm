@@ -254,9 +254,11 @@ def test_get_next_job_untagged_session_claimable_by_any_worker(job_queue):
 def test_get_next_job_sessionless_claimer_is_unrestricted(job_queue):
     """A claimer with no resolvable session claims any job, session-owned or not.
 
-    worker_id=None (no worker row) and a worker row whose session_id is NULL
-    both fall back to pre-#620 claim-anything behaviour, so a build whose
-    workers happen to be unstamped can never deadlock on its own jobs.
+    worker_id=None (host-side claiming) and a *present* worker row whose
+    session_id is NULL both fall back to pre-#620 claim-anything behaviour,
+    so a build whose workers happen to be unstamped can never deadlock on
+    its own jobs. (A worker whose row is MISSING is different — see
+    test_get_next_job_missing_worker_row_claims_nothing.)
     """
     job_queue.add_job(
         job_type="notebook",
@@ -275,11 +277,45 @@ def test_get_next_job_sessionless_claimer_is_unrestricted(job_queue):
         session_id="session-A",
     )
 
-    # No worker row at all → unrestricted.
+    # No worker_id at all (host-side claim) → unrestricted.
     assert job_queue.get_next_job("notebook") is not None
     # A worker row with a NULL session → also unrestricted.
     legacy_worker = _register_worker(job_queue, None, "container-legacy")
     assert job_queue.get_next_job("notebook", worker_id=legacy_worker) is not None
+
+
+def test_get_next_job_missing_worker_row_claims_nothing(job_queue):
+    """A claimer whose workers row is GONE gets no jobs at all (issue #853).
+
+    A missing row means some clm process deregistered this worker (its pool
+    stopped, or a later build's stale-row cleanup reaped it). The zombie
+    incident: falling back to unrestricted claiming here let one leaked
+    worker process poach and fail jobs from every session sharing the queue
+    for a day. Deregistered means done — not even NULL-session legacy jobs
+    may be handed out.
+    """
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="owned.py",
+        output_file="owned.ipynb",
+        content_hash="owned",
+        payload={},
+        session_id="session-A",
+    )
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="legacy.py",
+        output_file="legacy.ipynb",
+        content_hash="legacy",
+        payload={},
+        # No session_id — even unowned jobs are off limits.
+    )
+
+    assert job_queue.get_next_job("notebook", worker_id=424242) is None
+
+    # Both jobs are still pending for legitimate claimers.
+    assert job_queue.get_next_job("notebook") is not None
+    assert job_queue.get_next_job("notebook") is not None
 
 
 def test_get_next_job_worker_claims_own_and_null_but_not_foreign(job_queue):
@@ -912,6 +948,14 @@ def _claim(job_queue, worker_id: int = 1, session_id: str | None = None) -> Job:
         content_hash=f"hash-{worker_id}",
         payload={},
         session_id=session_id,
+    )
+    # get_next_job refuses claimers without a workers row (issue #853), so
+    # materialise one for worker_id (NULL session → unrestricted claiming,
+    # matching these tests' pre-#853 assumptions).
+    job_queue._get_conn().execute(
+        "INSERT OR IGNORE INTO workers (id, worker_type, container_id, status) "
+        "VALUES (?, 'notebook', ?, 'idle')",
+        (worker_id, f"orphan-test-worker-{worker_id}"),
     )
     claimed = job_queue.get_next_job(worker_id=worker_id, job_type="notebook")
     assert claimed is not None, "get_next_job should claim the pending job we just added"
