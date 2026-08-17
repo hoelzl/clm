@@ -87,6 +87,22 @@ invalidation; and worker *reuse* is image-blind — a still-running worker
 pool from an earlier build keeps its old image, so stop lingering workers
 first when switching images.
 
+**Reading errors: replayed vs executed (CLM {version}, #860).** Stored
+errors/warnings are replayed on cache hits (deliberately — a cached-broken
+deck must stay red instead of silently going green), and since CLM
+{version} a replayed failure is *labeled*: the live stream shows
+`✗ [User Error, cached]` with a provenance line ("this file was NOT
+executed in this build"), quiet mode prefixes `ERROR (cached):`, the
+summary splits the count (`11 errors (0 from this run's execution, 11
+replayed from cache)`), and the JSON report carries per-error/per-warning
+`from_cache` plus `error_count_from_execution` / `error_count_from_cache`.
+**A `cached` label means the failure was NOT reproduced by this build** —
+it persists for its content hash even after the environment is fixed (the
+kernel env is not part of the cache key). To re-execute: rebuild with
+`--ignore-cache`, or inspect the stored entry with `clm cache explain
+<file>`. When a finding is both replayed and freshly reproduced in one
+build, it counts as fresh — `0 from this run's execution` is trustworthy.
+
 Examples:
 
 ```bash

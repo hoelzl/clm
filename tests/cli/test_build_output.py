@@ -1772,3 +1772,148 @@ class TestDefaultFormatterMisc:
         formatter.show_startup_message("warming up")
         out = capsys.readouterr().err
         assert "warming up" in out
+
+
+# ---------------------------------------------------------------------------
+# Issue #860: replayed (cached) failures must be distinguishable from fresh
+# execution failures in EVERY output mode. An unlabeled replayed failure
+# reads as a live one — it cost a debugging session hours chasing an
+# already-fixed environment problem whose stale failures the cache replayed.
+# ---------------------------------------------------------------------------
+
+
+def _cached_error(**kwargs) -> BuildError:
+    details = kwargs.pop("details", {})
+    details["from_cache"] = True
+    return _make_error(details=details, **kwargs)
+
+
+class TestCachedFailureProvenance:
+    def test_is_from_cache_property_reads_details(self):
+        assert _cached_error().is_from_cache
+        assert not _make_error().is_from_cache
+
+    def test_summary_counts_split_fresh_and_cached(self):
+        summary = BuildSummary(
+            duration=1.0,
+            total_files=3,
+            errors=[_make_error(), _cached_error(), _cached_error()],
+        )
+        assert summary.cached_error_count == 2
+        assert summary.execution_error_count == 1
+
+    def test_default_live_error_carries_label_and_remedy(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_error(_cached_error())
+        out = capsys.readouterr().err
+        assert "[User Error, cached]" in out
+        assert "NOT" in out and "executed" in out
+        assert "--ignore-cache" in out
+        assert "clm cache explain" in out
+
+    def test_default_live_error_unchanged_when_fresh(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        formatter.show_error(_make_error())
+        out = capsys.readouterr().err
+        assert "[User Error]" in out
+        assert "cached" not in out
+        assert "--ignore-cache" not in out
+
+    def test_default_summary_splits_error_counts(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        summary = BuildSummary(
+            duration=1.0,
+            total_files=3,
+            errors=[_make_error(), _cached_error(), _cached_error()],
+        )
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "3 errors (1 from this run's execution, 2 replayed from cache)" in out
+        assert "[User, cached]" in out
+
+    def test_default_summary_keeps_plain_count_without_cached_errors(self, capsys):
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[_make_error()])
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "1 errors" in out
+        assert "replayed from cache" not in out
+
+    def test_verbose_detail_carries_label_and_remedy(self, capsys):
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+        formatter._show_error_detail(1, _cached_error(category="notebook_execution"))
+        out = capsys.readouterr().err
+        assert "[User Error - notebook_execution, cached]" in out
+        assert "--ignore-cache" in out
+
+    def test_quiet_error_and_summary_carry_provenance(self, capsys):
+        formatter = QuietOutputFormatter()
+        formatter.show_error(_cached_error())
+        summary = BuildSummary(duration=1.0, total_files=2, errors=[_make_error(), _cached_error()])
+        formatter.show_summary(summary)
+        out = capsys.readouterr().err
+        assert "ERROR (cached):" in out
+        assert "(1 replayed from cache)" in out
+
+    def test_json_report_exposes_provenance_and_counts(self, capsys):
+        formatter = JSONOutputFormatter()
+        formatter.show_build_start("C", 2)
+        cached_warning = BuildWarning(category="c", message="m", severity="low")
+        cached_warning.from_cache = True
+        summary = BuildSummary(
+            duration=1.0,
+            total_files=2,
+            errors=[_make_error(), _cached_error()],
+            warnings=[cached_warning, BuildWarning(category="c2", message="m2", severity="low")],
+        )
+        formatter.show_summary(summary)
+        data = json.loads(capsys.readouterr().out)
+        assert data["error_count_from_execution"] == 1
+        assert data["error_count_from_cache"] == 1
+        assert [e["from_cache"] for e in data["errors"]] == [False, True]
+        assert [w["from_cache"] for w in data["warnings"]] == [True, False]
+
+    def test_reporter_dedup_fresh_evidence_wins_over_cached(self):
+        reporter = BuildReporter.__new__(BuildReporter)
+        cached = _cached_error()
+        fresh = _make_error()
+        unique = reporter._deduplicate_errors([cached, fresh])
+        assert len(unique) == 1
+        assert not unique[0].is_from_cache, (
+            "a finding also produced by this run's execution must not read as cached"
+        )
+
+    def test_reporter_dedup_all_cached_stays_cached(self):
+        reporter = BuildReporter.__new__(BuildReporter)
+        unique = reporter._deduplicate_errors([_cached_error(), _cached_error()])
+        assert len(unique) == 1
+        assert unique[0].is_from_cache
+
+    def test_reporter_warning_dedup_fresh_evidence_wins(self):
+        reporter = BuildReporter.__new__(BuildReporter)
+        cached = BuildWarning(category="c", message="m", severity="low")
+        cached.from_cache = True
+        fresh = BuildWarning(category="c", message="m", severity="low")
+        unique = reporter._deduplicate_warnings([cached, fresh])
+        assert len(unique) == 1
+        assert not getattr(unique[0], "from_cache", False)
+
+    def test_report_cached_issues_stamps_errors_and_warnings(self):
+        """The backend replay site marks provenance on BOTH issue kinds."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from clm.infrastructure.backends.sqlite_backend import SqliteBackend
+
+        error = _make_error()
+        warning = BuildWarning(category="c", message="m", severity="low")
+        fake_self = SimpleNamespace(
+            db_manager=MagicMock(get_issues=MagicMock(return_value=([error], [warning]))),
+            build_reporter=MagicMock(),
+        )
+        SqliteBackend._report_cached_issues(fake_self, "f.py", "hash", "meta")
+
+        assert error.details["from_cache"] is True
+        assert getattr(warning, "from_cache", False) is True
+        fake_self.build_reporter.report_error.assert_called_once_with(error)
+        fake_self.build_reporter.report_warning.assert_called_once_with(warning)

@@ -442,6 +442,14 @@ class BuildReporter:
                 unique.append(error)
             else:
                 representative.occurrence_count += 1
+                # Provenance is not part of the fingerprint, so a replayed
+                # copy and a fresh one can collapse (one output target hit
+                # the cache, another re-executed and failed). Fresh evidence
+                # wins: "cached" must mean "ONLY seen from cache in this
+                # build", or the summary's "0 from this run's execution"
+                # cannot be trusted (issue #860).
+                if representative.is_from_cache and not error.is_from_cache:
+                    representative.details.pop("from_cache", None)
 
         return unique
 
@@ -468,6 +476,13 @@ class BuildReporter:
                 unique.append(warning)
             else:
                 representative.occurrence_count += 1
+                # Fresh evidence wins over replay provenance — mirrors
+                # _deduplicate_errors (issue #860). The transient attribute
+                # is simply dropped so the representative reads as fresh.
+                if getattr(representative, "from_cache", False) and not getattr(
+                    warning, "from_cache", False
+                ):
+                    delattr(representative, "from_cache")
 
         return unique
 

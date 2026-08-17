@@ -1902,12 +1902,22 @@ class SqliteBackend(LocalOpsBackend):
             errors, warnings = self.db_manager.get_issues(file_path, content_hash, output_metadata)
 
             for error in errors:
-                # Mark this as a cached/historical error for display purposes
+                # Replay-time provenance (issue #860): consumed by
+                # BuildError.is_from_cache and surfaced in every output mode
+                # — an unlabeled replayed failure is indistinguishable from a
+                # live one. Set on the retrieved instance only; never written
+                # back to processing_issues.
                 if "from_cache" not in error.details:
                     error.details["from_cache"] = True
                 self.build_reporter.report_error(error)
 
             for warning in warnings:
+                # Same provenance for warnings, as a TRANSIENT attribute:
+                # BuildWarning has no details dict, and a dataclass field
+                # would leak into to_json()/processing_issues storage —
+                # provenance is a replay-time fact, not a stored one. Read
+                # via output_formatter._warning_is_from_cache.
+                warning.from_cache = True  # type: ignore[attr-defined]
                 self.build_reporter.report_warning(warning)
 
             if errors or warnings:
