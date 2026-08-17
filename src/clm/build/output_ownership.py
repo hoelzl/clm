@@ -31,6 +31,7 @@ pre-created, which is why it lives at the top of
 from __future__ import annotations
 
 import logging
+import stat
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -156,16 +157,32 @@ def snapshot_output_ownership(
             continue
         seen.add(root)
 
-        if not root.exists():
+        try:
+            stat_result = root.stat()
+        except FileNotFoundError:
             entries.append(RootOwnership(root, evidence="did not exist at build start"))
             continue
-        if not root.is_dir():
+        except OSError as exc:
+            # ``Path.exists()`` would swallow this and report "absent",
+            # i.e. owned. An unreadable root is exactly the case to fail
+            # closed on.
             entries.append(
                 RootOwnership(
                     root,
                     evidence=None,
-                    reason="exists but is not a directory",
+                    reason=f"could not be inspected at build start ({exc})",
                 )
+            )
+            continue
+
+        if not stat.S_ISDIR(stat_result.st_mode):
+            # Neither destructive operation touches a non-directory root:
+            # the sweep skips it with a warning and ``shutil.rmtree(...,
+            # ignore_errors=True)`` is a no-op on a file. Refusing here
+            # would turn a pre-existing broken setup into a new hard
+            # build failure with an unrelated-sounding message.
+            entries.append(
+                RootOwnership(root, evidence="is not a directory; nothing is deleted there")
             )
             continue
         if _is_empty(root):
@@ -176,7 +193,11 @@ def snapshot_output_ownership(
             (
                 candidate
                 for candidate in _manifest_dirs_for(root, manifest_root_list)
-                if (candidate / MANIFEST_FILENAME).exists()
+                # ``is_file``, not ``exists``: a *directory* named
+                # ``.clm-manifest.json`` is not a manifest, and must not
+                # authorize deletion (same test
+                # ``provenance_manifest.find_course_manifest_path`` uses).
+                if (candidate / MANIFEST_FILENAME).is_file()
             ),
             None,
         )

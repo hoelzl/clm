@@ -17,9 +17,15 @@ segment, or resolves onto the course data directory itself (the
 overlap check resolves symlinks, so a relative path that loops back onto
 the course root is caught too.
 
-- *Migration*: make the path course-root relative (`output/students`). To
-  build somewhere else, use `clm build --output-dir DIR` — it re-roots
-  every target under `<DIR>/<target-name>/`.
+- *Migration*: make the path course-root relative (`output/students`) and
+  move — or symlink — the tree under the course root. `clm build
+  --output-dir DIR` builds elsewhere for one run (it re-roots every target
+  under `<DIR>/<target-name>/`), but it is **not** a substitute for the
+  spec path: `clm git`, `clm release` and `clm recordings` resolve the
+  output tree from the spec and have no such flag, so a spec path and an
+  `--output-dir` that disagree leave them looking in different places.
+  A symlinked `output/` is fine: the rules bound what a *spec path* can
+  aim at, not where a filesystem link leads.
 
 `<dir-group><path>` and each `<subdir>` follow the same rule (course-root
 relative, no `..`), and `<dir-group><name>` is now sanitized per path
@@ -43,7 +49,17 @@ leaves the stale files in place.
   written — subsequent builds are gated no further — or empty the
   directory yourself. `clm build --allow-unowned-output` performs the
   deletion anyway; it is deliberately a separate flag from `--clean`,
-  which is the operation being gated.
+  which is the operation being gated. A refused build does **not** write
+  the manifest into that root: the manifest is the ownership evidence, so
+  writing it would hand the next build the permission this one declined.
+  Other targets that swept normally still get theirs.
+- *`--snapshot` / `--verify-against`*: `--snapshot DIR` builds into a
+  directory it already requires to be empty, so it always passes.
+  `--verify-against` builds into the **regular** output tree and is gated
+  like any other build — on a pre-manifest tree its sweep is refused
+  (and, since that flow suppresses the manifest, stays refused), which
+  surfaces as stale files reported as unexpected extras. Run one plain
+  build first.
 
 ## Multi-dot diagram sources render under their full stem (#855, {version})
 

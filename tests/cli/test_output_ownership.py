@@ -76,6 +76,82 @@ def registry() -> OutputWriteRegistry:
     return OutputWriteRegistry()
 
 
+class TestOwnershipDoesNotSelfAuthorize:
+    """A refusal must not hand the next build permission to delete.
+
+    The provenance manifest *is* the ownership evidence. Writing it after
+    a refused sweep meant: build 1 refuses (exit 0, stale files kept) and
+    writes the manifest; build 2 sees an "owned" root and deletes
+    everything the build did not write. Found in review of PR #864.
+    """
+
+    def test_refused_roots_are_recorded_on_the_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from clm.build.engine import _maybe_run_sweep
+
+        root = tmp_path / "documents"
+        _make_file(root / "thesis.txt")
+        config = _config(tmp_path, sweep=True)
+
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[root],
+            backend=SimpleNamespace(
+                output_write_registry=OutputWriteRegistry(),
+                image_registry=ImageRegistry(),
+            ),
+            build_reporter=MagicMock(errors=[]),
+            only_sections_mode=False,
+            ownership=snapshot_output_ownership([root]),
+        )
+
+        assert config.refused_output_roots == (root,)
+
+    def test_target_root_over_a_refused_root_is_skipped(self, tmp_path: Path) -> None:
+        from clm.build.engine import _manifest_roots_to_skip
+
+        target_root = tmp_path / "output" / "shared"
+        other_root = tmp_path / "output" / "trainer"
+        course = SimpleNamespace(
+            output_targets=[
+                SimpleNamespace(output_root=target_root),
+                SimpleNamespace(output_root=other_root),
+            ]
+        )
+        config = _config(tmp_path, refused_output_roots=(target_root / "course-en",))
+
+        # Only the tier that was refused loses its manifest — suppressing
+        # every target would leave the healthy ones unmarked, and they
+        # would be refused on the next build in turn.
+        assert _manifest_roots_to_skip(course, config) == {target_root}
+
+    def test_no_refusal_skips_nothing(self, tmp_path: Path) -> None:
+        from clm.build.engine import _manifest_roots_to_skip
+
+        course = SimpleNamespace(output_targets=[SimpleNamespace(output_root=tmp_path / "out")])
+        assert _manifest_roots_to_skip(course, _config(tmp_path)) == set()
+
+    def test_write_provenance_manifests_honours_skip_roots(self, tmp_path: Path) -> None:
+        from clm.core.provenance_manifest import write_provenance_manifests
+
+        out_root = tmp_path / "output" / "shared"
+        out_root.mkdir(parents=True)
+        course = MagicMock()
+        course.output_targets = [SimpleNamespace(output_root=out_root)]
+
+        written = write_provenance_manifests(
+            course,
+            source_commit=None,
+            source_dirty=None,
+            built_at="2026-08-18T00:00:00+00:00",
+            skip_roots=[out_root],
+        )
+
+        assert written == []
+        assert not (out_root / MANIFEST_FILENAME).exists()
+
+
 class TestOwnershipSnapshot:
     def test_missing_root_is_owned(self, tmp_path: Path) -> None:
         ownership = snapshot_output_ownership([tmp_path / "nope"])
@@ -83,11 +159,16 @@ class TestOwnershipSnapshot:
         assert ownership.unowned_roots == ()
 
     def test_empty_root_is_owned(self, tmp_path: Path) -> None:
-        """The ``--snapshot`` / ``--verify-against`` case.
+        """The ``--snapshot`` case.
 
-        Those flows suppress the provenance manifest, so the empty-at-
-        start rule is the only evidence they can offer — and ``--snapshot``
-        already refuses a non-empty target directory.
+        ``--snapshot DIR`` builds into ``DIR`` and already refuses a
+        non-empty one (``clm build`` entry point), so the empty-at-start
+        rule is the evidence it needs — which is the only evidence it
+        *can* offer, since the flow suppresses the provenance manifest.
+
+        ``--verify-against`` is deliberately not covered here: it builds
+        into the regular output tree, so it is gated exactly like any
+        other build (see the migration note).
         """
         root = tmp_path / "snapshot-baseline"
         root.mkdir()
@@ -121,6 +202,46 @@ class TestOwnershipSnapshot:
         _make_file(root / "thesis.txt")
         ownership = snapshot_output_ownership([root], manifest_roots=[tmp_path / "output"])
         assert not ownership.is_owned(root)
+
+    def test_a_manifest_directory_is_not_evidence(self, tmp_path: Path) -> None:
+        """``mkdir .clm-manifest.json`` must not authorize deletion."""
+        _make_file(tmp_path / "notes.txt")
+        (tmp_path / MANIFEST_FILENAME).mkdir()
+        assert not snapshot_output_ownership([tmp_path]).is_owned(tmp_path)
+
+    def test_a_root_that_is_a_file_is_left_alone(self, tmp_path: Path) -> None:
+        """Neither operation deletes through a non-directory root.
+
+        The sweep skips it with a warning and ``rmtree(..., ignore_errors)``
+        is a no-op on a file, so refusing would turn a pre-existing broken
+        setup into a new hard build failure.
+        """
+        root = _make_file(tmp_path / "not-a-dir")
+        ownership = snapshot_output_ownership([root])
+        assert ownership.is_owned(root)
+        assert "not a directory" in (ownership.evidence_for(root) or "")
+
+    def test_an_unreadable_root_is_not_owned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``Path.exists()`` swallows a permission error and answers False.
+
+        Reporting "did not exist at build start" for a root that is there
+        but unreadable would call it owned — exactly backwards.
+        """
+        root = tmp_path / "locked"
+        root.mkdir()
+        real_stat = Path.stat
+
+        def fake_stat(self: Path, *args, **kwargs):
+            if self == root:
+                raise PermissionError(13, "Permission denied")
+            return real_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+        ownership = snapshot_output_ownership([root])
+        assert not ownership.is_owned(root)
+        assert "inspect" in (ownership.reason_for(root) or "")
 
     def test_reason_names_the_evidence(self, tmp_path: Path) -> None:
         _make_file(tmp_path / "notes.txt")
@@ -167,6 +288,19 @@ class TestSweepRefusesUnownedRoots:
         assert not owned_stray.exists()
         assert kept.exists()
         assert report.refused_roots == [unowned]
+
+    def test_a_repeated_root_is_refused_once(
+        self, tmp_path: Path, registry: OutputWriteRegistry
+    ) -> None:
+        """``root_dirs`` legitimately repeats a directory.
+
+        An explicit target whose kinds span the public and the private
+        branch derives the same path twice, and reporting one directory
+        as two refused roots is a lie about the damage.
+        """
+        _make_file(tmp_path / "precious.txt")
+        report = sweep_stray_files([tmp_path, tmp_path], registry, unowned_roots=[tmp_path])
+        assert report.refused_roots == [tmp_path]
 
     def test_dry_run_never_deletes_in_a_refused_root(
         self, tmp_path: Path, registry: OutputWriteRegistry
@@ -319,6 +453,70 @@ class TestCleanWipeIsGated:
             output_write_registry=OutputWriteRegistry(),
             image_registry=ImageRegistry(),
         )
+
+    def test_cli_renders_the_refusal_instead_of_a_traceback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``main_build`` converts the engine's typed refusal.
+
+        Without the conversion the carefully worded remedy is buried
+        under a raw Python traceback — Click only renders
+        ``ClickException``/``Abort`` itself.
+        """
+        import click
+
+        from clm.build.errors import UnownedOutputRootError
+        from clm.cli.commands import build as build_module
+
+        async def fake_run_build(config, **kwargs):
+            raise UnownedOutputRootError("--clean would delete …; pass --allow-unowned-output")
+
+        monkeypatch.setattr(build_module, "run_build", fake_run_build)
+        spec_file = tmp_path / "spec.xml"
+        spec_file.write_text("<course/>", encoding="utf-8")
+
+        with pytest.raises(click.ClickException, match="allow-unowned-output"):
+            asyncio.run(
+                build_module.main_build(
+                    None,
+                    spec_file,
+                    tmp_path / "data",
+                    tmp_path / "out",
+                    False,  # watch
+                    "fast",  # watch_mode
+                    0.3,  # debounce
+                    False,  # print_correlation_ids
+                    "INFO",  # log_level
+                    tmp_path / "cache.db",
+                    tmp_path / "jobs.db",
+                    False,  # ignore_cache
+                    False,  # clear_cache
+                    True,  # clean
+                    False,  # incremental
+                    False,  # no_sweep
+                    (),  # only_sections
+                    None,  # workers
+                    None,  # notebook_workers
+                    None,  # plantuml_workers
+                    None,  # drawio_workers
+                    None,  # max_workers
+                    None,  # notebook_image
+                    None,  # plantuml_image
+                    None,  # drawio_image
+                    "default",  # output_mode
+                    False,  # no_progress
+                    False,  # no_color
+                    False,  # verbose_logging
+                    None,  # language
+                    False,  # speaker_only
+                    None,  # targets
+                    False,  # force_execute
+                    "disabled",  # http_replay
+                    "duplicated",  # image_mode
+                    "png",  # image_format
+                    False,  # inline_images
+                )
+            )
 
     def test_clean_refuses_and_deletes_nothing(self, tmp_path: Path) -> None:
         from clm.build.engine import process_course_with_backend

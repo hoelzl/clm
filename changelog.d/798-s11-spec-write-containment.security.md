@@ -6,19 +6,23 @@
   bounded. Two layers now bound them.
 
   **Spec validation** (fails before any job runs): an
-  `<output-target><path>` is refused when it is absolute, contains a `..`
-  segment, or resolves onto the course data directory itself — the
+  `<output-target><path>` is refused when it is absolute, blank, contains a
+  `..` segment, or resolves onto the course data directory itself — the
   one-character `<path>.</path>` typo that used to aim the sweep at the
-  course sources. The overlap check resolves symlinks rather than comparing
-  strings. `OutputTarget.from_spec` enforces the same rule, so `Course`
-  construction paths that do not validate first (`clm git`, the release
-  tooling, the MCP server) refuse too. `<dir-group><path>` and each
-  `<subdir>` go through the canonical `<include>`-path validator
-  (course-root relative, no `..`), and `<dir-group><name>` is sanitized per
-  path segment the way section names always were — nesting
-  (`Code/Solutions`) still works, traversal no longer does.
-  `sanitize_file_name` never returns `.` or `..` again, which closes the
-  same hole for section names, course names and notebook titles.
+  course sources, and its likelier sibling, a pretty-printed empty
+  `<path>` element that resolved to the course root on Windows. Both sides
+  of the overlap check are resolved, so a path that reaches the course root
+  through a symlink is caught too. `OutputTarget.from_spec` enforces the
+  same rules, and `clm git` / `clm release` — which read the spec path
+  without building a `Course` — validate explicitly, so no command acts on
+  a path `clm build` refuses. `<dir-group><path>` and each `<subdir>` go
+  through the canonical `<include>`-path validator (course-root relative,
+  no `..`), and `<dir-group><name>` is sanitized per path segment the way
+  section names always were — nesting (`Code/Solutions`) still works,
+  traversal no longer does. `sanitize_file_name` never returns a directory
+  reference again (`.`, `..`, and on Windows any run of dots, which
+  collapses the same way), closing the same hole for section names, course
+  names and notebook titles.
 
   **Ownership gate**: `--clean` and the sweep only act inside an output root
   clm can prove is its own — one that was empty or absent at build start,
@@ -28,7 +32,10 @@
   `--clean` fails the build having deleted nothing (the check runs before
   `git_dir_mover` moves anything), and the sweep leaves that root untouched.
   The sweep is now plan-then-execute so a refusal cannot leave a half-swept
-  tree. The new `clm build --allow-unowned-output` overrides the gate;
+  tree, and a refused root gets **no provenance manifest** — the manifest is
+  the ownership evidence, so writing it would have handed the next build
+  the permission this one declined (targets that swept normally still get
+  theirs). The new `clm build --allow-unowned-output` overrides the gate;
   `--clean` deliberately does not, since it is the operation being gated.
 
   **Breaking**: absolute `<output-target><path>` values are refused — use

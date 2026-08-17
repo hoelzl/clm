@@ -23,6 +23,7 @@ from clm.build import (
     BuildConfig,
     BuildOptionError,
     SpecValidationFailure,
+    UnownedOutputRootError,
     resolve_explain_rebuilds,
     resolve_fail_on_error,
     resolve_fail_on_missing_xref,
@@ -342,6 +343,10 @@ async def main_build(
     try:
         return await run_build(config, watch_runner=watch_and_rebuild)
     except SpecValidationFailure as e:
+        raise click.ClickException(str(e)) from None
+    except UnownedOutputRootError as e:
+        # The refusal message names the directory and the remedy; a raw
+        # traceback would bury both (finding S11, #798).
         raise click.ClickException(str(e)) from None
     except BuildOptionError as e:
         raise click.UsageError(str(e)) from None

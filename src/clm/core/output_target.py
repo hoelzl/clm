@@ -90,13 +90,16 @@ class OutputTarget:
             OutputTarget with resolved absolute paths
 
         Raises:
-            OutputPathError: When ``spec.path`` is absolute, contains a
-                ``..`` segment, or resolves onto the course data
-                directory. ``CourseSpec.validate`` reports the same rule
-                as a validation error, but not every ``Course``
-                construction path validates first (``clm git``, the
-                release tooling, the MCP server), so resolution refuses
-                too (finding S11, #798).
+            OutputPathError: When ``spec.path`` is empty, absolute,
+                contains a ``..`` segment, or resolves onto the course
+                data directory. ``CourseSpec.validate`` reports the same
+                rules as validation errors, but not every ``Course``
+                construction path validates first (``clm cache``, the
+                export commands, the MCP server), so resolution refuses
+                too (finding S11, #798). Consumers that read
+                ``OutputTargetSpec.path`` without building a ``Course``
+                validate explicitly — see ``clm.cli.commands.git`` and
+                ``clm.cli.commands.release``.
         """
         validate_output_target_path(spec.path, target_name=spec.name, course_root=course_root)
 

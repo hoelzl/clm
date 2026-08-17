@@ -293,6 +293,14 @@ class BuildConfig:
     # flag, since ``--clean`` is the operation being gated.
     allow_unowned_output: bool = False
 
+    # Output roots whose post-build sweep was refused for lack of
+    # ownership evidence. Populated at runtime by ``_maybe_run_sweep``
+    # (like ``resolved_section_selection`` above), and read by the
+    # provenance-manifest step: the manifest *is* the ownership
+    # evidence, so a refused root must not receive one — otherwise the
+    # build that refused to delete hands the next build permission to.
+    refused_output_roots: tuple[Path, ...] = ()
+
     # Stray-file sweep at end of build (Feature D2 of git-friendly output
     # writes). Default ``True`` since the new build flow no longer wipes
     # the output tree, so leftover files from renamed/removed sections

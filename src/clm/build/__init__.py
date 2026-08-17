@@ -27,7 +27,7 @@ from clm.build.engine import (
     process_course_with_backend,
     run_build,
 )
-from clm.build.errors import BuildOptionError, SpecValidationFailure
+from clm.build.errors import BuildOptionError, SpecValidationFailure, UnownedOutputRootError
 from clm.build.output_formatter import OutputFormatter
 from clm.build.reporter import BuildReporter
 
@@ -38,6 +38,7 @@ __all__ = [
     "BuildReporter",
     "OutputFormatter",
     "SpecValidationFailure",
+    "UnownedOutputRootError",
     "initialize_paths_and_course",
     "process_course_with_backend",
     "resolve_explain_rebuilds",

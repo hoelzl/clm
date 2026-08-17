@@ -34,7 +34,7 @@ import hashlib
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -382,17 +382,33 @@ def write_provenance_manifests(
     built_at: str,
     spec_name: str | None = None,
     failed_topics: frozenset[str] | set[str] | None = None,
+    skip_roots: Iterable[Path] = (),
 ) -> list[Path]:
     """Write one ``.clm-manifest.json`` per built output target.
 
     Targets whose ``output_root`` does not exist (e.g. a target that produced
     nothing) are skipped. Returns the list of manifest paths written.
     See :func:`build_provenance_manifest` for *failed_topics* (issue #295).
+
+    *skip_roots* names output roots that must **not** receive a manifest.
+    The build passes the roots whose stray-file sweep was refused for
+    lack of ownership evidence (finding S11, #798): the manifest is that
+    evidence, so writing it after a refusal would hand the next build
+    permission to delete exactly what this one declined to touch.
     """
+    skipped = set(skip_roots)
     written: list[Path] = []
     for target in course.output_targets:
         out_root = target.output_root
         if not out_root.exists():
+            continue
+        if out_root in skipped:
+            logger.warning(
+                "Not writing a provenance manifest into %s: clm could not "
+                "verify it owns that output tree, and the manifest would "
+                "authorize the next build to delete from it.",
+                out_root,
+            )
             continue
         manifest = build_provenance_manifest(
             course,

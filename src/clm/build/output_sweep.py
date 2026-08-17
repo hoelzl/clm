@@ -210,7 +210,12 @@ def sweep_stray_files(
     state = _SweepState()
     refused: list[Path] = []
 
-    for root in root_dirs:
+    # The caller's roots legitimately repeat: an explicit target whose
+    # kinds span both the public and the private branch derives the same
+    # directory twice (``engine._compute_root_dirs``). Walking it twice
+    # is wasted work, and refusing it twice would report one directory as
+    # two.
+    for root in dict.fromkeys(root_dirs):
         if not root.exists():
             continue
         if not root.is_dir():
@@ -256,29 +261,40 @@ def _execute_plan(plan: _SweepPlan, *, dry_run: bool, state: _SweepState) -> Non
     """Carry out a planned sweep, recording what was actually removed.
 
     Files go first, then directories deepest-first (the order
-    :func:`_plan_directory` produced them in). A failure is logged and
-    skipped: the containing directory's ``rmdir`` then fails too, which
-    is the same outcome the pre-plan implementation reached by marking
-    the parent non-empty.
+    :func:`_plan_directory` produced them in). A deletion that fails is
+    logged once and blocks the removal of every directory above it — the
+    same outcome the pre-plan implementation reached by marking the
+    parent non-empty, and without the cascade of "directory is not
+    empty" warnings a blind ``rmdir`` per ancestor would produce (a
+    single file held open by an editor or a virus scanner is routine on
+    Windows).
     """
     if dry_run:
         state.deleted_files.extend(plan.files)
         state.removed_dirs.extend(plan.dirs)
         return
 
+    blocked: set[Path] = set()
+
     for file_path in plan.files:
         try:
             file_path.unlink()
         except OSError as exc:
             logger.warning("Sweep: cannot remove %s: %s", file_path, exc)
+            blocked.add(file_path.parent)
             continue
         state.deleted_files.append(file_path)
 
     for dir_path in plan.dirs:
+        if dir_path in blocked:
+            logger.debug("Sweep: not removing %s — something inside it survived", dir_path)
+            blocked.add(dir_path.parent)
+            continue
         try:
             dir_path.rmdir()
         except OSError as exc:
             logger.warning("Sweep: cannot remove empty dir %s: %s", dir_path, exc)
+            blocked.add(dir_path.parent)
             continue
         state.removed_dirs.append(dir_path)
 

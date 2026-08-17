@@ -194,28 +194,45 @@ def validate_output_target_path(
     2. It contains no ``..`` segment.
     3. Resolved against *course_root*, it neither equals nor contains
        the course data directory. This is the check that catches the
-       one-character ``<path>.</path>`` typo, and it is symlink-correct
-       (both sides are resolved) rather than a string comparison.
+       one-character ``<path>.</path>`` typo. Both sides are resolved
+       before comparing, so a path that reaches the course root through
+       a symlink is caught too.
+
+    Note what rule 3 is **not**: it does not require the output root to
+    stay *below* the course root. A course that symlinks its ``output/``
+    onto another disk is a legitimate, deliberate setup, and refusing it
+    would break working courses — so the rules bound what a spec can
+    aim at *by writing a path*, not where a filesystem link may lead.
 
     *course_root* is optional because not every caller has resolved one;
-    rules 1 and 2 always apply. An empty path is not this function's
-    business — :meth:`OutputTargetSpec.validate` already reports it.
+    rules 1 and 2 always apply.
+
+    An empty — or whitespace-only — path is refused here too. XML
+    elements are usually pretty-printed, so a blank ``<path>`` parses as
+    ``"\\n      "``: truthy enough to pass a ``if not self.path`` check,
+    and empty enough that ``course_root / path`` is the course root
+    itself on Windows. That is rule 3 in a different spelling, and the
+    likelier author mistake.
 
     Raises:
         OutputPathError: When any rule is violated.
     """
     cleaned = value.strip()
     if not cleaned:
-        return
+        raise OutputPathError(
+            f"Output target '{target_name}': <path> is empty. Give the "
+            f"target a directory below the course root, e.g. "
+            f"<path>output/{target_name}</path>."
+        )
 
     normalized = cleaned.replace("\\", "/")
     candidate = Path(normalized)
     if candidate.is_absolute() or normalized.startswith("/") or _WINDOWS_DRIVE_RE.match(normalized):
         raise OutputPathError(
             f"Output target '{target_name}': <path>{cleaned}</path> is an "
-            f"absolute path. Output paths must be relative to the course "
-            f"root so a spec cannot direct writes (and the post-build "
-            f"sweep) outside the course."
+            f"absolute path. Output paths are relative to the course root; "
+            f"to build elsewhere, run `clm build --output-dir DIR` or move "
+            f"(or link) the output tree under the course root."
         )
     if any(part == ".." for part in candidate.parts):
         raise OutputPathError(
@@ -1027,12 +1044,17 @@ class DirGroupSpec:
             else raw_path
         )
         if subdirs is not None:
+            # An empty ``<subdir/>`` means "the base directory, no extra
+            # level" and has always been legal — keep it verbatim rather
+            # than making it a parse error.
             subdirs = [
                 normalize_include_path(
                     subdir,
                     attr_name="subdir",
                     element_label="<dir-group>/<subdirs>/<subdir>",
                 )
+                if subdir.strip()
+                else subdir
                 for subdir in subdirs
             ]
         return cls(
@@ -1176,7 +1198,10 @@ class OutputTargetSpec:
         if not self.name:
             errors.append("Output target must have a name attribute")
 
-        if not self.path:
+        # ``not self.path.strip()``, not ``not self.path``: a
+        # pretty-printed ``<path>\n      </path>`` is truthy but names no
+        # directory, and used to resolve to the course root itself.
+        if not self.path.strip():
             errors.append(f"Output target '{self.name}' must have a <path> element")
         else:
             try:

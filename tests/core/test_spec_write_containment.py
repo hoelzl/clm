@@ -111,6 +111,23 @@ class TestOutputTargetPathValidation:
         """Callers that have no course root still get the shape checks."""
         assert _spec_with_output_path("../elsewhere").validate()
 
+    @pytest.mark.parametrize("path", ["", "   ", "\n      "])
+    def test_blank_path_is_rejected(self, path: str, tmp_path: Path) -> None:
+        """A pretty-printed empty ``<path>`` is the likelier typo.
+
+        ``element_text`` does not strip, so ``<path>\\n  </path>`` parses
+        to a *truthy* whitespace string: it slipped past the "must have a
+        <path> element" check, and past a ``value.strip()`` early return
+        in the validator — then ``course_root / "   "`` is the course root
+        itself on Windows. That is rule 3 in a different spelling.
+        """
+        assert _errors_for(path, tmp_path)
+
+    def test_blank_path_is_refused_at_resolution_too(self, tmp_path: Path) -> None:
+        spec = OutputTargetSpec(name="students", path="   ")
+        with pytest.raises(CourseSpecError):
+            OutputTarget.from_spec(spec, tmp_path)
+
 
 class TestOutputTargetRuntimeRefusal:
     """``OutputTarget.from_spec`` refuses too — defense in depth.
@@ -166,6 +183,16 @@ class TestDirGroupPathValidation:
         spec = DirGroupSpec.from_element(self._element(subdir="a/b"))
         assert spec.subdirs == ["a/b"]
 
+    def test_empty_subdir_keeps_its_historical_meaning(self) -> None:
+        """``<subdir/>`` means "the base directory, no extra level"."""
+        from xml.etree import ElementTree as ET
+
+        element = ET.fromstring(
+            "<dir-group><name>Code</name><path>code</path><subdirs><subdir/></subdirs></dir-group>"
+        )
+        spec = DirGroupSpec.from_element(element)
+        assert spec.subdirs == [""]
+
 
 class TestDirGroupNameSanitization:
     """``<dir-group><name>`` is sanitized the way section names are."""
@@ -206,14 +233,37 @@ class TestDirGroupNameSanitization:
 
 
 class TestSanitizeFileName:
-    """``sanitize_file_name`` must never hand back a traversal component."""
+    """``sanitize_file_name`` must never hand back a directory reference."""
 
-    @pytest.mark.parametrize("text", [".", "..", " .. ", "..."])
-    def test_dot_components_are_replaced(self, text: str) -> None:
+    @pytest.mark.parametrize("text", [".", "..", " .. ", "...", "....", ". .", "?.?.?."])
+    def test_dot_only_names_do_not_name_a_directory(self, text: str, tmp_path: Path) -> None:
+        """Asserting ``result not in ('.', '..')`` was not enough.
+
+        On Windows *any* run of dots collapses onto the containing
+        directory — ``out/...`` resolves to ``out`` — so a section named
+        ``"..."`` (or ``"?.?.?."``, since ``?`` is deleted by the
+        sanitizer) made ``--only-sections`` `rmtree` the whole
+        per-target output directory instead of one section. The real
+        property is filesystem-level: the sanitized name must resolve to
+        a *child* of the directory it is joined onto.
+        """
         result = sanitize_file_name(text)
-        assert result not in (".", "..")
+        joined = (tmp_path / result).resolve()
+        assert joined != tmp_path.resolve()
+        assert joined.parent == tmp_path.resolve()
+
+    def test_dot_only_names_are_reported_as_traversal(self) -> None:
+        """Callers that refuse rather than rename need the same verdict."""
+        from clm.core.utils.text_utils import is_traversal_name
+
+        assert is_traversal_name(".")
+        assert is_traversal_name(":..:")
+        assert is_traversal_name("...")
+        assert not is_traversal_name("Section 1")
+        assert not is_traversal_name("")
 
     def test_ordinary_names_are_untouched(self) -> None:
         assert sanitize_file_name("Section 1") == "Section 1"
         assert sanitize_file_name("file.txt") == "file.txt"
         assert sanitize_file_name("C# Basics") == "CSharp Basics"
+        assert sanitize_file_name("Woche 01: Einführung") == "Woche 01 Einführung"

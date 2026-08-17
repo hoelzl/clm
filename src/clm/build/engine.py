@@ -976,6 +976,28 @@ def _manifest_roots(course: Course) -> list[Path]:
     return [t.output_root for t in course.output_targets] or [course.output_root]
 
 
+def _manifest_roots_to_skip(course: Course, config: BuildConfig) -> set[Path]:
+    """Output-target roots that must not receive a provenance manifest.
+
+    A target root covering an output root whose sweep was refused: the
+    manifest is the ownership evidence the gate reads, so writing it
+    after a refusal would let the next build delete exactly what this one
+    declined to touch — the gate would authorize itself after one run
+    (finding S11, #798). Targets that swept normally still get theirs, so
+    one refused tier does not leave the rest of the build unmarked (and
+    therefore refused next time too).
+    """
+    refused = config.refused_output_roots
+    if not refused:
+        return set()
+    return {
+        target.output_root
+        for target in course.output_targets
+        for root in refused
+        if target.output_root == root or target.output_root in root.parents
+    }
+
+
 def _maybe_run_sweep(
     *,
     config: BuildConfig,
@@ -1051,17 +1073,24 @@ def _maybe_run_sweep(
     if report.refused_roots and ownership is not None:
         from clm.build.output_ownership import describe_refusal
 
+        # Recorded on the config so the provenance-manifest step skips
+        # these roots: the manifest is the ownership evidence, so writing
+        # it now would let the *next* build delete what this one refused
+        # to touch (the gate would authorize itself after one run).
+        config.refused_output_roots = tuple(report.refused_roots)
         message = describe_refusal(
             ownership,
             operation="The stray-file sweep",
             roots=report.refused_roots,
         )
         logger.error(message)
-        build_reporter.formatter.show_startup_message(
-            f"Stray-file sweep refused in {len(report.refused_roots)} "
-            f"unverified output root(s); stale files were left in place. "
-            f"See the log for details."
-        )
+        # Straight to stderr, not through the formatter: this runs after
+        # the summary has been rendered, and the quiet/JSON formatters
+        # implement ``show_startup_message`` as a no-op — the one run
+        # that must warn the user is exactly the run they would not see.
+        # stderr also keeps ``--output-mode json`` stdout parseable.
+        console = Console(file=sys.stderr, force_terminal=not config.no_color)
+        console.print(f"\n[bold yellow]Stray-file sweep refused[/bold yellow]\n\n{message}\n")
 
     if report.deleted_files or report.removed_dirs:
         logger.info(
@@ -1116,6 +1145,7 @@ async def process_course_with_backend(
     start_time: float,
     build_reporter: BuildReporter,
     watch_runner=None,
+    ownership: OutputOwnership | None = None,
 ) -> BuildSummary | None:
     """Process course and optionally watch for changes.
 
@@ -1139,13 +1169,16 @@ async def process_course_with_backend(
     only_sections_mode = config.resolved_section_selection is not None
 
     # Ownership evidence for the destructive output operations (finding
-    # S11, #798). Taken here — before `precreate_output_directories`
-    # creates anything and before the `--clean` wipe — because the
-    # "empty at build start" evidence is gone the moment the build
-    # writes its first file.
+    # S11, #798). ``run_build`` snapshots before it starts databases and
+    # worker pools, so a refused ``--clean`` costs nothing; a caller that
+    # drives this function directly gets the snapshot taken here instead
+    # — still before `precreate_output_directories` creates anything and
+    # before the `--clean` wipe, which is what the "empty at build start"
+    # evidence requires.
     from clm.build.output_ownership import enforce_owned_roots, snapshot_output_ownership
 
-    ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
+    if ownership is None:
+        ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
 
     # JupyterLite runs as its own phase after the per-file stages so the
     # progress bar doesn't overrun the HTML stage total. It is skipped in
@@ -1598,6 +1631,21 @@ async def run_build(
             f"Output targets: {', '.join(t.name for t in course.output_targets)}"
         )
 
+    # Ownership evidence for the destructive output operations, taken
+    # before anything creates, writes to or wipes an output root (finding
+    # S11, #798). ``--clean`` is gated right here — before the databases
+    # and the worker pools start — so a refusal costs the user a message
+    # rather than a spawned-and-torn-down build.
+    from clm.build.output_ownership import enforce_owned_roots, snapshot_output_ownership
+
+    ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
+    if config.clean:
+        enforce_owned_roots(
+            ownership,
+            operation="--clean",
+            allow_unowned=config.allow_unowned_output,
+        )
+
     if build_reporter is None:
         build_reporter = BuildReporter(output_formatter)
 
@@ -1747,6 +1795,7 @@ async def run_build(
                     start_time=start_time,
                     build_reporter=build_reporter,
                     watch_runner=watch_runner,
+                    ownership=ownership,
                 )
     except KeyboardInterrupt:
         logger.info("Build interrupted, cleaning up...")
@@ -1835,6 +1884,7 @@ async def run_build(
                     built_at=datetime.now(timezone.utc).isoformat(),
                     spec_name=config.spec_file.name,
                     failed_topics=failed_topics,
+                    skip_roots=_manifest_roots_to_skip(course, config),
                 )
                 if written:
                     logger.info("Wrote %d provenance manifest(s)", len(written))

@@ -64,40 +64,52 @@ _STREAM_STRING_TRANSLATION_TABLE = str.maketrans(
 )
 
 
-# ``.`` and ``..`` survive the translation table (neither character is
-# replaced or deleted) but they are not names — they are the current and
-# parent directory. Every caller joins the result onto an output
-# directory, so returning ``..`` walks *out* of the output tree (finding
-# S11, #798). Map them to underscore runs of the same length: distinct
-# results, so two components that only differ in dot count do not
-# collide, and no traversal.
-_TRAVERSAL_REPLACEMENTS = {".": "_", "..": "__"}
-
-
 def _translate_file_name(text: str) -> str:
     """The character-level half of :func:`sanitize_file_name`."""
     text = text.replace("C#", "CSharp")
     return text.strip().translate(_FILE_STRING_TRANSLATION_TABLE)
 
 
-def is_traversal_name(text: str) -> bool:
-    """True when *text* would name the current or parent directory.
+def _is_dots_only(name: str) -> bool:
+    """True when *name* is non-empty and made of dots and spaces only.
 
-    ``sanitize_file_name`` maps those to a safe replacement, so a caller
-    can no longer detect them by inspecting its output — but a caller
-    that wants to *refuse* such input rather than silently rename it
-    (the recordings dashboard does: a section name of ``":..:"`` is a
+    Such a name does not identify a file: ``.`` and ``..`` are the
+    current and parent directory everywhere, and on Windows *any* run of
+    dots collapses the same way (``out/...`` resolves to ``out``, and
+    trailing dots are stripped, so ``out/a..`` creates ``out/a``). The
+    recordings dashboard already judged names this way
+    (``value.strip(". ") == ""``); the sanitizer now agrees.
+    """
+    return bool(name) and name.strip(". ") == ""
+
+
+def is_traversal_name(text: str) -> bool:
+    """True when *text* would name a directory instead of a file.
+
+    ``sanitize_file_name`` maps such names to a safe replacement, so a
+    caller can no longer detect them by inspecting its output — but a
+    caller that wants to *refuse* the input rather than silently rename
+    it (the recordings dashboard does: a section name of ``":..:"`` is a
     mistake worth reporting, not a directory called ``__``) needs the
     question answered before the replacement. Note the sanitizer deletes
     ``:`` and other punctuation first, which is what makes ``":..:"``
     traversal at all.
     """
-    return _translate_file_name(text) in _TRAVERSAL_REPLACEMENTS
+    return _is_dots_only(_translate_file_name(text))
 
 
 def sanitize_file_name(text: str) -> str:
     sanitized_text = _translate_file_name(text)
-    return _TRAVERSAL_REPLACEMENTS.get(sanitized_text, sanitized_text)
+    if _is_dots_only(sanitized_text):
+        # Dots survive the translation table (the character is neither
+        # replaced nor deleted), and every caller joins the result onto
+        # an output directory — so ``..`` walks *out* of the output tree
+        # and, on Windows, so does any other run of dots (finding S11,
+        # #798). Replace the dots with underscores: the result is the
+        # same length, so names that differ only in dot count stay
+        # distinct, and none of them is a directory reference.
+        return sanitized_text.replace(".", "_")
+    return sanitized_text
 
 
 def sanitize_relative_name(name: str) -> str:

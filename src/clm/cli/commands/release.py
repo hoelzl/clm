@@ -33,6 +33,7 @@ from clm.core.course_spec import (
     ReleaseChannelsSpec,
     SectionSpec,
     release_channel_ref,
+    validate_output_target_path,
 )
 from clm.core.provenance_manifest import (
     MANIFEST_FILENAME,
@@ -156,6 +157,16 @@ def _build_resolved(
     channel: ReleaseChannelSpec,
 ) -> _ResolvedChannel:
     source_target = next((t for t in spec.output_targets if t.name == block.source_target), None)
+    if source_target is not None:
+        # The frozen source is an ``<output-target><path>``, read here
+        # without building a ``Course``. Hold it to the same rule
+        # ``OutputTarget.from_spec`` applies, so ``clm release`` cannot
+        # read from (or, via sync, write next to) a path ``clm build``
+        # refuses (finding S11, #798). ``<channel path=…>`` is a
+        # different element and keeps its current resolution.
+        validate_output_target_path(
+            source_target.path, target_name=source_target.name, course_root=course_root
+        )
     source = _abs_under(course_root, source_target.path) if source_target else None
     return _ResolvedChannel(
         name=release_channel_ref(block, channel),

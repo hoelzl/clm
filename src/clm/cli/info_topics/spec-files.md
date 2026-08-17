@@ -699,15 +699,21 @@ not write, and `--clean` wipes the root outright. A spec therefore cannot
 point a target anywhere it likes. Since {version} a `<path>` is refused
 at spec-validation time — before any job runs — when it
 
-- is **absolute** (`/srv/out`, `C:\out`) — build elsewhere with
-  `clm build --output-dir DIR`, which re-roots every target under
-  `<DIR>/<target-name>/`;
+- is **absolute** (`/srv/out`, `C:\out`) — build elsewhere for one run with
+  `clm build --output-dir DIR` (which re-roots every target under
+  `<DIR>/<target-name>/`), or move/symlink the tree under the course root;
+- is **empty or whitespace-only** — a pretty-printed `<path>
+  </path>`
+  used to resolve to the course root itself;
 - contains a **`..` segment**;
 - resolves onto the **course data directory itself** — the
   `<path>.</path>` typo, which used to aim the sweep at your slides.
 
-The check is symlink-correct: a relative path that resolves back onto the
-course root through a symlink is refused too.
+Both sides are resolved before comparing, so a relative path that reaches
+the course root through a symlink is refused too. The rules bound what a
+spec can aim at *by writing a path* — they do not require the output tree
+to sit physically below the course root, so symlinking `output/` onto
+another disk keeps working.
 
 Beyond the spec, the destructive operations verify at run time that the
 output root is CLM's before deleting anything: it must have been empty (or
