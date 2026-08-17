@@ -2,6 +2,31 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Multi-dot diagram sources render under their full stem (#855, {version})
+
+**Breaking only for diagram sources with a dot in the stem** (most commonly
+language twins: `embeddings.de.drawio` / `embeddings.en.drawio`). The render
+name used to be derived with `with_suffix`, which swallowed the last
+dot-segment as if it were an extension — both language twins collapsed onto
+one `img-generated/embeddings.png`, one render was silently lost per build
+(last writer won, race-dependent), and the `img/embeddings.de.png` /
+`img/embeddings.en.png` names slides reference never existed in the output.
+
+Renders now keep the source's **full stem**: `embeddings.de.drawio` →
+`img-generated/embeddings.de.png`. Single-suffix sources (`diagram.drawio` →
+`diagram.png`) are unchanged. `clm course migrate-generated-images` looks up
+legacy renders under the same suffixed names.
+
+To migrate a repo with multi-dot diagram sources:
+
+1. Reference the suffixed name in slides (`img/embeddings.de.png`) — repos
+   that already did are simply fixed.
+2. Delete any committed **collapsed** render (`img-generated/embeddings.png`
+   with only `.de`/`.en` sources) — no source produces it anymore, and it
+   would keep shipping as a stale hand-authored-looking image.
+3. Expect the affected diagrams to re-render once (render paths feed cache
+   keys).
+
 ## Worker modules reject command-line arguments (#853, {version})
 
 **Breaking only for hand-launched workers invoked with arguments.** The

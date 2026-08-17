@@ -47,6 +47,23 @@ class TestMigration:
         assert not (topic / "img" / "diag.png").exists()
         assert "2 moved" in result.output
 
+    def test_a_multi_dot_source_moves_its_suffixed_render(self, runner, tmp_path):
+        """``embeddings.de.drawio``'s render is looked up under the SUFFIXED
+        name (``embeddings.de.png``), mirroring the build's issue-#855 naming
+        — and a collapsed ``embeddings.png`` is NOT treated as generated."""
+        topic = _topic(tmp_path)
+        (topic / "drawio" / "embeddings.de.drawio").write_text("<mxfile/>", encoding="utf-8")
+        (topic / "img" / "embeddings.de.png").write_bytes(b"suffixed render")
+        (topic / "img" / "embeddings.png").write_bytes(b"hand-authored or stale collapse")
+
+        result = runner.invoke(migrate_generated_images_cmd, [str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert (topic / "img-generated" / "embeddings.de.png").read_bytes() == b"suffixed render"
+        assert (topic / "img" / "embeddings.png").exists(), (
+            "a collapsed-name file no longer matches any source and must stay"
+        )
+
     def test_both_render_formats_move(self, runner, tmp_path):
         """A repo that switched image_format carries stale renders in the
         other format — both are build-owned."""
