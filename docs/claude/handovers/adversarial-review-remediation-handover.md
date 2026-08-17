@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 7, 8 DONE; Phase 4: S4/S8/S12 DONE, S11/S9/S10+D7 remain with **locked implementation contracts** (2026-08-17 — read the per-item contract blocks, do not re-derive the design decisions) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 7, 8 DONE; Phase 4: S4/S8/S12/S11 DONE, S9 and S10+D7 remain with **locked implementation contracts** (2026-08-17 — read the per-item contract blocks, do not re-derive the design decisions) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1154,7 +1154,7 @@ keep the security change reviewable in one sitting, and neither is blocked.
 
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress — S4, S8, S12 DONE; remaining S11 → S9 → S10+D7 (recommended order; **implementation contracts locked with the owner 2026-08-17** — see each item) ▸ TRACKED: #798
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress — S4, S8, S12, S11 DONE; remaining **S9 → S10+D7** (recommended order; **implementation contracts locked with the owner 2026-08-17** — see each item) ▸ TRACKED: #798
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -1209,17 +1209,98 @@ CLM owns, and secrets stay out of logs and commits.
    nonexistent-inside/dir-target inputs raise raw exceptions instead of
    JSON in some handlers (identical pre-fix behavior, FastMCP wraps them as
    ToolError — severity-Minor polish, not a containment gap).
-3. **S11 — spec-driven writes.** Sanitize `<dir-group><name>` and `<subdir>`
-   (`src/clm/core/dir_group.py:75-84,94`) the way section names already are —
-   the asymmetry is an oversight, not a design. Validate `<output-target><path>`
-   beyond emptiness. Make `sanitize_file_name` reject `.` and `..`
-   (`text_utils.py:56-70`). Consider requiring a marker file (e.g.
-   `.clm-manifest.json`) before the sweep will empty a directory — a
-   one-character typo (`<path>.</path>`) currently reaches the sweep.
+3. **S11 — spec-driven writes.** ▸ **DONE 2026-08-18** (PR #864, merge
+   b533aeb5; refs umbrella #798). Both contracted layers landed.
+
+   **Layer 1 (parse/validation).** `<output-target><path>` is refused at
+   `CourseSpec.validate(course_root=…)` — which `clm build` now calls with
+   the resolved data dir — when it is absolute, **blank**, carries a `..`
+   segment, or resolves onto the course data dir. Rooted (`/x`) *and*
+   drive-qualified (`C:\x`) forms are refused on every platform:
+   `Path.is_absolute()` is platform-dependent, so a one-platform rule lets
+   a spec authored on the other escape. The blank case turned out to be
+   the likelier typo than `<path>.</path>` — `element_text` does not
+   strip, so a pretty-printed empty element parses to a *truthy*
+   `"\n      "` that resolved to the course root on Windows (found in
+   review). `OutputTarget.from_spec` enforces the same rules, and the
+   three commands that read the spec path **without** building a `Course`
+   — `clm git`, `clm release`, `clm zip` — validate explicitly and convert
+   the error to a `ClickException` (a listing command must not traceback
+   at the user who has to migrate that very spec). `<dir-group><path>` and
+   each `<subdir>` go through the S4 `normalize_include_path` seam; empty
+   values keep their historical meanings (`<path>` = course root,
+   `<subdir/>` = no extra level), so nothing that parsed before is newly
+   rejected. `<dir-group><name>` is sanitized **per path segment**, so
+   `Code/Solutions` still nests but a traversal segment cannot.
+   `sanitize_file_name` no longer returns a directory reference — not just
+   `.`/`..` but any all-dots name, because on Windows `out/...` collapses
+   onto `out`, which made a section named `"..."` (or `"?.?.?."`, since
+   `?` is deleted by the sanitizer) `rmtree` the whole per-target output
+   dir under `--only-sections`. Companion `is_traversal_name` keeps the
+   recordings dashboard *refusing* such input instead of silently
+   renaming it (`tests/recordings/test_web_security.py` would otherwise
+   have gone quiet — the sanitizer no longer produces the `..` it matched
+   on). **Deliberately not implemented**: containment-below-root. Rule 3
+   compares for equality/ancestry only, so a course that symlinks
+   `output/` onto another disk keeps working; the error text and
+   `spec-files.md` say that rather than over-claiming.
+
+   **Layer 2 (ownership gate).** New `clm.build.output_ownership`:
+   `snapshot_output_ownership(root_dirs, manifest_roots=…)` is taken in
+   `run_build` **before** databases, worker pools,
+   `precreate_output_directories` and the `--clean` wipe. A root is clm's
+   when it was empty/absent at build start, carries `.clm-manifest.json`
+   in itself or in a *declared* target root above it (no unbounded upward
+   walk), or — sweep only — the walk completed and found nothing the write
+   registries do not account for. `--clean` raises
+   `UnownedOutputRootError` before `git_dir_mover` moves anything
+   (rendered as a `ClickException`); the sweep refuses **per root**,
+   keeping files *and* directory structure, and `sweep_stray_files` became
+   plan-then-execute (S4 shape) so a refusal cannot leave a half-swept
+   tree. Override is the new `--allow-unowned-output`, never `--clean`.
+
+   **The landmine this arc turned on** (two review rounds, both Critical):
+   *the gate can authorize itself*. The provenance manifest is the
+   evidence the next build reads, so a build that declined to delete must
+   not write it. Round 1 wrote it anyway → build 2 deleted everything at
+   exit 0. Round 2 suppressed it but keyed on *the sweep having refused* —
+   and `--no-sweep`, `--incremental` and a build with errors never reach a
+   refusal, so those three flows still handed out the credential, now with
+   **no warning on either run**. The shipped design keys on the evidence:
+   `config.unowned_output_roots` is set from the snapshot before anything
+   can decide not to sweep, and a sweep that *runs* only narrows it.
+   Anyone touching this must keep that direction — evidence in, refusal
+   out — and remember that `_plan_directory` returns an empty plan both
+   for a clean tree and for one it could not read (hence
+   `plan.scan_failed`). Only the *closest* covering target root loses its
+   manifest, so one bad tier does not drag the healthy ones into the
+   refusal next build.
+
+   **Consequence for the user-facing remedy**: because the manifest is
+   withheld, "re-run a normal build" can never clear a refusal. The remedy
+   is: move the files, repoint `<path>`, or `--allow-unowned-output` once
+   (that build sweeps *and* marks). All four texts say this — refusal
+   message, `clm info commands`, `clm info migration`, changelog fragment;
+   they were mutually contradictory in round 2 and are the thing to
+   re-check if this behavior ever changes.
+
+   **Tests**: `tests/core/test_spec_write_containment.py` (25 RED
+   pre-fix), `tests/cli/test_output_ownership.py` (seams), and — load-
+   bearing — `tests/build/test_output_ownership_e2e.py`, which runs the
+   real `clm build` **twice** against a pre-seeded tree for the
+   plain/`--no-sweep`/`--incremental` paths. The seam tests could not see
+   the Critical: the manifest write lives in `run_build` while the refusal
+   happens inside `process_course_with_backend`. Drive-path `<dir-group>`
+   refusals are Windows-only params, matching the S4 include-ledger split
+   (on POSIX `C:\x` is a contained relative path).
+
+   **Follow-up left open**: `<release-channels><channel path=…>` is a
+   different element with its own resolution and is *not* validated by
+   this change.
 
    **Implementation contract (decision locked 2026-08-17: "overlap check +
-   ownership gate" — BOTH layers, not either/or).** Do not re-derive the
-   design; the open questions in the paragraph above are settled:
+   ownership gate" — BOTH layers, not either/or).** Retained as the record
+   of the locked decisions; the delivered change follows it:
 
    - **Layer 1 — parse-time spec validation.** An `<output-target><path>` is
      rejected at spec load (validation error naming the element and value)
@@ -1781,8 +1862,13 @@ so the maintainer can object:
 
 1. **S5 scope** — recommendation: repo-local config may not set executable paths
    at all (user/system config only). Fall back to an allowlist if too restrictive.
-2. **S11 sweep marker** — recommendation: require `.clm-manifest.json` (or
-   equivalent) before the sweep will empty a directory.
+2. ~~**S11 sweep marker**~~ — **settled and shipped** (PR #864): the sweep and
+   `--clean` require ownership evidence — empty/absent at build start,
+   `.clm-manifest.json` in the root or a declared target root above it, or (sweep
+   only) a completed walk that found nothing unaccounted for. Override is
+   `--allow-unowned-output`, never `--clean`. Crucially, the manifest is *withheld*
+   from a root that failed the check, so the gate cannot authorize itself on the
+   next build — see item 3 of Phase 4 for why that took two review rounds.
 3. ~~**D8 override flag name**~~ — **settled and shipped**: the flag is
    `--allow-diverged-companion` on both `record` and `apply`, and it is not only
    *named* narrowly, it *is* narrow — it drops only the violations the companion
