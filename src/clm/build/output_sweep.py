@@ -116,6 +116,14 @@ class _SweepPlan:
     skipped_subtrees: list[Path] = field(factory=list)
     kept_due_to_pattern: int = 0
 
+    scan_failed: bool = False
+    """Set when some directory in the walk could not be listed.
+
+    An unreadable directory yields the same empty plan as a clean one, so
+    the ownership gate must not read "nothing to delete" as evidence
+    without knowing the walk actually saw the tree.
+    """
+
     @property
     def is_empty(self) -> bool:
         return not self.files and not self.dirs
@@ -193,11 +201,12 @@ def sweep_stray_files(
         unowned_roots: Roots for which the caller could not establish
             ownership evidence (see
             :func:`clm.build.output_ownership.snapshot_output_ownership`).
-            Such a root is swept only if the plan is empty — the
-            registries then account for everything on disk, which is
-            itself the missing evidence. Otherwise the root is left
-            untouched and listed in ``refused_roots``. Empty by default,
-            so callers with no snapshot get the pre-gate behavior.
+            Such a root is swept only if the walk completed and found
+            nothing to delete — the registries then account for
+            everything on disk, which is itself the missing evidence.
+            Otherwise the root is left untouched and listed in
+            ``refused_roots``. Empty by default, so callers with no
+            snapshot get the pre-gate behavior.
     """
     if skip_reason is not None:
         return SweepReport(skipped=True, skip_reason=skip_reason, dry_run=dry_run)
@@ -231,14 +240,21 @@ def sweep_stray_files(
             plan=plan,
         )
 
-        if root in unowned and not plan.is_empty:
+        if root in unowned and not (plan.is_empty and not plan.scan_failed):
+            # ``plan.scan_failed`` matters as much as a non-empty plan: an
+            # empty plan is only ownership evidence when the walk actually
+            # saw the tree. A directory the sweep could not read produces
+            # the same empty plan as a clean one, and clearing the root on
+            # that basis would mark it as clm's without anything ever
+            # having looked.
             logger.error(
                 "Sweep refused in %s: clm cannot verify it owns this "
                 "directory, and the sweep would have deleted %d file(s) and "
-                "%d directory/ies. Nothing was removed.",
+                "%d directory/ies%s. Nothing was removed.",
                 root,
                 len(plan.files),
                 len(plan.dirs),
+                " (part of the tree could not be read)" if plan.scan_failed else "",
             )
             refused.append(root)
             continue
@@ -320,6 +336,7 @@ def _plan_directory(
         entries = list(os.scandir(directory))
     except OSError as exc:
         logger.warning("Sweep: cannot scan %s: %s", directory, exc)
+        plan.scan_failed = True
         return False
 
     became_empty = True

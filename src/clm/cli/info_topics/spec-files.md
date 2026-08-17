@@ -720,7 +720,7 @@ output root is CLM's before deleting anything: it must have been empty (or
 absent) when the build started, or carry the `.clm-manifest.json`
 provenance index a previous `clm build` wrote. A directory that fails both
 tests is refused with its path named, and nothing under it is deleted —
-see `clm info migration` for the one-time impact on output trees created
+see `clm info migration` for the impact on output trees created
 before the manifest existed, and for the `--allow-unowned-output` override.
 
 #### Output kinds

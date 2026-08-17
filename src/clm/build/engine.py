@@ -1196,6 +1196,12 @@ async def process_course_with_backend(
     ``watch_runner`` is the injected watch-mode loop
     (``async (course, backend, config) -> None``); the CLI passes its
     watchdog-based implementation. Required when ``config.watch`` is set.
+
+    ``ownership`` is the pre-build output-ownership snapshot (finding
+    S11, #798). A caller that supplies one has also recorded it on the
+    config (``_record_unowned_roots``) — ``run_build`` does both, so the
+    snapshot predates database and worker startup; when it is ``None``
+    this function takes and records the snapshot itself.
     """
     from clm.core.utils.execution_utils import (
         JUPYTERLITE_STAGE,

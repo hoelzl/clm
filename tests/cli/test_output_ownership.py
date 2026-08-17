@@ -148,6 +148,48 @@ class TestOwnershipDoesNotSelfAuthorize:
 
         assert config.unowned_output_roots == ()
 
+    def test_a_sweep_that_could_not_look_does_not_adopt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable tree plans exactly like a clean one — empty.
+
+        Clearing the root on that basis would mark it as clm's without
+        anything having seen it, which is the one asymmetry left in the
+        evidence logic after the round-2 fix.
+        """
+        import os
+
+        from clm.build.engine import _maybe_run_sweep, _record_unowned_roots
+
+        root = tmp_path / "output" / "course-en"
+        _make_file(root / "unreadable.html")
+        config = _config(tmp_path, sweep=True)
+        ownership = snapshot_output_ownership([root])
+        _record_unowned_roots(config, ownership)
+
+        real_scandir = os.scandir
+
+        def refuse_scandir(path, *args, **kwargs):
+            if Path(path) == root:
+                raise PermissionError(13, "Permission denied")
+            return real_scandir(path, *args, **kwargs)
+
+        monkeypatch.setattr("clm.build.output_sweep.os.scandir", refuse_scandir)
+
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[root],
+            backend=SimpleNamespace(
+                output_write_registry=OutputWriteRegistry(),
+                image_registry=ImageRegistry(),
+            ),
+            build_reporter=MagicMock(errors=[]),
+            only_sections_mode=False,
+            ownership=ownership,
+        )
+
+        assert config.unowned_output_roots == (root,)
+
     def test_a_refused_sweep_keeps_the_root_unowned(self, tmp_path: Path) -> None:
         from clm.build.engine import _maybe_run_sweep, _record_unowned_roots
 

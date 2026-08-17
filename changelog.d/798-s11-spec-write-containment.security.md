@@ -38,8 +38,10 @@
   writing it would hand that build the permission this one declined. That
   holds whether or not a sweep ran, so `--no-sweep` / `--incremental` (and a
   build with errors) cannot quietly mark an unverified tree either; targets
-  that swept cleanly still get theirs. The new `clm build --allow-unowned-output` overrides the gate;
-  `--clean` deliberately does not, since it is the operation being gated.
+  that swept cleanly still get theirs. The new
+  `clm build --allow-unowned-output` overrides the gate — that build sweeps
+  the tree *and* marks it, so later builds are ungated; `--clean`
+  deliberately does not override, since it is the operation being gated.
 
   **Breaking**: absolute `<output-target><path>` values are refused — make
   the path course-relative and move (or symlink) the tree under the course

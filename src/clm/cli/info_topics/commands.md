@@ -287,7 +287,9 @@ files out of the way (or empty the directory), point
 `<output-target><path>` at a directory CLM owns, or — if the tree really is
 CLM's — pass `--allow-unowned-output` once. That run deletes the
 unaccounted-for files and writes the manifest, so the tree is marked from
-then on. The flag is deliberately its own rather than an extra meaning for
+then on. (Combined with `--no-sweep` or `--incremental` it only marks the
+tree — there is no sweep to delete anything — so the leftovers go on the
+*next* build's sweep instead.) The flag is deliberately its own rather than an extra meaning for
 `--clean`, which is the dangerous operation being gated.
 
 #### Split-source build routing
