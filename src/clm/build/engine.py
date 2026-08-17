@@ -1034,17 +1034,19 @@ def _maybe_run_sweep(
         logger.debug("Stray-file sweep found no orphans")
 
 
-def _contains_jobs_pending_timeout(exc: BaseException) -> bool:
-    """Return True if ``exc`` is (or wraps) a :class:`JobsPendingTimeoutError`.
+def _find_jobs_pending_timeout(exc: BaseException) -> JobsPendingTimeoutError | None:
+    """Return the :class:`JobsPendingTimeoutError` ``exc`` is (or wraps), if any.
 
     Job submission and completion polling run inside ``asyncio.TaskGroup``
     (see :meth:`Course.process_stage_for_target`), so a timeout raised by
     ``wait_for_completion`` reaches the build orchestration wrapped in a
     ``BaseExceptionGroup``. This unwraps one level of grouping (recursively)
-    so the timeout is recognised regardless of nesting.
+    so the timeout is recognised regardless of nesting. Returning the
+    exception (not just a bool) lets the abort log state the actual trigger
+    — job stall vs. configured completion cap (issue #851).
     """
     if isinstance(exc, JobsPendingTimeoutError):
-        return True
+        return exc
     # ``BaseExceptionGroup`` is a builtin on the supported runtimes
     # (requires-python >= 3.11) but ruff's py310 target flags the bare
     # name, so reference it via ``builtins`` to stay lint-clean.
@@ -1052,8 +1054,16 @@ def _contains_jobs_pending_timeout(exc: BaseException) -> bool:
 
     group_type = getattr(builtins, "BaseExceptionGroup", None)
     if group_type is not None and isinstance(exc, group_type):
-        return any(_contains_jobs_pending_timeout(sub) for sub in exc.exceptions)
-    return False
+        for sub in exc.exceptions:
+            found = _find_jobs_pending_timeout(sub)
+            if found is not None:
+                return found
+    return None
+
+
+def _contains_jobs_pending_timeout(exc: BaseException) -> bool:
+    """Return True if ``exc`` is (or wraps) a :class:`JobsPendingTimeoutError`."""
+    return _find_jobs_pending_timeout(exc) is not None
 
 
 async def process_course_with_backend(
@@ -1180,12 +1190,12 @@ async def process_course_with_backend(
                 # timeout so the finally block can still produce a summary
                 # that lists the stuck jobs. Any other exception re-raises
                 # unchanged.
-                if _contains_jobs_pending_timeout(exc):
+                timeout_exc = _find_jobs_pending_timeout(exc)
+                if timeout_exc is not None:
                     build_reporter.mark_timed_out()
                     logger.error(
-                        "Build aborted: one or more worker jobs did not "
-                        "complete within the per-build timeout. The output "
-                        "tree is incomplete; see the error summary."
+                        f"Build aborted: {timeout_exc}. The output tree is "
+                        f"incomplete; see the error summary."
                     )
                 else:
                     # Issue #596: the finally block below still renders the
@@ -1335,10 +1345,24 @@ def _record_teardown_orphans(summary: BuildSummary, orphans: list[dict[str, Any]
     silently-incomplete output tree. Each orphan becomes an infrastructure
     ``BuildError`` and the summary is marked timed-out, giving the same
     unconditional non-zero exit a per-stage job timeout gets (issue #617).
+
+    Orphans whose job already carries a stall/cap abort error are skipped
+    (issue #851): when the pool shutdown was commanded by the build's own
+    abort, the in-flight job was already reported by
+    ``_report_pending_jobs_timeout``, and re-stamping it "worker died
+    mid-job" would double-count it and misattribute a capacity abort to the
+    #617 worker-lifecycle race.
     """
     from clm.core.build_data_classes import BuildError
 
+    abort_reported_job_ids = {
+        e.job_id
+        for e in summary.errors
+        if e.category in ("job_timeout", "job_never_started") and e.job_id is not None
+    }
     for orphan in orphans:
+        if orphan.get("id") in abort_reported_job_ids:
+            continue
         summary.errors.append(
             BuildError(
                 error_type="infrastructure",
@@ -1367,15 +1391,42 @@ def _record_teardown_orphans(summary: BuildSummary, orphans: list[dict[str, Any]
 def format_exit_failure(summary: BuildSummary) -> str:
     """Compose the exit-time failure message for a ``timed_out`` summary.
 
-    ``summary.timed_out`` is set by two distinct paths: a genuine per-stage
-    worker-job timeout (issue #143), and :func:`_record_teardown_orphans`,
-    which reuses the flag as its exit-forcing mechanism (issue #617). Orphans
-    are appended *after* finish_build rendered the summary, so for them the
-    generic "timed out … see the error summary above" message is wrong on
-    both counts — nothing about them appears above, and they did not time
-    out. Name the orphaned inputs directly instead.
+    ``summary.timed_out`` is set by two distinct paths: a stall/cap abort
+    raised while waiting for worker jobs (issues #143/#851), and
+    :func:`_record_teardown_orphans`, which reuses the flag as its
+    exit-forcing mechanism (issue #617). The message must lead with the
+    actual cause: when the build aborted because jobs stopped completing,
+    saying "worker died mid-job … see #617" (as the pre-#851 code did
+    whenever any orphan existed) blamed a fixed lifecycle bug for a
+    capacity abort. The #617 orphan message is reserved for orphans that
+    are *not* explained by an abort. Orphans are appended after
+    finish_build rendered the summary, so the orphan branch names the
+    affected inputs directly — nothing about them appears above.
     """
+    aborted_jobs = [e for e in summary.errors if e.category in ("job_timeout", "job_never_started")]
     orphans = [e for e in summary.errors if e.category == "orphaned_job"]
+    if aborted_jobs:
+        stuck = sum(1 for e in aborted_jobs if e.category == "job_timeout")
+        never_started = len(aborted_jobs) - stuck
+        breakdown = ", ".join(
+            part
+            for part in (
+                f"{stuck} claimed but unfinished" if stuck else "",
+                f"{never_started} never claimed by a worker" if never_started else "",
+            )
+            if part
+        )
+        message = (
+            f"\nBuild failed: the build gave up waiting for worker jobs "
+            f"with {len(aborted_jobs)} job(s) unfinished ({breakdown}). "
+            f"The output tree is incomplete; the per-job errors above "
+            f"state the trigger (job stall / completion cap). "
+        )
+        if orphans:
+            files = ", ".join(e.file_path for e in orphans)
+            message += f"In-flight job(s) killed at pool shutdown: {files}. "
+        message += "See issue #851."
+        return message
     if orphans:
         files = ", ".join(e.file_path for e in orphans)
         return (
@@ -1555,6 +1606,29 @@ async def run_build(
     if started_workers:
         output_formatter.show_startup_message(f"Started {len(started_workers)} worker(s)")
 
+    # A single notebook worker serializes every notebook job; on a large
+    # course that is almost always an unintentional default rather than a
+    # choice (issue #851 hit a 336-job stage at ~12 s/job through 1 worker).
+    # One upfront warning makes the capacity limit visible before the build
+    # spends an hour in a serial queue.
+    if len(course.files) > 50:
+        # Read the raw requested count (per-type override falling back to the
+        # global default) instead of get_worker_config(), which would re-run
+        # and re-log the pool-size clamp. Clamping only reduces a count, so a
+        # request of 1 is also the effective count.
+        notebook_count = (
+            worker_config.notebook.count
+            if worker_config.notebook.count is not None
+            else worker_config.default_worker_count
+        )
+        if notebook_count == 1:
+            logger.warning(
+                f"Using a single notebook worker for {len(course.files)} "
+                f"course files — notebook jobs will run serially. Consider "
+                f"'clm build --notebook-workers N' or setting "
+                f"worker_management.default_worker_count."
+            )
+
     # Persistent kernel crash/flake telemetry (issue #330). Lives next to
     # the cache db by default but is its own file so cache clears never
     # erase the history; the store opens connections lazily per write.
@@ -1596,6 +1670,11 @@ async def run_build(
                 # our own workers must not condemn a concurrent build's
                 # still-starting pre-registrations in a shared jobs DB.
                 worker_session_id=lifecycle_manager.session_id,
+                # Stall detector + optional absolute completion cap (issue
+                # #851). 0 in the config means "disabled"/"unlimited" and
+                # maps to None here.
+                job_stall_timeout=worker_config.job_stall_timeout or None,
+                max_wait_for_completion_duration=(worker_config.max_wait_for_completion or None),
             )
 
             async with backend:

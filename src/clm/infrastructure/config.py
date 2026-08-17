@@ -528,6 +528,32 @@ class WorkersManagementConfig(BaseModel):
         description="Number of workers to start in parallel",
     )
 
+    # Build completion waiting (issue #851)
+    job_stall_timeout: float = Field(
+        default=1200.0,
+        ge=0,
+        description=(
+            "Abort the build when no worker job completes for this many "
+            "seconds while jobs are still outstanding (progress-aware stall "
+            "detector, issue #851). Every job completion resets the clock, "
+            "so a long queue that is still draining never trips it — only a "
+            "genuinely wedged worker pool does. 0 disables stall detection."
+        ),
+    )
+
+    max_wait_for_completion: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Optional absolute wall-clock cap in seconds on waiting for one "
+            "build stage's job batch to complete. 0 (the default) means "
+            "unlimited — the stall detector above is the backstop. Before "
+            "issue #851 this was hardcoded to 1200 seconds, which "
+            "deterministically aborted healthy large builds whose stage "
+            "needed more than 20 minutes of throughput."
+        ),
+    )
+
     # Per-worker-type configurations
     notebook: WorkerTypeConfig = Field(
         default_factory=WorkerTypeConfig,
@@ -1367,6 +1393,17 @@ startup_timeout = 30
 # Number of workers to start in parallel
 # Environment variable: CLM_WORKER_MANAGEMENT__STARTUP_PARALLEL
 startup_parallel = 5
+
+# Abort the build when no worker job completes for this many seconds
+# (progress-aware stall detector, issue #851). Job completions reset the
+# clock; 0 disables stall detection.
+# Environment variable: CLM_WORKER_MANAGEMENT__JOB_STALL_TIMEOUT
+job_stall_timeout = 1200.0
+
+# Absolute wall-clock cap in seconds on waiting for one build stage's job
+# batch. 0 = unlimited (default); the stall detector is the backstop.
+# Environment variable: CLM_WORKER_MANAGEMENT__MAX_WAIT_FOR_COMPLETION
+max_wait_for_completion = 0.0
 
 # Per-worker-type configuration
 [worker_management.notebook]

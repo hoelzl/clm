@@ -200,8 +200,9 @@ class BuildSummary:
     empty otherwise, so every renderer that reads it is a no-op on a normal
     build."""
     timed_out: bool = False
-    """True when the build aborted because one or more worker jobs did not
-    complete within ``max_wait_for_completion_duration`` (issue #143). A
+    """True when the build gave up waiting for worker jobs — the job-stall
+    detector fired (no job completed for ``job_stall_timeout`` seconds) or a
+    configured absolute completion cap expired (issues #143/#851). A
     timed-out build must always exit non-zero, independent of the
     ``--fail-on-error`` policy, because pending jobs mean the output tree is
     incomplete."""

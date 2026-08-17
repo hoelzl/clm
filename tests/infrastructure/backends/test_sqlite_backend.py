@@ -326,11 +326,12 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
 
 @pytest.mark.asyncio
 async def test_wait_for_completion_timeout(temp_db, temp_workspace):
-    """Test wait_for_completion timeout behavior."""
+    """A configured absolute completion cap still aborts the wait."""
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        max_wait_for_completion_duration=0.5,  # Short timeout
+        max_wait_for_completion_duration=0.5,  # Short opt-in cap
+        poll_interval=0.05,
         skip_worker_check=True,  # Unit test - no workers needed
     )
 
@@ -340,12 +341,12 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         payload = MockPayload()
         await backend.execute_operation(operation, payload)
 
-        # Should timeout. The typed JobsPendingTimeoutError subclasses
-        # TimeoutError, so this assertion keeps matching while the build
-        # orchestration can detect the typed variant (issue #143).
+        # Should abort at the cap. The typed JobsPendingTimeoutError
+        # subclasses TimeoutError, so this assertion keeps matching while
+        # the build orchestration can detect the typed variant (issue #143).
         from clm.core.backend import JobsPendingTimeoutError
 
-        with pytest.raises(JobsPendingTimeoutError, match="did not complete within") as excinfo:
+        with pytest.raises(JobsPendingTimeoutError, match="completion cap") as excinfo:
             await backend.wait_for_completion()
         # Pending jobs are attached so the orchestration can record one
         # infrastructure error per stuck job.
@@ -357,9 +358,13 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
 
 @pytest.mark.asyncio
 async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_workspace):
-    """Issue #143 (sub-bug A): a pending-job timeout records one
-    infrastructure BuildError per stuck job on the build reporter, so the
-    timeout reaches the build summary instead of silently exiting 0."""
+    """Issue #143 (sub-bug A): a pending-job abort records one
+    infrastructure BuildError per unfinished job on the build reporter, so
+    the abort reaches the build summary instead of silently exiting 0.
+
+    The job here was never claimed by a worker, so since issue #851 it is
+    reported honestly as "never started" — not as "the worker is stuck on
+    this file"."""
     from unittest.mock import MagicMock
 
     from clm.core.backend import JobsPendingTimeoutError
@@ -369,6 +374,7 @@ async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_wo
         db_path=temp_db,
         workspace_path=temp_workspace,
         max_wait_for_completion_duration=0.5,
+        poll_interval=0.05,
         skip_worker_check=True,
         build_reporter=reporter,
         enable_progress_tracking=False,
@@ -382,12 +388,231 @@ async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_wo
         with pytest.raises(JobsPendingTimeoutError):
             await backend.wait_for_completion()
 
-        # Exactly one error reported, with the job-timeout signature.
+        # Exactly one error reported, with the never-started signature.
         assert reporter.report_error.call_count == 1
         reported = reporter.report_error.call_args[0][0]
-        assert reported.category == "job_timeout"
+        assert reported.category == "job_never_started"
         assert reported.error_type == "infrastructure"
         assert reported.severity == "error"
+        assert "never started" in reported.message
+        # No per-file debugging advice for a job no worker ever touched.
+        assert "jupyter execute" not in reported.actionable_guidance
+        assert "not at fault" in reported.actionable_guidance
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stall_detector_aborts_when_no_job_completes(temp_db, temp_workspace):
+    """Issue #851: with no absolute cap configured (the default), the
+    progress-aware stall detector aborts the wait once no job has completed
+    for ``job_stall_timeout`` seconds."""
+    from clm.core.backend import JobsPendingTimeoutError
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        job_stall_timeout=0.3,
+        poll_interval=0.05,
+        skip_worker_check=True,
+        enable_progress_tracking=False,
+    )
+    # The default absolute cap is unlimited.
+    assert backend.max_wait_for_completion_duration is None
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
+
+        with pytest.raises(JobsPendingTimeoutError, match="stalled") as excinfo:
+            await backend.wait_for_completion()
+        assert len(excinfo.value.pending_jobs) == 1
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stall_detector_progress_resets_the_clock(temp_db, temp_workspace):
+    """Issue #851: jobs completing steadily must never trip the stall
+    detector, even when the whole batch takes far longer than
+    ``job_stall_timeout`` — the pre-#851 flat deadline aborted exactly this
+    healthy-but-long drain."""
+    from clm.infrastructure.database.job_queue import JobQueue as JQ
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        job_stall_timeout=0.35,
+        poll_interval=0.05,
+        skip_worker_check=True,
+        enable_progress_tracking=False,
+    )
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        for i in range(3):
+            await backend.execute_operation(
+                operation,
+                MockPayload(
+                    correlation_id=f"corr-{i}",
+                    input_file=f"test{i}.py",
+                    input_file_name=f"test{i}.py",
+                    output_file=f"output/test{i}.ipynb",
+                    data=f"test content {i}",
+                ),
+            )
+        job_ids = sorted(backend.active_jobs.keys())
+        assert len(job_ids) == 3
+
+        async def drain_slowly():
+            # Total drain time (~0.6s) far exceeds the stall timeout
+            # (0.35s), but the inter-completion gap (0.2s) never does.
+            job_queue = JQ(temp_db)
+            try:
+                for job_id in job_ids:
+                    await asyncio.sleep(0.2)
+                    job_queue.update_job_status(job_id, "completed")
+            finally:
+                job_queue.close()
+
+        task = asyncio.create_task(drain_slowly())
+        result = await backend.wait_for_completion()
+        await task
+
+        assert result is True
+        assert backend.active_jobs == {}
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_absolute_cap_aborts_despite_steady_progress(temp_db, temp_workspace):
+    """Issue #851: an explicitly configured absolute cap is a hard
+    wall-clock limit — it fires even while jobs are still completing."""
+    from clm.core.backend import JobsPendingTimeoutError
+    from clm.infrastructure.database.job_queue import JobQueue as JQ
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        job_stall_timeout=None,  # isolate the cap
+        max_wait_for_completion_duration=0.4,
+        poll_interval=0.05,
+        skip_worker_check=True,
+        enable_progress_tracking=False,
+    )
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        for i in range(4):
+            await backend.execute_operation(
+                operation,
+                MockPayload(
+                    correlation_id=f"corr-{i}",
+                    input_file=f"test{i}.py",
+                    input_file_name=f"test{i}.py",
+                    output_file=f"output/test{i}.ipynb",
+                    data=f"test content {i}",
+                ),
+            )
+        job_ids = sorted(backend.active_jobs.keys())
+
+        stop = asyncio.Event()
+
+        async def drain_slowly():
+            job_queue = JQ(temp_db)
+            try:
+                for job_id in job_ids:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=0.2)
+                        return  # wait aborted; stop completing jobs
+                    except TimeoutError:
+                        pass
+                    job_queue.update_job_status(job_id, "completed")
+            finally:
+                job_queue.close()
+
+        task = asyncio.create_task(drain_slowly())
+        try:
+            with pytest.raises(JobsPendingTimeoutError, match="completion cap"):
+                await backend.wait_for_completion()
+        finally:
+            stop.set()
+            await task
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_pending_jobs_report_distinguishes_claimed_from_queued(temp_db, temp_workspace):
+    """Issue #851: on abort, a job a worker actually claimed keeps the
+    "stuck processing" framing (#143), while a queued job that never
+    reached a worker is reported as "never started" without per-file
+    debugging advice."""
+    from unittest.mock import MagicMock
+
+    from clm.core.backend import JobsPendingTimeoutError
+
+    reporter = MagicMock()
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        job_stall_timeout=0.3,
+        poll_interval=0.05,
+        skip_worker_check=True,
+        build_reporter=reporter,
+        enable_progress_tracking=False,
+    )
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        for i in range(2):
+            await backend.execute_operation(
+                operation,
+                MockPayload(
+                    correlation_id=f"corr-{i}",
+                    input_file=f"test{i}.py",
+                    input_file_name=f"test{i}.py",
+                    output_file=f"output/test{i}.ipynb",
+                    data=f"test content {i}",
+                ),
+            )
+        claimed_id, queued_id = sorted(backend.active_jobs.keys())
+
+        # Simulate a worker having claimed (but not finished) the first job.
+        conn = sqlite3.connect(temp_db)
+        try:
+            conn.execute(
+                "UPDATE jobs SET status = 'processing', started_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (claimed_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with pytest.raises(JobsPendingTimeoutError):
+            await backend.wait_for_completion()
+
+        reported = {
+            call.args[0].job_id: call.args[0] for call in reporter.report_error.call_args_list
+        }
+        assert set(reported) == {claimed_id, queued_id}
+
+        claimed_error = reported[claimed_id]
+        assert claimed_error.category == "job_timeout"
+        assert "stuck processing" in claimed_error.message
+        assert "jupyter execute" in claimed_error.actionable_guidance
+
+        queued_error = reported[queued_id]
+        assert queued_error.category == "job_never_started"
+        assert "never started" in queued_error.message
+        assert "jupyter execute" not in queued_error.actionable_guidance
     finally:
         backend.active_jobs.clear()
         await backend.shutdown()
