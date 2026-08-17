@@ -1,8 +1,11 @@
 # Design: dependency-environment isolation (three roles, three environments)
 
-Status: in progress (2026-07-02). Wave 1 (packaging) and Wave 2a (JupyterLite
-tool env) have shipped; Wave 2b (course-runtime kernel env) is still proposed.
-Context: issue #516 follow-up.
+Status: **COMPLETE** (updated 2026-08-17). All three waves have shipped —
+Wave 1 (packaging), Wave 2a (JupyterLite tool env), and Wave 2b
+(course-runtime kernel env, both steps: the knob and the `[ml]` removal).
+Context: issue #516 follow-up. The body below is the decision record as
+designed; see **"Shipped state (2026-08)"** at the end for where the code
+landed, the post-ship hardenings, and the operational lessons since.
 
 ## Problem
 
@@ -28,7 +31,11 @@ Conflating them causes concrete harm:
 - **Version-truth confusion.** The course-runtime versions a student sees are
   whatever happens to be co-resolved with clm, not an explicitly pinned set.
 
-## Current architecture (evidence)
+## Architecture at design time (evidence — HISTORICAL, pre-Wave-2b)
+
+> This section describes the state the design was written against. The
+> "no interpreter/kernel override anywhere" finding below is what Wave 2b
+> then fixed; the current mechanism is in "Shipped state (2026-08)".
 
 The good news: **the correct model already exists for the Docker path.** The
 split is only missing from Direct mode.
@@ -131,9 +138,10 @@ mitmproxy transport) and confirm none leak constraints into clm's resolution.
   pinned `uvx` tool env (`src/clm/workers/jupyterlite/builder.py`); the
   `[jupyterlite]` extra and the `[tool.uv] conflicts` fork are deleted. clm's
   env only needs `uv` on PATH.
-- **Wave 2b:** Role B — kernelspec/`JUPYTER_PATH` course-venv wiring exposed as a
-  first-class config knob (see the detailed design below), then remove `[ml]` as
-  a clm extra.
+- **Wave 2b (shipped):** Role B — kernelspec/`JUPYTER_PATH` course-venv wiring
+  exposed as a first-class config knob (see the detailed design below), then
+  remove `[ml]` as a clm extra. Both steps landed (2b-1 the knob, 2b-2 the
+  `[ml]` → `course-runtime-requirements.txt` repositioning).
 
 ## Wave 2b — detailed design (Role B: course-runtime kernel env)
 
@@ -338,3 +346,58 @@ for Wave 2b — noted so the group is designed with room for it (don't hard-code
   package versions match students' — but that is *better* surfaced by an explicit
   course venv (or the Docker image, the real source of truth) than hidden inside
   clm's resolution.
+
+## Shipped state (2026-08)
+
+Where the design above landed, plus what accrued after shipping.
+
+### Code map
+
+- **`src/clm/infrastructure/workers/kernel_env.py`** — the whole Role-B
+  mechanism: `resolve_notebook_kernel_python` (the env → spec → `clm.toml` →
+  empty precedence), `resolve_kernel_interpreter` (normalisation: `~`
+  expansion; a venv *directory* resolves to its platform interpreter; a
+  **relative value anchors to `find_project_root()`** — the nearest
+  `pyproject.toml`/`clm.toml`/`.git` ancestor of the cwd, worktree-aware —
+  never the bare cwd), `provision_course_kernel` (ipykernel validation +
+  kernelspec write under `<user-data>/clm/kernel-envs/<hash>/`), and
+  `jupyter_path_with_kernel` (prepend, which is load-bearing).
+- **`src/clm/infrastructure/workers/worker_executor.py`** — the executor
+  provisions once at construction and injects `JUPYTER_PATH` into notebook
+  workers only; Docker mode ignores the knob as designed.
+- **`src/clm/cli/commands/provision.py`** — `clm provision kernel-env`
+  (register-existing MVP; `--create` remains unbuilt, as deferred).
+- The build engine resolves the spec tier where the spec is in scope and
+  threads the concrete interpreter down, exactly the "cleanest shape" the
+  wiring section called for.
+
+### Post-ship hardenings
+
+- **Provisioning hash is case/os-normalised** (PR #856): the kernelspec dir
+  key hashes `os.path.normcase(path)`, so `C:\venv` vs `c:/venv` spellings of
+  one interpreter share a kernelspec instead of provisioning twins. Symlinks
+  are deliberately NOT resolved — on POSIX `.venv/bin/python` links into the
+  base interpreter, and resolving it would launch the kernel outside the venv.
+- **Worker/kernel identity is observable and guarded** (#853, #860): worker
+  modules reject argv (a stray `--help` no longer starts a real worker in
+  whatever env the shell had), and replayed cached failures are labeled so a
+  stale kernel-env failure is never mistaken for a live one.
+
+### Operational lessons (2026-08-17 incident forensics)
+
+- **The fallback is the failure mode.** When no tier is set, the kernel
+  resolves to the *worker's own* venv's stock `python3` kernelspec — whose
+  `argv[0]` is a bare `"python"` from PATH. A build driven by a dep-light clm
+  install (dev checkout, uv tool env) then executes course code in an
+  environment with no course stack, producing `No module named pandas`-class
+  failures that look like course bugs. A committed `clm.toml`
+  `[jupyter] kernel_python = ".venv"` in the course repo closes this for
+  every invocation from inside that repo (PythonCourses does exactly this).
+- **Worktrees work by construction**: the relative `".venv"` anchors to the
+  *worktree's* project root, so each worktree's own `uv sync`-created venv is
+  both the course-runtime env and (when clm is a project dependency) the host
+  env. The venv is not checked out — a fresh worktree needs its `uv sync`
+  before building, and a missing venv fails loudly at provisioning
+  ("kernel-python interpreter not found"), not silently in the kernel.
+- Deleted worktrees leave orphaned `kernel-envs/<hash>/` dirs behind
+  (cosmetic; re-provisioning is idempotent, nothing reads stale entries).
