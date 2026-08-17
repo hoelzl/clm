@@ -550,3 +550,11 @@ the worker actually said before stalling.
 generous under herd parallelism on big dev boxes: budget for boot-time
 scaling, or serialize the herd. And empty log files are themselves a bug —
 "the diagnostics are missing" is a defect to fix, not background noise.
+
+**Tooling.** The harness this section was measured with — boot-latency probe,
+herd-scaling probe, and the pytest repro loop — lives on as
+``scripts/worker_flake_lab.py`` (``boot`` / ``herd`` / ``repro``
+subcommands). When a *new* real-worker test family flakes, run it before
+re-deriving the methodology: ``boot`` rules out a non-herd slowdown, ``herd
+-n <xdist worker count>`` shows whether concurrency alone breaches the 15 s
+poll, ``repro -n 5`` measures the flake rate before and after a fix.
