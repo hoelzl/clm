@@ -164,9 +164,14 @@ def _build_resolved(
         # read from (or, via sync, write next to) a path ``clm build``
         # refuses (finding S11, #798). ``<channel path=…>`` is a
         # different element and keeps its current resolution.
-        validate_output_target_path(
-            source_target.path, target_name=source_target.name, course_root=course_root
-        )
+        try:
+            validate_output_target_path(
+                source_target.path, target_name=source_target.name, course_root=course_root
+            )
+        except CourseSpecError as exc:
+            # Read-only channel listings must not traceback — see the
+            # same conversion in ``clm git``.
+            raise click.ClickException(str(exc)) from None
     source = _abs_under(course_root, source_target.path) if source_target else None
     return _ResolvedChannel(
         name=release_channel_ref(block, channel),

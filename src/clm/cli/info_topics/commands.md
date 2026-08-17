@@ -277,13 +277,18 @@ output root is CLM's. A root qualifies when it
   in which case there is nothing to delete anyway.
 
 Otherwise the operation is refused: `--clean` fails the build before
-deleting anything, the sweep leaves that root untouched and logs which
-directory it refused. Both name the directory and the remedy. Point
-`<output-target><path>` at a directory CLM owns, empty it yourself, or
-re-run a normal (non-`--clean`) build first so it writes its manifest.
-`--allow-unowned-output` proceeds anyway; it is deliberately its own
-flag rather than an extra meaning for `--clean`, which is the dangerous
-operation being gated.
+deleting anything; the sweep leaves that root untouched and reports it on
+stderr. Both name the directory and the remedy.
+
+A refused root also gets **no `.clm-manifest.json`** — the manifest is the
+evidence, so writing it would let the next build delete what this one
+declined to touch. Re-running the build therefore refuses again: move the
+files out of the way (or empty the directory), point
+`<output-target><path>` at a directory CLM owns, or — if the tree really is
+CLM's — pass `--allow-unowned-output` once. That run deletes the
+unaccounted-for files and writes the manifest, so the tree is marked from
+then on. The flag is deliberately its own rather than an extra meaning for
+`--clean`, which is the dangerous operation being gated.
 
 #### Split-source build routing
 

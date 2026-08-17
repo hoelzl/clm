@@ -976,26 +976,55 @@ def _manifest_roots(course: Course) -> list[Path]:
     return [t.output_root for t in course.output_targets] or [course.output_root]
 
 
+def _record_unowned_roots(config: BuildConfig, ownership: OutputOwnership) -> None:
+    """Pin the pre-build ownership verdict onto the config.
+
+    Set as soon as the snapshot exists, *before* anything can decide not
+    to sweep: the provenance-manifest step reads this, and a build that
+    never sweeps (``--no-sweep``, ``--incremental``, errors) must still
+    withhold the manifest from a root it cannot prove it owns. The sweep
+    narrows the list afterwards when it clears a root.
+
+    ``--allow-unowned-output`` empties it: the operator has adopted those
+    roots deliberately, so the build marks them as clm's.
+    """
+    config.unowned_output_roots = () if config.allow_unowned_output else ownership.unowned_roots
+
+
 def _manifest_roots_to_skip(course: Course, config: BuildConfig) -> set[Path]:
     """Output-target roots that must not receive a provenance manifest.
 
-    A target root covering an output root whose sweep was refused: the
-    manifest is the ownership evidence the gate reads, so writing it
-    after a refusal would let the next build delete exactly what this one
-    declined to touch — the gate would authorize itself after one run
-    (finding S11, #798). Targets that swept normally still get theirs, so
-    one refused tier does not leave the rest of the build unmarked (and
-    therefore refused next time too).
+    The manifest is the ownership evidence the *next* build's gate reads,
+    so a root clm could not prove it owns must not get one — otherwise
+    this build hands the next one permission to delete exactly what it
+    was not allowed to touch (finding S11, #798).
+
+    Keyed on the ownership evidence in ``config.unowned_output_roots``,
+    not on whether a sweep refused: ``--no-sweep``, ``--incremental`` and
+    a build with errors skip the sweep entirely, and keying on the
+    refusal would have marked those roots owned without anything ever
+    looking at them.
+
+    Only the *closest* covering target root is skipped, so a refusal
+    under a nested target does not strip an outer target that swept
+    cleanly; targets unrelated to the unowned root keep their manifests,
+    which is what stops one bad tier from leaving the whole build
+    unmarked (and refused in turn next time).
     """
-    refused = config.refused_output_roots
-    if not refused:
+    unowned = config.unowned_output_roots
+    if not unowned:
         return set()
-    return {
-        target.output_root
-        for target in course.output_targets
-        for root in refused
-        if target.output_root == root or target.output_root in root.parents
-    }
+
+    skip: set[Path] = set()
+    for root in unowned:
+        covering = [
+            target.output_root
+            for target in course.output_targets
+            if target.output_root == root or target.output_root in root.parents
+        ]
+        if covering:
+            skip.add(max(covering, key=lambda path: len(path.parts)))
+    return skip
 
 
 def _maybe_run_sweep(
@@ -1067,17 +1096,21 @@ def _maybe_run_sweep(
     )
 
     if report.skipped:
+        # ``config.unowned_output_roots`` deliberately keeps its snapshot
+        # value: no sweep ran, so nothing produced the registry evidence
+        # that would let those roots be marked as clm's.
         logger.info(f"Stray-file sweep skipped: {report.skip_reason}")
         return
+
+    # The sweep ran: an unowned root it walked without finding anything
+    # unexpected is accounted for by the write registries, which is the
+    # evidence the snapshot could not offer. Narrow the list to the roots
+    # actually refused, so only those lose their provenance manifest.
+    config.unowned_output_roots = tuple(report.refused_roots)
 
     if report.refused_roots and ownership is not None:
         from clm.build.output_ownership import describe_refusal
 
-        # Recorded on the config so the provenance-manifest step skips
-        # these roots: the manifest is the ownership evidence, so writing
-        # it now would let the *next* build delete what this one refused
-        # to touch (the gate would authorize itself after one run).
-        config.refused_output_roots = tuple(report.refused_roots)
         message = describe_refusal(
             ownership,
             operation="The stray-file sweep",
@@ -1089,8 +1122,13 @@ def _maybe_run_sweep(
         # implement ``show_startup_message`` as a no-op — the one run
         # that must warn the user is exactly the run they would not see.
         # stderr also keeps ``--output-mode json`` stdout parseable.
+        # ``markup=False`` on the body: a directory named ``[archive]``
+        # is legal, and Rich would eat the escape and print a path that
+        # does not exist.
         console = Console(file=sys.stderr, force_terminal=not config.no_color)
-        console.print(f"\n[bold yellow]Stray-file sweep refused[/bold yellow]\n\n{message}\n")
+        console.print("\n[bold yellow]Stray-file sweep refused[/bold yellow]\n")
+        console.print(message, markup=False, highlight=False, soft_wrap=True)
+        console.print()
 
     if report.deleted_files or report.removed_dirs:
         logger.info(
@@ -1179,6 +1217,7 @@ async def process_course_with_backend(
 
     if ownership is None:
         ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
+        _record_unowned_roots(config, ownership)
 
     # JupyterLite runs as its own phase after the per-file stages so the
     # progress bar doesn't overrun the HTML stage total. It is skipped in
@@ -1639,6 +1678,7 @@ async def run_build(
     from clm.build.output_ownership import enforce_owned_roots, snapshot_output_ownership
 
     ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
+    _record_unowned_roots(config, ownership)
     if config.clean:
         enforce_owned_roots(
             ownership,

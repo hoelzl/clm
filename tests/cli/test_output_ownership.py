@@ -77,22 +77,85 @@ def registry() -> OutputWriteRegistry:
 
 
 class TestOwnershipDoesNotSelfAuthorize:
-    """A refusal must not hand the next build permission to delete.
+    """A build must not hand the next one permission to delete.
 
-    The provenance manifest *is* the ownership evidence. Writing it after
-    a refused sweep meant: build 1 refuses (exit 0, stale files kept) and
-    writes the manifest; build 2 sees an "owned" root and deletes
-    everything the build did not write. Found in review of PR #864.
+    The provenance manifest *is* the ownership evidence. Writing it into
+    a root clm could not verify meant: build 1 declines to delete (exit 0,
+    stale files kept) and writes the manifest; build 2 sees an "owned"
+    root and deletes everything the build did not write. The end-to-end
+    proof — two real builds, including the ``--no-sweep`` and
+    ``--incremental`` paths where no sweep runs at all — is in
+    ``tests/build/test_output_ownership_e2e.py``; these pin the seams.
     """
 
-    def test_refused_roots_are_recorded_on_the_config(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_the_snapshot_verdict_is_recorded_before_any_sweep_decision(
+        self, tmp_path: Path
     ) -> None:
-        from clm.build.engine import _maybe_run_sweep
+        """Keyed on the evidence, not on a sweep having refused.
+
+        ``--no-sweep`` / ``--incremental`` / a build with errors never
+        reach a refusal, so keying the manifest suppression on one left
+        exactly those flows marking an unverified tree as clm's.
+        """
+        from clm.build.engine import _record_unowned_roots
+
+        root = tmp_path / "documents"
+        _make_file(root / "thesis.txt")
+        config = _config(tmp_path, sweep=False)
+
+        _record_unowned_roots(config, snapshot_output_ownership([root]))
+
+        assert config.unowned_output_roots == (root,)
+
+    def test_the_override_flag_adopts_the_roots(self, tmp_path: Path) -> None:
+        from clm.build.engine import _record_unowned_roots
+
+        root = tmp_path / "documents"
+        _make_file(root / "thesis.txt")
+        config = _config(tmp_path, allow_unowned_output=True)
+
+        _record_unowned_roots(config, snapshot_output_ownership([root]))
+
+        assert config.unowned_output_roots == ()
+
+    def test_a_sweep_that_clears_a_root_adopts_it(self, tmp_path: Path) -> None:
+        """Registry evidence: the sweep found nothing unexpected.
+
+        That is the evidence the snapshot could not offer, so the root
+        gets its manifest after all — otherwise a tree whose contents the
+        build fully accounts for would stay unverified forever.
+        """
+        from clm.build.engine import _maybe_run_sweep, _record_unowned_roots
+
+        root = tmp_path / "output" / "course-en"
+        written = _make_file(root / "lecture.html")
+        registry = OutputWriteRegistry()
+        registry.record_write(written, content=b"x", source=written)
+
+        config = _config(tmp_path, sweep=True)
+        ownership = snapshot_output_ownership([root])
+        _record_unowned_roots(config, ownership)
+        assert config.unowned_output_roots == (root,)
+
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[root],
+            backend=SimpleNamespace(output_write_registry=registry, image_registry=ImageRegistry()),
+            build_reporter=MagicMock(errors=[]),
+            only_sections_mode=False,
+            ownership=ownership,
+        )
+
+        assert config.unowned_output_roots == ()
+
+    def test_a_refused_sweep_keeps_the_root_unowned(self, tmp_path: Path) -> None:
+        from clm.build.engine import _maybe_run_sweep, _record_unowned_roots
 
         root = tmp_path / "documents"
         _make_file(root / "thesis.txt")
         config = _config(tmp_path, sweep=True)
+        ownership = snapshot_output_ownership([root])
+        _record_unowned_roots(config, ownership)
 
         _maybe_run_sweep(
             config=config,
@@ -103,12 +166,12 @@ class TestOwnershipDoesNotSelfAuthorize:
             ),
             build_reporter=MagicMock(errors=[]),
             only_sections_mode=False,
-            ownership=snapshot_output_ownership([root]),
+            ownership=ownership,
         )
 
-        assert config.refused_output_roots == (root,)
+        assert config.unowned_output_roots == (root,)
 
-    def test_target_root_over_a_refused_root_is_skipped(self, tmp_path: Path) -> None:
+    def test_target_root_over_an_unowned_root_is_skipped(self, tmp_path: Path) -> None:
         from clm.build.engine import _manifest_roots_to_skip
 
         target_root = tmp_path / "output" / "shared"
@@ -119,14 +182,30 @@ class TestOwnershipDoesNotSelfAuthorize:
                 SimpleNamespace(output_root=other_root),
             ]
         )
-        config = _config(tmp_path, refused_output_roots=(target_root / "course-en",))
+        config = _config(tmp_path, unowned_output_roots=(target_root / "course-en",))
 
-        # Only the tier that was refused loses its manifest — suppressing
-        # every target would leave the healthy ones unmarked, and they
-        # would be refused on the next build in turn.
+        # Only the unverified tier loses its manifest — suppressing every
+        # target would leave the healthy ones unmarked, and they would be
+        # refused on the next build in turn.
         assert _manifest_roots_to_skip(course, config) == {target_root}
 
-    def test_no_refusal_skips_nothing(self, tmp_path: Path) -> None:
+    def test_only_the_closest_covering_target_is_skipped(self, tmp_path: Path) -> None:
+        """Nested targets: an outer tree that swept cleanly keeps its own."""
+        from clm.build.engine import _manifest_roots_to_skip
+
+        outer = tmp_path / "output"
+        inner = tmp_path / "output" / "students"
+        course = SimpleNamespace(
+            output_targets=[
+                SimpleNamespace(output_root=outer),
+                SimpleNamespace(output_root=inner),
+            ]
+        )
+        config = _config(tmp_path, unowned_output_roots=(inner / "course-en",))
+
+        assert _manifest_roots_to_skip(course, config) == {inner}
+
+    def test_nothing_unowned_skips_nothing(self, tmp_path: Path) -> None:
         from clm.build.engine import _manifest_roots_to_skip
 
         course = SimpleNamespace(output_targets=[SimpleNamespace(output_root=tmp_path / "out")])

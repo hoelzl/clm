@@ -242,11 +242,17 @@ def describe_refusal(
     ]
     for root in refused:
         lines.append(f"  {root} — {ownership.reason_for(root)}")
+    # Deliberately *not* "re-run a normal build so it writes the
+    # manifest": a refused root gets no manifest, precisely so the
+    # refusal cannot authorize the next build. Re-running changes
+    # nothing until the directory or the spec does.
     lines.append(
-        "Point <output-target><path> at a directory clm owns, empty the "
-        "directory yourself, or re-run a normal build first so it writes "
-        f"its {MANIFEST_FILENAME} provenance index. To delete anyway, pass "
-        f"{OVERRIDE_FLAG}."
+        "Nothing was deleted, and re-running the build will refuse again. "
+        "Move the files out of the way (or empty the directory), point "
+        "<output-target><path> at a directory clm owns, or — if this tree "
+        f"really is clm's — pass {OVERRIDE_FLAG} once, which deletes the "
+        f"unaccounted-for files and writes the {MANIFEST_FILENAME} "
+        "provenance index that marks the tree as clm's from then on."
     )
     return "\n".join(lines)
 

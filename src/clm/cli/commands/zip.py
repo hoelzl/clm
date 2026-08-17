@@ -13,7 +13,7 @@ from pathlib import Path, PurePath
 import click
 
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec
+from clm.core.course_spec import CourseSpec, CourseSpecError, validate_output_target_path
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +118,15 @@ def find_output_directories(
         if target_filter and target_spec.name != target_filter:
             continue
 
-        path = Path(target_spec.path)
-        if not path.is_absolute():
-            path = course_root / path
+        # Same rule ``OutputTarget.from_spec`` applies; this command
+        # reads the spec path without building a ``Course`` (S11, #798).
+        try:
+            validate_output_target_path(
+                target_spec.path, target_name=target_spec.name, course_root=course_root
+            )
+        except CourseSpecError as exc:
+            raise click.ClickException(str(exc)) from None
+        path = course_root / Path(target_spec.path)
 
         languages = target_spec.languages or ["de", "en"]
 

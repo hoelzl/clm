@@ -453,9 +453,15 @@ def find_output_repos(
             # ``OutputTarget.from_spec`` does — otherwise ``clm git``
             # would happily init a repo at a path ``clm build`` refuses
             # (finding S11, #798).
-            validate_output_target_path(
-                target_spec.path, target_name=target_spec.name, course_root=course_root
-            )
+            try:
+                validate_output_target_path(
+                    target_spec.path, target_name=target_spec.name, course_root=course_root
+                )
+            except CourseSpecError as exc:
+                # A listing command must not traceback: this is exactly
+                # the spec a user has to migrate, and they need to be
+                # able to look at their repos while doing it.
+                raise click.ClickException(str(exc)) from None
             path = course_root / Path(target_spec.path)
 
             # Get languages for this target

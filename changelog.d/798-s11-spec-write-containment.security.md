@@ -13,9 +13,10 @@
   `<path>` element that resolved to the course root on Windows. Both sides
   of the overlap check are resolved, so a path that reaches the course root
   through a symlink is caught too. `OutputTarget.from_spec` enforces the
-  same rules, and `clm git` / `clm release` — which read the spec path
-  without building a `Course` — validate explicitly, so no command acts on
-  a path `clm build` refuses. `<dir-group><path>` and each `<subdir>` go
+  same rules, and the three commands that read the spec path without
+  building a `Course` — `clm git`, `clm release`, `clm zip` — validate
+  explicitly (surfacing a usage error, not a traceback), so no command acts
+  on a path `clm build` refuses. `<dir-group><path>` and each `<subdir>` go
   through the canonical `<include>`-path validator (course-root relative,
   no `..`), and `<dir-group><name>` is sanitized per path segment the way
   section names always were — nesting (`Code/Solutions`) still works,
@@ -32,14 +33,18 @@
   `--clean` fails the build having deleted nothing (the check runs before
   `git_dir_mover` moves anything), and the sweep leaves that root untouched.
   The sweep is now plan-then-execute so a refusal cannot leave a half-swept
-  tree, and a refused root gets **no provenance manifest** — the manifest is
-  the ownership evidence, so writing it would have handed the next build
-  the permission this one declined (targets that swept normally still get
-  theirs). The new `clm build --allow-unowned-output` overrides the gate;
+  tree, and a root clm could not prove it owns gets **no provenance
+  manifest** — the manifest is the evidence the next build's gate reads, so
+  writing it would hand that build the permission this one declined. That
+  holds whether or not a sweep ran, so `--no-sweep` / `--incremental` (and a
+  build with errors) cannot quietly mark an unverified tree either; targets
+  that swept cleanly still get theirs. The new `clm build --allow-unowned-output` overrides the gate;
   `--clean` deliberately does not, since it is the operation being gated.
 
-  **Breaking**: absolute `<output-target><path>` values are refused — use
-  course-relative paths, or `clm build --output-dir DIR` to build elsewhere.
-  Output trees that predate the provenance manifest (CLM < 1.8) or were built
-  with `--no-provenance-manifest` are refused on their next `--clean` or
-  sweep until one normal build writes the manifest. See `clm info migration`.
+  **Breaking**: absolute `<output-target><path>` values are refused — make
+  the path course-relative and move (or symlink) the tree under the course
+  root. Output trees that predate the provenance manifest (CLM < 1.8), or
+  were built with `--no-provenance-manifest`, and that hold files the build
+  does not produce are refused on their next `--clean` or sweep; the refusal
+  is permanent until the directory changes or `--allow-unowned-output`
+  adopts the tree. See `clm info migration`.

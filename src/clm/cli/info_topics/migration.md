@@ -45,14 +45,17 @@ leaves the stale files in place.
 - *Who this affects*: output trees built with `--no-provenance-manifest`,
   or with a CLM older than 1.8 (before the manifest was written by
   default), that also contain files the current build does not produce.
-- *Migration*: run one normal build (no `--clean`) so the manifest is
-  written — subsequent builds are gated no further — or empty the
-  directory yourself. `clm build --allow-unowned-output` performs the
-  deletion anyway; it is deliberately a separate flag from `--clean`,
-  which is the operation being gated. A refused build does **not** write
-  the manifest into that root: the manifest is the ownership evidence, so
-  writing it would hand the next build the permission this one declined.
-  Other targets that swept normally still get theirs.
+- *Migration*: a refused build does **not** write the manifest into that
+  root — the manifest is the ownership evidence, so writing it would hand
+  the next build the permission this one declined. Re-running therefore
+  refuses again. Move the extra files out of the way (or empty the
+  directory), point `<output-target><path>` at a directory CLM owns, or —
+  if the tree really is CLM's — run `clm build --allow-unowned-output`
+  once: that build deletes the unaccounted-for files and writes the
+  manifest, and every later build is ungated. The flag is deliberately
+  separate from `--clean`, which is the operation being gated. Targets
+  that swept cleanly keep their manifests, so one refused tier does not
+  drag the rest of the build into the refusal.
 - *`--snapshot` / `--verify-against`*: `--snapshot DIR` builds into a
   directory it already requires to be empty, so it always passes.
   `--verify-against` builds into the **regular** output tree and is gated

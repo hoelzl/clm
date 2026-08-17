@@ -252,9 +252,16 @@ class TestFindOutputDirectoriesWithTargets:
         assert len(result) == 1
         assert result[0].target_name == "public"
 
-    def test_absolute_target_path_is_preserved(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_absolute_target_path_is_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Absolute ``<path>`` values are a spec error since S11 (#798).
+
+        ``clm zip`` reads the spec path without building a ``Course``, so
+        it validates explicitly — and reports it as a usage error rather
+        than a traceback, since a user migrating such a spec still needs
+        to be able to run the command.
+        """
+        import click
+
         absolute_path = (tmp_path / "elsewhere").resolve()
         target = MagicMock(path=str(absolute_path), languages=["en"])
         target.name = "public"
@@ -267,9 +274,8 @@ class TestFindOutputDirectoriesWithTargets:
             lambda _: (tmp_path, tmp_path / "output"),
         )
 
-        result = find_output_directories(tmp_path / "spec.xml")
-
-        assert result[0].path == absolute_path / "course-en"
+        with pytest.raises(click.ClickException, match="absolute"):
+            find_output_directories(tmp_path / "spec.xml")
 
     def test_default_languages_when_none_specified(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
