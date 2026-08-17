@@ -858,6 +858,56 @@ def test_cleanup_removes_worker_when_all_heartbeats_stale(db_path, workspace_pat
     assert not _worker_row_exists(db_path, worker)
 
 
+def _seed_created_worker(db_path, container_id, *, age_seconds=0):
+    """Insert a pre-registration row ('created') aged by the given amount.
+
+    ``last_heartbeat`` mirrors ``started_at`` — the real ``_pre_register_worker``
+    INSERT leaves both to the schema's ``DEFAULT CURRENT_TIMESTAMP``, so a
+    'created' row always carries its creation time in both columns.
+    """
+    jq = JobQueue(db_path)
+    try:
+        cur = jq._get_conn().execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, session_id,
+                                 execution_mode, started_at, last_heartbeat)
+            VALUES ('notebook', ?, 'created', 'session-other', 'direct',
+                    datetime('now', ? || ' seconds'), datetime('now', ? || ' seconds'))
+            """,
+            (container_id, str(-age_seconds), str(-age_seconds)),
+        )
+        worker_id = cur.lastrowid
+        assert worker_id is not None
+        return worker_id
+    finally:
+        jq.close()
+
+
+def test_cleanup_keeps_a_fresh_foreign_pre_registration(db_path, workspace_path, worker_configs):
+    """A seconds-old 'created' row is another build's booting worker (flake
+    doc §11.2): it has no heartbeat yet and no executor here tracks it, so
+    every health signal reads dead — deleting it kills that worker at
+    activation ("Worker N does not exist in database"). Cleanup must leave
+    'created' rows to the age-guarded stuck-created pass."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    worker = _seed_created_worker(db_path, "direct-booting", age_seconds=2)
+
+    manager.cleanup_stale_workers()
+
+    assert _worker_row_exists(db_path, worker)
+
+
+def test_cleanup_still_reaps_a_stuck_pre_registration(db_path, workspace_path, worker_configs):
+    """A 'created' row far past the 30s activation window is a startup
+    casualty; the dedicated stuck-created pass still removes it."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    worker = _seed_created_worker(db_path, "direct-stuck", age_seconds=120)
+
+    manager.cleanup_stale_workers()
+
+    assert not _worker_row_exists(db_path, worker)
+
+
 def test_monitor_health_marks_stale_zero_cpu_docker_worker_hung(
     db_path, workspace_path, worker_configs
 ):

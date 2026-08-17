@@ -67,6 +67,18 @@ def _build(course: Path, *args: str) -> subprocess.CompletedProcess:
     # CI=true flips replay-mode defaults; every mode here is explicit, but a
     # scrubbed, stable env keeps the two builds of one test identical.
     env.pop("CI", None)
+    # Hermetic must not mean SHARED: scrubbing CLM_* also dropped the per-test
+    # DB isolation, silently pointing every scrubbed build at the cwd default
+    # `clm_jobs.db` — ONE jobs DB shared by every concurrently running
+    # subprocess-build test. A concurrent build's cleanup_stale_workers then
+    # deleted this build's seconds-old pre-registration and the worker died at
+    # activation (flake doc §11.2). Give each build course-local DBs, and keep
+    # the xdist worker's isolated log dir so the conftest failure diagnostics
+    # can still harvest the worker logs.
+    env["CLM_JOBS_DB_PATH"] = str(course / "clm_jobs.db")
+    env["CLM_CACHE_DB_PATH"] = str(course / "clm_cache.db")
+    if "CLM_LOG_DIR" in os.environ:
+        env["CLM_LOG_DIR"] = os.environ["CLM_LOG_DIR"]
     return subprocess.run(
         [
             sys.executable,

@@ -262,7 +262,7 @@ class WorkerPoolManager:
         # These are workers that were pre-registered but never activated
         removed_count = self._cleanup_stuck_created_workers(conn)
 
-        cursor = conn.execute("SELECT id, container_id, last_heartbeat FROM workers")
+        cursor = conn.execute("SELECT id, container_id, last_heartbeat, status FROM workers")
         workers = cursor.fetchall()
 
         if not workers:
@@ -289,7 +289,20 @@ class WorkerPoolManager:
         docker_client = None
 
         removed_count = 0
-        for worker_id, container_id, last_heartbeat in workers:
+        for worker_id, container_id, last_heartbeat, status in workers:
+            # A 'created' row is a pre-registration another build wrote
+            # moments ago: its worker subprocess is still booting, it has no
+            # heartbeat yet, and no executor anywhere tracks it — so the
+            # checks below can only call it dead. Deleting it here made the
+            # booting worker die at activation ("Worker N does not exist in
+            # database") whenever two builds share one jobs DB (flake doc
+            # §11.2: a concurrent build's cleanup killed a 2-second-old
+            # pre-registration). Genuinely stuck pre-registrations are
+            # reaped by _cleanup_stuck_created_workers above, which has the
+            # 30-second age guard this loop lacks.
+            if status == "created":
+                continue
+
             # Check if this is a direct worker or docker worker
             is_direct = container_id.startswith("direct-")
 

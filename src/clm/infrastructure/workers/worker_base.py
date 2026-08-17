@@ -1090,13 +1090,29 @@ class Worker(ABC):
         finally:
             client.close()
 
+    # How long a booting worker keeps polling for its own pre-registration row
+    # before giving up. The row is written by the PARENT process moments before
+    # Popen, so the rendezvous is a cross-process read of a file the parent
+    # just wrote — and a single-shot read of such a rendezvous turned every
+    # transient hiccup (a briefly locked DB, a WAL not yet visible to a fresh
+    # connection under heavy load) into a fatal "Worker N does not exist in
+    # database" startup casualty (flake doc §11.2). Generous-timeout polling,
+    # never a single check, per the established worker-test doctrine; the poll
+    # returns on the first successful activation, so the budget only elapses
+    # for a genuinely missing row.
+    ACTIVATION_POLL_TIMEOUT_SECONDS = 10.0
+    ACTIVATION_POLL_INTERVAL_SECONDS = 0.25
+
     @staticmethod
     def activate_pre_registered_worker(db_path: Path, worker_id: int, worker_type: str) -> int:
         """Activate a pre-registered worker by updating its status from 'created' to 'idle'.
 
         This is used when workers are pre-registered by the parent process to eliminate
         startup wait time. The parent creates the worker row with status='created',
-        and the worker subprocess calls this method to activate itself.
+        and the worker subprocess calls this method to activate itself. The
+        activation UPDATE is polled for up to
+        :data:`ACTIVATION_POLL_TIMEOUT_SECONDS` (see the constant's rationale)
+        instead of being attempted exactly once.
 
         Args:
             db_path: Path to SQLite database
@@ -1107,39 +1123,56 @@ class Worker(ABC):
             int: The same worker_id (for consistency with register methods)
 
         Raises:
-            ValueError: If worker doesn't exist or is not in 'created' status
+            ValueError: If the worker row never appears within the poll budget,
+                or exists in a non-'created' status.
         """
         queue = JobQueue(db_path)
 
         try:
             conn = queue._get_conn()
+            deadline = time.monotonic() + Worker.ACTIVATION_POLL_TIMEOUT_SECONDS
+            attempts = 0
 
-            # Update status from 'created' to 'idle'
-            cursor = conn.execute(
-                """
-                UPDATE workers
-                SET status = 'idle', last_heartbeat = CURRENT_TIMESTAMP
-                WHERE id = ? AND status = 'created'
-                """,
-                (worker_id,),
-            )
+            while True:
+                attempts += 1
+                # Update status from 'created' to 'idle'
+                cursor = conn.execute(
+                    """
+                    UPDATE workers
+                    SET status = 'idle', last_heartbeat = CURRENT_TIMESTAMP
+                    WHERE id = ? AND status = 'created'
+                    """,
+                    (worker_id,),
+                )
 
-            if cursor.rowcount == 0:
-                # Check if worker exists at all
+                if cursor.rowcount > 0:
+                    suffix = f" after {attempts} attempts" if attempts > 1 else ""
+                    logger.info(
+                        f"Activated pre-registered {worker_type} worker {worker_id} "
+                        f"(status: created -> idle){suffix}"
+                    )
+                    return worker_id
+
+                # A row in a non-'created' status is a real state error, not a
+                # visibility race — fail immediately with the actual status.
                 check_cursor = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
                 row = check_cursor.fetchone()
-                if row is None:
-                    raise ValueError(f"Worker {worker_id} does not exist in database")
-                else:
+                if row is not None:
                     raise ValueError(
                         f"Worker {worker_id} has status '{row[0]}', expected 'created'"
                     )
 
-            logger.info(
-                f"Activated pre-registered {worker_type} worker {worker_id} "
-                f"(status: created -> idle)"
-            )
-            return worker_id
+                if time.monotonic() >= deadline:
+                    raise ValueError(
+                        f"Worker {worker_id} does not exist in database "
+                        f"(polled {attempts}x over "
+                        f"{Worker.ACTIVATION_POLL_TIMEOUT_SECONDS:.0f}s; the "
+                        f"pre-registration row written by the parent build never "
+                        f"became visible — deleted by a concurrent process, or a "
+                        f"mismatched jobs DB path)"
+                    )
+
+                time.sleep(Worker.ACTIVATION_POLL_INTERVAL_SECONDS)
 
         finally:
             queue.close()

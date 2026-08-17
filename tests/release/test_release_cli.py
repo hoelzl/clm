@@ -439,9 +439,18 @@ def test_week_resolves_ledger_from_channel(tmp_path):
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
-    )
+    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    # Not check=True: CalledProcessError's message shows only the command and
+    # exit code, silently discarding git's stderr — which turned the one
+    # observed (transient) failure of this family into an unattributable
+    # flake (flake doc §11). Raise with the full evidence instead, so the
+    # next transient failure explains itself.
+    if result.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(args)} in {repo} failed (rc={result.returncode})\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    return result
 
 
 def _ls_files(repo: Path) -> set[str]:
@@ -703,10 +712,16 @@ class TestSyncPush:
             )
         assert result.exit_code == 0, result.output
         tracked = _ls_files(dest)
-        assert "Sec/01 Intro.ipynb" in tracked
-        assert FROZEN_FILENAME in tracked
-        assert _last_subject(dest) == "Release to jan: 1 new"
-        assert _git(remote, "log", "-1", "--format=%s").stdout.strip() == "Release to jan: 1 new"
+        # Carry the sync's own report in every failure: this test failed once
+        # with tracked == {'.gitignore'} and NOTHING to explain why the sync
+        # promoted zero files (flake doc §11.3) — the output would have said.
+        context = f"tracked={tracked}\n--- release sync output ---\n{result.output}"
+        assert "Sec/01 Intro.ipynb" in tracked, context
+        assert FROZEN_FILENAME in tracked, context
+        assert _last_subject(dest) == "Release to jan: 1 new", context
+        assert _git(remote, "log", "-1", "--format=%s").stdout.strip() == "Release to jan: 1 new", (
+            context
+        )
 
 
 # ---------------------------------------------------------------------------

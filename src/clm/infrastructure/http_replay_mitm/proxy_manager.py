@@ -226,13 +226,47 @@ class MitmproxyManager:
     ) -> None:
         self.stop()
 
+    # How many times an AUTO-PICKED listen port is retried when mitmdump loses
+    # the bind race (see _pick_free_port's TOCTOU note): between our probe
+    # socket's release and mitmdump's bind, another process on the host — most
+    # visibly a parallel test binding its own ports under pytest-xdist — can
+    # grab the port, and mitmdump then exits with "address already in use".
+    # Each retry picks a FRESH port, so consecutive losses are independent
+    # ~1/ephemeral-range events; three attempts push the failure probability
+    # below anything observable. A caller-configured port is never retried:
+    # the caller asked for that exact port, so its unavailability is an error.
+    _BIND_RETRY_ATTEMPTS = 3
+
     def start(self) -> None:
         if self._process is not None:
             raise MitmproxyError("Manager already started")
 
         mitmdump = _locate_mitmdump()
-        self.listen_port = self._configured_port or _pick_free_port(self.listen_host)
+        attempts = 1 if self._configured_port else self._BIND_RETRY_ATTEMPTS
+        for attempt in range(1, attempts + 1):
+            self.listen_port = self._configured_port or _pick_free_port(self.listen_host)
+            try:
+                self._start_once(mitmdump)
+                return
+            except MitmproxyError as exc:
+                if attempt >= attempts or not _is_port_bind_failure(str(exc)):
+                    raise
+                logger.warning(
+                    "mitmdump lost the bind race for port %s (attempt %d/%d); "
+                    "retrying on a fresh port",
+                    self.listen_port,
+                    attempt,
+                    attempts,
+                )
 
+    def _start_once(self, mitmdump: str) -> None:
+        """Launch mitmdump on ``self.listen_port`` and wait for readiness.
+
+        Raises :class:`MitmproxyError` (with the drained output) when the
+        process exits during startup or never becomes ready; the caller's
+        retry loop classifies the output to decide whether a fresh port is
+        worth trying.
+        """
         cmd: list[str] = [
             mitmdump,
             "--listen-host",
@@ -463,12 +497,38 @@ def _locate_mitmdump() -> str:
 def _pick_free_port(host: str) -> int:
     """Bind to port 0 and let the OS pick a free port, then release.
 
-    There is a small TOCTOU window between releasing the port here and
-    mitmdump binding it; on a single host this is acceptable. ``host`` is
-    always an IPv4 address (``0.0.0.0`` or ``127.0.0.1``), matching the
-    ``AF_INET`` socket below.
+    There is a TOCTOU window between releasing the port here and mitmdump
+    binding it — losing that race used to be a fatal startup error, which
+    made it a real hazard under heavy parallelism (many pytest-xdist workers
+    binding their own ports on one host). ``MitmproxyManager.start`` now
+    treats a lost race as retryable and re-picks a fresh port (see
+    ``_BIND_RETRY_ATTEMPTS``). ``host`` is always an IPv4 address
+    (``0.0.0.0`` or ``127.0.0.1``), matching the ``AF_INET`` socket below.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind((host, 0))
         port: int = sock.getsockname()[1]
         return port
+
+
+# Substrings (lowercased) that identify a startup failure as "the listen port
+# was taken before mitmdump could bind it". Covers CPython/mitmproxy phrasings
+# on POSIX (EADDRINUSE / "address already in use") and Windows (WinError
+# 10048, whose message is "only one usage of each socket address ... is
+# normally permitted", plus asyncio's "error while attempting to bind on
+# address" wrapper). Deliberately narrow: any OTHER startup failure (bad
+# addon, bad options, missing mitmdump deps) must surface immediately, not
+# burn retries.
+_PORT_BIND_FAILURE_MARKERS = (
+    "address already in use",
+    "eaddrinuse",
+    "winerror 10048",
+    "only one usage of each socket address",
+    "error while attempting to bind on address",
+)
+
+
+def _is_port_bind_failure(output: str) -> bool:
+    """Whether a startup-failure output indicates a lost port-bind race."""
+    lowered = output.lower()
+    return any(marker in lowered for marker in _PORT_BIND_FAILURE_MARKERS)
