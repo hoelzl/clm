@@ -9,6 +9,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.26.1] - 2026-08-17
+
+### Added
+
+- **`scripts/worker_flake_lab.py`** — promotion of the flake-investigation
+  harness used to root-cause the direct-worker boot thundering herd (§10 of
+  `docs/claude/design/test-flakiness-root-causes.md`) out of session scratch.
+  Three subcommands match the investigation's three steps: `boot` (cold-boot
+  latency of one direct worker; ~1.4 s baseline), `herd -n N` (how boot
+  latency scales with N simultaneous boots — the measurement that explains
+  the rotating registration timeouts under `-n auto`), and `repro -n N`
+  (flake rate of the worker-family test files, for before/after fix
+  verification).
+
+### Changed
+
+- Test suite: direct-worker integration tests no longer flake under
+  `pytest -m "not docker"` on many-core machines. Real-worker suites
+  (`test_lifecycle_integration`, `test_direct_integration`) and the two
+  `clm build` subprocess tests now carry `serial("workerpool")`, serializing
+  the worker-boot herd that could stretch boot latency past the 15 s
+  registration poll under `-n auto` (measured: 48 concurrent boots ≈ 10 s).
+  The two build-subprocess tests also gained `integration`, moving them out
+  of the fast pre-push suite while keeping `-m "not docker"` and CI coverage.
+
+### Fixed
+
+- Fixed direct and Docker worker logs being completely empty: an import-time
+  `logging.basicConfig(WARNING)` in `clm.core.utils` made each worker's own
+  INFO-level setup a silent no-op, so worker subprocesses logged nothing to
+  their executor-side log files. Worker entry points now configure logging in
+  `main()` and the library tree is import-pure; worker log files carry boot,
+  registration, and job-processing lines again.
+
 ## [1.26.0] - 2026-08-16
 
 ### Added
