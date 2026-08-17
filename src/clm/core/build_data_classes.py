@@ -42,6 +42,20 @@ class BuildError:
     details: dict[str, Any] = field(default_factory=dict)
     occurrence_count: int = 1
 
+    @property
+    def is_from_cache(self) -> bool:
+        """Whether this error was replayed from a stored result (issue #860).
+
+        Replay-time provenance, stamped by
+        ``SqliteBackend._report_cached_issues`` on the retrieved instance —
+        never persisted back into ``processing_issues``. A True value means
+        the failing file was NOT executed in this build; the error describes
+        a previous run whose result the cache replayed. Presentation must
+        surface this (issue #860: an unlabeled replayed failure reads as a
+        live one and sends readers chasing an already-fixed problem).
+        """
+        return bool(self.details.get("from_cache"))
+
     def __str__(self) -> str:
         """Human-readable error representation."""
         parts = [f"[{self.error_type.title()} Error] {self.category}"]
@@ -223,6 +237,19 @@ class BuildSummary:
         :attr:`successful_files` negative.
         """
         return len({e.file_path for e in self.errors if e.severity == "error"})
+
+    @property
+    def cached_error_count(self) -> int:
+        """Errors replayed from stored results rather than executed (issue #860).
+
+        Counts summary entries (like the "N errors" line), not occurrences.
+        """
+        return sum(1 for e in self.errors if e.is_from_cache)
+
+    @property
+    def execution_error_count(self) -> int:
+        """Errors produced by this build's own execution (issue #860)."""
+        return len(self.errors) - self.cached_error_count
 
     @property
     def successful_files(self) -> int:

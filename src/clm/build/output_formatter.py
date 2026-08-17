@@ -38,6 +38,63 @@ def _occurrence_note(count: int) -> str:
     return f" ({count} times)" if count > 1 else ""
 
 
+def _cached_label_suffix(error: BuildError) -> str:
+    """``", cached"`` inside the error-type bracket for replayed errors.
+
+    Provenance must be visible wherever the category is (issue #860): an
+    unlabeled replayed failure is indistinguishable from a live one and sends
+    readers chasing a problem this build never re-executed. The category
+    itself stays — user-vs-infrastructure remains the actionable axis.
+    """
+    return ", cached" if error.is_from_cache else ""
+
+
+def _cached_provenance_line(error: BuildError) -> str | None:
+    """One-line replay provenance + remedy for a cached error, or ``None``.
+
+    Names the remedy explicitly: a stale failure persists for its content
+    hash even after the *environment* is fixed (the kernel env is not part
+    of the cache key), so "this is cached" without "here is how to re-run
+    it" just converts one confusion into another (issue #860).
+    """
+    if not error.is_from_cache:
+        return None
+    return (
+        "Replayed from a previous run's cached failure — this file was NOT "
+        "executed in this build. Rebuild with --ignore-cache to re-execute, "
+        "or inspect the stored entry with `clm cache explain <file>`."
+    )
+
+
+def _error_count_line(summary: BuildSummary) -> str:
+    """The summary's error-count text, split by provenance when relevant.
+
+    ``"11 errors (0 from this run's execution, 11 replayed from cache)"``
+    is the one-glance disambiguation issue #860 exists for; a build with no
+    cached errors keeps the plain ``"11 errors"`` form unchanged.
+    """
+    base = f"{len(summary.errors)} errors"
+    cached = summary.cached_error_count
+    if cached == 0:
+        return base
+    return (
+        f"{base} ({summary.execution_error_count} from this run's execution, "
+        f"{cached} replayed from cache)"
+    )
+
+
+def _warning_is_from_cache(warning: BuildWarning) -> bool:
+    """Replay provenance for warnings (issue #860).
+
+    Stamped as a transient attribute by
+    ``SqliteBackend._report_cached_issues`` — deliberately NOT a dataclass
+    field: ``BuildWarning.to_json`` feeds ``processing_issues`` storage, and
+    provenance is a replay-time fact that must never be persisted (nor break
+    older readers of shared databases with an unexpected key).
+    """
+    return bool(getattr(warning, "from_cache", False))
+
+
 class OutputMode(Enum):
     """Output mode for build reporting."""
 
@@ -337,7 +394,7 @@ class DefaultOutputFormatter(OutputFormatter):
     def show_error(self, error: BuildError) -> None:
         """Display an error."""
         # Format error type with color
-        error_type_str = f"[{error.error_type.title()} Error]"
+        error_type_str = f"[{error.error_type.title()} Error{_cached_label_suffix(error)}]"
         if error.error_type == "user":
             color = "yellow"
         elif error.error_type == "configuration":
@@ -389,6 +446,10 @@ class DefaultOutputFormatter(OutputFormatter):
         guidance = strip_ansi(error.actionable_guidance)
         self.console.print(f"  [bold]Action:[/bold] {guidance}")
 
+        provenance = _cached_provenance_line(error)
+        if provenance:
+            self.console.print(f"  [dim]{provenance}[/dim]")
+
         if error.job_id:
             self.console.print(f"  Job ID: #{error.job_id}", style="dim")
 
@@ -430,7 +491,7 @@ class DefaultOutputFormatter(OutputFormatter):
         # Summary statistics
         self.console.print("[bold]Summary:[/bold]")
         self.console.print(f"  {summary.total_files} files processed")
-        self.console.print(f"  [red]{len(summary.errors)} errors[/red]")
+        self.console.print(f"  [red]{_error_count_line(summary)}[/red]")
         self.console.print(f"  [yellow]{len(summary.warnings)} warnings[/yellow]")
         # Output-write registry stats: always visible so users can
         # confirm the registry ran, mirroring the unconditional errors
@@ -486,7 +547,9 @@ class DefaultOutputFormatter(OutputFormatter):
                     error_msg = first_line
 
                 self.console.print(
-                    f"  [{error_type_color}]{i}. [{error.error_type.title()}][/{error_type_color}] "
+                    f"  [{error_type_color}]{i}. "
+                    f"[{error.error_type.title()}{_cached_label_suffix(error)}]"
+                    f"[/{error_type_color}] "
                     f"{location_info}[dim]{_occurrence_note(error.occurrence_count)}[/dim]"
                 )
                 self.console.print(f"     {error_msg}")
@@ -524,6 +587,10 @@ class DefaultOutputFormatter(OutputFormatter):
 
                 # Format the message with severity, location, and repeat count
                 note = _occurrence_note(warning.occurrence_count)
+                if _warning_is_from_cache(warning):
+                    # Escaped: bare [cached] parses as a rich style token and
+                    # vanishes from the output.
+                    note += r" \[cached]"
                 if severity_label:
                     self.console.print(
                         f"  [{color}]{i}. {severity_label} {warning.message}{location}{note}[/{color}]"
@@ -738,7 +805,7 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
         self.console.print("[bold]Summary:[/bold]")
         self.console.print(f"  {summary.total_files} files processed")
         self.console.print(f"  {summary.successful_files} successful")
-        self.console.print(f"  [red]{len(summary.errors)} errors[/red]")
+        self.console.print(f"  [red]{_error_count_line(summary)}[/red]")
         self.console.print(f"  [yellow]{len(summary.warnings)} warnings[/yellow]")
 
         # Show ALL errors (not just first 5)
@@ -756,6 +823,10 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
                 display_path = format_error_path(warning.file_path) if warning.file_path else ""
                 location = f" ({display_path})" if display_path else ""
                 note = _occurrence_note(warning.occurrence_count)
+                if _warning_is_from_cache(warning):
+                    # Escaped: bare [cached] parses as a rich style token and
+                    # vanishes from the output.
+                    note += r" \[cached]"
                 self.console.print(
                     f"  [yellow]{i}. [{warning.severity}] {warning.message}{location}{note}[/yellow]"
                 )
@@ -795,7 +866,8 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
             location_info += ")"
 
         self.console.print(
-            f"\n  [{error_type_color}]{index}. [{error.error_type.title()} Error - {error.category}]"
+            f"\n  [{error_type_color}]{index}. [{error.error_type.title()} Error - "
+            f"{error.category}{_cached_label_suffix(error)}]"
             f"[/{error_type_color}][dim]{_occurrence_note(error.occurrence_count)}[/dim]"
         )
         self.console.print(f"     File: {location_info}")
@@ -830,6 +902,10 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
         # Show actionable guidance
         guidance = strip_ansi(error.actionable_guidance)
         self.console.print(f"     [bold]Action:[/bold] {guidance}")
+
+        provenance = _cached_provenance_line(error)
+        if provenance:
+            self.console.print(f"     [dim]{provenance}[/dim]")
 
         # Show job ID and correlation ID if available
         if error.job_id:
@@ -872,7 +948,8 @@ class QuietOutputFormatter(OutputFormatter):
         """Display error briefly."""
         display_path = format_error_path(error.file_path)
         error_msg = strip_ansi(error.message)
-        self.console.print(f"ERROR: {display_path}: {error_msg}", style="red")
+        prefix = "ERROR (cached)" if error.is_from_cache else "ERROR"
+        self.console.print(f"{prefix}: {display_path}: {error_msg}", style="red")
         self.errors_shown += 1
 
     def should_show_warning(self, warning: BuildWarning) -> bool:
@@ -894,8 +971,11 @@ class QuietOutputFormatter(OutputFormatter):
 
             self.console.print(f"See logs: {get_log_dir()}", style="dim")
         elif summary.has_errors():
+            cached = summary.cached_error_count
+            cached_note = f" ({cached} replayed from cache)" if cached else ""
             self.console.print(
-                f"\nBuild failed with {len(summary.errors)} errors in {summary.duration:.1f}s",
+                f"\nBuild failed with {len(summary.errors)} errors{cached_note} "
+                f"in {summary.duration:.1f}s",
                 style="red bold",
             )
             # Show log file location
@@ -1003,6 +1083,12 @@ class JSONOutputFormatter(OutputFormatter):
         # Add counts for convenience
         self.output_data["error_count"] = len(summary.errors)
         self.output_data["warning_count"] = len(summary.warnings)
+        # Provenance split (issue #860): agents reading this report must be
+        # able to tell "this build's execution failed" from "the cache
+        # replayed a stored failure" without diffing per-error details.
+        # Always emitted so consumers need not special-case absence.
+        self.output_data["error_count_from_execution"] = summary.execution_error_count
+        self.output_data["error_count_from_cache"] = summary.cached_error_count
 
         # Decks that passed only after a retry (issue #330). Always emit the
         # key so machine consumers don't have to special-case its absence.
@@ -1076,6 +1162,10 @@ class JSONOutputFormatter(OutputFormatter):
             "correlation_id": error.correlation_id,
             "details": clean_details,
             "occurrence_count": error.occurrence_count,
+            # Top-level replay provenance (issue #860) — also present inside
+            # details for replayed errors, surfaced here so consumers never
+            # have to know the details-dict convention.
+            "from_cache": error.is_from_cache,
         }
 
     def _warning_to_dict(self, warning: BuildWarning) -> dict[str, Any]:
@@ -1086,6 +1176,7 @@ class JSONOutputFormatter(OutputFormatter):
             "severity": warning.severity,
             "file_path": warning.file_path,
             "occurrence_count": warning.occurrence_count,
+            "from_cache": _warning_is_from_cache(warning),
         }
 
     def cleanup(self) -> None:
