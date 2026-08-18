@@ -1,7 +1,7 @@
 # Cassette secret filtering — handover
 
-**Created**: 2026-08-18 | **Status**: #875 and #878 CLOSED (PR #876, merge
-`e76acd59`); **#877 and #874 OPEN** | **Next**: #877, then #874
+**Created**: 2026-08-18 | **Status**: #875, #878 and #877 CLOSED; **#874
+OPEN**, **#881 NEW** | **Next**: #874
 
 Companion to `adversarial-review-remediation-handover.md` (Phase 4 item 6,
 which is where this arc started as finding S9). That document is the plan;
@@ -24,8 +24,9 @@ implementations of one contract**:
 
 Since PR #876 that contract is executable:
 `tests/infrastructure/test_cassette_scanner_recorder_parity.py` pushes ~60
-payload shapes through **both** sides and asserts only that they agree. **Add a
-row whenever you touch either walk.**
+response-body shapes through **both** sides and asserts only that they agree;
+#877 added a second table of ~35 **request** bodies (JSON and form-encoded).
+**Add a row whenever you touch either side.**
 
 Three properties of that suite, learned the hard way — preserve them:
 
@@ -37,6 +38,10 @@ Three properties of that suite, learned the hard way — preserve them:
 3. **It does not normalise its inputs.** The first version passed
    `text.encode()` to one side and `text` to the other, so the byte-decoding
    limb went untested — and that is exactly where the BOM bug lived.
+4. **It cannot catch a shared blind spot** (the #877 lesson). Two sides that
+   are consistently wrong *agree*, so the suite stays green. Nothing structural
+   fixes that; the only defence is asking what the table does not cover — and
+   the answer for a year was "request bodies".
 
 ## 2. Where the code is
 
@@ -46,7 +51,8 @@ Three properties of that suite, learned the hard way — preserve them:
 | — value-type rule | `is_secret_body_value` |
 | — repeated-name detection | `load_json_noting_duplicate_secrets` |
 | — the walk | `_redact_json_values` |
-| Request filter (**#877 lives here**) | `src/clm/infrastructure/http_replay_mitm/vcr_format.py:472-540` |
+| Request filter | `src/clm/infrastructure/http_replay_mitm/vcr_format.py` (`replace_post_data_parameters`) |
+| — the shared request-body walk | `filter_json_parameters` (same module; the audit calls it too) |
 | Audit / `clm cassette scan` | `src/clm/workers/notebook/cassette_doctor.py` (`scan_cassette_secrets`, `_iter_secret_body_keys`, `_json_or_none`) |
 | CLI | `src/clm/cli/commands/cassette.py` |
 | Parity suite | `tests/infrastructure/test_cassette_scanner_recorder_parity.py` |
@@ -82,9 +88,13 @@ is not installed. Do not add a `clm` import to either.
   `x["secret"]["id"]` raises. Deliberate: redacting only the strings inside
   would miss a secret under a key that is not on the list. Documented in
   `clm info commands`, `clm info migration` and `docs/user-guide/http-replay.md`.
-- **Numbers, booleans and null are exempt** from redaction. The tempting inverse
-  rule — "redact only strings" — **leaks**: `{"secret":{"value":"sk-live-…"}}`
-  gets recursed into and `value` is not on the key list.
+- **Numbers, booleans and null are exempt** from redaction — on the **response
+  side only**. The tempting inverse rule — "redact only strings" — **leaks**:
+  `{"secret":{"value":"sk-live-…"}}` gets recursed into and `value` is not on
+  the key list. Do **not** copy the exemption to the request side: it exists
+  because redaction rewrites what replayed code *reads*, and a request body is
+  never handed back to the notebook. Adding it there would change the replay
+  match key for every committed cassette carrying a numeric one, for no gain.
 - **The info topics are load-bearing.** `clm info commands` lists the finding
   kinds *exhaustively*, and downstream course-repo agents read it. Adding a
   finding kind without updating it makes those agents wrong — this is CLAUDE.md's
@@ -92,30 +102,49 @@ is not installed. Do not add a `clm` import to either.
 
 ## 4. Open work
 
-### #877 — request-body filter does not recurse (**do this first**)
+### #877 — request-body filter does not recurse (**CLOSED**)
 
-`{"data": {"api_key": "sk-live-LEAK"}}` is recorded **verbatim**, and
-`clm cassette scan` reports the file **clean**. The response side recurses; the
-request side does not, and neither does the scanner's request-body branch.
+`{"data": {"api_key": "sk-live-LEAK"}}` was recorded **verbatim** and
+`clm cassette scan` reported the file **clean** — a false all-clear in the audit
+#874 gates on. The response side recursed; the request side did not, and neither
+did the scanner's request-body branch.
 
-Why it is invisible: the two sides are *consistently* top-level-only, so parity
-holds and the new suite passes. A shared blind spot, not a divergence — which is
-the failure mode a parity test structurally cannot catch, and worth remembering
+Why it was invisible: the two sides were *consistently* top-level-only, so
+parity held and the suite passed. A shared blind spot, not a divergence — the
+failure mode a parity test structurally cannot catch, and worth remembering
 before trusting that suite too much.
 
-Why it matters: this is a **false all-clear** in the audit that #874 gates on.
+What landed:
 
-**The care it needs**: request bodies **are** part of the replay match key, and
-record and lookup filter through the same code. Making the filter recurse
-changes both what a new cassette contains *and* what an incoming request is
-normalised to before matching — so existing cassettes carrying a nested secret
-will start **missing on replay**. That is the class `clm info migration` already
-documents for S9; extend that note, and make sure `clm cassette scan` reports
-the affected entries so they are findable.
+- `vcr_format.filter_json_parameters` — one recursive walk, used by **both** the
+  recorder and the audit. The request side is now single-implementation, unlike
+  the response side's two walks; the parity rows guard a future
+  reimplementation rather than a live divergence.
+- Recursion covers nested objects, arrays, and a top-level array root. A
+  matched key takes its subtree with it (stop-at-match, like the response
+  side). **No value-type exemption** on the request side — see the landmine
+  below.
+- Parse, walk *and* `json.dumps` under one guard. `dumps` used to sit outside
+  it: at a lowered recursion limit a `RecursionError` escaped the filter, which
+  the addon reads as "unfilterable" → live network, nothing recorded.
+- `_form_body_keys` no longer skips a body without an `=`. `token` on its own is
+  stripped by the recorder (`partition` yields an empty separator, not `None`),
+  so skipping it was a false all-clear.
+- Docs: `clm info migration` gained a `#877` section (new replay-miss class),
+  `clm info commands` and `docs/user-guide/http-replay.md` updated.
 
-Acceptance: nested `api_key`/`password`/`token` stripped at any depth; the audit
-reports them; the parity table grows **request-body rows** (it has none today —
-which is why this slipped past it); migration note updated.
+Two things it left behind:
+
+- **#881** — a percent-encoded form parameter *name* (`api%5Fkey=SECRET`) is
+  decoded by the audit's `parse_qsl` and not by the recorder's raw `partition`,
+  so the audit reports a finding no re-record can clear. Pre-existing; fixing it
+  on the recorder side is a match-key migration, which is why it is its own
+  issue. Named in a comment after the request-body table so the shape reads as
+  known-divergent rather than untested.
+- The request-side parity predicate is **"the recorder removes a parameter"**,
+  not "the bytes changed". A JSON *object* request body is re-dumped through
+  `json.dumps` even when nothing matched, so byte inequality would call every
+  JSON request body dirty.
 
 ### #874 — course-repo cassette audit
 
@@ -145,7 +174,10 @@ Re-run with:
 cd <PythonCourses>/slides && clm cassette scan --json
 ```
 
-Land **#877 first** if you intend to treat a green scan as evidence.
+**#877 has landed**, so a green scan is now evidence — and the numbers above
+predate it. Re-run the scan before acting on them: the widened request-body
+walk can only *add* findings, and any it adds are request-side, i.e. the
+replay-miss class.
 
 ## 5. Test-suite flakiness on the Windows dev box (read before panicking)
 

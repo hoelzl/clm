@@ -532,6 +532,29 @@ def _iter_secret_body_keys(
             yield from _iter_secret_body_keys(item, keys, placeholder, is_secret_value)
 
 
+def _json_body_param_names(payload: object, names: frozenset[str]) -> list[str]:
+    """Request-body parameter names the recorder would strip, at any depth.
+
+    Unlike the response side this is **not** a second walk: it calls the
+    recorder's own :func:`vcr_format.filter_json_parameters` and reports
+    exactly the keys it acted on. The response side pays for two walks and
+    a parity suite to keep them honest; the request side has one
+    implementation and cannot drift by construction (issue #877).
+
+    ``RecursionError`` is caught for the same reason it is on the response
+    side: the recorder's guard leaves a pathologically nested body's bytes
+    untouched, so a finding here would be one no re-record can clear — and
+    letting it escape would abort the whole repo walk.
+    """
+    from clm.infrastructure.http_replay_mitm.vcr_format import filter_json_parameters
+
+    try:
+        _, matched = filter_json_parameters(payload, dict.fromkeys(names))
+    except RecursionError:
+        return []
+    return matched
+
+
 def _form_body_keys(raw: object) -> list[str]:
     """Parameter names of a form-encoded body, or ``[]``.
 
@@ -539,13 +562,20 @@ def _form_body_keys(raw: object) -> list[str]:
     ``api_key`` from ``application/x-www-form-urlencoded`` bodies — the
     OAuth password and client-credentials grants — so the audit has to
     read them too, not just JSON.
+
+    A field with no ``=`` counts. ``parse_qsl(keep_blank_values=True)``
+    reads ``token`` as ``("token", "")``, and so does the recorder — its
+    ``partition(b"=")`` yields an empty separator, not ``None``, so the
+    valueless name is stripped like any other. Skipping bodies without an
+    ``=`` made those a false all-clear: the audit vouched for a cassette
+    the recorder rewrites, and a rewritten request body is a replay miss.
     """
     if isinstance(raw, (bytes, bytearray)):
         try:
             raw = raw.decode("utf-8")
         except UnicodeDecodeError:
             return []
-    if not isinstance(raw, str) or "=" not in raw:
+    if not isinstance(raw, str):
         return []
     from urllib.parse import parse_qsl
 
@@ -621,14 +651,17 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
         )
         if cf.is_json_content_type(request_content_type):
             payload, _ = _json_or_none(raw_body)
-            body_names: Iterable[str] = (
-                [k for k in payload if isinstance(k, str)] if isinstance(payload, dict) else []
-            )
+            # At any depth, like the recorder: a nested
+            # ``{"data": {"api_key": …}}`` was recorded verbatim while the
+            # audit — reading top-level keys only — vouched for the file
+            # (issue #877). Scanner and recorder were consistently
+            # top-level, so the parity suite passed on it: a shared blind
+            # spot, which is the one shape a parity test cannot catch.
+            body_names: Iterable[str] = _json_body_param_names(payload, body_params)
         else:
-            body_names = _form_body_keys(raw_body)
+            body_names = [k for k in _form_body_keys(raw_body) if k.lower() in body_params]
         for key in body_names:
-            if key.lower() in body_params:
-                findings.append(SecretFinding(index, "request body", key, uri))
+            findings.append(SecretFinding(index, "request body", key, uri))
 
         headers = (response or {}).get("headers") or {}
         for name in headers:

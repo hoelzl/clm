@@ -6,8 +6,8 @@ recorder would *not* act on makes the repo-wide gate (#874) unsatisfiable,
 and a body the recorder *would* rewrite but the scanner ignores makes the
 gate a false all-clear.
 
-Two separate recursive walks enforce that contract —
-``cassette_format._redact_json_values`` and
+On the **response** side two separate recursive walks enforce that
+contract — ``cassette_format._redact_json_values`` and
 ``cassette_doctor._iter_secret_body_keys``. Issue #875 was one wrong value
 test written into both of them, agreeing perfectly and wrong together;
 inspection had already "verified" them against each other. So the guard
@@ -15,8 +15,17 @@ here is executable and runs the *same payload* through both sides,
 asserting only that they agree — not what either one does, which is the
 job of their own test modules.
 
-Add a row to ``PAYLOADS`` whenever you touch either walk. A shape only
-one side handles is exactly the bug this file exists to catch.
+On the **request** side there is one walk: the audit calls the recorder's
+own ``vcr_format.filter_json_parameters`` (#877). The rows below still
+earn their keep — they pin the shapes, and they catch a future
+reimplementation — but the structural guarantee is stronger there.
+
+Add a row to ``PAYLOADS`` or ``REQUEST_BODIES`` whenever you touch either
+side. A shape only one side handles is exactly the bug this file exists to
+catch — with the caveat #877 taught: two sides that are *consistently*
+wrong agree, so a shared blind spot passes here. The response table had no
+request-body rows at all, which is how a nested ``api_key`` recorded
+verbatim and scanned clean while this suite stayed green.
 """
 
 from __future__ import annotations
@@ -303,6 +312,254 @@ def test_a_nested_secret_under_a_matched_key_is_one_finding(tmp_path: Path) -> N
     payload = {"secret": {"api_key": "a", "password": "b", "nested": {"secret": "c"}}}
     findings = _scanner_findings_raw(json.dumps(payload), tmp_path, "nested_under_match")
     assert [(f.location, f.key) for f in findings] == [("response body", "secret")]
+
+
+JSON = "application/json"
+FORM = "application/x-www-form-urlencoded"
+
+# Request bodies, as the **raw text** a cassette holds. Same contract as
+# the response table, and the reason it exists is #877: the recorder and
+# the audit were *both* top-level-only, so they agreed — and the table
+# above, which only ever fed response bodies, could not see it. A shared
+# blind spot is the one failure a parity suite cannot catch by itself, so
+# these rows are here to pin the shapes rather than to have discovered them.
+REQUEST_BODIES: dict[str, tuple[str, str]] = {
+    # --- JSON, nothing to strip -------------------------------------------
+    "req_empty_object": ("{}", JSON),
+    "req_empty_body": ("", JSON),
+    "req_no_secrets": ('{"model":"gpt","messages":[{"role":"user","content":"hi"}]}', JSON),
+    "req_unparseable": ("not json at all", JSON),
+    "req_clean_array": ("[1,2,3]", JSON),
+    "req_scalar": ('"just a string"', JSON),
+    "req_null_root": ("null", JSON),
+    # A *response*-list name that is not on the request list. The two lists
+    # differ on purpose, and reading one where the other belongs would make
+    # every LLM cassette dirty.
+    "req_response_only_key": ('{"secret":"sk-live-LEAK"}', JSON),
+    # Whole-key matching, never substring.
+    "req_near_miss_substring": ('{"my_password_hint":"x"}', JSON),
+    "req_near_miss_plural": ('{"tokens":5,"api_keys":[]}', JSON),
+    "req_max_tokens": ('{"max_tokens":10,"model":"gpt"}', JSON),
+    # A repeat of an ordinary name removes nothing.
+    "req_duplicate_ordinary": ('{"a":1,"a":2}', JSON),
+    # --- JSON, stripped ---------------------------------------------------
+    "req_top_level_secret": ('{"api_key":"sk-live-LEAK"}', JSON),
+    "req_nested_secret": ('{"data":{"api_key":"sk-live-LEAK"}}', JSON),
+    "req_secret_in_list": ('{"items":[{"id":1},{"password":"hunter2"}]}', JSON),
+    "req_secret_in_top_level_array": ('[{"token":"t"},{"keep":1}]', JSON),
+    "req_deeply_nested_secret": ('{"a":{"b":{"c":{"d":{"api_key":"sk"}}}}}', JSON),
+    "req_container_secret": ('{"api_key":{"inner":"sk-live-LEAK"}}', JSON),
+    "req_secret_inside_a_match": ('{"api_key":{"password":"y"}}', JSON),
+    # No value-type exemption on the request side — see
+    # ``test_the_request_side_has_no_value_type_exemption``.
+    "req_numeric_secret": ('{"a":{"token":5}}', JSON),
+    "req_bool_secret": ('{"token":true}', JSON),
+    "req_null_secret": ('{"api_key":null}', JSON),
+    # Case, at depth as well as at the top.
+    "req_upper_key": ('{"API_KEY":"sk-live-LEAK"}', JSON),
+    "req_title_key_nested": ('{"auth":{"Password":"hunter2"}}', JSON),
+    # ``json.loads`` keeps the last pair, but the request filter re-dumps
+    # rather than preserving bytes, so the shadowed plaintext is dropped —
+    # and the surviving pair is matched whatever its type, so unlike the
+    # response side there is no shadowed-value blind spot to report around.
+    "req_duplicate_secret": ('{"api_key":"sk-live-LEAK","api_key":1}', JSON),
+    "req_duplicate_secret_nested": ('{"d":{"token":"sk-live-LEAK","token":2}}', JSON),
+    # --- form-encoded -----------------------------------------------------
+    "form_empty": ("", FORM),
+    "form_clean": ("a=1&b=2", FORM),
+    "form_near_miss": ("my_password=x&keep=1", FORM),
+    "form_valueless_ordinary": ("flag", FORM),
+    "form_secret": ("grant_type=password&password=hunter2", FORM),
+    "form_case": ("API_KEY=sk-live-LEAK&keep=1", FORM),
+    "form_blank_secret": ("password=", FORM),
+    # No ``=`` at all: the recorder strips it (``partition`` yields an empty
+    # separator, not ``None``), and the audit used to skip such bodies
+    # wholesale — a false all-clear on a body that will replay-miss.
+    "form_valueless_secret": ("token", FORM),
+    "form_secret_and_valueless": ("token&keep=1", FORM),
+    # --- not filtered at all ----------------------------------------------
+    # A JSON payload under a content-type the recorder does not read as
+    # JSON goes down the form branch, which finds no ``&``/``=`` parameters
+    # in it. Neither side may act.
+    "json_under_text_plain": ('{"api_key":"sk-live-LEAK"}', "text/plain"),
+}
+
+#: Rows that carry a leak marker and which **neither** side may act on,
+#: with the reason. Explicit rather than inferred, and checked by its own
+#: test below: an exclusion nobody verifies is a place to hide a
+#: regression.
+REQUEST_BODIES_DELIBERATELY_UNFILTERED = {
+    "req_response_only_key": "`secret` is on the response key list, not the request one",
+    "json_under_text_plain": "the recorder does not read this content-type as JSON",
+}
+
+#: Names above whose *bodies* the recorder must not leave the plaintext in.
+#: Parity alone is satisfied by both sides ignoring a row, so pin the
+#: direction too, exactly as the response table does.
+REQUEST_BODIES_THAT_MUST_LOSE_THE_PLAINTEXT = [
+    name
+    for name, (text, _ct) in REQUEST_BODIES.items()
+    if ("sk-live-LEAK" in text or "hunter2" in text)
+    and name not in REQUEST_BODIES_DELIBERATELY_UNFILTERED
+]
+
+
+def _request_cassette(body: str, content_type: str, tmp_path: Path, name: str) -> Path:
+    path = tmp_path / f"{name}.http-cassette.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "interactions": [
+                    {
+                        "request": {
+                            "method": "POST",
+                            "uri": "https://api.example.com/v1/chat",
+                            "body": body,
+                            "headers": {"content-type": [content_type]},
+                        },
+                        "response": {
+                            "status": {"code": 200, "message": "OK"},
+                            "headers": {"content-type": ["text/plain"]},
+                            "body": {"string": "ok"},
+                        },
+                    }
+                ],
+                "version": 1,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _recorded_request_body(body: str, content_type: str) -> bytes:
+    out = cf.build_request_filter()(
+        cf.Request(
+            "POST", "https://api.example.com/v1/chat", body.encode(), {"content-type": content_type}
+        )
+    )
+    assert out is not None, "an unfilterable request must never become a network bypass"
+    recorded = out.body
+    return recorded if isinstance(recorded, bytes) else str(recorded).encode()
+
+
+def _recorder_strips_request_param(body: str, content_type: str) -> bool:
+    """True when the recorder *removes a parameter* from this request body.
+
+    Deliberately not "the bytes changed", which is the response-side
+    predicate. A JSON **object** request body is re-dumped through
+    ``json.dumps`` even when nothing matched — the inherited vcrpy quirk
+    committed cassettes were recorded through — so byte inequality would
+    call every JSON request body dirty and the gate would be
+    unsatisfiable. Comparing parse trees sees past the reformatting while
+    still catching a repeated name (``json.loads`` keeps the last pair, so
+    a dropped one shows up as a tree difference).
+    """
+    recorded = _recorded_request_body(body, content_type)
+    if content_type.startswith("application/json"):
+
+        def parse(raw: bytes) -> object:
+            try:
+                return json.loads(raw)
+            except (ValueError, RecursionError):
+                return "<unparseable>"
+
+        return parse(body.encode()) != parse(recorded)
+    return recorded != body.encode()
+
+
+def _scanner_request_findings(body: str, content_type: str, tmp_path: Path, name: str) -> list:
+    path = _request_cassette(body, content_type, tmp_path, name)
+    report = scan_cassette_secrets(path)
+    assert report.error is None, report.error
+    return [f for f in report.findings if f.location == "request body"]
+
+
+@pytest.mark.parametrize("name", sorted(REQUEST_BODIES))
+def test_scanner_and_recorder_agree_on_request_bodies(name: str, tmp_path: Path) -> None:
+    """Same contract as the response table, on the match-key side.
+
+    Worse when broken, in fact: responses are not part of the replay match
+    key and request bodies are, so a recorder change the audit does not
+    report leaves a cassette that will replay-miss with nothing pointing
+    at it.
+    """
+    body, content_type = REQUEST_BODIES[name]
+    strips = _recorder_strips_request_param(body, content_type)
+    flags = bool(_scanner_request_findings(body, content_type, tmp_path, name))
+    assert strips == flags, (
+        f"{name}: recorder strips={strips} but scanner flags={flags}. "
+        "A finding no re-record clears makes `clm cassette scan` unsatisfiable; "
+        "a stripped parameter the scan misses hides a cassette that will replay-miss."
+    )
+
+
+def test_the_request_table_covers_both_verdicts() -> None:
+    """Guard against every row agreeing because nothing ever matches."""
+    verdicts = {_recorder_strips_request_param(body, ct) for body, ct in REQUEST_BODIES.values()}
+    assert verdicts == {True, False}
+
+
+@pytest.mark.parametrize("name", sorted(REQUEST_BODIES_THAT_MUST_LOSE_THE_PLAINTEXT))
+def test_a_request_side_secret_never_survives_in_the_recorded_bytes(
+    name: str, tmp_path: Path
+) -> None:
+    """Direction, not just agreement — and the audit must point at it."""
+    body, content_type = REQUEST_BODIES[name]
+    recorded = _recorded_request_body(body, content_type)
+    for plaintext in (b"sk-live-LEAK", b"hunter2"):
+        if plaintext in body.encode():
+            assert plaintext not in recorded, recorded
+    assert _scanner_request_findings(body, content_type, tmp_path, name)
+
+
+@pytest.mark.parametrize("name", sorted(REQUEST_BODIES_DELIBERATELY_UNFILTERED))
+def test_a_deliberately_unfiltered_row_really_is_unfiltered(name: str, tmp_path: Path) -> None:
+    """The exclusions above are claims, so check them.
+
+    Both rows carry a leak marker and are excused from the direction
+    check. If either ever *did* get filtered, the excuse would silently
+    stop being true and the row would quietly test nothing.
+    """
+    body, content_type = REQUEST_BODIES[name]
+    reason = REQUEST_BODIES_DELIBERATELY_UNFILTERED[name]
+    assert not _recorder_strips_request_param(body, content_type), reason
+    assert not _scanner_request_findings(body, content_type, tmp_path, name), reason
+
+
+def test_the_request_side_has_no_value_type_exemption(tmp_path: Path) -> None:
+    """The response side's number/bool/null exemption must not be copied here.
+
+    It exists because redaction rewrites what replayed code *reads* —
+    GPT-2's ``encoder.json`` maps ``"secret"`` to an integer (#875). A
+    request body is never handed back to the notebook, so the recorder
+    removes the key whatever its type. Adding the exemption here would
+    change the replay match key for every already-committed cassette
+    carrying a numeric one, for no gain.
+    """
+    body = '{"a":{"token":5}}'
+    assert _recorder_strips_request_param(body, JSON)
+    assert [f.key for f in _scanner_request_findings(body, JSON, tmp_path, "numeric")] == ["token"]
+
+
+def test_a_matched_request_container_yields_exactly_one_finding(tmp_path: Path) -> None:
+    """One removal in, one finding out — the count regression the booleans miss."""
+    body = '{"api_key":{"password":"a","inner":{"token":"b"}}}'
+    findings = _scanner_request_findings(body, JSON, tmp_path, "container")
+    assert [(f.location, f.key) for f in findings] == [("request body", "api_key")]
+
+
+# Known, deliberate divergence — tracked separately rather than silently
+# omitted from the table above, because an untested shape and a shape
+# tested to diverge look identical in a passing suite.
+#
+# A percent-encoded parameter *name* (``api%5Fkey=SECRET``) is decoded by
+# the audit's ``parse_qsl`` and not by the recorder's raw ``partition``,
+# so the audit reports a finding re-recording cannot clear. Fixing it on
+# the recorder side changes the form-encoded replay match key, which is a
+# migration and a separate decision; fixing it on the audit side would
+# make the audit blind to a genuinely leaked credential. See issue #881.
 
 
 class TestBodyEncodings:

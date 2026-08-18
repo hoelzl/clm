@@ -25,6 +25,7 @@ data of every replayed cassette.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
@@ -432,6 +433,148 @@ class TestRequestFiltersCoverTheRecordedShapes:
         )
         assert out is not None
         assert out.body == "naïve=1".encode("latin-1")
+
+
+class TestRequestBodyFilteringRecurses:
+    """A nested credential must not be recorded verbatim (issue #877).
+
+    The response side walked the whole body from the start; the request
+    side stopped at the top level, and so did the audit that checks it.
+    Consistently top-level on both sides means the parity suite passed —
+    a shared blind spot rather than a divergence, which is the one shape
+    a parity test structurally cannot catch.
+
+    Unlike the response side this touches the **replay match key**:
+    request bodies are matched on, and record and lookup run through this
+    same filter. So the direction assertions here (the plaintext is gone)
+    come with byte-preservation assertions (an untouched body keeps its
+    bytes), because a gratuitous rewrite is a replay miss.
+    """
+
+    def _json(self, body: bytes, method: str = "POST"):
+        return _filtered(
+            vf.Request(
+                method, "https://api.example.com/v1/x", body, {"content-type": "application/json"}
+            )
+        )
+
+    @pytest.mark.parametrize("key", ["api_key", "password", "token"])
+    def test_a_secret_one_level_down_is_stripped(self, key: str) -> None:
+        out = self._json(json.dumps({"data": {key: "SHHH", "keep": 1}}).encode())
+        assert out is not None
+        assert b"SHHH" not in (out.body or b"")
+        assert json.loads(out.body) == {"data": {"keep": 1}}
+
+    def test_a_secret_inside_a_list_of_objects_is_stripped(self) -> None:
+        body = json.dumps({"items": [{"id": 1}, {"api_key": "SHHH"}]}).encode()
+        out = self._json(body)
+        assert out is not None
+        assert json.loads(out.body) == {"items": [{"id": 1}, {}]}
+
+    def test_a_secret_in_a_top_level_array_is_stripped(self) -> None:
+        """A JSON array root used to return early, before any filtering.
+
+        Batch endpoints post one, and ``[{"api_key": …}]`` recorded
+        verbatim.
+        """
+        out = self._json(b'[{"api_key": "SHHH"}, {"keep": 1}]')
+        assert out is not None
+        assert json.loads(out.body) == [{}, {"keep": 1}]
+
+    def test_a_deeply_nested_secret_is_stripped(self) -> None:
+        payload: dict = {"api_key": "SHHH"}
+        for _ in range(12):
+            payload = {"wrap": payload}
+        out = self._json(json.dumps(payload).encode())
+        assert out is not None
+        assert b"SHHH" not in (out.body or b"")
+
+    @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+    def test_recursion_applies_on_any_method(self, method: str) -> None:
+        out = self._json(b'{"auth": {"api_key": "SHHH"}}', method=method)
+        assert out is not None
+        assert b"SHHH" not in (out.body or b"")
+
+    def test_filtering_stops_at_the_match(self) -> None:
+        """The whole subtree goes, like the response side's placeholder.
+
+        Descending *into* a matched key instead would leave a secret filed
+        under an inner name nobody listed.
+        """
+        out = self._json(b'{"api_key": {"inner": "SHHH", "also": ["SHHH"]}}')
+        assert out is not None
+        assert json.loads(out.body) == {}
+
+    def test_an_untouched_array_body_keeps_its_bytes(self) -> None:
+        """Request bodies are in the match key — do not rewrite for nothing.
+
+        An object body is still re-dumped (the inherited vcrpy quirk that
+        committed cassettes were recorded through), but an array or scalar
+        root was byte-preserved before this change and must stay so.
+        """
+        body = b'[{"keep":1},[2,3],"x"]'
+        out = self._json(body)
+        assert out is not None
+        assert out.body == body
+
+    @pytest.mark.parametrize("body", [b"[1,2,3]", b'"scalar"', b"42", b"null"])
+    def test_untouched_non_object_roots_keep_their_bytes(self, body: bytes) -> None:
+        out = self._json(body)
+        assert out is not None
+        assert out.body == body
+
+    def test_an_object_body_is_still_re_dumped(self) -> None:
+        """The quirk stays: committed cassettes hold bodies shaped this way."""
+        out = self._json(b'{"keep":"1"}')
+        assert out is not None
+        assert out.body == b'{"keep": "1"}'
+
+    def test_a_body_too_deep_to_walk_is_left_alone_not_refused(self) -> None:
+        """The contract, not the mechanism — which limb overflows varies.
+
+        Whether the *parse* or the *walk* blows the stack first depends on
+        the interpreter build and version (this box's CPython 3.13 parses a
+        depth-2000 body happily and overflows in the walk; other builds
+        bail inside ``json.loads``). Both limbs sit under one guard for
+        exactly that reason, so the assertion holds either way: the body is
+        recorded untouched and the request is **never** refused.
+
+        The limit is lowered rather than the body made enormous so that
+        *some* limb is guaranteed to overflow on every platform — the walk
+        costs at least one frame per level, and 400 levels cannot fit in
+        300. Reproducing the other regime here beats discovering it in CI.
+
+        Refusing is the expensive failure. ``_filter_request`` returning
+        ``None`` is handled like an ignore-host: the request goes to the
+        live network in every mode, including strict replay, and nothing
+        is recorded.
+        """
+        depth = 400
+        body = ('{"a":' * depth + '{"api_key":"SHHH"}' + "}" * depth).encode()
+        old = sys.getrecursionlimit()
+        sys.setrecursionlimit(300)
+        try:
+            out = self._json(body)
+        finally:
+            sys.setrecursionlimit(old)
+        assert out is not None, "an unfilterable body must not become a network bypass"
+        assert out.body == body
+
+    def test_a_nested_secret_is_stripped_at_a_workable_depth_under_a_low_limit(self) -> None:
+        """Sanity anchor for the test above: the guard is not swallowing everything.
+
+        With the same low limit but a shallow body, filtering still
+        happens — otherwise the previous test would pass against a filter
+        that had simply stopped working.
+        """
+        old = sys.getrecursionlimit()
+        sys.setrecursionlimit(300)
+        try:
+            out = self._json(b'{"a": {"b": {"api_key": "SHHH"}}}')
+        finally:
+            sys.setrecursionlimit(old)
+        assert out is not None
+        assert json.loads(out.body) == {"a": {"b": {}}}
 
 
 class TestTheRecorderRefusesRatherThanLeaks:

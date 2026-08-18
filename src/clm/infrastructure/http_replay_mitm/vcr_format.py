@@ -14,9 +14,9 @@ adaptation: byte-for-byte output compatibility with vcrpy-written
 cassettes is the load-bearing requirement, pinned by golden-fixture and
 round-trip tests (``tests/infrastructure/test_http_replay_vcr_format.py``).
 Behavioral quirks are therefore preserved deliberately — e.g.
-``replace_post_data_parameters`` re-dumps a JSON body via ``json.dumps``
-(pretty separators) even when no key matched, because committed cassettes
-contain bodies recorded through exactly that code path.
+``replace_post_data_parameters`` re-dumps a JSON *object* body via
+``json.dumps`` (pretty separators) even when no key matched, because
+committed cassettes contain bodies recorded through exactly that code path.
 
 Like its consumers :mod:`cassette_format` and the mitmproxy addon, this
 module is importable two ways: as
@@ -469,13 +469,81 @@ def _replace_form_parameters(request: Request, body: bytes, replacements: dict) 
     return b"&".join(k if sep is None else b"".join([k, sep, v]) for k, sep, v in new_splits)
 
 
+def filter_json_parameters(
+    payload: object, replacements: dict, request: Request | None = None
+) -> tuple[object, list[str]]:
+    """Remove/replace named parameters **anywhere** in a parsed JSON body.
+
+    Returns ``(filtered_payload, matched_names)`` — the rebuilt payload and
+    every key the filter acted on, one entry per occurrence, in traversal
+    order. Containers are rebuilt rather than mutated, so the caller's
+    parsed payload is untouched.
+
+    *replacements* must already be keyed by **lowercased** name (the
+    callers lowercase once, up front); a payload key is lowercased here
+    before the lookup. A replacement value of ``None`` removes the key —
+    which is what every CLM filter list maps to — anything else replaces
+    the value, and a callable is invoked as
+    ``rv(key=…, value=…, request=…)``, both inherited from vcrpy.
+
+    Two properties worth stating because they are easy to "simplify" away:
+
+    * **It recurses.** ``{"data": {"api_key": "sk-live-…"}}`` used to record
+      verbatim, and the audit that reads the same shape called the file
+      clean — a false all-clear on the one thing the gate exists to catch
+      (issue #877). The response side has always walked the whole body.
+    * **It stops at a match**, exactly like
+      :func:`cassette_format._redact_json_values`: the key is removed (or
+      its value replaced) wholesale, and the subtree under it is not
+      descended into. Nothing under a removed key survives, so there is
+      nothing left to filter there.
+
+    Unlike the response side there is **no value-type exemption**: a
+    number, boolean or ``null`` under ``api_key`` is removed too. The
+    exemption exists on the response side because redaction rewrites what
+    replayed code *reads* (GPT-2's ``encoder.json`` maps ``"secret"`` to an
+    integer, issue #875); a request body is never handed back to the
+    notebook, so dropping a key from it cannot corrupt anything. It only
+    normalises the replay match key — and record and lookup filter through
+    this same function, so both sides drop the same keys.
+
+    The residual cost of that, worth knowing: two requests differing *only*
+    in a filtered parameter collapse to one match key (paginating on a
+    nested ``token`` cursor, say) and replay in recorded order. The
+    top-level filter has always had that property; recursing widens it.
+    """
+    matched: list[str] = []
+
+    def walk(node: object) -> object:
+        if isinstance(node, dict):
+            filtered: dict = {}
+            for key, value in node.items():
+                lowered = str(key).lower()
+                if lowered not in replacements:
+                    filtered[key] = walk(value)
+                    continue
+                matched.append(str(key))
+                rv = replacements[lowered]
+                if callable(rv):
+                    rv = rv(key=key, value=value, request=request)
+                if rv is not None:
+                    filtered[key] = rv
+            return filtered
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        return node
+
+    return walk(payload), matched
+
+
 def replace_post_data_parameters(request: Request, replacements) -> Request:
     """Remove/replace form/JSON body parameters; value ``None`` removes.
 
-    Inherits vcrpy's JSON quirk on purpose: a JSON body is re-dumped via
-    ``json.dumps`` (default ``", "``/``": "`` separators) even when no key
-    matched — committed cassettes contain bodies recorded exactly this way,
-    and the JSON-semantic replay matcher absorbs the byte difference.
+    Inherits vcrpy's JSON quirk on purpose: a JSON *object* body is
+    re-dumped via ``json.dumps`` (default ``", "``/``": "`` separators)
+    even when no key matched — committed cassettes contain bodies recorded
+    exactly this way, and the JSON-semantic replay matcher absorbs the byte
+    difference.
     """
     if not request.body:
         return request
@@ -491,21 +559,24 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
     # S9, #798). Bodyless requests already returned above.
     if not isinstance(request.body, BytesIO):
         if isinstance(request.body, dict):
-            new_body = dict(request.body)
-            for key in list(new_body):
-                lowered = str(key).lower()
-                if lowered not in replacements:
-                    continue
-                rv = replacements[lowered]
-                ov = new_body.pop(key)
-                if callable(rv):
-                    rv = rv(key=key, value=ov, request=request)
-                if rv is not None:
-                    new_body[key] = rv
-            request.body = new_body
+            request.body, _ = filter_json_parameters(request.body, replacements, request)
         elif _is_json_content_type(request.headers.get("Content-Type")):
             try:
                 json_data = json.loads(request.body)
+                # Parse, walk *and* re-dump under one guard. Which of the
+                # three overflows first on a deeply nested body depends on
+                # the interpreter build, so splitting them makes the
+                # behaviour platform-dependent — the lesson the response
+                # filter learned from CI (#878).
+                filtered, matched = filter_json_parameters(json_data, replacements, request)
+                if not isinstance(json_data, dict) and not matched:
+                    # A JSON array or scalar the filter did not touch: keep
+                    # the original bytes, since re-dumping would rewrite
+                    # them for nothing. An *object* is re-dumped either way
+                    # — the inherited vcrpy quirk documented above, which
+                    # committed cassettes were recorded through.
+                    return request
+                encoded = json.dumps(filtered).encode("utf-8")
             except (ValueError, UnicodeDecodeError, RecursionError):
                 # A JSON content-type on a body that will not parse —
                 # malformed, mislabelled, or nested past the recursion
@@ -516,21 +587,7 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
                 # something we cannot read (finding S9, #798). The
                 # response filter guards the same three cases.
                 return request
-            if not isinstance(json_data, dict):
-                # A JSON array or scalar has no top-level keys to filter,
-                # and re-dumping it would rewrite bytes for nothing.
-                return request
-            for key in list(json_data):
-                lowered = str(key).lower()
-                if lowered not in replacements:
-                    continue
-                rv = replacements[lowered]
-                ov = json_data.pop(key)
-                if callable(rv):
-                    rv = rv(key=key, value=ov, request=request)
-                if rv is not None:
-                    json_data[key] = rv
-            request.body = json.dumps(json_data).encode("utf-8")
+            request.body = encoded
         else:
             if isinstance(request.body, str):
                 request.body = request.body.encode("utf-8")

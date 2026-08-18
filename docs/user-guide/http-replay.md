@@ -279,8 +279,33 @@ removed outright:
 - Body parameters (case-insensitive), JSON or form-encoded, on any
   method: `password`, `token`, `api_key`
 
+In a JSON body the search walks the **whole** body — nested objects,
+arrays, and a top-level array root — and, like the response side, stops
+at a match: the key goes and takes its subtree with it, so
+
+```json
+{"data": {"api_key": "sk-live-…", "keep": 1}}
+```
+
+records as `{"data": {"keep": 1}}`. There is no value-type exemption
+here, unlike responses (below): `{"a": {"token": 5}}` loses the key too.
+The exemption exists to stop redaction corrupting what replayed code
+*reads*, and a request body is never handed back to the notebook.
+
 A body that is not text — a binary upload — is recorded untouched; there
-are no parameters to filter in it.
+are no parameters to filter in it. So is a JSON body too deeply nested to
+walk: leaving it alone is the only safe answer, because a filter that
+*raises* is treated as "unfilterable" and sends the request to the live
+network without recording it.
+
+Request filtering is the half that can bite you later, because request
+bodies and query parameters are part of the replay match key and the
+lookup filters the incoming request the same way before matching. Two
+requests differing only in a filtered parameter — paginating on a `token`
+cursor, say — collapse to one match key and replay in recorded order. And
+a cassette recorded by an older CLM that kept a now-filtered parameter
+will replay-*miss*; `clm cassette scan` reports exactly those, and `clm
+info migration` explains the remedy (re-record the deck).
 
 **Responses** — `Set-Cookie` is dropped, and in a JSON body the *values*
 of `access_token`, `refresh_token`, `id_token`, `client_secret`,

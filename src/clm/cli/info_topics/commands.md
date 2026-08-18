@@ -3155,7 +3155,11 @@ Reports the file, the interaction index and the offending key for:
 - secret query parameters, case-insensitively (`api_key`, `token`, `key`,
   `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature`);
 - secret request-body parameters (`password`, `token`, `api_key`), JSON or
-  form-encoded, on any method, case-insensitively;
+  form-encoded, on any method, case-insensitively — **at any depth** in a JSON
+  body, including inside arrays and under a top-level array (since {version};
+  before that the request body was read top-level only, on both the recording
+  and the auditing side, so `{"data": {"api_key": …}}` recorded verbatim and
+  scanned clean);
 - `Set-Cookie` response headers;
 - OAuth-shaped keys anywhere in a JSON response body (`access_token`,
   `refresh_token`, `id_token`, `client_secret`, `api_key`, `apikey`,
@@ -3172,13 +3176,20 @@ substrings, because an LLM response legitimately contains `completion_tokens` /
 `total_tokens` and flagging those would mark every LLM cassette in the repo as
 dirty — but `{"Password": …}` is reported, because the recorder redacts it.
 
-The **value type** matters too: a number, boolean or `null` under one of those
-names is not a finding, since no credential is one and a JSON body can be a map
-keyed by ordinary words (GPT-2's `encoder.json` maps `"secret"` to `21078`).
-Strings, objects and arrays are findings — and note the recorder replaces an
-object or array **wholesale with the placeholder string**, so replayed code
-indexing into `response["secret"]["id"]` raises rather than reading a redacted
-field.
+The **value type** matters too, on the response side: a number, boolean or
+`null` under one of those names is not a finding, since no credential is one and
+a JSON body can be a map keyed by ordinary words (GPT-2's `encoder.json` maps
+`"secret"` to `21078`). Strings, objects and arrays are findings — and note the
+recorder replaces an object or array **wholesale with the placeholder string**,
+so replayed code indexing into `response["secret"]["id"]` raises rather than
+reading a redacted field.
+
+**Request** bodies have no such exemption: `{"a": {"token": 5}}` is reported,
+because the recorder removes the key whatever its type. The exemption exists to
+stop redaction corrupting what replayed code *reads*, and a request body is
+never handed back to the notebook — it only normalizes the replay match key.
+Removal there is wholesale too: a matched key takes its whole subtree with it,
+so one removal is one finding, not one per nested name.
 
 | Option | Description |
 |--------|-------------|
