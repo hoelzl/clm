@@ -1,6 +1,19 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 7, 8 DONE; Phase 4: S4/S8/S12/S11/S9 DONE, **S10+D7 is the last open item** with a locked implementation contract (2026-08-17 — read the contract block, do not re-derive the design decisions) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 4, 7, 8 DONE — **Phase 4 COMPLETE 2026-08-18** (S4, S8, S12, S11, S9, S10+D7; #798 closed). Remaining work is **Phase 5** (#799, job-queue correctness) and **Phase 6** (#800, cross-machine coordination), neither started | **Owner**: unassigned
+
+**2026-08-18 update**: **Phase 4 is COMPLETE** and **#798 is closed**. S11
+(PR #864), S9 (PR #866) and S10+D7 (PR #872) landed in that order, each
+against the implementation contract locked with the owner on 2026-08-17 —
+which held everywhere except one clause, worth reading before the next phase:
+the contract's "fail safe" instruction for `_build_has_docker_notebook_worker`
+named a single global default, and the probe's two callers turn out to need
+**opposite** ones (see Phase 4 item 5). Two other patterns recurred across all
+three: a refusal must not leave behind the evidence that would authorize it on
+the next run (S11's manifest, two review rounds), and a security filter that
+*raises* is worse than one that does nothing when the caller treats
+"unfilterable" as "pass through" (S9's live-network bypass). What remains of
+the whole plan is **Phase 5** (#799) and **Phase 6** (#800), neither started.
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1154,7 +1167,7 @@ keep the security change reviewable in one sitting, and neither is blocked.
 
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress — S4, S8, S12, S11, S9 DONE; remaining **S10+D7** only (**implementation contract locked with the owner 2026-08-17** — see the item) ▸ TRACKED: #798
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: **COMPLETE 2026-08-18** — S4, S8, S12, S11, S9, S10+D7 all DONE ▸ TRACKED: #798 (closed)
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -1344,16 +1357,107 @@ CLM owns, and secrets stay out of logs and commits.
    `notebook_kernel_python` (`kernel_env.py:165`). Separately, add a scheme
    allowlist for spec-supplied `repository_base` before it reaches `git` —
    Git's `ext::` transport executes its argument (`git.py:215,796`).
-5. **S10 + D7 — Docker.** `worker_executor.py:314-341`: mount `/source`
-   read-only for the notebook worker; keep read-write for PlantUML/DrawIO (the
-   comment at `:340` explains why they need it). Add a non-root `USER` to the
-   images and verify generated-image ownership still works. Fix the three
-   verified gaps in the `course.py:340` whole-volume guard: the `len(resolved)==1`
-   early return skips it, `data_dir` has no guard at all, and
-   `_build_has_docker_notebook_worker` returns `False` on any exception.
+5. **S10 + D7 — Docker.** ▸ **DONE 2026-08-18** (PR #872, merge 495bd0e4;
+   refs umbrella #798). Non-root images, a read-only `/source` for the
+   notebook worker, and the three whole-volume guard gaps all landed.
+
+   **Images.** All three worker images declare `USER 1000:1000` and are built
+   to run under *any* uid, because on native Linux the executor starts the
+   container as the **host** user (a CI runner's 1001, not the image's 1000)
+   so bind-mount writes keep host ownership — the uid-remapping caveat a
+   build-time uid cannot solve, since the right uid belongs to the machine.
+   That meant world-readable installs, a world-writable `$HOME`, caches under
+   `/tmp`, and the .NET/Deno kernelspecs copied out of root's user directory
+   into `/usr/local/share/jupyter/kernels` (they install as root at build time
+   and would otherwise be invisible — silently, since a missing kernel only
+   surfaces when a deck in that language is built). Setuid binaries are
+   stripped from all three. **Fold the `chmod -R a+rX` into the layer that
+   installs**: a separate `chmod -R a+rX /root` layer cost ~430 MB of overlay
+   copy-up (6.31 → 6.74 GB; folded, 6.33 GB).
+
+   **Draw.io is the awkward one.** Electron calls `os.userInfo()`, which
+   throws when the running uid has no password-database entry — and an
+   arbitrary uid never has one — so the entrypoint appends one at run time,
+   which needs `/etc/passwd` mode 0666. That is only safe *because* the setuid
+   strip removed everything to escalate through; the two are a pair, and the
+   image test pins them together. An `apt-get install` added below the strip
+   would silently re-arm it. D-Bus is a **session** bus now (the system bus
+   needs root) and `XDG_RUNTIME_DIR` is created uid-owned. Every one of those
+   failure modes is a **hang**, not a message, which is why a test drives the
+   real entrypoint rather than inspecting the image.
+
+   **The read-only `/source` broke executed notebooks, and the fix removed a
+   divergence.** `/source` is read-only for the notebook worker only — the one
+   that executes arbitrary course code; PlantUML and Draw.io render *into* the
+   source tree, which is their job. Review proved read-only `/source` breaks
+   **48 relative writes across 28 files** in PythonCourses: the Docker kernel
+   ran with cwd *inside* the mount, so `open("data.txt", "w")` in a cell
+   worked there and had never worked in Direct mode. `create_contents` now
+   always gives the kernel a writable `TemporaryDirectory` with `other_files`
+   copied in, in both modes — those cells still succeed, they simply cannot
+   write into the course repository. The one behaviour that *changes* is a
+   Docker-only **read** of a sibling file from the cell's own directory, and
+   it changes to match Direct mode, which never supported it.
+
+   **Guard gaps.** `_refuse_whole_volume_mount` now covers every construction
+   site: `course.py`'s single-target early return (`len(resolved) == 1`
+   skipped the check outright), the completely unguarded `data_dir`, and the
+   executor's own mount — checked in `start_worker`, **not** `__init__`, which
+   a review round caught: constructing the executor is not using it, and
+   guarding the constructor broke Direct-mode builds on any Docker-equipped
+   machine. `pool_manager` re-raises `WholeVolumeMountError` past its
+   swallow-and-continue handlers (otherwise the refusal degrades into "zero
+   workers"), and `clm build` renders it as a `ClickException` beside the S11
+   refusal.
+
+   **"Fail safe" is a direction, not a constant** — the sharpest thing this
+   item taught, and the one place the locked contract was incomplete. The
+   contract said `_build_has_docker_notebook_worker` must fail safe by
+   assuming Docker. That is right for *one* of its two callers: the workspace
+   resolver, whose path carries the whole-volume guard, so assuming Direct
+   silently returns an unguarded root. For the replay proxy it is exactly
+   backwards — assuming Docker binds `0.0.0.0` and opens a LAN listener. The
+   probe now takes `default_on_error`, each caller states its own direction,
+   and the failure is logged either way.
+
+   Tests: `tests/infrastructure/workers/test_docker_containment.py` (19,
+   unit), `test_docker_image_containment.py` (10, docker-marked — `USER`
+   metadata, the setuid sweep, kernelspec visibility for uid 4242, and the
+   real drawio entrypoint), and a job-execution case proving a cell's relative
+   write still succeeds under the read-only mount. That last one was
+   **vacuous** in its first form and review caught it: `"format": "notebook"`
+   never starts a kernel (only `format == "html"` reaches
+   `_create_using_nbconvert`) and the asserted string sat in the cell
+   *source*, so it passed against a broken build. It now writes a marker the
+   source does not contain, verified discriminating by flipping the format
+   back.
+
+   **Cache note (#744)**: rebuilt images do *not* invalidate the execution
+   cache — the identity in the key is the image **tag**, not its content — so
+   pass `--ignore-cache` to re-execute against a new image.
+
+   **Windows landmine.** Editing `docker/drawio/entrypoint.sh` through Python
+   `write_text` produced CRLF, and the container then failed with
+   `exec /app/entrypoint.sh: no such file or directory` — a message that names
+   the file it just found. `git diff` showed nothing, because git had been
+   storing LF throughout. Check the working-tree bytes, not the diff, when a
+   shell script in an image stops being executable.
+
+   Original finding text, for reference: `worker_executor.py:314-341`: mount
+   `/source` read-only for the notebook worker; keep read-write for
+   PlantUML/DrawIO (the comment at `:340` explains why they need it). Add a
+   non-root `USER` to the images and verify generated-image ownership still
+   works. Fix the three verified gaps in the `course.py:340` whole-volume
+   guard: the `len(resolved)==1` early return skips it, `data_dir` has no
+   guard at all, and `_build_has_docker_notebook_worker` returns `False` on
+   any exception.
 
    **Implementation contract (decision locked 2026-08-17: fixed non-root
-   UID).** `USER 1000:1000` in all three worker images (Dockerfiles under
+   UID).** Retained as the record of the locked decisions; the delivered
+   change follows it, with the one amendment noted above (the probe's safe
+   direction is per-caller, not global).
+
+   `USER 1000:1000` in all three worker images (Dockerfiles under
    `docker/`); ownership verification happens in the CI docker tier (Linux
    runners — the docker job is a required check since #679) plus a Docker
    Desktop/Windows smoke on the dev box; document the native-Linux
@@ -1363,7 +1467,10 @@ CLM owns, and secrets stay out of logs and commits.
    treat an undeterminable state as "a docker notebook worker exists" (guard
    applies) and log a warning, never silently disable the guard. Note the
    image-identity cache keying (#744): rebuilt images re-render cached
-   notebooks — expected, mention it in the changelog fragment.
+   notebooks — expected, mention it in the changelog fragment. *(That last
+   sentence is backwards, and the changelog says so: the key holds the image
+   **tag**, not its content, so a rebuilt image under the same tag is a cache
+   **hit** and re-execution needs `--ignore-cache`.)*
 6. **S9 — cassette scrubbing.** ▸ **DONE 2026-08-18** (PR #866, merge
    13501628; refs umbrella #798). Response side, request-side gaps, CA
    move and the audit all landed.
@@ -1894,31 +2001,42 @@ incrementally so the doc is always true of the current code.
 ## 5. Finding coverage map
 
 Every finding from the review, and where it is handled. IDs match
-`docs/claude/adversarial-review-2026-07-24.md`.
+`docs/claude/adversarial-review-2026-07-24.md`. **✔ = shipped.** Since
+2026-08-18 the only findings without a ✔ are the C-family, and they are the
+whole content of the two phases that have not started — Phase 5 (#799) and
+C1's final form in Phase 6 (#800). Nothing else is outstanding.
 
 | Finding | Phase | Finding | Phase | Finding | Phase |
 |---|---|---|---|---|---|
-| S1 | 0 | C1 | 0 (interim) → 6 (final) | Y1 | 3 |
-| S2 | 2 | C2 | 5 | Y2 | 3 ✔ DONE |
-| S3 | 2 | C3 | 5 | Y3 | 3 |
-| S4 | 4 (3a if cheap) | C4 | 5 | Y4 | 3 |
-| S5 | **3a** (pulled fwd) | C5 | 5 | Y5 | 3 |
-| S6 | 2 | C6 | 5 | Y6 | 3 |
-| S7 | 2 | C7 | 5 | Y7 | 3 |
-| S8 | 4 (3a if cheap) | C8 | 5 | Y8 | 3 |
-| S9 | 4 | C9 | 5 | Y9 | 3 |
-| S10 | 4 | C10 | 5 | A1 | 8 |
-| S11 | 4 | C11 | 5 | A2 | 8 |
-| S12 | 4 | C12 | 5 | A3 | 8 |
-| T1 | 1 | T5 | 1 | A4 | 8 |
-| T2 | 1 | T6 | 1 | A5 | 8 |
-| T3 | 7 | T7 | 1 | A6 | 8 |
-| T4 | 1 | T8 | 1 | A7 | 8 |
-| T9 | 1 | T10 | 1 | A8 | 8 |
-| | | | | A9 | 8 |
-| | | | | A10 | 8 |
-| | | | | A11 | 8 |
-| | | | | A12 | 8 |
+| S1 | 0 ✔ | C1 | 0 ✔ (interim) → 6 (final) | Y1 | 3 ✔ |
+| S2 | 2 ✔ | C2 | 5 | Y2 | 3 ✔ |
+| S3 | 2 ✔ | C3 | 5 | Y3 | 3 ✔ |
+| S4 | 4 ✔ | C4 | 5 | Y4 | 3 ✔ |
+| S5 | **3a** ✔ | C5 | 5 | Y5 | 3 ✔ |
+| S6 | 2 ✔ | C6 | 5 | Y6 | 3 ✔ |
+| S7 | 2 ✔ | C7 | 5 | Y7 | 3 ✔ |
+| S8 | 4 ✔ | C8 | 5 | Y8 | 3 ✔ |
+| S9 | 4 ✔ | C9 | 5 | Y9 | 3 ✔ |
+| S10 | 4 ✔ | C10 | 5 | A1 | 8 ✔ |
+| S11 | 4 ✔ | C11 | 5 | A2 | 8 ✔ |
+| S12 | 4 ✔ | C12 | 5 | A3 | 8 ✔ |
+| T1 | 1 ✔ | T5 | 1 ✔ | A4 | 8 ✔ |
+| T2 | 1 ✔ | T6 | 1 ✔ | A5 | 8 ✔ |
+| T3 | 7 ✔ | T7 | 1 ✔ | A6 | 8 ✔ |
+| T4 | 1 ✔ | T8 | 1 ✔ | A7 | 8 ✔ |
+| T9 | 1 ✔ | T10 | 1 ✔ | A8 | 8 ✔ |
+| | | | | A9 | 8 ✔ |
+| | | | | A10 | 8 ✔ |
+| | | | | A11 | 8 ✔ |
+| | | | | A12 | 8 ✔ |
+
+The §2 decisions are not in this table; each rides along with a phase item.
+**D1** was Phase 0's release posture and **D6** its interim C1 stopgap;
+**D2 + D3** shipped with Phase 2 item 1, **D4** with Phase 2 items 2–3,
+**D12** with Phase 1 item 2, **D8** with Phase 3 item 1, **D9** with Phase 3
+item 3, **D7** with Phase 4 item 5; **D11/D10** *are* Phases 7 and 8; and
+**D13/D14** left the plan as backlog issues #697/#698. **D5** is the only
+decision still ahead of the work — it is what Phase 6 builds.
 
 **Deliberately accepted, not fixed**: billion-laughs XML expansion in spec
 parsing (local hang/OOM only, LOW for a local tool); cassette response-header
@@ -1932,8 +2050,14 @@ if touching that code).
 Small enough to decide in flight; recommendations given, but flag them in the PR
 so the maintainer can object:
 
-1. **S5 scope** — recommendation: repo-local config may not set executable paths
-   at all (user/system config only). Fall back to an allowlist if too restrictive.
+1. ~~**S5 scope**~~ — **settled and shipped** (Phase 3a, 2026-07-26), but *not*
+   as recommended: the decision **split by key**. Repo-local config may not set
+   `external_tools.{plantuml_jar,drawio_executable}` — those fire on the host
+   during diagram conversion regardless of worker mode — while `[jupyter]
+   kernel_python` stays legal, because PythonCourses commits it and it only takes
+   effect where that repo's notebook code was already about to execute on the host.
+   See the Phase 3a notes for the asymmetry ("content chooses a program" is only
+   interesting where the content was not already going to be executed).
 2. ~~**S11 sweep marker**~~ — **settled and shipped** (PR #864): the sweep and
    `--clean` require ownership evidence — empty/absent at build start,
    `.clm-manifest.json` in the root or a declared target root above it, or (sweep
