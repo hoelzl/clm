@@ -22,6 +22,17 @@
   reports it under the new location `response body (repeated name)`. Scoped to
   filter-list names, so an ordinary `{"a":1,"a":2}` still takes the fast path.
 
+- **A pathologically nested JSON response body no longer forwards the request to
+  the live network, nor aborts a repo-wide audit** (#878). Recursing over a body
+  a few thousand levels deep raised `RecursionError` out of the response filter,
+  and the replay addon reads a raised filter as "unfilterable" — handling it
+  like an ignore-host, forwarding to the **live network** in every mode
+  including strict `replay`, and recording nothing. The same overflow escaping
+  `clm cassette scan` took down the audit of every cassette after it. Both sides
+  now leave such a body alone and keep going. Note *which* half overflows —
+  the parse or the walk — depends on the interpreter build, so both are guarded
+  together.
+
 - **`clm cassette scan` no longer reports a false all-clear for a response body
   with a byte-order mark** (#875). The audit decoded cassette bodies as strict
   UTF-8 before parsing, so a body carrying a BOM — or encoded as UTF-16/32,

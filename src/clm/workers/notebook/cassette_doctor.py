@@ -643,12 +643,32 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             response_payload, shadowed_names = _json_or_none(
                 body.get("string") if isinstance(body, dict) else None, response_body_keys
             )
-            for key in _iter_secret_body_keys(
-                response_payload,
-                response_body_keys,
-                cf.SECRET_PLACEHOLDER,
-                cf.is_secret_body_value,
-            ):
+            try:
+                body_keys_found = list(
+                    _iter_secret_body_keys(
+                        response_payload,
+                        response_body_keys,
+                        cf.SECRET_PLACEHOLDER,
+                        cf.is_secret_body_value,
+                    )
+                )
+            except RecursionError:
+                # A body deep enough to overflow the walk. Where the
+                # *parse* overflows depends on the interpreter build —
+                # CPython on Windows raises inside ``json.loads`` at a
+                # depth Linux parses happily — so this and the guard in
+                # ``_json_or_none`` are two halves of one case, and both
+                # must hold or the behaviour is platform-dependent.
+                #
+                # Yield nothing rather than a finding: the recorder's twin
+                # guard leaves such a body's bytes untouched, so
+                # re-recording clears nothing and a finding here would be
+                # unsatisfiable. Crucially it must not *escape* — this is
+                # a repo-wide walk, and one pathological cassette used to
+                # take down the audit of every file after it (issue #878
+                # covers the remaining recorder half).
+                body_keys_found = []
+            for key in body_keys_found:
                 findings.append(SecretFinding(index, "response body", key, uri))
             for name in sorted(shadowed_names):
                 # A repeated name whose earlier pair the parse tree threw

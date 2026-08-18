@@ -554,14 +554,22 @@ def build_response_filter(
             return filtered
         try:
             payload, shadowed_names = load_json_noting_duplicate_secrets(raw, body_keys)
+            # The *walk* is guarded with the parse, not after it: which of
+            # the two overflows on a deeply nested body depends on the
+            # interpreter build (CPython on Windows raises inside
+            # ``json.loads`` at a depth Linux parses happily, then
+            # overflows here instead). Splitting the guard made the
+            # behaviour platform-dependent — caught by CI on a test that
+            # passed locally.
+            redacted = _redact_json_values(payload, body_keys)
         except (ValueError, UnicodeDecodeError, RecursionError):
             # Mislabelled, truncated, or pathologically nested body: leave
             # the bytes exactly as recorded rather than guessing at their
-            # structure. (``RecursionError`` matters because the addon
-            # treats a raised filter as "do not record at all".)
+            # structure. ``RecursionError`` is the load-bearing one — the
+            # addon reads a raised filter as "unfilterable" and handles it
+            # like an ignore-host, forwarding to the **live network** in
+            # every mode and recording nothing.
             return filtered
-
-        redacted = _redact_json_values(payload, body_keys)
         if redacted == payload and not shadowed_names:
             # Nothing matched — keep the original bytes rather than
             # re-serializing (json.dumps would rewrite separators and

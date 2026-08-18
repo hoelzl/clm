@@ -276,20 +276,26 @@ class TestScannerRobustness:
         assert reports[clean].findings == []
         assert len(reports[dirty].findings) == 1
 
-    def test_a_body_too_deep_to_parse_does_not_abort_the_walk(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("depth", [1200, 4000])
+    def test_a_pathologically_deep_body_does_not_abort_the_walk(
+        self, depth: int, tmp_path: Path
+    ) -> None:
         """One pathological cassette must not take down a repo audit.
 
-        ``json.loads`` raises ``RecursionError`` — not ``ValueError`` —
-        past a few thousand levels, and the scan is a repo-wide walk whose
-        exit code gates #874. Letting it escape meant the *second*
-        cassette's real finding was never reported. The recorder guards
-        the identical case, so parity holds: neither side acts on a body
-        it cannot parse.
+        Both depths matter, and the reason is the bug this test was
+        written wrong for the first time: **which** half overflows is a
+        property of the interpreter build. At 4000 levels CPython on
+        Windows raises inside ``json.loads``; the same body parses fine on
+        Linux and the *traversal* raises instead. A test pinned to one
+        depth passed on one platform and failed CI on the other.
 
-        (Bodies that parse but overflow the *traversal* are issue #878;
-        this pins the parse half, which is the one in this diff.)
+        So assert the contract rather than the mechanism: whichever half
+        gives out, the walk keeps going and the *next* cassette's real
+        finding is still reported. Reporting nothing for the deep body is
+        the parity-preserving answer — the recorder leaves such a body's
+        bytes untouched, so a finding would be one no re-record clears.
         """
-        deep = '{"a":' * 4000 + "1" + "}" * 4000
+        deep = '{"a":' * depth + "1" + "}" * depth
         nested = _cassette(tmp_path, [_interaction(response_body=deep)], name="deep")
         dirty = _cassette(
             tmp_path,
@@ -299,6 +305,19 @@ class TestScannerRobustness:
         reports = {r.path: r for r in scan_cassettes_for_secrets([nested, dirty])}
         assert reports[nested].findings == []
         assert [f.key for f in reports[dirty].findings] == ["access_token"]
+
+    @pytest.mark.parametrize("depth", [1200, 4000])
+    def test_the_recorder_agrees_about_a_deep_body(self, depth: int) -> None:
+        """Parity at both depths: neither side acts on what it cannot walk."""
+        raw = ('{"a":' * depth + '{"secret":"sk-live-LEAK"}' + "}" * depth).encode()
+        out = cf.build_response_filter()(
+            {
+                "status": {"code": 200, "message": "OK"},
+                "headers": {"content-type": ["application/json"]},
+                "body": {"string": raw},
+            }
+        )
+        assert out["body"]["string"] == raw
 
 
 class TestScanCli:
