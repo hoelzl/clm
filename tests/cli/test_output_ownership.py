@@ -639,6 +639,74 @@ class TestCleanWipeIsGated:
                 )
             )
 
+    def test_a_whole_volume_mount_refusal_is_rendered_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The mount-root refusal takes the same CLI path (finding D7, #798).
+
+        Raising it instead of logging-and-continuing exists so the user
+        learns *which* directory is wrong; a traceback buries that, and
+        the sibling refusal three lines away in ``main_build`` was already
+        converted.
+        """
+        import click
+
+        from clm.cli.commands import build as build_module
+        from clm.infrastructure.workers.worker_executor import WholeVolumeMountError
+
+        async def fake_run_build(config, **kwargs):
+            raise WholeVolumeMountError(
+                "Docker mode refuses to mount a whole volume: the workspace "
+                "(output) directory resolves to D:\\"
+            )
+
+        monkeypatch.setattr(build_module, "run_build", fake_run_build)
+        spec_file = tmp_path / "spec.xml"
+        spec_file.write_text("<course/>", encoding="utf-8")
+
+        with pytest.raises(click.ClickException, match="whole volume"):
+            asyncio.run(
+                build_module.main_build(
+                    None,
+                    spec_file,
+                    tmp_path / "data",
+                    tmp_path / "out",
+                    False,  # watch
+                    "fast",  # watch_mode
+                    0.3,  # debounce
+                    False,  # print_correlation_ids
+                    "INFO",  # log_level
+                    tmp_path / "cache.db",
+                    tmp_path / "jobs.db",
+                    False,  # ignore_cache
+                    False,  # clear_cache
+                    False,  # clean
+                    False,  # incremental
+                    False,  # no_sweep
+                    (),  # only_sections
+                    None,  # workers
+                    None,  # notebook_workers
+                    None,  # plantuml_workers
+                    None,  # drawio_workers
+                    None,  # max_workers
+                    None,  # notebook_image
+                    None,  # plantuml_image
+                    None,  # drawio_image
+                    "default",  # output_mode
+                    False,  # no_progress
+                    False,  # no_color
+                    False,  # verbose_logging
+                    None,  # language
+                    False,  # speaker_only
+                    None,  # targets
+                    False,  # force_execute
+                    "disabled",  # http_replay
+                    "duplicated",  # image_mode
+                    "png",  # image_format
+                    False,  # inline_images
+                )
+            )
+
     def test_clean_refuses_and_deletes_nothing(self, tmp_path: Path) -> None:
         from clm.build.engine import process_course_with_backend
         from clm.build.errors import UnownedOutputRootError

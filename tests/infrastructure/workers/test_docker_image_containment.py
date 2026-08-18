@@ -142,13 +142,20 @@ def test_the_drawio_entrypoint_starts_under_an_arbitrary_uid() -> None:
     for the expected reason (no jobs DB, no API URL).
     """
     image = _image_or_skip("drawio")
-    result = subprocess.run(
-        ["docker", "run", "--rm", "--user", "4242:4242", image],
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    combined = result.stdout + result.stderr
+    # Named and force-removed: the failure this test exists to catch is a
+    # *hang*, and an unnamed detached leftover could not even be found.
+    name = "clm-drawio-entrypoint-probe"
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", "--name", name, "--user", "4242:4242", image],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        combined = result.stdout + result.stderr
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
     assert "Running DrawIO worker" in combined, combined[-2000:]
     # The worker's own refusal — proof it got past D-Bus, Xvfb and Electron's
     # password-database lookup rather than hanging or dying earlier.
