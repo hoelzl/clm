@@ -1,7 +1,8 @@
 # Cassette secret filtering — handover
 
-**Created**: 2026-08-18 | **Status**: #875, #878 and #877 CLOSED; **#874
-OPEN**, **#881 NEW** | **Next**: #874
+**Created**: 2026-08-18 | **Status**: #875, #878, #877 and #874 CLOSED;
+**#883 in flight**, **#881 open** | **Next**: land #883, then #881 is the only
+thing left in this arc
 
 Companion to `adversarial-review-remediation-handover.md` (Phase 4 item 6,
 which is where this arc started as finding S9). That document is the plan;
@@ -230,21 +231,55 @@ cd <PythonCourses>/slides && clm cassette scan --json
 green request-side is now evidence rather than an artefact of a top-level-only
 walk.
 
-The open question is **not** measurement, it is what to do:
+**Decided (2026-08-18), issue CLOSED**: re-recording is **opportunistic** — a
+flagged deck gets re-recorded when it is next touched for other reasons, which
+is this issue's own suggestion. A batch re-record was rejected: 262 of the 294
+findings are `openrouter.ai`, i.e. nondeterministic LLM responses, so
+re-recording rewrites what *replays* and therefore the rendered output of 84
+decks of live AZAV teaching material — course churn to remove a Cloudflare
+token with a ~30-minute TTL, plus a fresh chance at the chain-orphan failure
+mode `clm cassette doctor` exists for. Nothing is waiting on it: zero
+request-side findings means no replay miss.
 
-- A batch re-record of the 95 costs live OpenRouter/OpenAI calls and, because
-  LLM responses are nondeterministic, rewrites the *recorded output* of 84
-  decks of live AZAV teaching material — course churn for byte-hygiene with no
-  security gain, plus a fresh chance of the chain-orphan failure mode
-  `clm cassette doctor` exists for.
-- The issue's own suggestion — opportunistic, when a deck is next touched —
-  costs nothing and loses nothing.
-- The blocker for the "wire the scan into CI" item is that `clm cassette scan`
-  exits 1 on all 294 benign findings, so the gate can never be green until
-  every deck is re-recorded. A course-repo job can gate on request-side
-  findings only, today, with no clm change: `--json` reports each finding's
-  `location`. Anything more (a baseline file, a `--fail-on` filter) is a clm
-  feature and needs deciding first.
+The issue's last item — wire the scan into a repo check — was blocked on
+`clm cassette scan` exiting 1 on all 294 benign findings, so the gate could
+never be green. Split out as **#883** (a baseline of accepted findings) and
+implemented.
+
+### #883 — accepted-findings baseline (**in flight**)
+
+`clm cassette scan --write-baseline PATH` / `--baseline PATH`. Without them
+nothing changes; a bare scan still fails on any finding.
+
+Dogfooded on PythonCourses: 294 findings → **95 baseline entries** (one per
+file — the key has no index, so a deck's repeated cookie is one entry), gate
+exits 0; injecting a nested `api_key` into one request body makes it exit 1
+with exactly that one new finding.
+
+The design is all in the match key — **`(path relative to the scan root,
+location, key)`** — and the two omissions are the point:
+
+- **No interaction index.** Re-recording shifts every index, so an index-keyed
+  baseline would fail the gate the first time somebody did the thing the audit
+  asks for.
+- **No value.** A finding never carries one (the report must not print
+  secrets), and `__cf_bm` rotates on every recording.
+
+**The cost is name-level acceptance**: blessing `deck / response header /
+set-cookie` blesses *any* `set-cookie` in that file, including a real session
+credential. Inherent — the audit only ever sees the header name — and pinned by
+`test_a_different_cookie_in_a_baselined_file_is_accepted` so it stays a
+decision rather than a surprise. A new finding *kind* in a baselined file is
+still reported.
+
+Other load-bearing choices: stale entries (a deck that *was* re-recorded) are
+reported, never fatal, or the gate would punish the fix; an unreadable cassette
+is not baselineable and still fails, which is why `--write-baseline` exits
+non-zero after writing when it meets one; a malformed baseline raises rather
+than degrading to accept-nothing (unsatisfiable) or accept-everything (a false
+all-clear); keys are stored lowercased and paths POSIX, because the repo holds
+both `set-cookie` and `Set-Cookie` and a Windows-written baseline has to match
+on Linux CI.
 
 ## 5. Test-suite flakiness on the Windows dev box (read before panicking)
 

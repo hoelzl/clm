@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 
@@ -421,6 +422,10 @@ class SecretFinding:
     location: str
     key: str
     uri: str = ""
+    #: Set by :func:`apply_baseline` when a baseline blesses this finding.
+    #: Accepted findings are still *reported* — they are only excused from
+    #: the exit code, so a repo can see what it has accepted.
+    accepted: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -428,6 +433,7 @@ class SecretFinding:
             "location": self.location,
             "key": self.key,
             "uri": self.uri,
+            "accepted": self.accepted,
         }
 
 
@@ -763,3 +769,215 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
 def scan_cassettes_for_secrets(paths: Iterable[Path]) -> list[SecretScanReport]:
     """Audit every cassette in ``paths`` (read-only)."""
     return [scan_cassette_secrets(path) for path in paths]
+
+
+# ---------------------------------------------------------------------------
+# Accepted-findings baseline (issue #883)
+# ---------------------------------------------------------------------------
+# The audit exits non-zero on *any* finding, which is right for "should this
+# deck be re-recorded?" and useless as a repo gate: PythonCourses holds 294
+# findings that are all non-credential response cookies and none worth
+# re-recording live teaching material to clear (#874). A check that can never
+# go green gets switched off — the same failure this whole arc is about, one
+# level up. A baseline blesses what is there today so that anything *new*
+# fails.
+
+#: Schema version of the baseline document. Bump on any change to the entry
+#: shape, and make :func:`load_baseline` reject the versions it cannot read
+#: rather than guess at them.
+BASELINE_VERSION = 1
+
+
+class BaselineError(ValueError):
+    """A baseline file is missing, unreadable, or not in a shape we trust.
+
+    Raised rather than degraded, always. Treating a broken baseline as
+    *empty* would fail the gate on everything (unsatisfiable); treating it as
+    *match-all* would vouch for the repo (a false all-clear). Both are worse
+    than stopping.
+    """
+
+
+@define(frozen=True)
+class BaselineEntry:
+    """One accepted finding: a file, a location and a key name.
+
+    The two things deliberately **not** in the key are what make this
+    workable:
+
+    * **No interaction index.** Re-recording a deck shifts every index, so an
+      index-keyed baseline would report all of that deck's accepted findings
+      as new the first time somebody re-records — the gate would punish the
+      fix it exists to ask for.
+    * **No value.** A :class:`SecretFinding` never carries one (the report
+      must not print secrets), and the values this baseline mostly covers —
+      Cloudflare's ``__cf_bm`` — rotate on every recording, so a value-keyed
+      baseline would churn on every re-record.
+
+    The cost, which the docs must state rather than imply away: the key is
+    **name-level**. Accepting ``deck.yaml / response header / set-cookie``
+    accepts *any* ``set-cookie`` in that file, including one that is a real
+    session credential. The audit cannot tell those apart in any case — it
+    only ever sees the header name — so what a baseline buys is narrowing
+    "any cookie anywhere" to "a cookie in this file", not a value-level
+    guarantee.
+    """
+
+    path: str
+    location: str
+    key: str
+
+    def to_dict(self) -> dict:
+        return {"path": self.path, "location": self.location, "key": self.key}
+
+
+@define
+class BaselineOutcome:
+    """How a scan's findings landed against a baseline.
+
+    Attributes:
+        accepted: Findings a baseline entry blessed. Reported, not fatal.
+        new: Everything else. These decide the exit code.
+        stale: Baseline entries nothing matched this run — usually a deck
+            that was re-recorded, i.e. somebody doing the right thing.
+            Reported so the file can be regenerated, never fatal.
+        unreadable: Cassettes that could not be parsed. Not baselineable and
+            still fatal: a file the audit cannot read is not one it can
+            vouch for.
+    """
+
+    accepted: list[SecretFinding] = field(factory=list)
+    new: list[SecretFinding] = field(factory=list)
+    stale: list[BaselineEntry] = field(factory=list)
+    unreadable: int = 0
+
+    @property
+    def is_clean(self) -> bool:
+        """True when this run should exit zero."""
+        return not self.new and not self.unreadable
+
+
+def _relative_posix(path: Path, root: Path) -> str:
+    """*path* relative to *root*, with forward slashes.
+
+    Forward slashes are not cosmetic: CLM is developed on Windows and its CI
+    runs on Linux, so a baseline written with native separators would match
+    locally and miss in the one place the gate is meant to run.
+    """
+    try:
+        relative = Path(os.path.relpath(path, root))
+    except ValueError:  # different drive on Windows — fall back to the name
+        relative = Path(path.name)
+    return relative.as_posix()
+
+
+def _entry_for(report_path: str, finding: SecretFinding) -> BaselineEntry:
+    # The key is lowercased because the audit matches names
+    # case-insensitively and PythonCourses holds both ``set-cookie`` and
+    # ``Set-Cookie``. A case-sensitive baseline would read a casing flip as a
+    # brand-new secret.
+    return BaselineEntry(report_path, finding.location, finding.key.lower())
+
+
+def build_baseline(reports: Iterable[SecretScanReport], root: Path) -> dict:
+    """The baseline document blessing every finding in *reports*.
+
+    Entries are deduplicated (the key has no index, so one cookie on three
+    interactions is one thing to accept) and sorted, so committing the file
+    and regenerating it later produces a readable diff instead of churn.
+
+    An unreadable cassette contributes nothing — you cannot bless what you
+    cannot read — which is why the CLI refuses to exit zero when it writes a
+    baseline for a tree containing one.
+    """
+    entries = {
+        _entry_for(_relative_posix(report.path, root), finding)
+        for report in reports
+        for finding in report.findings
+    }
+    return {
+        "version": BASELINE_VERSION,
+        "entries": [
+            entry.to_dict() for entry in sorted(entries, key=lambda e: (e.path, e.location, e.key))
+        ],
+    }
+
+
+def baseline_entries_from_document(document: object) -> frozenset[BaselineEntry]:
+    """Validate a parsed baseline document into a set of entries.
+
+    Split from :func:`load_baseline` so an in-memory document (a freshly
+    built one, a test fixture) goes through exactly the same validation as
+    one read from disk.
+    """
+    if not isinstance(document, dict):
+        raise BaselineError("baseline must be a JSON object")
+    version = document.get("version")
+    if version != BASELINE_VERSION:
+        raise BaselineError(
+            f"unsupported baseline version {version!r} (this clm writes {BASELINE_VERSION}); "
+            "regenerate it with `clm cassette scan --write-baseline`"
+        )
+    raw_entries = document.get("entries")
+    if not isinstance(raw_entries, list):
+        raise BaselineError("baseline 'entries' must be a list")
+
+    entries = set()
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            raise BaselineError(f"baseline entry must be an object, got {type(item).__name__}")
+        try:
+            path, location, key = item["path"], item["location"], item["key"]
+        except KeyError as exc:
+            raise BaselineError(f"baseline entry is missing {exc.args[0]!r}") from exc
+        if not all(isinstance(v, str) for v in (path, location, key)):
+            raise BaselineError("baseline entry fields must be strings")
+        # Liberal in what we read: a hand-edited file (or one written by an
+        # older clm) may carry native separators, and refusing to match them
+        # would fail the gate for a cosmetic reason. Writing stays strict.
+        entries.add(BaselineEntry(path.replace("\\", "/"), location, key.lower()))
+    return frozenset(entries)
+
+
+def load_baseline(path: Path) -> frozenset[BaselineEntry]:
+    """Read and validate a baseline file. Raises :class:`BaselineError`."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BaselineError(f"could not read baseline '{path}': {exc}") from exc
+    try:
+        document = json.loads(text)
+    except ValueError as exc:
+        raise BaselineError(f"baseline '{path}' is not valid JSON: {exc}") from exc
+    return baseline_entries_from_document(document)
+
+
+def apply_baseline(
+    reports: Iterable[SecretScanReport], root: Path, entries: frozenset[BaselineEntry]
+) -> BaselineOutcome:
+    """Split *reports*' findings into accepted and new against *entries*.
+
+    Mutates each :class:`SecretFinding`'s ``accepted`` flag so the rendered
+    and JSON reports can show both, and returns the split plus the baseline
+    entries nothing matched.
+    """
+    outcome = BaselineOutcome()
+    matched: set[BaselineEntry] = set()
+
+    for report in reports:
+        if report.error is not None:
+            outcome.unreadable += 1
+            continue
+        relative = _relative_posix(report.path, root)
+        for finding in report.findings:
+            entry = _entry_for(relative, finding)
+            if entry in entries:
+                matched.add(entry)
+                finding.accepted = True
+                outcome.accepted.append(finding)
+            else:
+                finding.accepted = False
+                outcome.new.append(finding)
+
+    outcome.stale = sorted(entries - matched, key=lambda e: (e.path, e.location, e.key))
+    return outcome

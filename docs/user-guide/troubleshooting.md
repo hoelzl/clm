@@ -769,6 +769,32 @@ The scan also exits non-zero when a cassette could not be **read**, because an
 unreadable file is not evidence of cleanliness. Check the `error` field in
 `--json` output to tell that apart from a real finding.
 
+### I want the scan in CI, but it fails on hundreds of harmless findings
+
+That is the normal state of a course repo — nearly all of them are recorded
+`Set-Cookie` headers, and re-recording an LLM deck to clear one rewrites what
+replays. Record what you already have and gate on new findings:
+
+```bash
+clm cassette scan --write-baseline .clm-cassette-baseline.json   # once, commit it
+clm cassette scan --baseline .clm-cassette-baseline.json         # in CI
+```
+
+Two things that look like problems and are not:
+
+- **"N baseline entries matched nothing."** Stale entries, almost always
+  because a deck *was* re-recorded and its findings are gone. Never fatal;
+  regenerate the file with `--write-baseline`.
+- **A new finding in a file that is already in the baseline.** Entries match on
+  `(path, location, key)`, so a new finding *kind* in a baselined file is
+  correctly reported. The flip side is that a second `set-cookie` in that same
+  file is accepted — see `clm info commands` for why the key cannot include the
+  value.
+
+An unreadable cassette is never accepted by a baseline, and
+`--write-baseline` exits non-zero if it meets one — otherwise it would promise
+a green gate that the next run cannot deliver.
+
 ### A replayed cell reads a redacted field and raises
 
 Expected, and the shape is worth knowing: when a secret-named key holds an

@@ -17,10 +17,15 @@ from clm.cli.commands.shared import cli_console, get_logger
 from clm.core.course_paths import resolve_course_paths
 from clm.workers.notebook.cassette_doctor import (
     DEFAULT_MIN_TEXT_LEN,
+    BaselineError,
+    BaselineOutcome,
     CassetteReport,
     SecretScanReport,
+    apply_baseline,
+    build_baseline,
     diagnose_cassettes,
     iter_cassette_paths,
+    load_baseline,
     scan_cassettes_for_secrets,
 )
 
@@ -175,8 +180,15 @@ def doctor(spec_file: Path | None, fix: bool, min_text_len: int, as_json: bool) 
     _render_text_report(reports, fix=fix)
 
 
-def _render_secret_report(reports: list[SecretScanReport]) -> int:
-    """Print the audit and return the number of findings."""
+def _render_secret_report(
+    reports: list[SecretScanReport], outcome: BaselineOutcome | None = None
+) -> int:
+    """Print the audit and return the number of findings that fail the gate.
+
+    Without a baseline that is every finding. With one, accepted findings
+    are still listed — a repo should be able to see what it has accepted —
+    but marked, and only the rest count.
+    """
     console = cli_console
     total = 0
     dirty = 0
@@ -189,19 +201,37 @@ def _render_secret_report(reports: list[SecretScanReport]) -> int:
             continue
         if not report.findings:
             continue
-        dirty += 1
-        total += len(report.findings)
-        console.print(f"[red]x {report.path}[/red]: {len(report.findings)} finding(s)")
+        gating = [f for f in report.findings if not (outcome and f.accepted)]
+        dirty += 1 if gating else 0
+        total += len(gating)
+        colour = "red" if gating else "dim"
+        console.print(
+            f"[{colour}]{'x' if gating else '-'} {report.path}[/{colour}]: "
+            f"{len(report.findings)} finding(s)"
+        )
         for finding in report.findings:
+            mark = " [dim](accepted)[/dim]" if outcome and finding.accepted else ""
             console.print(
                 f"    interaction {finding.index}: {finding.location} "
-                f"'{finding.key}'  {finding.uri}"
+                f"'{finding.key}'  {finding.uri}{mark}"
             )
 
     console.print(
         f"\n{len(reports)} cassette(s) scanned, {dirty} with secrets "
         f"({total} finding(s)), {skipped} unreadable."
     )
+    if outcome is not None:
+        console.print(f"{len(outcome.accepted)} finding(s) accepted by the baseline.")
+        if outcome.stale:
+            # Not a failure: a stale entry usually means a deck was
+            # re-recorded, i.e. somebody did the thing the audit asks for.
+            # Failing here would make the gate punish the fix.
+            console.print(
+                f"[yellow]{len(outcome.stale)} baseline entr(y/ies) matched nothing[/yellow] "
+                "— re-record cleanup, most likely. Regenerate with --write-baseline:"
+            )
+            for entry in outcome.stale:
+                console.print(f"    {entry.path}: {entry.location} '{entry.key}'")
     if total:
         console.print(
             "Re-record the affected deck(s) against the live service; the "
@@ -223,7 +253,29 @@ def _render_secret_report(reports: list[SecretScanReport]) -> int:
     default=False,
     help="Emit a machine-readable JSON report on stdout instead of text.",
 )
-def scan(spec_file: Path | None, as_json: bool) -> None:
+@click.option(
+    "--baseline",
+    "baseline_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Accept the findings recorded in this file; only new ones fail the "
+        "exit code. Write it with --write-baseline."
+    ),
+)
+@click.option(
+    "--write-baseline",
+    "write_baseline_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write the current findings to this file as an accepted baseline, then stop.",
+)
+def scan(
+    spec_file: Path | None,
+    as_json: bool,
+    baseline_path: Path | None,
+    write_baseline_path: Path | None,
+) -> None:
     """Audit committed cassettes for recorded secrets (read-only).
 
     Walks every ``*.http-cassette.yaml`` under the spec's source tree (or
@@ -244,43 +296,102 @@ def scan(spec_file: Path | None, as_json: bool) -> None:
     service (``clm cassette doctor --fix`` is a different, narrower
     repair).
 
+    ``--baseline`` makes the scan usable as a repo gate. A repo whose
+    existing findings are all known and benign — course repos hold
+    hundreds of non-credential response cookies — can never turn a bare
+    scan green, and an unsatisfiable gate gets switched off. Write the
+    current state with ``--write-baseline``, commit it, and from then on
+    only a *new* finding fails. Accepted findings are still reported.
+
     \b
     Examples:
         clm cassette scan course.xml            # audit a course repo
         clm cassette scan course.xml --json     # machine-readable
         clm cassette scan                       # walk current dir
+        clm cassette scan --write-baseline .clm-cassette-baseline.json
+        clm cassette scan --baseline .clm-cassette-baseline.json   # CI gate
     """
+    if baseline_path and write_baseline_path:
+        raise click.UsageError(
+            "--baseline and --write-baseline are mutually exclusive: pass "
+            "--write-baseline alone to regenerate the file."
+        )
+
     root = _resolve_walk_root(spec_file)
     paths = list(iter_cassette_paths(root))
     reports = scan_cassettes_for_secrets(paths)
     finding_count = sum(len(r.findings) for r in reports)
     unreadable = sum(1 for r in reports if r.error is not None)
 
-    if as_json:
-        click.echo(
-            json.dumps(
-                {
-                    "root": str(root),
-                    "cassette_count": len(reports),
-                    "finding_count": finding_count,
-                    # Reported next to the findings so a CI consumer
-                    # keying on ``finding_count == 0`` cannot read
-                    # "unreadable" as "clean" — the exit code already
-                    # treats them as a failure.
-                    "unreadable_count": unreadable,
-                    "cassettes": [r.to_dict() for r in reports],
-                },
-                indent=2,
-            )
+    if write_baseline_path is not None:
+        _write_baseline(write_baseline_path, reports, root)
+        cli_console.print(
+            f"Wrote baseline for {finding_count} finding(s) to {write_baseline_path}."
         )
+        # An unreadable cassette is not baselineable, so a later
+        # ``--baseline`` run would still fail on it. Exiting zero here
+        # would promise a green gate this file cannot deliver.
+        if unreadable:
+            cli_console.print(
+                f"[yellow]{unreadable} cassette(s) could not be read[/yellow] and are not in "
+                "the baseline — they will keep failing the gate until they parse."
+            )
+            raise SystemExit(1)
+        return
+
+    outcome = None
+    if baseline_path is not None:
+        try:
+            entries = load_baseline(baseline_path)
+        except BaselineError as exc:
+            # Never degrade to "accept everything" (a false all-clear) or
+            # "accept nothing" (an unsatisfiable gate) — stop and say why.
+            raise click.ClickException(str(exc)) from exc
+        outcome = apply_baseline(reports, root, entries)
+
+    gating_count = len(outcome.new) if outcome else finding_count
+
+    if as_json:
+        payload = {
+            "root": str(root),
+            "cassette_count": len(reports),
+            # Still the total, so a consumer that has always read this
+            # keeps reading the same thing. The exit code keys on
+            # ``new_count`` once a baseline is in play.
+            "finding_count": finding_count,
+            # Reported next to the findings so a CI consumer keying on
+            # ``finding_count == 0`` cannot read "unreadable" as "clean" —
+            # the exit code already treats them as a failure.
+            "unreadable_count": unreadable,
+            "cassettes": [r.to_dict() for r in reports],
+        }
+        if outcome is not None:
+            payload["baseline"] = str(baseline_path)
+            payload["accepted_count"] = len(outcome.accepted)
+            payload["new_count"] = len(outcome.new)
+            payload["stale_count"] = len(outcome.stale)
+            payload["stale_entries"] = [e.to_dict() for e in outcome.stale]
+        click.echo(json.dumps(payload, indent=2))
     elif not paths:
         cli_console.print(f"No cassettes found under {root}.")
         return
     else:
-        _render_secret_report(reports)
+        _render_secret_report(reports, outcome)
 
     # Fails closed on an unreadable cassette too: a file the audit could
     # not parse is not a file it can vouch for, and a repo where every
-    # cassette is truncated would otherwise pass the gate green.
-    if finding_count or unreadable:
+    # cassette is truncated would otherwise pass the gate green. A
+    # baseline cannot excuse one either.
+    if gating_count or unreadable:
         raise SystemExit(1)
+
+
+def _write_baseline(path: Path, reports: list[SecretScanReport], root: Path) -> None:
+    """Write the baseline document, with a trailing newline and LF endings.
+
+    The file is committed to a course repo, so it must not flap between
+    checkouts: LF-only, sorted entries, ``indent=2``.
+    """
+    document = build_baseline(reports, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")

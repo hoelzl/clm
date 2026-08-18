@@ -1,0 +1,540 @@
+"""A baseline of accepted findings, so the scan can gate a repo (#883).
+
+``clm cassette scan`` exits non-zero on *any* finding. PythonCourses has 294
+of them (#874) — every one a ``Set-Cookie`` response header, every one
+non-credential, and none worth re-recording 84 decks of live teaching
+material to clear. So a CI job running the scan would fail on day one and
+keep failing, and **an unsatisfiable gate gets switched off**. That is the
+same failure the whole S9 arc is about, one level up.
+
+A baseline blesses what is there today; anything new fails. The design
+lives or dies on its match key, and the two omissions are the point:
+
+* **not the interaction index** — re-recording a deck shifts indices, so an
+  index-keyed baseline would report every accepted finding as new the first
+  time somebody does the right thing;
+* **not the value** — a finding never carries one (the report must not print
+  secrets) and ``__cf_bm`` rotates on every recording, so a value-keyed
+  baseline would churn constantly.
+
+The cost of that is real and tested below: the key is name-level, so
+accepting ``deck / response header / set-cookie`` accepts a *different*
+cookie in the same file too. Inherent — the audit only ever sees the header
+name — and the docs must not imply otherwise.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from clm.workers.notebook.cassette_doctor import (
+    BASELINE_VERSION,
+    BaselineError,
+    apply_baseline,
+    build_baseline,
+    iter_cassette_paths,
+    load_baseline,
+    scan_cassettes_for_secrets,
+)
+
+
+def _interaction(
+    *,
+    uri: str = "https://api.example.com/v1/chat",
+    request_headers: dict | None = None,
+    request_body: str = "{}",
+    response_headers: dict | None = None,
+    response_body: str = "{}",
+) -> dict:
+    return {
+        "request": {
+            "method": "POST",
+            "uri": uri,
+            "body": request_body,
+            "headers": {k: [v] for k, v in (request_headers or {}).items()},
+        },
+        "response": {
+            "status": {"code": 200, "message": "OK"},
+            "headers": {
+                k: [v]
+                for k, v in (response_headers or {"content-type": "application/json"}).items()
+            },
+            "body": {"string": response_body},
+        },
+    }
+
+
+def _write(root: Path, rel: str, interactions: list[dict]) -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump({"interactions": interactions, "version": 1}, sort_keys=True),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _scan(root: Path) -> list:
+    return scan_cassettes_for_secrets(iter_cassette_paths(root))
+
+
+def _cookie_deck(
+    root: Path, rel: str = "m550/deck.http-cassette.yaml", cookie: str = "s=1"
+) -> Path:
+    return _write(root, rel, [_interaction(response_headers={"set-cookie": cookie})])
+
+
+class TestBuildingABaseline:
+    def test_it_blesses_every_current_finding(self, tmp_path: Path) -> None:
+        _cookie_deck(tmp_path)
+        document = build_baseline(_scan(tmp_path), tmp_path)
+        assert document["version"] == BASELINE_VERSION
+        assert document["entries"] == [
+            {
+                "path": "m550/deck.http-cassette.yaml",
+                "location": "response header",
+                "key": "set-cookie",
+            }
+        ]
+
+    def test_paths_are_posix_relative_to_the_scan_root(self, tmp_path: Path) -> None:
+        """A baseline written on Windows has to match on Linux CI.
+
+        CLM is developed on Windows and its CI runs on Linux, so a native
+        separator in the file would make the gate pass locally and fail in
+        the very place it exists to run.
+        """
+        _cookie_deck(tmp_path, "a/b/c/deck.http-cassette.yaml")
+        entries = build_baseline(_scan(tmp_path), tmp_path)["entries"]
+        assert entries[0]["path"] == "a/b/c/deck.http-cassette.yaml"
+        assert "\\" not in entries[0]["path"]
+
+    def test_entries_are_deduplicated_and_ordered(self, tmp_path: Path) -> None:
+        """Two identical findings in one file are one entry.
+
+        The key has no index, so a deck with the same cookie on three
+        interactions is one thing to accept — and a stable order keeps the
+        committed file from churning in diffs.
+        """
+        _write(
+            tmp_path,
+            "m550/deck.http-cassette.yaml",
+            [_interaction(response_headers={"set-cookie": f"s={i}"}) for i in range(3)],
+        )
+        _cookie_deck(tmp_path, "m010/other.http-cassette.yaml")
+        entries = build_baseline(_scan(tmp_path), tmp_path)["entries"]
+        assert [e["path"] for e in entries] == [
+            "m010/other.http-cassette.yaml",
+            "m550/deck.http-cassette.yaml",
+        ]
+
+    def test_the_key_is_lowercased(self, tmp_path: Path) -> None:
+        """``Set-Cookie`` and ``set-cookie`` are the same secret.
+
+        The audit matches names case-insensitively and PythonCourses holds
+        both spellings, so a case-sensitive baseline would report a casing
+        flip as a brand-new finding.
+        """
+        _write(
+            tmp_path,
+            "deck.http-cassette.yaml",
+            [_interaction(response_headers={"Set-Cookie": "s=1"})],
+        )
+        assert build_baseline(_scan(tmp_path), tmp_path)["entries"][0]["key"] == "set-cookie"
+
+    def test_an_unreadable_cassette_contributes_nothing(self, tmp_path: Path) -> None:
+        """You cannot bless what you cannot read."""
+        (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
+        assert build_baseline(_scan(tmp_path), tmp_path)["entries"] == []
+
+
+class TestApplyingABaseline:
+    def test_an_unchanged_repo_has_nothing_new(self, tmp_path: Path) -> None:
+        _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert outcome.new == []
+        assert len(outcome.accepted) == 1
+        assert outcome.stale == []
+
+    def test_a_new_finding_is_not_accepted(self, tmp_path: Path) -> None:
+        """The whole point: a newly recorded secret must break the gate."""
+        _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        _write(
+            tmp_path,
+            "m550/second.http-cassette.yaml",
+            [_interaction(request_headers={"authorization": "Bearer LEAK"})],
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert [(f.location, f.key) for f in outcome.new] == [("request header", "authorization")]
+
+    def test_a_new_finding_kind_in_a_baselined_file_is_not_accepted(self, tmp_path: Path) -> None:
+        """Accepting a cookie in a file must not accept a token in it.
+
+        A path-only key would have made every baselined file a permanent
+        blind spot, which is a far bigger hole than the name-level one this
+        design does accept.
+        """
+        path = _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "interactions": [
+                        _interaction(response_headers={"set-cookie": "s=1"}),
+                        _interaction(response_body=json.dumps({"access_token": "ya29.LEAK"})),
+                    ],
+                    "version": 1,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert [(f.location, f.key) for f in outcome.new] == [("response body", "access_token")]
+
+    def test_the_same_finding_at_a_new_index_is_still_accepted(self, tmp_path: Path) -> None:
+        """The index is deliberately out of the key.
+
+        Re-recording a deck shifts every interaction index. Keying on it
+        would fail the gate the first time somebody re-records, which is
+        exactly the behaviour we are asking for — so the gate would be
+        punishing the fix.
+        """
+        path = _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "interactions": [
+                        _interaction(),
+                        _interaction(),
+                        _interaction(response_headers={"set-cookie": "s=1"}),
+                    ],
+                    "version": 1,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert outcome.new == []
+        assert outcome.accepted[0].index == 2
+
+    def test_a_different_cookie_in_a_baselined_file_is_accepted(self, tmp_path: Path) -> None:
+        """The documented cost of a name-level key, pinned so it stays known.
+
+        A finding carries no value — the report must never print a secret —
+        so once ``set-cookie`` is accepted for a file, *any* ``set-cookie``
+        in it is. The audit could not tell a session cookie from ``__cf_bm``
+        even if it wanted to. Narrowing "any cookie anywhere" to "a cookie
+        in this file" is the improvement on offer; this test exists so the
+        limit is a decision rather than a surprise.
+        """
+        path = _cookie_deck(tmp_path, cookie="__cf_bm=harmless")
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "interactions": [
+                        _interaction(response_headers={"set-cookie": "session=REAL-CREDENTIAL"})
+                    ],
+                    "version": 1,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert outcome.new == []
+
+    def test_the_same_finding_in_a_different_file_is_not_accepted(self, tmp_path: Path) -> None:
+        _cookie_deck(tmp_path, "m550/deck.http-cassette.yaml")
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        _cookie_deck(tmp_path, "m550/other.http-cassette.yaml")
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert len(outcome.new) == 1
+
+    def test_a_re_recorded_deck_leaves_a_stale_entry_not_a_failure(self, tmp_path: Path) -> None:
+        """Doing the right thing must not fail the gate.
+
+        A deck that gets re-recorded loses its findings, and its baseline
+        entries stop matching. Failing on that would make the gate flap
+        every time somebody cleans a deck up, so stale entries are reported
+        and counted instead.
+        """
+        path = _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        path.write_text(
+            yaml.safe_dump({"interactions": [_interaction()], "version": 1}, sort_keys=True),
+            encoding="utf-8",
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert outcome.new == []
+        assert outcome.accepted == []
+        assert [e.path for e in outcome.stale] == ["m550/deck.http-cassette.yaml"]
+
+    def test_a_deleted_cassette_leaves_a_stale_entry(self, tmp_path: Path) -> None:
+        path = _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        path.unlink()
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert len(outcome.stale) == 1
+
+    def test_findings_are_marked_accepted(self, tmp_path: Path) -> None:
+        """``--json`` consumers need to tell the two apart per finding."""
+        _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        _write(
+            tmp_path,
+            "new.http-cassette.yaml",
+            [_interaction(request_headers={"authorization": "Bearer LEAK"})],
+        )
+        reports = _scan(tmp_path)
+        apply_baseline(reports, tmp_path, _entries(baseline))
+        marks = {(f.location, f.accepted) for r in reports for f in r.findings}
+        assert marks == {("response header", True), ("request header", False)}
+
+    def test_an_unreadable_cassette_is_never_accepted(self, tmp_path: Path) -> None:
+        """A file the audit cannot parse is not a file it can vouch for.
+
+        Nothing in the baseline can bless it, so it keeps failing the gate
+        — which is what ``--write-baseline`` refusing to exit zero on one
+        is about.
+        """
+        _cookie_deck(tmp_path)
+        baseline = build_baseline(_scan(tmp_path), tmp_path)
+        (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, _entries(baseline))
+        assert outcome.new == []
+        assert outcome.unreadable == 1
+
+
+class TestLoadingABaseline:
+    def test_a_round_trip(self, tmp_path: Path) -> None:
+        _cookie_deck(tmp_path)
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps(build_baseline(_scan(tmp_path), tmp_path)), encoding="utf-8")
+        assert len(load_baseline(path)) == 1
+
+    def test_a_windows_separator_in_the_file_still_matches(self, tmp_path: Path) -> None:
+        """Be liberal reading, strict writing.
+
+        A hand-edited baseline, or one written by an older clm, may carry
+        native separators. Refusing to match them would fail the gate for a
+        cosmetic reason.
+        """
+        _cookie_deck(tmp_path, "a/b/deck.http-cassette.yaml")
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": BASELINE_VERSION,
+                    "entries": [
+                        {
+                            "path": "a\\b\\deck.http-cassette.yaml",
+                            "location": "response header",
+                            "key": "set-cookie",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, load_baseline(path))
+        assert outcome.new == []
+        assert outcome.stale == []
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "not json at all",
+            '{"version": 1}',
+            '{"version": 99, "entries": []}',
+            '{"version": 1, "entries": "nope"}',
+            '{"version": 1, "entries": [{"path": "a"}]}',
+            "[]",
+        ],
+    )
+    def test_a_malformed_baseline_is_an_error_not_a_silent_pass(
+        self, text: str, tmp_path: Path
+    ) -> None:
+        """Never degrade to "accept everything".
+
+        A baseline that fails to parse must stop the run, not quietly
+        become an empty set (which would fail the gate on everything, an
+        unsatisfiable gate) and above all not become a match-all (which
+        would vouch for the repo). Loud is the only safe answer.
+        """
+        path = tmp_path / "baseline.json"
+        path.write_text(text, encoding="utf-8")
+        with pytest.raises(BaselineError):
+            load_baseline(path)
+
+    def test_a_missing_baseline_is_an_error(self, tmp_path: Path) -> None:
+        with pytest.raises(BaselineError):
+            load_baseline(tmp_path / "nope.json")
+
+
+def _entries(document: dict) -> frozenset:
+    """Load a freshly-built document the way the CLI would."""
+    from clm.workers.notebook.cassette_doctor import baseline_entries_from_document
+
+    return baseline_entries_from_document(document)
+
+
+class TestScanCliBaseline:
+    """The gate as a course repo would actually run it.
+
+    The text report goes through the shared Rich console, which binds to the
+    real stderr at import time and is invisible to ``CliRunner`` — so content
+    is asserted through ``--json`` and text mode is pinned on its exit code.
+    """
+
+    def _run(self, args: list[str], cwd: Path):
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        runner = CliRunner()
+        return runner.invoke(cassette_group, ["scan", *args], catch_exceptions=False)
+
+    def _payload(self, result) -> dict:
+        return json.loads(result.output[result.output.index("{") :])
+
+    def test_write_then_gate_is_green(self, tmp_path: Path, monkeypatch) -> None:
+        """The whole point, end to end."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+
+        assert self._run(["--write-baseline", str(baseline)], tmp_path).exit_code == 0
+        assert baseline.exists()
+        assert self._run(["--baseline", str(baseline)], tmp_path).exit_code == 0
+
+    def test_a_bare_scan_still_fails_on_the_same_tree(self, tmp_path: Path, monkeypatch) -> None:
+        """Without a baseline nothing changes — this is opt-in."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        assert self._run([], tmp_path).exit_code != 0
+
+    def test_a_new_finding_breaks_the_gate(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)], tmp_path)
+
+        _write(
+            tmp_path,
+            "leak.http-cassette.yaml",
+            [_interaction(request_headers={"authorization": "Bearer LEAK"})],
+        )
+        result = self._run(["--baseline", str(baseline), "--json"], tmp_path)
+        assert result.exit_code != 0
+        payload = self._payload(result)
+        assert payload["new_count"] == 1
+        assert payload["accepted_count"] == 1
+        assert payload["finding_count"] == 2
+
+    def test_json_marks_each_finding(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)], tmp_path)
+        payload = self._payload(self._run(["--baseline", str(baseline), "--json"], tmp_path))
+        findings = [f for c in payload["cassettes"] for f in c["findings"]]
+        assert [f["accepted"] for f in findings] == [True]
+
+    def test_finding_count_still_means_findings(self, tmp_path: Path, monkeypatch) -> None:
+        """A consumer that has always read ``finding_count`` keeps its meaning.
+
+        Redefining it to "new findings" under a baseline would silently
+        change what an existing CI script reports — the exit code and
+        ``new_count`` are where the baseline shows up.
+        """
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)], tmp_path)
+        payload = self._payload(self._run(["--baseline", str(baseline), "--json"], tmp_path))
+        assert payload["finding_count"] == 1
+        assert payload["new_count"] == 0
+
+    def test_an_unreadable_cassette_still_fails_a_baselined_run(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A baseline cannot bless a file the audit could not parse."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)], tmp_path)
+        (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
+        assert self._run(["--baseline", str(baseline)], tmp_path).exit_code != 0
+
+    def test_write_baseline_refuses_to_exit_zero_on_an_unreadable_cassette(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Otherwise it promises a green gate it cannot deliver.
+
+        The file is still written — the readable findings are worth
+        blessing — but exiting zero here and non-zero on the very next
+        ``--baseline`` run is exactly the confusion this feature exists to
+        remove.
+        """
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
+        baseline = tmp_path / "baseline.json"
+        assert self._run(["--write-baseline", str(baseline)], tmp_path).exit_code != 0
+        assert baseline.exists()
+
+    def test_a_malformed_baseline_fails_loudly(self, tmp_path: Path, monkeypatch) -> None:
+        """Never silently accept everything."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text("{ not json", encoding="utf-8")
+        result = self._run(["--baseline", str(baseline)], tmp_path)
+        assert result.exit_code != 0
+        assert "baseline" in result.output.lower()
+
+    def test_a_missing_baseline_fails_loudly(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        result = self._run(["--baseline", str(tmp_path / "nope.json")], tmp_path)
+        assert result.exit_code != 0
+
+    def test_the_two_options_are_mutually_exclusive(self, tmp_path: Path, monkeypatch) -> None:
+        """Passing both is ambiguous: read it, or overwrite it?"""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        result = self._run(
+            ["--baseline", str(tmp_path / "a.json"), "--write-baseline", str(tmp_path / "b.json")],
+            tmp_path,
+        )
+        assert result.exit_code != 0
+        assert not (tmp_path / "b.json").exists()
+
+    def test_the_written_file_is_lf_and_stable(self, tmp_path: Path, monkeypatch) -> None:
+        """It is committed to a course repo — it must not flap on checkout.
+
+        CLM is Windows-first and the repo normalises to LF, so writing
+        native line endings would make the file dirty on every checkout.
+        """
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path, "b/deck.http-cassette.yaml")
+        _cookie_deck(tmp_path, "a/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)], tmp_path)
+
+        raw = baseline.read_bytes()
+        assert b"\r\n" not in raw
+        assert raw.endswith(b"\n")
+        first = raw
+        self._run(["--write-baseline", str(baseline)], tmp_path)
+        assert baseline.read_bytes() == first

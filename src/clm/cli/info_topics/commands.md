@@ -3197,12 +3197,60 @@ so one removal is one finding, not one per nested name.
 | Option | Description |
 |--------|-------------|
 | `--json` | Emit a machine-readable JSON report on stdout instead of the text report. |
+| `--baseline PATH` | Accept the findings recorded in PATH; only *new* ones fail the exit code. Accepted findings are still reported. |
+| `--write-baseline PATH` | Write the current findings to PATH as an accepted baseline, then stop. |
 
 Every finding is one that re-recording the deck actually clears: the audit
 asks "would the recorder change this file today?", not "is this file free of
 every secret". So it deliberately says nothing about a token in a body the
 recorder does not touch — an SSE stream, an HTML error page, a JSON payload
 served as `text/plain`, or a binary request body.
+
+##### Baselines (since {version})
+
+A course repo whose existing findings are all known and benign can never turn
+a bare scan green — and a gate nobody can satisfy gets switched off. Record
+the current state once, commit it, and from then on only a new finding fails:
+
+```bash
+clm cassette scan --write-baseline .clm-cassette-baseline.json   # once
+clm cassette scan --baseline .clm-cassette-baseline.json         # in CI
+```
+
+A baseline entry is **`(path relative to the scan root, location, key)`**.
+Two things are deliberately *not* in it:
+
+- **Not the interaction index.** Re-recording a deck shifts every index, so an
+  index-keyed baseline would report all of that deck's accepted findings as
+  new the first time someone re-records — the gate would punish the fix it
+  exists to ask for.
+- **Not the value.** A finding never carries one (the report must not print
+  secrets), and the values a baseline mostly covers — Cloudflare's `__cf_bm`
+  — rotate on every recording.
+
+**So the key is name-level, and that is a real limit**: accepting
+`deck.yaml / response header / set-cookie` accepts *any* `set-cookie` in that
+file, including one that is a genuine session credential. The audit cannot
+tell those apart in any case — it only ever sees the header name. A baseline
+narrows "any cookie anywhere" to "a cookie in this file"; it is not a
+value-level guarantee, and a new finding *kind* in a baselined file (a token
+in a body, say) is still reported.
+
+Key names are stored lowercased, since the audit matches them
+case-insensitively and a repo can hold both `set-cookie` and `Set-Cookie`.
+Paths are stored with forward slashes so a baseline written on Windows matches
+on Linux CI; native separators are accepted when reading.
+
+Entries that match nothing — usually a deck that *was* re-recorded — are
+reported as **stale** and never fail the run; regenerate with
+`--write-baseline`. An **unreadable** cassette is not baselineable and keeps
+failing the gate, which is why `--write-baseline` exits non-zero (after
+writing) when it meets one. The two options are mutually exclusive.
+
+With `--json`, a baselined run adds `accepted_count`, `new_count`,
+`stale_count` and `stale_entries`, and every finding carries `accepted`.
+`finding_count` keeps meaning *all* findings, so a consumer that already reads
+it is unaffected; the exit code keys on `new_count`.
 
 Exits non-zero when anything is found **or when a cassette could not be read
 at all** (an unreadable file is not evidence of cleanliness), so it can gate a
@@ -3219,8 +3267,10 @@ filtered before matching. See `clm info migration`.
 
 ```bash
 clm cassette scan course-specs/python-course.xml           # audit a repo
-clm cassette scan course-specs/python-course.xml --json    # CI gate
+clm cassette scan course-specs/python-course.xml --json    # machine-readable
 clm cassette scan                                           # walk cwd
+clm cassette scan --write-baseline .clm-cassette-baseline.json
+clm cassette scan --baseline .clm-cassette-baseline.json    # CI gate
 ```
 
 ### `clm config`
