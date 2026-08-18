@@ -1719,20 +1719,28 @@ class TestKernelCleanup:
 
 
 class TestSourceDirectoryHandling:
-    """Test handling of source_dir parameter for Docker mode with source mount.
+    """``source_dir`` is a *read-only* input, not the execution directory.
 
-    In Docker mode with source mount, supporting files (data.csv, model.pkl, etc.)
-    are available directly from the mounted /source directory, eliminating the need
-    to decode base64-encoded other_files from the payload.
+    Docker mode used to execute the kernel inside the mounted ``/source``
+    directory and therefore skipped materializing ``other_files``. That
+    made the mount the one place a notebook could write into the course
+    repository — and once the mount became read-only (S10, #798) those
+    cells failed instead, while the same cells kept working in Direct
+    mode. The kernel now runs in a writable temp dir in **both** modes,
+    with the siblings written next to it; ``source_dir`` survives only
+    for the Jinja loader and image resolution.
     """
 
     @pytest.mark.asyncio
-    async def test_write_other_files_skips_when_source_dir_provided(self, tmp_path):
-        """When source_dir is provided, write_other_files should skip writing."""
+    async def test_supporting_files_are_written_even_with_a_source_mount(self, tmp_path):
+        """The Docker path materializes siblings like the Direct path.
+
+        Skipping the write left the notebook's siblings reachable only
+        through the read-only mount it no longer executes in.
+        """
         spec = SpeakerOutput(format="html")
         processor = NotebookProcessor(spec)
 
-        # Create a payload with some other_files
         test_data = b"test content"
         encoded_data = b64encode(test_data).decode("utf-8")
         payload = make_payload(
@@ -1742,19 +1750,12 @@ class TestSourceDirectoryHandling:
             other_files={"data.txt": encoded_data},
         )
 
-        # Create a temp directory to be our "source" mount
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-
-        # Create another temp directory that would be written to
         write_dir = tmp_path / "write"
         write_dir.mkdir()
 
-        # Call write_other_files with source_dir provided
-        await processor.write_other_files("test-cid", write_dir, payload, source_dir=source_dir)
+        await processor.write_other_files("test-cid", write_dir, payload)
 
-        # No files should have been written to write_dir
-        assert list(write_dir.iterdir()) == []
+        assert (write_dir / "data.txt").read_bytes() == test_data
 
     @pytest.mark.asyncio
     async def test_write_other_files_writes_when_no_source_dir(self, tmp_path):
@@ -1777,7 +1778,7 @@ class TestSourceDirectoryHandling:
         write_dir.mkdir()
 
         # Call write_other_files without source_dir
-        await processor.write_other_files("test-cid", write_dir, payload, source_dir=None)
+        await processor.write_other_files("test-cid", write_dir, payload)
 
         # File should have been written
         written_file = write_dir / "data.txt"
@@ -1851,7 +1852,7 @@ class TestSourceDirectoryHandling:
         write_dir.mkdir()
 
         # Call write_other_files without source_dir
-        await processor.write_other_files("test-cid", write_dir, payload, source_dir=None)
+        await processor.write_other_files("test-cid", write_dir, payload)
 
         # Nested file should have been written with directories created
         written_file = write_dir / "subdir" / "nested" / "data.txt"

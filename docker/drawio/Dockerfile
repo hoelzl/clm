@@ -114,14 +114,27 @@ RUN chmod +x /app/entrypoint.sh
 # executor runs the container as the host user) never does. The entrypoint
 # appends an entry for whatever uid it finds, which needs /etc/passwd
 # writable; the setuid strip below is what keeps that safe.
-ENV HOME=/home/clm     XDG_CACHE_HOME=/tmp/cache     ELECTRON_DISABLE_SECURITY_WARNINGS=1
+ENV HOME=/home/clm \
+    XDG_CACHE_HOME=/tmp/cache \
+    ELECTRON_DISABLE_SECURITY_WARNINGS=1
 
-RUN set -eu;     mkdir -p /home/clm /tmp/.X11-unix;     chmod 0777 /home/clm;     chmod 1777 /tmp/.X11-unix;     chmod 0666 /etc/passwd;     chmod -R a+rX /app
+RUN set -eu; \
+    mkdir -p /home/clm /tmp/.X11-unix; \
+    chmod 0777 /home/clm; \
+    chmod 1777 /tmp/.X11-unix; \
+    chmod 0666 /etc/passwd; \
+    chmod -R a+rX /app
 
 # Strip every setuid/setgid bit. A worker needs none of them (su, mount,
-# passwd, chrome-sandbox with --no-sandbox), and removing them is what makes
-# the writable password database below harmless: without a setuid binary
-# there is nothing to escalate *to*.
+# passwd; chrome-sandbox is unused under --no-sandbox), and removing them is
+# what makes the world-writable password database *above* harmless: with no
+# setuid binary there is nothing for an edited passwd entry to escalate to.
+# Pinned by a docker-marked test, because an apt-get added below this line
+# would silently re-arm it.
+#
+# (The OpenShift convention — USER 1000:0 with a gid-0-writable /etc/passwd —
+# would avoid the world-writable bit, but assumes the container always has
+# gid 0, which is not true here: the executor passes the host gid.)
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 USER 1000:1000

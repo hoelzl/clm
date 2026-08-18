@@ -67,15 +67,24 @@ def _refuse_whole_volume_workspace(candidate: Path, sorted_roots: list[str]) -> 
 
     Applies to both shapes the workspace root can take — the single
     target root and the common ancestor of several — because the single
-    case used to return before the check ran (finding D7, #798).
+    case used to return before the check ran (finding D7, #798). The
+    advice differs: with one target there is nothing to split apart, so
+    telling the user to build targets separately would be nonsense.
     """
-    if candidate == candidate.parent:
+    if candidate != candidate.parent:
+        return
+    if len(sorted_roots) == 1:
         raise ValueError(
-            "Docker-mode builds would have to mount a whole drive to cover "
-            f"these <output-targets>: {sorted_roots}. Build each target "
-            "separately with `--targets <name>`, or place the target "
-            "output roots under a shared parent directory."
+            f"Docker-mode builds would have to mount a whole drive: the "
+            f"<output-target> path resolves to {sorted_roots[0]}, a "
+            f"drive/filesystem root. Point it at a directory below the root."
         )
+    raise ValueError(
+        "Docker-mode builds would have to mount a whole drive to cover "
+        f"these <output-targets>: {sorted_roots}. Build each target "
+        "separately with `--targets <name>`, or place the target "
+        "output roots under a shared parent directory."
+    )
 
 
 @define

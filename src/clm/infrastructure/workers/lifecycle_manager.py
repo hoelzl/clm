@@ -15,6 +15,7 @@ from clm.infrastructure.workers.pool_manager import WorkerPoolManager
 from clm.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
     DockerWorkerExecutor,
+    WholeVolumeMountError,
     WorkerConfig,
     WorkerExecutor,
 )
@@ -102,6 +103,12 @@ class WorkerLifecycleManager:
                 network_name=config.network_name,
                 log_level="INFO",
             )
+        except WholeVolumeMountError:
+            # Not a "Docker is unavailable" condition: the mount roots are
+            # wrong and every container would expose a whole drive. Swallowing
+            # it here produced a build with zero workers that stalled instead
+            # of saying which directory is the problem (finding D7, #798).
+            raise
         except Exception:
             # Docker not available, only direct executor will be used
             logger.debug("Docker not available, Docker executor not created")

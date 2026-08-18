@@ -2082,12 +2082,21 @@ class TestBuildHasDockerNotebookWorker:
         wc = _fake_worker_config([("notebook", "docker", 0), ("plantuml", "direct", 1)])
         assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is False
 
-    def test_resolution_error_is_treated_as_direct_only(self) -> None:
+    def test_an_unresolvable_config_returns_the_callers_safe_default(self) -> None:
+        """The probe answers with what the *caller* said is safe.
+
+        Which caller gets which default is what actually matters, and
+        that is pinned at the call sites:
+        ``test_binds_loopback_when_the_worker_mode_cannot_be_resolved``
+        and ``test_the_workspace_guard_applies_when_the_mode_is_unknown``.
+        """
+
         def _boom():
             raise RuntimeError("cannot resolve")
 
         wc = SimpleNamespace(get_all_worker_configs=_boom)
         assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is False
+        assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=True) is True
 
 
 class _FakeMitmManager:
@@ -2162,6 +2171,27 @@ class TestMitmproxyTransportBindHost:
 
     def test_binds_loopback_when_no_worker_config(self, monkeypatch, tmp_path) -> None:
         listen_host, _ = self._run(monkeypatch, tmp_path, None)
+        assert listen_host == "127.0.0.1"
+
+    def test_binds_loopback_when_the_worker_mode_cannot_be_resolved(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """An unresolvable config must not open a LAN listener.
+
+        The probe takes a ``default_on_error`` because its two callers
+        have opposite safe directions: the workspace resolver assumes
+        Docker (that path carries the whole-volume guard), this one
+        assumes Direct. Asserting the *probe* returns its own argument
+        proves nothing — flipping this call site to ``True`` would bind
+        ``0.0.0.0`` for the build's duration and no probe-level test
+        would notice (finding D7, #798).
+        """
+
+        def _boom():
+            raise RuntimeError("cannot enumerate worker configs")
+
+        wc = SimpleNamespace(get_all_worker_configs=_boom)
+        listen_host, _ = self._run(monkeypatch, tmp_path, wc)
         assert listen_host == "127.0.0.1"
 
     def test_forwards_trace_dir_from_invocation_env(self, monkeypatch, tmp_path) -> None:

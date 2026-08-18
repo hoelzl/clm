@@ -572,6 +572,41 @@ for the full explanation.
 
 ## Docker Issues
 
+### Worker containers run as a non-root user
+
+The three worker images run as uid 1000 rather than root, and the notebook
+worker gets the course sources mounted **read-only** — it executes
+course-authored code and writes only to the output tree. PlantUML and Draw.io
+keep the source mount writable, because rendering diagrams into the source
+tree is what they do.
+
+**Symptom**: a notebook cell that writes a file next to its slides fails in
+Docker mode.
+
+This should not happen: the kernel runs in a writable temporary directory in
+Docker mode exactly as it always has in Direct mode, and files a cell writes
+there are discarded with it. If you do see a read-only filesystem error from a
+cell, the cell is writing to an *absolute* path inside `/source` — make it
+relative, or write under the output tree.
+
+**Symptom**: `clm build --workers docker` fails with "Docker mode refuses to
+mount a whole volume".
+
+An `<output-target><path>`, or the course data directory, resolves to a drive
+or filesystem root (`C:\`, `/`), which would bind-mount that entire disk into
+the container. Point it at a directory below the root.
+
+**Running the images by hand on Linux**: a bind mount keeps host ownership, so
+a container writing into one must run as you:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/output:/workspace"     docker.io/mhoelzl/clm-notebook-processor:lite
+```
+
+`clm` does this for you on native Linux. On Docker Desktop (Windows/macOS) the
+mount is virtualized and the image's own user is kept. See `docker/README.md`
+for the image-side details.
+
 ### Docker Services Not Starting
 
 **Symptoms**:

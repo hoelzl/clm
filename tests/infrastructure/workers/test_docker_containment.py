@@ -154,28 +154,34 @@ class TestContainerUser:
         monkeypatch.setattr(we, "_container_user", lambda: None)
         assert "user" not in self._run_kwargs(db_path, workspace_path)
 
-    def test_posix_hosts_pin_the_host_uid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_linux_hosts_pin_the_host_uid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A bind mount keeps host ownership on native Linux.
 
         The images default to uid 1000, but a GitHub runner is 1001 — a
         container writing output into the mount as 1000 simply fails. So
         the executor pins the host uid rather than the image baking one in.
 
-        ``os.name`` is read through a module-level indirection rather than
-        patched globally: patching ``os.name`` to "posix" on Windows also
-        makes ``pathlib`` try to build ``PosixPath`` objects.
+        The platform is read through a module-level indirection rather
+        than patched globally: patching ``sys.platform``/``os.name`` also
+        makes ``pathlib`` try to build ``PosixPath`` objects on Windows.
         """
         from clm.infrastructure.workers import worker_executor as we
 
-        monkeypatch.setattr(we, "_HOST_IS_POSIX", True)
+        monkeypatch.setattr(we, "_HOST_KEEPS_MOUNT_OWNERSHIP", True)
         monkeypatch.setattr(we.os, "getuid", lambda: 1001, raising=False)
         monkeypatch.setattr(we.os, "getgid", lambda: 1002, raising=False)
         assert we._container_user() == "1001:1002"
 
-    def test_non_posix_hosts_return_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_non_linux_hosts_return_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Windows *and macOS*: Docker Desktop maps ownership itself.
+
+        ``os.name == "posix"`` was the original test — true on macOS, so
+        it would have overridden the image USER there while five documents
+        said it did not.
+        """
         from clm.infrastructure.workers import worker_executor as we
 
-        monkeypatch.setattr(we, "_HOST_IS_POSIX", False)
+        monkeypatch.setattr(we, "_HOST_KEEPS_MOUNT_OWNERSHIP", False)
         assert we._container_user() is None
 
     def test_running_clm_as_root_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,7 +190,7 @@ class TestContainerUser:
 
         from clm.infrastructure.workers import worker_executor as we
 
-        monkeypatch.setattr(we, "_HOST_IS_POSIX", True)
+        monkeypatch.setattr(we, "_HOST_KEEPS_MOUNT_OWNERSHIP", True)
         monkeypatch.setattr(we.os, "getuid", lambda: 0, raising=False)
         monkeypatch.setattr(we.os, "getgid", lambda: 0, raising=False)
 

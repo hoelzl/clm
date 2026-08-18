@@ -164,7 +164,13 @@ RUN set -eu; \
         sleep 15; \
     done; \
     rm -f dotnet-install.sh; \
-    [ "${ok}" -eq 1 ]
+    [ "${ok}" -eq 1 ]; \
+    chmod -R a+rX /root/.dotnet
+# The chmod belongs to *this* layer on purpose. The image runs as a non-root
+# (and possibly arbitrary) uid, so the toolchain has to be readable by
+# anyone — but doing it in a later `chmod -R` copies up all ~1530 .NET files
+# for a permission bit, ~280 MB of overlay on an image whose CI layer-cache
+# budget is already rationed (see .github/workflows/ci.yml).
 
 # Install uv (modern Python package installer).
 #
@@ -176,7 +182,8 @@ RUN curl --fail --location --silent --show-error \
         --retry 5 --retry-delay 5 --retry-all-errors \
         https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
     && sh /tmp/uv-install.sh \
-    && rm -f /tmp/uv-install.sh
+    && rm -f /tmp/uv-install.sh \
+    && chmod -R a+rX /root/.local
 
 # Install micromamba for Python environment management.
 # This provides a clean Python installation without PEP 668 restrictions.
@@ -483,20 +490,42 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 #    readable — the image holds no secrets, only tools;
 #  * HOME is a world-writable directory, and every cache/runtime dir that
 #    a kernel writes to is pointed at /tmp.
-ENV HOME=/home/clm     JUPYTER_RUNTIME_DIR=/tmp/jupyter-runtime     JUPYTER_DATA_DIR=/tmp/jupyter-data     MPLCONFIGDIR=/tmp/matplotlib     DENO_DIR=/tmp/deno     XDG_CACHE_HOME=/tmp/cache     DOTNET_NOLOGO=1     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+ENV HOME=/home/clm \
+    JUPYTER_RUNTIME_DIR=/tmp/jupyter-runtime \
+    JUPYTER_DATA_DIR=/tmp/jupyter-data \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    DENO_DIR=/tmp/deno \
+    XDG_CACHE_HOME=/tmp/cache \
+    DOTNET_NOLOGO=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    # A *different* variable from DOTNET_CLI_TELEMETRY_OPTOUT: without it the
+    # .NET Interactive first-run banner prints on every kernel start, because
+    # the build-time sentinel lives under /root/.dotnet and HOME no longer
+    # points there.
+    DOTNET_INTERACTIVE_CLI_TELEMETRY_OPTOUT=1
 
-RUN set -eu;     mkdir -p /home/clm /usr/local/share/jupyter/kernels;     if [ -d /root/.local/share/jupyter/kernels ]; then         cp -a /root/.local/share/jupyter/kernels/. /usr/local/share/jupyter/kernels/;     fi;     chmod -R a+rX /root /opt/conda /app /usr/local/share/jupyter;     chmod 0777 /home/clm
+# ``/root`` only needs to be traversable — the toolchains inside it were made
+# readable in the layers that installed them, so no bulk copy-up happens here.
+RUN set -eu; \
+    mkdir -p /home/clm /usr/local/share/jupyter/kernels; \
+    if [ -d /root/.local/share/jupyter/kernels ]; then \
+        cp -a /root/.local/share/jupyter/kernels/. /usr/local/share/jupyter/kernels/; \
+    fi; \
+    chmod a+rx /root; \
+    chmod -R a+rX /app /usr/local/share/jupyter; \
+    chmod 0777 /home/clm
 
-# Strip every setuid/setgid bit. A worker needs none of them (su, mount,
-# passwd, chrome-sandbox with --no-sandbox), and removing them is what makes
-# the writable password database below harmless: without a setuid binary
-# there is nothing to escalate *to*.
+# Strip every setuid/setgid bit: a worker needs none of them (su, mount,
+# passwd), and a container that executes course-authored code should not ship
+# a local privilege-escalation surface. Pinned by a docker-marked test, so an
+# apt-get added below this line cannot silently re-arm it.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 EXPOSE 8888
 
-# Numeric on purpose: the uid need not exist in /etc/passwd, and the
-# executor may override it with the host uid (see docs/user-guide/docker.md).
+# Numeric on purpose: the uid need not exist in /etc/passwd, and the executor
+# overrides it with the host uid on native Linux (see docker/README.md).
 USER 1000:1000
 
 # Run the notebook worker

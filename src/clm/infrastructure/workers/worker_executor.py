@@ -284,7 +284,10 @@ class WorkerExecutor(ABC):
         return None
 
 
-#: Worker types that legitimately write into the mounted source tree.
+#: Worker types that legitimately write into the mounted source tree. An
+#: allowlist, so a *new* worker type gets the read-only mount by default —
+#: the safe direction, but a silent one: a type that does need to write
+#: would fail at run time rather than here.
 #: PlantUML and DrawIO render diagrams next to their sources; the notebook
 #: worker reads slide sources and writes only to ``/workspace``, so it gets
 #: the mount read-only (finding S10, #798). It is also the worker that
@@ -292,11 +295,17 @@ class WorkerExecutor(ABC):
 _SOURCE_WRITING_WORKER_TYPES = frozenset({"plantuml", "drawio"})
 
 
-#: Whether the host keeps real uid ownership on bind mounts. Read through a
-#: module attribute rather than ``os.name`` at the call site so a test can
-#: flip it without patching ``os.name`` globally — that also makes
-#: ``pathlib`` build ``PosixPath`` objects and blow up on Windows.
-_HOST_IS_POSIX = os.name == "posix"
+#: Whether the host keeps real uid ownership on bind mounts — i.e. native
+#: Linux. Deliberately not ``os.name == "posix"``: that is also true on
+#: macOS, where Docker Desktop virtualizes the mount and maps ownership, so
+#: overriding the image's own USER there would contradict what the docs
+#: promise and gain nothing. Read through a module attribute rather than
+#: inline so a test can flip it without patching ``sys.platform`` globally.
+_HOST_KEEPS_MOUNT_OWNERSHIP = sys.platform.startswith("linux")
+
+
+#: One warning per process, not one per worker in the pool.
+_WARNED_RUNNING_AS_ROOT = False
 
 
 def _container_user() -> str | None:
@@ -304,7 +313,8 @@ def _container_user() -> str | None:
 
     The images run as a non-root user by default (finding S10, #798), but
     the *specific* uid matters wherever a bind mount keeps host ownership
-    — i.e. on native Linux. A container writing rendered diagrams into the
+    — i.e. on native **Linux** (not merely POSIX: macOS is POSIX, and
+    Docker Desktop maps ownership there). A container writing rendered diagrams into the
     mounted source tree, or notebook output into ``/workspace``, must run
     as the host user or the writes fail (a GitHub runner is uid 1001, the
     image default is 1000). So on POSIX hosts the executor pins the host
@@ -315,20 +325,33 @@ def _container_user() -> str | None:
     ownership is handled by the VM, so the image's own ``USER`` stands and
     this returns ``None``.
     """
-    if not _HOST_IS_POSIX:
+    if not _HOST_KEEPS_MOUNT_OWNERSHIP:
         return None
     getuid = getattr(os, "getuid", None)
     getgid = getattr(os, "getgid", None)
     if getuid is None or getgid is None:  # pragma: no cover — POSIX always has these
         return None
     uid, gid = getuid(), getgid()
-    if uid == 0:
+    global _WARNED_RUNNING_AS_ROOT
+    if uid == 0 and not _WARNED_RUNNING_AS_ROOT:
+        _WARNED_RUNNING_AS_ROOT = True
         logger.warning(
             "clm is running as root, so worker containers inherit uid 0 to keep "
             "bind-mount writes working. The images default to a non-root user; "
             "run clm as an ordinary user to get that containment."
         )
     return f"{uid}:{gid}"
+
+
+class WholeVolumeMountError(ValueError):
+    """A Docker mount root resolves to a whole drive/filesystem root.
+
+    Its own type because both construction sites wrap executor creation in
+    a broad ``except Exception`` — one of them logging "Docker not
+    available" — which turned this refusal into a build that came up with
+    zero workers and stalled, instead of one that says which directory is
+    the problem (finding D7, #798).
+    """
 
 
 def _refuse_whole_volume_mount(path: Path, *, label: str) -> None:
@@ -342,7 +365,7 @@ def _refuse_whole_volume_mount(path: Path, *, label: str) -> None:
     """
     resolved = Path(path).resolve()
     if resolved == resolved.parent:
-        raise ValueError(
+        raise WholeVolumeMountError(
             f"Docker mode refuses to mount a whole volume: the {label} "
             f"resolves to {resolved}, a drive/filesystem root. The container "
             f"would get everything on that disk. Point it at a directory "

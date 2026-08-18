@@ -45,9 +45,11 @@ GitHub Actions runner, for instance, is uid 1001. Baking a build-time uid into
 the image cannot solve this, because the right uid is a property of the machine
 running the build, not of the image.
 
-So `clm` resolves it at run time: on POSIX hosts the executor starts each
-container with `--user <host-uid>:<host-gid>`, and the image's own `USER` stands
-on Docker Desktop (Windows/macOS), where the mount is virtualized. The images
+So `clm` resolves it at run time: on **native Linux** the executor starts each
+container with `--user <host-uid>:<host-gid>`. On Docker Desktop (Windows and
+macOS) the mount is virtualized and maps ownership itself, so the image's own
+`USER` stands there — note that macOS is POSIX, so the check is on the platform,
+not on `os.name`. The images
 are therefore written to work under **any** uid — installs are world-readable,
 `$HOME` is world-writable, and caches/runtime dirs point at `/tmp`. Keep it that
 way when editing them: nothing may depend on the process being uid 1000.

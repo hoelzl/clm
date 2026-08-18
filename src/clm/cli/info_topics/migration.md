@@ -12,10 +12,13 @@ code — could rewrite the repository it was built from.
 - **All three worker images now run as uid 1000** (`USER 1000:1000`) instead of
   root.
 - **`/source` is mounted read-only for the notebook worker.** PlantUML and
-  Draw.io keep it writable: they render diagrams into the source tree. If a
-  notebook cell writes next to its slides, that write now fails in Docker mode
-  (it still works in Direct mode). Write to the output tree instead, or run
-  that deck with `--workers direct`.
+  Draw.io keep it writable: they render diagrams into the source tree.
+  Notebooks are unaffected — the kernel now runs in a writable temporary
+  directory in Docker mode, exactly as it always has in Direct mode, so a cell
+  doing `open("data.txt", "w")` or `savefig("plot.png")` still works and its
+  files are discarded with the temp dir. What changed is that such a write can
+  no longer land *in the course repository*, and the two worker modes no
+  longer differ.
 - **Whole-volume mounts are refused.** A data dir or output root that resolves
   to a drive/filesystem root (`C:\`, `/`) is rejected before any container
   starts — it would have handed the container the entire disk. Previously only
@@ -33,6 +36,10 @@ keep working, and a warning says the containment is gone.
 *Cache note*: the images change, and the worker image identity feeds the
 execution cache key (#744), so the first build after upgrading re-renders
 cached notebooks once. Expected, not a bug.
+
+*macOS note*: only native **Linux** keeps real uid ownership on a bind mount,
+so only there does `clm` override the container user. Docker Desktop on
+Windows and macOS maps ownership itself and the image's own user is kept.
 
 ## Cassette recording scrubs responses; the mitmproxy CA moved (#798, {version})
 

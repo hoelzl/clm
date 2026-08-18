@@ -31,9 +31,15 @@
   and opens a LAN listener). Each caller now states its own default and the
   failure is logged.
 
-  **Breaking**: a notebook cell that wrote into the course tree fails in Docker
-  mode (use the output tree, or `--workers direct`), and anyone running the
-  images by hand on native Linux needs `--user "$(id -u):$(id -g)"` to write
-  into a bind mount. Because the worker image identity feeds the execution
-  cache key (#744), the first build after upgrading re-renders cached notebooks
-  once. See `clm info migration` and `docker/README.md`.
+  Executed notebooks keep working: the kernel now runs in a writable temporary
+  directory in Docker mode too, which is what Direct mode has always done, so a
+  cell that writes `data.txt` or `plot.png` still succeeds — it simply can no
+  longer write into the course repository. That also removes a Docker/Direct
+  behavioural divergence rather than adding one.
+
+  **Breaking**: anyone running the images by hand on native Linux needs
+  `--user "$(id -u):$(id -g)"` to write into a bind mount, and a data dir or
+  output root at a drive root is now rejected before any container starts.
+  Because the worker image identity feeds the execution cache key (#744), the
+  first build after upgrading re-renders cached notebooks once. See
+  `clm info migration` and `docker/README.md`.

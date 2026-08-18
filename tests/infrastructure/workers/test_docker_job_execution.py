@@ -345,6 +345,101 @@ class TestDockerJobExecution:
             if workers:
                 manager.stop_managed_workers(workers)
 
+    def test_an_executed_cell_may_write_a_relative_file(
+        self, docker_test_env, docker_image_available
+    ):
+        """A notebook that writes next to itself must still execute.
+
+        Teaching decks do this constantly — ``open("data.txt", "w")``,
+        ``savefig("plot.png")``, ``%%writefile``; the reference course repo
+        has dozens. In Direct mode such a cell has always run in a
+        throwaway temp directory. Docker mode used to run the kernel *in*
+        the mounted source tree, which was both a write path into the
+        course repository and, once that mount became read-only (S10,
+        #798), a build failure the Direct path did not have.
+
+        The kernel now gets a writable temp cwd in both modes, so this
+        executes — and nothing lands in the source tree.
+        """
+        if not docker_image_available:
+            pytest.skip("Docker image not available (run: clm docker build)")
+
+        env = docker_test_env
+        image_name = docker_image_available
+
+        written_name = "cell-written-file.txt"
+        notebook_source = "\n".join(
+            [
+                "# %%",
+                f"with open({written_name!r}, 'w') as f:",
+                "    f.write('written by the kernel')",
+                f"print(open({written_name!r}).read())",
+                "",
+            ]
+        )
+
+        cli_overrides = {
+            "default_execution_mode": "docker",
+            "notebook_count": 1,
+            "plantuml_count": 0,
+            "drawio_count": 0,
+        }
+        config = load_worker_config(cli_overrides)
+        config.notebook.image = image_name
+
+        manager = WorkerLifecycleManager(
+            config=config,
+            db_path=env["db_path"],
+            workspace_path=env["workspace"],
+            data_dir=env["data_dir"],
+        )
+
+        workers = []
+        try:
+            workers = manager.start_managed_workers()
+            time.sleep(5)
+
+            queue = JobQueue(env["db_path"])
+            input_file = env["topic_dir"] / "writes_a_file.py"
+            input_file.write_text(notebook_source, encoding="utf-8")
+            output_file = env["workspace"] / "writes_a_file.ipynb"
+
+            job_id = queue.add_job(
+                job_type="notebook",
+                input_file=str(input_file),
+                output_file=str(output_file),
+                content_hash="test-relative-write-123",
+                payload={
+                    "data": notebook_source,
+                    "kind": "completed",
+                    "prog_lang": "python",
+                    "language": "en",
+                    "format": "notebook",
+                    "source_topic_dir": str(env["topic_dir"]),
+                },
+            )
+
+            max_wait = 120
+            start = time.time()
+            while time.time() - start < max_wait:
+                job = queue.get_job(job_id)
+                if job.status in ("completed", "failed"):
+                    break
+                time.sleep(1)
+
+            job = queue.get_job(job_id)
+            assert job.status == "completed", (
+                f"a cell writing a relative file failed in Docker mode: {job.error}"
+            )
+            assert output_file.exists()
+            assert "written by the kernel" in output_file.read_text(encoding="utf-8")
+            # …and the read-only mount is intact: nothing leaked into the repo.
+            assert not (env["topic_dir"] / written_name).exists()
+
+        finally:
+            if workers:
+                manager.stop_managed_workers(workers)
+
     def test_docker_worker_handles_nested_output_paths(
         self, docker_test_env, docker_image_available
     ):
