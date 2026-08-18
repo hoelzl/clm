@@ -143,9 +143,23 @@ HeaderFields = Iterable[tuple[object, object]]
 
 
 def _decode_ascii(value: object) -> str:
-    """Decode a header name/value to ``str`` the way vcrpy does (ASCII)."""
+    """Decode a header name/value to ``str`` the way vcrpy does (ASCII).
+
+    vcrpy raises on a non-ASCII header byte. CLM cannot afford to: this
+    runs *upstream* of the request filter, and the addon reads any filter
+    exception as "unfilterable", which it handles like an ignore-host —
+    forwarding the request to the live network in every mode, including
+    strict replay in CI, and recording nothing (finding S9, #798). A
+    German deck setting OpenRouter's ``X-Title`` to ``"Übung 3"`` is
+    enough to trigger it through ``requests``.
+
+    So a non-ASCII byte is replaced rather than raised. Headers are not
+    part of the replay match key, so the substitution cannot cause a
+    miss; it only means such a header reads approximately in the
+    cassette, which beats the interaction not existing.
+    """
     if isinstance(value, bytes):
-        return value.decode("ascii")
+        return value.decode("ascii", errors="replace")
     return str(value)
 
 

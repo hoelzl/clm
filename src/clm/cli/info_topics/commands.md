@@ -3174,7 +3174,7 @@ Every finding is one that re-recording the deck actually clears: the audit
 asks "would the recorder change this file today?", not "is this file free of
 every secret". So it deliberately says nothing about a token in a body the
 recorder does not touch — an SSE stream, an HTML error page, a JSON payload
-served as `text/plain`.
+served as `text/plain`, or a binary request body.
 
 Exits non-zero when anything is found **or when a cassette could not be read
 at all** (an unreadable file is not evidence of cleanliness), so it can gate a

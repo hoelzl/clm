@@ -331,6 +331,37 @@ class TestRequestFiltersCoverTheRecordedShapes:
         assert out is not None, "an unfilterable body must not become a network bypass"
         assert out.body == body
 
+    def test_a_non_ascii_header_does_not_refuse_the_request(self) -> None:
+        """``X-Title: Übung 3`` must not become a network bypass either.
+
+        Header decoding happens *upstream* of the filter, so an ASCII-strict
+        decode raised before any filtering — and the addon reads that as
+        "unfilterable", i.e. forward to the live network in every mode and
+        record nothing. A German deck setting OpenRouter's documented
+        ``X-Title`` is enough to trigger it through ``requests``.
+        """
+        request = cf.vcr_request_from_parts(
+            "POST",
+            "https://api.example.com/v1/x",
+            [(b"x-title", "Übung 3".encode()), (b"authorization", b"Bearer SECRET")],
+            b"{}",
+        )
+        out = _filtered(request)
+        assert out is not None, "a non-ASCII header must not become a network bypass"
+        assert "authorization" not in out.headers  # filtering still happened
+        assert "x-title" in {k.lower() for k in out.headers}
+
+    def test_a_pathologically_nested_json_body_is_left_alone(self) -> None:
+        """``RecursionError`` guards the request side as well as the response.
+
+        Same reasoning as the parse guard next to it — raising here means
+        the request is forwarded live and never recorded.
+        """
+        body = ("[" * 20000 + "]" * 20000).encode()
+        out = _filtered(_request(headers={"content-type": "application/json"}, body=body))
+        assert out is not None
+        assert out.body == body
+
     def test_a_latin1_form_body_is_left_alone(self) -> None:
         out = _filtered(
             vf.Request(

@@ -23,22 +23,35 @@
   `api-key` (Azure), `x-goog-api-key` (Gemini), `proxy-authorization`,
   `x-amz-security-token`, `x-auth-token`; query parameters `key`,
   `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature` — and closed
-  three gaps in how they were applied: a JSON content-type is matched by
-  prefix (so `application/json; charset=utf-8` bodies are filtered instead of
-  skipped), query-parameter names are matched case-insensitively, and bodies
-  are filtered on any method rather than `POST` alone. A body that will not
-  parse is left untouched rather than dropping the interaction.
+  four gaps in how they were applied: a JSON content-type is matched by prefix
+  (so `application/json; charset=utf-8` bodies are filtered instead of
+  skipped), query *and* body parameter names are matched case-insensitively,
+  and bodies are filtered on any method rather than `POST` alone.
+
+  A request the filter cannot process is no longer refused, either. That
+  mattered more than it sounds: the recorder treats an unfilterable request
+  like an ignore-host, forwarding it to the live network in *every* mode —
+  including strict `replay` in CI — and recording nothing, with no miss to
+  notice. A binary upload, a latin-1 form body, a non-ASCII header value
+  (`X-Title: Übung 3`) and a pathologically nested JSON body each did exactly
+  that; they are now recorded with whatever filtering applies and no
+  exception.
 
   New `clm cassette scan [SPEC-FILE]` audits **already-committed** cassettes
   read-only, naming the file, interaction index and key, and exits non-zero
-  when it finds anything — the way to decide which decks in a course repo are
-  worth re-recording, instead of blanket re-recording thousands of files that
-  each need a live service. Responses are not part of the replay match key, so
+  when it finds anything — or when a cassette cannot be read at all, since an
+  unparseable file is not evidence of cleanliness. It is the way to decide
+  which decks in a course repo are worth re-recording, instead of blanket
+  re-recording thousands of files that each need a live service. Every finding
+  is one a re-record actually clears: the audit asks "would the recorder
+  change this file today?", so it deliberately says nothing about a token in
+  a body the recorder does not touch. Responses are not part of the replay match key, so
   the response-side change cannot cause a replay miss. Two request-side ones
   can, loudly: a cassette recorded with a now-filtered *query parameter*, and
   one whose *request body* kept a `password`/`token`/`api_key` because its
-  content-type carried a charset, its method was not `POST`, or it was
-  form-encoded. Both are part of the replay match key; the scanner flags
+  content-type carried a charset, its method was not `POST`, or the key was
+  spelled with different casing. Both are part of the replay match key; the
+  scanner flags
   exactly those cassettes, and `clm info migration` says which findings are
   urgent.
 

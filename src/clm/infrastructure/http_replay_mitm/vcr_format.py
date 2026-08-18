@@ -506,13 +506,15 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
         elif _is_json_content_type(request.headers.get("Content-Type")):
             try:
                 json_data = json.loads(request.body)
-            except (ValueError, UnicodeDecodeError):
-                # A JSON content-type on a body that will not parse. vcrpy
-                # would raise here; the addon turns any filter exception
-                # into "forward without recording", so raising would drop
-                # the interaction from the cassette silently. Leave the
-                # body untouched instead — there is nothing to filter in
-                # something we cannot read (finding S9, #798).
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                # A JSON content-type on a body that will not parse —
+                # malformed, mislabelled, or nested past the recursion
+                # limit. vcrpy would raise here; the addon turns any
+                # filter exception into "unfilterable", which it forwards
+                # to the live network without recording. Leave the body
+                # untouched instead — there is nothing to filter in
+                # something we cannot read (finding S9, #798). The
+                # response filter guards the same three cases.
                 return request
             if not isinstance(json_data, dict):
                 # A JSON array or scalar has no top-level keys to filter,
