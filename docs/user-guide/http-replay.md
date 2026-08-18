@@ -265,16 +265,46 @@ up the strict default from the `CI` environment variable.
 
 ## Redaction
 
-Secret filters are applied at record time before the cassette is
-written:
+Cassettes are committed files, so secret filters are applied at record
+time, before anything is written.
 
-- Request headers: `authorization`, `cookie`, `x-api-key`, `set-cookie`
-- POST body parameters: `password`, `token`, `api_key`
-- Query parameters: `api_key`, `token`
+**Requests** — the named header, query parameter or body parameter is
+removed outright:
 
-These cover the typical teaching-material surface. Review the cassette
-YAML by eye before committing if your topic hits an API with a novel
-auth scheme.
+- Headers: `authorization`, `cookie`, `x-api-key`, `set-cookie`,
+  `api-key` (Azure OpenAI), `x-goog-api-key` (Gemini),
+  `proxy-authorization`, `x-amz-security-token`, `x-auth-token`
+- Query parameters (case-insensitive): `api_key`, `token`, `key`,
+  `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature`
+- Body parameters, JSON or form-encoded, on any method: `password`,
+  `token`, `api_key`
+
+**Responses** — `Set-Cookie` is dropped, and in a JSON body the *values*
+of `access_token`, `refresh_token`, `id_token`, `client_secret`,
+`api_key`, `apikey`, `authorization`, `password`, `secret` and
+`session_token` are replaced with `[REDACTED-BY-CLM]`, recursively. The
+keys stay, so the payload keeps its shape.
+
+Key names are matched **exactly**, never as substrings: an LLM response
+legitimately carries `completion_tokens` / `total_tokens`, and clipping
+those would corrupt replayed usage data.
+
+Two consequences worth knowing:
+
+- A replayed cell *receives* the redacted body. If your API returns a
+  field literally named `password` or `secret` and the notebook prints
+  it, the recording run shows the real value and every replay shows the
+  placeholder.
+- Only JSON response bodies are redacted. A token inside an SSE stream,
+  an HTML error page, or a JSON payload served as `text/plain` is
+  recorded as-is.
+
+`clm cassette scan [SPEC-FILE]` audits **already-committed** cassettes
+against exactly these rules (read-only, exits non-zero on findings) — it
+tells you which decks are worth re-recording. Cassettes recorded before
+the response filter existed predate all of the response-side rules.
+Still review the YAML by eye before committing if your topic hits an API
+with a novel auth scheme.
 
 ## Telemetry passthrough
 

@@ -229,15 +229,20 @@ def scan(spec_file: Path | None, as_json: bool) -> None:
     Walks every ``*.http-cassette.yaml`` under the spec's source tree (or
     the current directory when SPEC-FILE is omitted) and reports any value
     the recorder would strip today: secret request headers and query
-    parameters, secret request-body parameters, ``Set-Cookie`` response
-    headers, and OAuth-shaped keys in JSON response bodies. Cassettes
-    recorded before CLM {version} predate the response-side filter
-    entirely, so this is how you find the ones worth re-recording.
+    parameters, secret request-body parameters (JSON or form-encoded),
+    ``Set-Cookie`` response headers, and OAuth-shaped keys in JSON response
+    bodies. Cassettes recorded before the response-side filter existed
+    predate all of that, so this is how you find the ones worth
+    re-recording.
 
-    Exits non-zero when anything is found, so it can gate a repo audit.
-    Never rewrites: a cassette flagged here is fixed by re-recording the
-    deck against the live service (``clm cassette doctor --fix`` is a
-    different, narrower repair).
+    Every finding is one that re-recording the deck actually clears —
+    the audit asks "would the recorder change this file today?", not "is
+    this file free of every secret". Exits non-zero when anything is
+    found, or when a cassette could not be read at all (an unreadable
+    file is not evidence of cleanliness), so it can gate a repo audit.
+    Never rewrites: the fix is to re-record the deck against the live
+    service (``clm cassette doctor --fix`` is a different, narrower
+    repair).
 
     \b
     Examples:
@@ -249,6 +254,7 @@ def scan(spec_file: Path | None, as_json: bool) -> None:
     paths = list(iter_cassette_paths(root))
     reports = scan_cassettes_for_secrets(paths)
     finding_count = sum(len(r.findings) for r in reports)
+    unreadable = sum(1 for r in reports if r.error is not None)
 
     if as_json:
         click.echo(
@@ -268,5 +274,8 @@ def scan(spec_file: Path | None, as_json: bool) -> None:
     else:
         _render_secret_report(reports)
 
-    if finding_count:
+    # Fails closed on an unreadable cassette too: a file the audit could
+    # not parse is not a file it can vouch for, and a repo where every
+    # cassette is truncated would otherwise pass the gate green.
+    if finding_count or unreadable:
         raise SystemExit(1)

@@ -351,8 +351,13 @@ def build_request_filter(
     return before_record_request
 
 
-def _is_json_content_type(value: object) -> bool:
+def is_json_content_type(value: object) -> bool:
     """True when a content-type header value denotes JSON.
+
+    Public because the committed-cassette audit
+    (:mod:`clm.workers.notebook.cassette_doctor`) must gate on exactly the
+    same predicate the recorder uses — a finding the recorder would not
+    act on is a finding nobody can clear.
 
     Prefix, not equality: ``application/json; charset=utf-8`` is the
     same media type, and an equality check let those bodies skip
@@ -415,22 +420,25 @@ def build_response_filter(
 
     def before_record_response(response: dict) -> dict:
         filtered = dict(response)
+        headers = response.get("headers")
+        headers = headers if isinstance(headers, dict) else {}
 
-        headers = response.get("headers") or {}
-        if header_names and isinstance(headers, dict):
+        # The two rules are independent: disabling header filtering must
+        # not silently disable body redaction (they were nested once, and
+        # ``build_response_filter(filter_headers=())`` then left tokens in
+        # place — found in review).
+        if header_names:
             filtered["headers"] = {
                 name: value
                 for name, value in headers.items()
                 if str(name).lower() not in header_names
             }
-            content_type = next(
-                (v for k, v in headers.items() if str(k).lower() == "content-type"), None
-            )
-        else:
-            content_type = None
+        content_type = next(
+            (v for k, v in headers.items() if str(k).lower() == "content-type"), None
+        )
 
         body = response.get("body")
-        if not (body_keys and isinstance(body, dict) and _is_json_content_type(content_type)):
+        if not (body_keys and isinstance(body, dict) and is_json_content_type(content_type)):
             return filtered
 
         raw = body.get("string")
@@ -438,9 +446,11 @@ def build_response_filter(
             return filtered
         try:
             payload = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
-            # Mislabelled or truncated body: leave the bytes exactly as
-            # recorded rather than guessing at their structure.
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            # Mislabelled, truncated, or pathologically nested body: leave
+            # the bytes exactly as recorded rather than guessing at their
+            # structure. (``RecursionError`` matters because the addon
+            # treats a raised filter as "do not record at all".)
             return filtered
 
         redacted = _redact_json_values(payload, body_keys)
@@ -451,8 +461,30 @@ def build_response_filter(
             return filtered
 
         text = json.dumps(redacted, ensure_ascii=False)
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                encoded: bytes | str = text.encode("utf-8")
+            except UnicodeEncodeError:
+                # A lone surrogate survives json.loads but cannot be
+                # encoded. Escaping it keeps the interaction recordable —
+                # dropping it would leave the cassette short one response,
+                # which replays as the *previous* one rather than failing.
+                encoded = json.dumps(redacted, ensure_ascii=True).encode("utf-8")
+        else:
+            encoded = text
+
         filtered["body"] = dict(body)
-        filtered["body"]["string"] = text.encode("utf-8") if isinstance(raw, bytes) else text
+        filtered["body"]["string"] = encoded
+        # Keep the length header honest — ``decode_response`` maintains
+        # this invariant for decompression, and a cassette whose
+        # content-length disagrees with its body misleads every reader.
+        length = len(encoded if isinstance(encoded, bytes) else encoded.encode("utf-8"))
+        current = filtered.get("headers")
+        if isinstance(current, dict):
+            filtered["headers"] = {
+                name: ([str(length)] if str(name).lower() == "content-length" else value)
+                for name, value in current.items()
+            }
         return filtered
 
     return before_record_response

@@ -150,8 +150,68 @@ class TestResponseBodyRedaction:
     )
     def test_secret_key_values_are_redacted(self, key: str) -> None:
         out = self._redact({key: "ya29.SUPERSECRET", "keep": "visible"})
-        assert out[key] != "ya29.SUPERSECRET"
+        # Pin the replacement itself, not just "it changed": a placeholder
+        # of "" — or a truncated prefix of the real secret — would satisfy
+        # an inequality assertion while still leaking (or breaking the
+        # scanner, which recognizes clean cassettes by this exact value).
+        assert out[key] == "[REDACTED-BY-CLM]"
+        assert out[key] == cf.SECRET_PLACEHOLDER
         assert out["keep"] == "visible"
+
+    def test_a_redacted_body_keeps_its_shape(self) -> None:
+        """The key survives; only the value goes.
+
+        Replayed code reads these payloads — a missing key is a different
+        failure than a redacted one.
+        """
+        out = self._redact({"token_type": "Bearer", "access_token": "S"})
+        assert set(out) == {"token_type", "access_token"}
+        assert out["token_type"] == "Bearer"
+
+    def test_content_length_follows_the_redacted_body(self) -> None:
+        """A cassette whose content-length disagrees with its body lies."""
+        payload = json.dumps({"access_token": "S" * 200}).encode()
+        out = cf.build_response_filter()(
+            _response(
+                {"content-type": ["application/json"], "content-length": [str(len(payload))]},
+                payload,
+            )
+        )
+        assert out["headers"]["content-length"] == [str(len(out["body"]["string"]))]
+
+    def test_an_untouched_body_is_byte_identical(self) -> None:
+        """Not merely equal-as-JSON: the exact bytes are preserved.
+
+        Re-serializing every clean response would rewrite separators and
+        unicode escapes across the whole corpus on the next build — a
+        diff nobody asked for. Asserting through ``json.loads`` would not
+        notice.
+        """
+        raw = b'{"a":1,   "b":"caf\xc3\xa9"}'
+        out = cf.build_response_filter()(_response({"content-type": ["application/json"]}, raw))
+        assert out["body"]["string"] == raw
+
+    def test_a_surrogate_bearing_body_is_still_recordable(self) -> None:
+        """A lone surrogate survives ``json.loads`` but cannot be encoded.
+
+        Raising here would drop the interaction, and a dropped response
+        to a *repeated* request replays as the previous one — silently
+        different output, not a miss.
+        """
+        raw = b'{"access_token": "S", "text": "\\ud800"}'
+        out = cf.build_response_filter()(_response({"content-type": ["application/json"]}, raw))
+        assert json.loads(out["body"]["string"])["access_token"] == cf.SECRET_PLACEHOLDER
+
+    def test_body_redaction_does_not_depend_on_header_filtering(self) -> None:
+        """The two rules are independent.
+
+        They were nested once, so disabling header filtering silently
+        disabled body redaction too.
+        """
+        out = cf.build_response_filter(filter_headers=())(
+            _response({"content-type": ["application/json"]}, b'{"access_token": "S"}')
+        )
+        assert json.loads(out["body"]["string"])["access_token"] == cf.SECRET_PLACEHOLDER
 
     def test_redaction_is_recursive_through_dicts_and_lists(self) -> None:
         out = self._redact(
@@ -195,6 +255,84 @@ class TestResponseBodyRedaction:
             _response({"content-type": ["application/json"]}, b'"just-a-string"')
         )
         assert json.loads(out["body"]["string"]) == "just-a-string"
+
+
+class TestRequestFiltersCoverTheRecordedShapes:
+    """Gaps the audit would otherwise flag forever.
+
+    A finding the recorder cannot clear is a gate nobody can satisfy, so
+    every shape the scanner reports has to be one the recorder strips.
+    """
+
+    def test_query_parameter_case_does_not_matter(self) -> None:
+        """``?API_KEY=`` is the same secret as ``?api_key=``."""
+        out = _filtered(_request(uri="https://api.example.com/x?API_KEY=SHHH&keep=1"))
+        assert "SHHH" not in out.uri
+        assert "keep=1" in out.uri
+
+    @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+    def test_json_bodies_are_filtered_on_any_method(self, method: str) -> None:
+        """vcrpy filtered POST only; a PUT with an api_key is ordinary."""
+        request = vf.Request(
+            method,
+            "https://api.example.com/v1/x",
+            b'{"api_key": "SHHH", "keep": 1}',
+            {"content-type": "application/json"},
+        )
+        out = _filtered(request)
+        assert b"SHHH" not in (out.body or b"")
+
+    def test_form_encoded_bodies_are_filtered(self) -> None:
+        """The OAuth password grant, which the scanner also reads."""
+        request = vf.Request(
+            "POST",
+            "https://api.example.com/token",
+            b"grant_type=password&username=bob&password=hunter2",
+            {"content-type": "application/x-www-form-urlencoded"},
+        )
+        out = _filtered(request)
+        assert b"hunter2" not in (out.body or b"")
+        assert b"username=bob" in (out.body or b"")
+
+
+class TestTheRecorderRefusesRatherThanLeaks:
+    """``_filter_response`` returning ``None`` means "do not record".
+
+    Tested at the addon seam because that is where the decision is acted
+    on, and because the alternative — recording an unscrubbed response —
+    is the failure this whole finding is about.
+    """
+
+    def _addon(self):
+        from clm.infrastructure.http_replay_mitm.addon import ClmReplayAddon
+
+        addon = ClmReplayAddon()
+        addon._response_filter = None  # what running() would have built
+        return addon
+
+    def test_no_filter_means_no_recording(self) -> None:
+        """Fail closed if ``running()`` somehow did not build the filter."""
+        assert self._addon()._filter_response(_response({}, b"{}")) is None
+
+    def test_a_filter_that_raises_means_no_recording(self) -> None:
+        from clm.infrastructure.http_replay_mitm.addon import ClmReplayAddon
+
+        addon = ClmReplayAddon()
+
+        def explode(_response):
+            raise RuntimeError("boom")
+
+        addon._response_filter = explode
+        assert addon._filter_response(_response({}, b"{}")) is None
+
+    def test_a_working_filter_returns_the_scrubbed_response(self) -> None:
+        from clm.infrastructure.http_replay_mitm.addon import ClmReplayAddon
+
+        addon = ClmReplayAddon()
+        addon._response_filter = cf.build_response_filter()
+        out = addon._filter_response(_response({"set-cookie": ["s=1"]}, b"{}"))
+        assert out is not None
+        assert "set-cookie" not in out["headers"]
 
 
 class TestFilterListsArePinned:

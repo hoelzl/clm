@@ -633,8 +633,16 @@ class ClmReplayAddon:
         :meth:`_filter_request`: recording the unfiltered response is
         never an option, because a ``Set-Cookie`` or an OAuth token body
         in a committed cassette is a live credential (finding S9, #798).
-        Losing one interaction is a loud replay miss later; leaking a
-        secret into a course repo is not.
+
+        Dropping is not free, though, and the docstring used to claim it
+        was: a *repeated* identical request whose second response is
+        dropped replays the first one again (``_select_serve_index``
+        repeats the last match) rather than missing. So the filter itself
+        avoids raising wherever it can — an unparseable, pathologically
+        nested, or surrogate-bearing body is left alone rather than
+        thrown — and anything that still reaches here is logged at ERROR
+        with its URL, because the resulting cassette is incomplete in a
+        way replay will not announce.
         """
         response_filter = self._response_filter
         if response_filter is None:
@@ -642,8 +650,10 @@ class ClmReplayAddon:
         try:
             return response_filter(response)
         except Exception as exc:  # noqa: BLE001 — never crash the proxy
-            logger.warning(
-                "Response filtering failed (%s: %s); not recording this interaction",
+            logger.error(
+                "Response filtering failed (%s: %s); this interaction is NOT "
+                "recorded, so the cassette will be short one response — "
+                "re-record this deck",
                 type(exc).__name__,
                 exc,
             )

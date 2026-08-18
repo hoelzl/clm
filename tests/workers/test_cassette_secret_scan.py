@@ -144,6 +144,42 @@ class TestDirtyCassettesAreFlagged:
         )
         assert [f.key for f in scan_cassette_secrets(path).findings] == ["refresh_token"]
 
+    def test_form_encoded_request_body(self, tmp_path: Path) -> None:
+        """The OAuth password grant — the recorder strips it, so must the audit.
+
+        Reading request bodies as JSON only made the canonical
+        credential-bearing shape invisible to the very audit meant to
+        find it.
+        """
+        path = _cassette(
+            tmp_path,
+            [
+                _interaction(
+                    request_headers={"content-type": "application/x-www-form-urlencoded"},
+                    request_body="grant_type=password&username=bob&password=hunter2",
+                )
+            ],
+        )
+        assert [f.key for f in scan_cassette_secrets(path).findings] == ["password"]
+
+    def test_a_json_body_under_a_non_json_content_type_is_not_flagged(self, tmp_path: Path) -> None:
+        """Content-type gated, exactly like the recorder.
+
+        Re-recording would not redact this body, so flagging it would be
+        a finding the documented remedy can never clear — and the audit's
+        exit code is a gate.
+        """
+        path = _cassette(
+            tmp_path,
+            [
+                _interaction(
+                    response_headers={"content-type": "text/plain"},
+                    response_body=json.dumps({"access_token": "S"}),
+                )
+            ],
+        )
+        assert scan_cassette_secrets(path).findings == []
+
     def test_an_already_redacted_value_is_not_a_finding(self, tmp_path: Path) -> None:
         """A cassette recorded *after* the fix carries the placeholder.
 
@@ -234,6 +270,31 @@ class TestScanCli:
         assert result.exit_code != 0
         assert '"finding_count": 1' in result.output
 
+    def test_an_unreadable_cassette_fails_the_gate(self, tmp_path: Path) -> None:
+        """A file the audit could not parse is not evidence of cleanliness.
+
+        Counting only findings meant a repo whose cassettes were all
+        truncated passed the gate green.
+        """
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            (Path(fs) / "broken.http-cassette.yaml").write_text(
+                "this: is: not: a cassette", encoding="utf-8"
+            )
+            result = runner.invoke(cassette_group, ["scan", "--json"])
+
+        assert result.exit_code != 0
+        payload = json.loads(result.output[result.output.index("{") :])
+        assert payload["finding_count"] == 0
+        assert payload["cassettes"][0]["error"]
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 @pytest.mark.parametrize(
     "cassette",
@@ -253,7 +314,11 @@ def test_committed_cassettes_in_this_repo(cassette: str) -> None:
     does not touch it; this test states which of the two files the audit
     is expected to flag, so a future accidental leak stands out.
     """
-    report = scan_cassette_secrets(Path(cassette))
+    path = _REPO_ROOT / cassette  # repo-anchored: a CWD-relative path would
+    assert path.is_file(), path  # make this pass vacuously from elsewhere
+    report = scan_cassette_secrets(path)
+    assert report.error is None
+    assert report.interaction_count > 0
     keys = {f.key for f in report.findings}
     if "golden" in cassette:
         assert keys == {"set-cookie"}

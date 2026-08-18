@@ -24,17 +24,37 @@ bodies were written verbatim into files that then went out in a PR.
 - A JSON content-type is matched by prefix, so `application/json;
   charset=utf-8` bodies are filtered too — they were skipped entirely before.
 
+- Query parameter names are matched case-insensitively, and request bodies
+  are filtered on any method (not just `POST`) — both were holes through
+  which `?API_KEY=…` and a `PUT` payload recorded verbatim.
+
 **Do you need to re-record?** Run `clm cassette scan <spec>` in each course
 repo. It is read-only and reports file, interaction index and key. Re-record
 only the decks it flags (`clm build --http-replay refresh`); everything else
-keeps replaying unchanged. Responses are not part of the replay match key, so
-the response-side change cannot cause a replay miss.
+keeps replaying unchanged.
 
-One case *can* cause a miss: a cassette recorded with a **now-filtered query
-parameter** in its URL (`?key=…` on Gemini, a presigned AWS URL). The replay
-lookup filters the incoming request the same way before matching, so the
-recorded URL no longer matches. That surfaces as a loud replay miss, not as
-wrong output — re-record the deck. The scanner flags exactly these cassettes.
+**Two of those flags also predict a replay miss**, because the replay lookup
+filters the *incoming* request the same way before matching, and both the URL
+query and the request body are part of the match key:
+
+- a cassette recorded with a **now-filtered query parameter** (`?key=…` on
+  Gemini, a presigned AWS URL, or any casing variant like `?API_KEY=`);
+- a cassette whose **request body** kept a `password` / `token` / `api_key` —
+  which happens when its content-type carried a charset (`application/json;
+  charset=utf-8`), when the request was not a `POST`, or when the body was
+  form-encoded and predates this release. The incoming request now has that
+  key removed, so it no longer matches what was recorded.
+
+Both surface as a loud replay miss (a build failure under `replay`, a
+re-record under `new-episodes`), never as wrong output, and `clm cassette
+scan` flags exactly these cassettes — its "request query" and "request body"
+findings are the ones to treat as urgent.
+
+Response-side changes cannot cause a miss: responses are not part of the match
+key. They do change what a replayed cell *receives* — a deck whose API returns
+a field literally named `password`, `secret`, `api_key` or `authorization`
+renders the real value on the recording run and `[REDACTED-BY-CLM]` on every
+replay.
 
 **The mitmproxy CA moved.** The proxy's confdir — which holds the CA
 **private key** — was created next to the jobs database, i.e. inside the

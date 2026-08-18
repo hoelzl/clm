@@ -133,9 +133,13 @@ class MitmproxyManager:
         # worker socket stream against the proxy's interception decisions.
         self.trace_dir = Path(trace_dir) if trace_dir is not None else None
         self.listen_port: int | None = None  # set on start
-        # mitmproxy stores its CA + config under ``confdir``. Per-build
-        # isolation keeps the CA out of the user's home directory and gives
-        # each build its own short-lived CA.
+        # mitmproxy stores its CA + config under ``confdir`` — including the
+        # CA **private key**. The build passes a per-user directory
+        # (``engine._mitm_ca_dir``, beside ``kernel-envs/``): one stable CA
+        # per machine, and never inside a course repository, which is where
+        # a jobs-db-relative confdir used to put the key (finding S9, #798).
+        # Tests pass their own temporary directory. ``None`` falls back to
+        # mitmproxy's own ``~/.mitmproxy``.
         self.confdir = Path(confdir) if confdir is not None else None
         self.extra_args = extra_args or []
         # Hosts the addon forwards but never records (LangSmith telemetry by

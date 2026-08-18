@@ -401,15 +401,25 @@ def replace_headers(request: Request, replacements) -> Request:
 
 
 def replace_query_parameters(request: Request, replacements) -> Request:
-    """Remove/replace query parameters; value ``None`` removes the parameter."""
+    """Remove/replace query parameters; value ``None`` removes the parameter.
+
+    Parameter names are compared **case-insensitively** — a deliberate
+    divergence from vcrpy, which uses a plain dict lookup. Query keys are
+    case-sensitive in the URL spec, but nobody writes ``?API_KEY=`` meaning
+    something different from ``?api_key=``, and the case-sensitive
+    comparison let ``?Api_Key=SECRET`` record verbatim (finding S9, #798).
+    The replacement value is looked up by the *canonical* (list) spelling;
+    the surviving parameter keeps its original casing.
+    """
     query = request.query
     new_query = []
-    replacements = dict(replacements)
+    replacements = {str(k).lower(): v for k, v in dict(replacements).items()}
     for k, ov in query:
-        if k not in replacements:
+        lowered = str(k).lower()
+        if lowered not in replacements:
             new_query.append((k, ov))
         else:
-            rv = replacements[k]
+            rv = replacements[lowered]
             if callable(rv):
                 rv = rv(key=k, value=ov, request=request)
             if rv is not None:
@@ -447,7 +457,11 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
         return request
 
     replacements = dict(replacements)
-    if request.method == "POST" and not isinstance(request.body, BytesIO):
+    # Any method that carries a body, not just POST. vcrpy gated this on
+    # POST; a ``PUT``/``PATCH`` with a JSON body carrying ``api_key`` is
+    # ordinary in an API-teaching deck, and it recorded verbatim (finding
+    # S9, #798). Bodyless requests already returned above.
+    if not isinstance(request.body, BytesIO):
         if isinstance(request.body, dict):
             new_body = request.body.copy()
             for k, rv in replacements.items():

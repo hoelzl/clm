@@ -515,9 +515,11 @@ def test_response_secrets_stripped_from_recording(
     assert "REFRESHSECRET" not in text
     # The keys survive with a placeholder (the payload keeps its shape) …
     assert "access_token" in text
-    # … and the usage counters are untouched.
+    assert "[REDACTED-BY-CLM]" in text
+    # … and the usage counters are untouched. Keyed assertions: a bare
+    # "33" would also match the ephemeral port or a Date header.
     assert '"completion_tokens": 22' in text or '"completion_tokens":22' in text
-    assert "33" in text
+    assert '"total_tokens": 33' in text or '"total_tokens":33' in text
 
 
 def test_ignore_hosts_forwarded_but_not_recorded(

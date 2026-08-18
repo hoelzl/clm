@@ -486,13 +486,51 @@ def _iter_secret_body_keys(
             yield from _iter_secret_body_keys(item, keys, placeholder)
 
 
+def _form_body_keys(raw: object) -> list[str]:
+    """Parameter names of a form-encoded body, or ``[]``.
+
+    The recorder's fall-through branch strips ``password``/``token``/
+    ``api_key`` from ``application/x-www-form-urlencoded`` bodies — the
+    OAuth password and client-credentials grants — so the audit has to
+    read them too, not just JSON.
+    """
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return []
+    if not isinstance(raw, str) or "=" not in raw:
+        return []
+    from urllib.parse import parse_qsl
+
+    try:
+        return [name for name, _ in parse_qsl(raw, keep_blank_values=True)]
+    except ValueError:
+        return []
+
+
+def _response_content_type(response: object) -> object | None:
+    headers = (response or {}).get("headers") if isinstance(response, dict) else None
+    if not isinstance(headers, dict):
+        return None
+    return next((v for k, v in headers.items() if str(k).lower() == "content-type"), None)
+
+
 def scan_cassette_secrets(path: Path) -> SecretScanReport:
     """Report secret-shaped values in one committed cassette. Never writes.
 
-    What counts is exactly what the recorder would strip today (see
-    ``cassette_format``'s filter lists), so an interaction is flagged only
-    if re-recording it would actually change something. A value already
-    replaced by the recorder's placeholder is clean.
+    What counts is exactly what the recorder would strip **today**, so
+    every finding is one that re-recording the deck actually clears —
+    otherwise the audit's exit code would be a gate nobody can satisfy.
+    That equivalence is load-bearing and easy to break: the response-body
+    scan is content-type gated because the recorder's is, and the request
+    body is read as JSON *or* form-encoded because the recorder filters
+    both. A value already carrying the recorder's placeholder is clean.
+
+    The flip side, worth knowing: this is not a general secret detector.
+    A token in a body the recorder does not touch (an SSE stream, an
+    HTML error page, a JSON body served as ``text/plain``) is not
+    reported, because re-recording would not remove it either.
     """
     from clm.infrastructure.http_replay_mitm import cassette_format as cf
     from clm.infrastructure.http_replay_mitm.vcr_format import load_cassette
@@ -521,11 +559,15 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             if str(name).lower() in query_params:
                 findings.append(SecretFinding(index, "request query", str(name), uri))
 
-        payload = _json_or_none(getattr(request, "body", None))
+        raw_body = getattr(request, "body", None)
+        payload = _json_or_none(raw_body)
         if isinstance(payload, dict):
-            for key in payload:
-                if isinstance(key, str) and key.lower() in body_params:
-                    findings.append(SecretFinding(index, "request body", key, uri))
+            body_names: Iterable[str] = [k for k in payload if isinstance(k, str)]
+        else:
+            body_names = _form_body_keys(raw_body)
+        for key in body_names:
+            if key.lower() in body_params:
+                findings.append(SecretFinding(index, "request body", key, uri))
 
         headers = (response or {}).get("headers") or {}
         for name in headers:
@@ -533,11 +575,15 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
                 findings.append(SecretFinding(index, "response header", str(name), uri))
 
         body = (response or {}).get("body") or {}
-        response_payload = _json_or_none(body.get("string") if isinstance(body, dict) else None)
-        for key in _iter_secret_body_keys(
-            response_payload, response_body_keys, cf.SECRET_PLACEHOLDER
-        ):
-            findings.append(SecretFinding(index, "response body", key, uri))
+        # Content-type gated, like the recorder: a JSON payload served as
+        # text/plain is not something re-recording would redact, so
+        # flagging it would be an unfixable finding.
+        if cf.is_json_content_type(_response_content_type(response)):
+            response_payload = _json_or_none(body.get("string") if isinstance(body, dict) else None)
+            for key in _iter_secret_body_keys(
+                response_payload, response_body_keys, cf.SECRET_PLACEHOLDER
+            ):
+                findings.append(SecretFinding(index, "response body", key, uri))
 
     return SecretScanReport(path=path, interaction_count=len(requests), findings=findings)
 
