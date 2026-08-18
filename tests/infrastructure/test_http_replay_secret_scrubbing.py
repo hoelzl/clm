@@ -560,6 +560,42 @@ class TestRequestBodyFilteringRecurses:
         assert out is not None, "an unfilterable body must not become a network bypass"
         assert out.body == body
 
+    def test_a_mapping_body_is_walked_too(self) -> None:
+        """The ``dict``-body branch, which had no test at all.
+
+        vcrpy's ``Request`` accepts a mapping body and the filter has always
+        had a branch for it. CLM's mitmproxy path never produces one — bodies
+        arrive as ``bytes`` — but ``load_cassette`` will hand one back for a
+        hand-written cassette whose ``body:`` is a YAML mapping, and the
+        branch is now recursive like the others.
+        """
+        request = vf.Request(
+            "POST",
+            "https://api.example.com/v1/x",
+            {"data": {"api_key": "SHHH", "keep": 1}},
+            {"content-type": "application/json"},
+        )
+        out = _filtered(request)
+        assert out is not None
+        assert out.body == {"data": {"keep": 1}}
+
+    def test_a_cyclic_mapping_body_is_left_alone_not_refused(self) -> None:
+        """What the ``dict`` branch's ``RecursionError`` guard actually buys.
+
+        A *deep* mapping body blows up in ``build_request_filter``'s
+        defensive ``deepcopy`` before the guard is reached, so the guard
+        cannot help there. A **cyclic** one is the case it does catch:
+        ``deepcopy``'s memo resolves the cycle and the walk is what runs
+        away. Either way the request must come back unrefused — a raising
+        filter is read as an ignore-host and sent to the live network in
+        every mode, recording nothing.
+        """
+        body: dict = {"outer": {"api_key": "SHHH"}}
+        body["outer"]["self"] = body
+        out = _filtered(vf.Request("POST", "https://api.example.com/v1/x", body, {}))
+        assert out is not None, "an unfilterable body must not become a network bypass"
+        assert out.body is not None
+
     def test_a_nested_secret_is_stripped_at_a_workable_depth_under_a_low_limit(self) -> None:
         """Sanity anchor for the test above: the guard is not swallowing everything.
 

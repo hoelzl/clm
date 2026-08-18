@@ -20,8 +20,8 @@
   recorder does.** Three fixes in one, all of them cases where the audit and
   the recorder disagreed about what a parameter name even is: a name with no
   `=` (a bare `token`) is now reported, because the recorder strips it; a
-  percent-encoded name (`api%5Fkey=…`) and a `+` in a name are now **not**
-  reported, because the recorder does not; and a non-UTF-8 byte in a
+  percent-encoded name (`api%5Fkey=…`) is now **not** reported, because the
+  recorder does not strip it; and a non-UTF-8 byte in a
   parameter *value* no longer makes the audit skip the whole body, which had
   it vouching for a cassette the recorder does rewrite. The recorder missing a
   percent-encoded name is a real leak, tracked separately as #881.

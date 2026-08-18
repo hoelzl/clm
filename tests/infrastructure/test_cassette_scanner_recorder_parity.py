@@ -404,14 +404,18 @@ REQUEST_BODIES: dict[str, tuple[bytes | str, str]] = {
     # decode raises and `replace_post_data_parameters` turns that into "leave
     # this body alone" — every field, not just the offending one.
     "form_non_utf8_name": ("naïve=1".encode("latin-1") + b"&password=x", FORM),
-    # ``parse_qsl`` percent-decodes names and turns ``+`` into a space; the
-    # recorder's ``partition`` does neither. Reading these as ``api_key`` /
-    # ``password`` gave the audit findings no re-record could clear. The
-    # recorder missing them is a genuine leak, but a *recorder* one — see
-    # the note under the table.
+    # ``parse_qsl`` percent-decodes names; the recorder's ``partition`` does
+    # not. Reading these as ``api_key`` / ``password`` gave the audit findings
+    # no re-record could clear. The recorder missing them is a genuine leak,
+    # but a *recorder* one — see the note under the table.
     "form_percent_encoded_name": (b"api%5Fkey=SECRET", FORM),
     "form_percent_encoded_valueless": (b"passwor%64", FORM),
-    "form_plus_in_name": (b"api+key=SECRET&password=hunter2", FORM),
+    # ``parse_qsl`` also turns ``+`` into a space. Unlike percent-decoding
+    # that could never diverge — no filter-list name contains a space, so it
+    # can neither create a match nor destroy one — so this row pins the
+    # shape, not a fixed bug. There is no ``+`` body that discriminates
+    # between the two readings, which is the proof.
+    "form_plus_in_name": (b"api+key=SECRET", FORM),
     # --- not filtered at all ----------------------------------------------
     # A JSON payload under a content-type the recorder does not read as
     # JSON goes down the form branch, which finds no ``&``/``=`` parameters
@@ -435,6 +439,7 @@ REQUEST_BODIES_DELIBERATELY_UNFILTERED = {
     "json_under_text_plain": "the recorder does not read this content-type as JSON",
     "form_percent_encoded_name": "the recorder does not percent-decode names (#881)",
     "form_percent_encoded_valueless": "the recorder does not percent-decode names (#881)",
+    "form_plus_in_name": "`api+key` is not on the filter list under either reading",
     "form_non_utf8_name": "an undecodable field name makes the recorder skip the whole body",
 }
 
@@ -452,20 +457,50 @@ def _body_bytes(body: bytes | str) -> bytes:
     return body if isinstance(body, bytes) else body.encode("utf-8")
 
 
+def _markers_in(body: bytes | str) -> list[bytes]:
+    """The plaintext markers a body carries, whatever it is encoded as.
+
+    A raw substring test over the bytes is not enough: UTF-16 and UTF-32
+    hide ``sk-live-LEAK`` from it, so such a row would drop out of
+    direction-pinning **silently** — indistinguishable, in a green suite,
+    from a row that has it. That is the same invisibility as #877 itself, so
+    the encodings ``json.loads`` sniffs are decoded here rather than
+    hand-patched row by row.
+    """
+    raw = _body_bytes(body)
+    # Every encoding ``json.detect_encoding`` recognises, BOM-less variants
+    # included: ``utf-16`` alone assumes little-endian without a BOM, so a
+    # UTF-16-BE body would still slip through the derivation silently.
+    for encoding in (
+        "utf-8",
+        "utf-8-sig",
+        "utf-16",
+        "utf-16-be",
+        "utf-16-le",
+        "utf-32",
+        "utf-32-be",
+        "utf-32-le",
+    ):
+        try:
+            text = raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        hits = [m for m in _PLAINTEXT_MARKERS if m.decode() in text]
+        if hits:
+            return hits
+    return []
+
+
 #: Row name -> the plaintext byte strings that must be **gone** from what the
 #: recorder writes. Parity alone is satisfied by both sides ignoring a row, so
-#: pin the direction too, exactly as the response table does.
+#: pin the direction too, exactly as the response table does. The recorder
+#: re-dumps as UTF-8, so a secret that survived an encoded body surfaces as
+#: UTF-8 in what it writes — which is why the markers stay ``bytes``.
 REQUEST_BODY_PLAINTEXT: dict[str, list[bytes]] = {
-    name: [m for m in _PLAINTEXT_MARKERS if m in _body_bytes(body)]
+    name: _markers_in(body)
     for name, (body, _ct) in REQUEST_BODIES.items()
-    if any(m in _body_bytes(body) for m in _PLAINTEXT_MARKERS)
-    and name not in REQUEST_BODIES_DELIBERATELY_UNFILTERED
+    if _markers_in(body) and name not in REQUEST_BODIES_DELIBERATELY_UNFILTERED
 }
-# UTF-16 hides the marker from a UTF-8 substring test, so the derivation
-# above skips the row — silently, which is the failure mode. Spelled out
-# instead: the recorder re-dumps as UTF-8, so a surviving secret surfaces as
-# UTF-8 in what it writes.
-REQUEST_BODY_PLAINTEXT["req_utf16_nested_secret"] = [b"sk-live-LEAK"]
 
 
 def _request_cassette(body: bytes, content_type: str, tmp_path: Path, name: str) -> Path:
@@ -607,6 +642,60 @@ def test_a_bad_byte_in_a_form_value_does_not_blind_the_audit(tmp_path: Path) -> 
     assert b"SECRET" not in _recorded_request_body(body, FORM)
     findings = _scanner_request_findings(body, FORM, tmp_path, "badbyte")
     assert [f.key for f in findings] == ["api_key"]
+
+
+@pytest.mark.parametrize("content_type", [JSON, FORM, "text/plain"])
+def test_a_yaml_mapping_request_body_is_seen_by_both_sides(
+    content_type: str, tmp_path: Path
+) -> None:
+    """A hand-written cassette can carry a mapping where a string belongs.
+
+    ``load_cassette`` hands that back as a ``dict``, and the recorder's
+    ``isinstance(request.body, dict)`` branch fires on it **before** any
+    content-type check. The audit used to fall through to the form reader,
+    which rejects a non-``bytes``/``str`` body — so it reported such a file
+    clean while the recorder would strip it. Contrived, but a false
+    all-clear, and the dispatch order is what makes it one.
+    """
+    path = tmp_path / f"mapping-{content_type.replace('/', '_')}.http-cassette.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "interactions": [
+                    {
+                        "request": {
+                            "method": "POST",
+                            "uri": "https://api.example.com/v1/chat",
+                            "body": {"data": {"api_key": "sk-live-LEAK"}},
+                            "headers": {"content-type": [content_type]},
+                        },
+                        "response": {
+                            "status": {"code": 200, "message": "OK"},
+                            "headers": {"content-type": ["text/plain"]},
+                            "body": {"string": "ok"},
+                        },
+                    }
+                ],
+                "version": 1,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    report = scan_cassette_secrets(path)
+    assert report.error is None, report.error
+    assert [(f.location, f.key) for f in report.findings] == [("request body", "api_key")]
+
+    out = cf.build_request_filter()(
+        cf.Request(
+            "POST",
+            "https://api.example.com/v1/chat",
+            {"data": {"api_key": "sk-live-LEAK"}},
+            {"content-type": content_type},
+        )
+    )
+    assert out is not None
+    assert out.body == {"data": {}}
 
 
 def test_an_undecodable_form_field_name_stops_both_sides(tmp_path: Path) -> None:

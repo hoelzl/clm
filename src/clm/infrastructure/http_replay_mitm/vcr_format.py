@@ -570,13 +570,22 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
             try:
                 request.body, _ = filter_json_parameters(request.body, replacements, request)
             except RecursionError:
-                # Same guard as the JSON branch below, and for the same
-                # reason. This branch could not recurse before, so it could
-                # not overflow either; now it can, and an escaping
-                # ``RecursionError`` reads to the addon as "unfilterable" —
-                # live network in every mode, nothing recorded. Unreachable
-                # through the mitmproxy path (bodies arrive as ``bytes``),
-                # kept because the cost of being wrong here is silent egress.
+                # Same guard as the JSON branch below: this branch could not
+                # recurse before, so it could not overflow either, and an
+                # escaping ``RecursionError`` reads to the addon as
+                # "unfilterable" — live network in every mode, nothing
+                # recorded.
+                #
+                # It buys less than it looks like, and the limit is worth
+                # knowing. ``build_request_filter`` ``deepcopy``s the request
+                # first, so a body nested deeper than the stack allows blows
+                # up *there* and never reaches this guard. What this does
+                # catch is a **cyclic** body: ``deepcopy``'s memo handles the
+                # cycle happily and the walk below is what runs away. Both
+                # cases need a ``dict`` body, which the mitmproxy path never
+                # produces (bodies arrive as ``bytes``) — kept because the
+                # cost of being wrong here is silent egress, not because it
+                # is reachable.
                 return request
         elif _is_json_content_type(request.headers.get("Content-Type")):
             try:

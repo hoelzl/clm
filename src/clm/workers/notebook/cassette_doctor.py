@@ -545,6 +545,14 @@ def _json_body_param_names(payload: object, names: frozenset[str]) -> list[str]:
     side: the recorder's guard leaves a pathologically nested body's bytes
     untouched, so a finding here would be one no re-record can clear — and
     letting it escape would abort the whole repo walk.
+
+    The two guards do not cover *exactly* the same depth, and the residue is
+    worth knowing rather than chasing. The recorder runs parse + walk +
+    ``json.dumps`` under one guard while this runs parse + walk, so it gives
+    up one nesting level earlier: at a single depth around 1000 the audit
+    reports a body the recorder would no-op on. Measured; always in the
+    benign direction (an unsatisfiable finding, never a false all-clear), and
+    it needs a request body nested a thousand deep to reach.
     """
     from clm.infrastructure.http_replay_mitm.vcr_format import filter_json_parameters
 
@@ -573,7 +581,9 @@ def _form_body_keys(raw: object) -> list[str]:
       That the recorder misses such a name is a real leak, but it is a
       *recorder* bug (issue #881) — the audit's question is only "would
       the recorder change this file today?".
-    * ``parse_qsl`` also turns ``+`` into a space, with the same effect.
+      (``parse_qsl`` also turns ``+`` into a space, but that one could never
+      diverge either way: no name on the filter list contains a space, so
+      plus-decoding can neither create a match nor destroy one.)
     * A field with **no ``=``** still counts: the recorder's ``partition``
       yields an empty separator, not ``None``, so a bare ``token`` is
       stripped like any other name. ``parse_qsl`` needed
@@ -659,9 +669,10 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             if str(name).lower() in query_params:
                 findings.append(SecretFinding(index, "request query", str(name), uri))
 
-        # Dispatch on the request content-type exactly as the recorder
-        # does — JSON there, form-encoded everywhere else. Reading the
-        # body both ways would flag a JSON payload served as text/plain
+        # Dispatch exactly as the recorder does, **including the order**:
+        # a mapping body first (whatever the content-type says), then JSON
+        # by content-type, then form-encoded for everything else. Reading
+        # the body both ways would flag a JSON payload served as text/plain
         # (which the recorder leaves alone), i.e. a finding no re-record
         # can clear.
         raw_body = getattr(request, "body", None)
@@ -673,7 +684,16 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             ),
             None,
         )
-        if cf.is_json_content_type(request_content_type):
+        if isinstance(raw_body, dict):
+            # ``load_cassette`` yields a mapping for a hand-written
+            # cassette whose ``body:`` is a YAML mapping rather than a
+            # string. Nothing CLM writes produces one, but the recorder's
+            # ``isinstance(request.body, dict)`` branch fires on it before
+            # any content-type check — so an audit that fell through to the
+            # form reader here reported such a file clean while the recorder
+            # would strip it. A false all-clear, however contrived the file.
+            body_names: Iterable[str] = _json_body_param_names(raw_body, body_params)
+        elif cf.is_json_content_type(request_content_type):
             payload, _ = _json_or_none(raw_body)
             # At any depth, like the recorder: a nested
             # ``{"data": {"api_key": …}}`` was recorded verbatim while the
@@ -681,7 +701,7 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             # (issue #877). Scanner and recorder were consistently
             # top-level, so the parity suite passed on it: a shared blind
             # spot, which is the one shape a parity test cannot catch.
-            body_names: Iterable[str] = _json_body_param_names(payload, body_params)
+            body_names = _json_body_param_names(payload, body_params)
         else:
             body_names = [k for k in _form_body_keys(raw_body) if k.lower() in body_params]
         for key in body_names:

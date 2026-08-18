@@ -133,13 +133,23 @@ What landed:
   matched key takes its subtree with it (stop-at-match, like the response
   side). **No value-type exemption** on the request side — see the landmine
   below.
-- Parse, walk *and* `json.dumps` under one guard, on the JSON branch and the
-  (CLM-unreachable) `dict`-body branch alike. An escaping `RecursionError`
-  reads to the addon as "unfilterable" → live network in every mode, nothing
-  recorded. The limb actually reproduced escaping is the new Python-level
-  *walk*, at `setrecursionlimit(300)` / depth 400; on this box's CPython 3.13
-  the parse always blows before `json.dumps` would, so the dumps half is
-  hardening rather than a demonstrated bug.
+- Parse, walk *and* `json.dumps` under one guard on the JSON branch; the
+  (CLM-unreachable) `dict`-body branch, which only walks, got the same
+  `RecursionError` guard. An escaping `RecursionError` reads to the addon as
+  "unfilterable" → live network in every mode, nothing recorded. The limb
+  actually reproduced escaping is the new Python-level *walk*, at
+  `setrecursionlimit(300)` / depth 400; on this box's CPython 3.13 the parse
+  always blows before `json.dumps` would, so the dumps half is hardening
+  rather than a demonstrated bug.
+  **Know what the `dict` guard cannot do**: `build_request_filter` deep-copies
+  the request first, so a *deeply nested* mapping body blows up in
+  `copy.deepcopy` and never reaches it. What it does catch is a **cyclic**
+  body — `deepcopy`'s memo resolves the cycle and the walk runs away. Both
+  need a `dict` body, which only a hand-written cassette produces.
+- The audit dispatches on body **type before content-type**, like the
+  recorder: a YAML-mapping `body:` is walked whatever the header says. Falling
+  through to the form reader (which rejects non-`bytes`/`str`) made such a
+  file a false all-clear.
 - **`_form_body_keys` now hand-mirrors `_replace_form_parameters` instead of
   using `parse_qsl`.** Three divergences, found in review:
   - a name with **no `=`** (bare `token`) is stripped by the recorder
@@ -196,6 +206,11 @@ The #877 column is the important one: the widened recursive walk finds
   bot-management, ~30 min TTL), `WMF-Uniq` ×24, `WMF-Last-Access` ×18,
   `WMF-Last-Access-Global` ×18, `GeoIP` ×18, `NetworkProbeLimit` ×18, `WMF-DP`
   ×10 (all Wikimedia analytics/geo), `grokipedia-affinity` ×2 (routing).
+  These counts are **cookies**, and sum to 378; the 294 in the table are
+  **findings**, one per `set-cookie` *header*, and a single header can carry
+  several cookies. Different metrics, same corpus, same day — an earlier
+  version of this section counted cookies but summed them against the finding
+  total, which reconciled only by coincidence.
 - **Zero request-side findings**, confirmed again *after* #877 — decisive,
   because those are the only class in the replay match key. Nothing will start
   failing to replay, so re-recording is byte-hygiene and can ride along with
