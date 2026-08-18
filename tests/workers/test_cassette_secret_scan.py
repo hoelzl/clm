@@ -99,8 +99,44 @@ class TestCleanCassettesPass:
         )
         assert scan_cassette_secrets(path).findings == []
 
+    def test_a_word_keyed_vocabulary_is_not_a_secret(self, tmp_path: Path) -> None:
+        """The scanner has to move with the recorder (issue #875).
+
+        ``encoder.json`` maps words to integer token ids, and ``secret``
+        and ``password`` are words. The recorder now leaves numeric values
+        alone, so a scanner that still flagged them would report findings
+        no re-record can clear — and `clm cassette scan` exits non-zero on
+        findings, which makes the repo audit gate unsatisfiable. That
+        equivalence is the point of the scanner, not a nicety.
+        """
+        path = _cassette(
+            tmp_path,
+            [
+                _interaction(
+                    response_body=json.dumps(
+                        {"hello": 31373, "secret": 21078, "password": 28712, "flag": None}
+                    )
+                )
+            ],
+        )
+        assert scan_cassette_secrets(path).findings == []
+
 
 class TestDirtyCassettesAreFlagged:
+    def test_a_container_valued_secret_key_is_still_flagged(self, tmp_path: Path) -> None:
+        """The other half of #875: exempting scalars must not exempt subtrees.
+
+        The recorder redacts a dict- or list-valued secret key wholesale,
+        so the scanner must keep flagging it — otherwise the audit calls a
+        cassette clean that the recorder would still rewrite.
+        """
+        path = _cassette(
+            tmp_path,
+            [_interaction(response_body=json.dumps({"secret": {"value": "sk-live-abc123"}}))],
+        )
+        findings = scan_cassette_secrets(path).findings
+        assert [(f.location, f.key) for f in findings] == [("response body", "secret")]
+
     def test_secret_request_header(self, tmp_path: Path) -> None:
         path = _cassette(
             tmp_path, [_interaction(request_headers={"authorization": "Bearer SECRET"})]

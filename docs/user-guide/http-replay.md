@@ -292,12 +292,22 @@ Key names are matched **exactly**, never as substrings: an LLM response
 legitimately carries `completion_tokens` / `total_tokens`, and clipping
 those would corrupt replayed usage data.
 
+The *value* has to be redactable too. A number, boolean or `null` under
+one of those keys is left alone, because no credential is one — and a
+response body can legitimately be a map keyed by ordinary words, where
+`secret` and `password` are just entries. GPT-2's BPE vocabulary
+(`encoder.json`) is exactly that: it maps `"secret"` to the integer
+`21078`, and overwriting it with a placeholder string would hand the
+replayed tokenizer a corrupted vocabulary. Strings, objects and arrays
+under a secret-named key are still redacted, objects and arrays
+wholesale.
+
 Two consequences worth knowing:
 
 - A replayed cell *receives* the redacted body. If your API returns a
-  field literally named `password` or `secret` and the notebook prints
-  it, the recording run shows the real value and every replay shows the
-  placeholder.
+  string field literally named `password` or `secret` and the notebook
+  prints it, the recording run shows the real value and every replay
+  shows the placeholder.
 - Only JSON response bodies are redacted. A token inside an SSE stream,
   an HTML error page, or a JSON payload served as `text/plain` is
   recorded as-is.

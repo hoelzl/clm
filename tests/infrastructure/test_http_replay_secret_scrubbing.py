@@ -158,6 +158,57 @@ class TestResponseBodyRedaction:
         assert out[key] == cf.SECRET_PLACEHOLDER
         assert out["keep"] == "visible"
 
+    @pytest.mark.parametrize("value", [21078, 0, -1, 3.5, True, False, None])
+    def test_a_numeric_or_null_value_is_not_a_secret(self, value: object) -> None:
+        """A token *id* is not a token (issue #875).
+
+        ``encoder.json`` — GPT-2's BPE vocabulary, fetched by the text
+        chunking deck — is a map from word to integer id, and ``secret``
+        and ``password`` are ordinary words. Redacting by key name alone
+        wrote the placeholder string over four integer ids, handing the
+        replayed tokenizer a corrupted vocabulary *and* changing the JSON
+        value type out from under whatever reads it.
+
+        No credential this filter exists for is a number, a boolean or
+        null, so exempting those types costs nothing and is the whole fix.
+        """
+        out = self._redact({"hello": 31373, "secret": value, "password": value})
+        assert out["secret"] == value
+        assert out["password"] == value
+        assert out["hello"] == 31373
+
+    def test_the_real_vocabulary_shape_survives(self) -> None:
+        """The exact corpus case, as a regression pin.
+
+        Byte-identical, not merely equal-as-JSON: nothing matched, so the
+        recorder must take the untouched-body shortcut rather than
+        re-serialize a 1.8 MB vocabulary and rewrite its separators.
+        """
+        raw = b'{"hello":31373,"secret":21078,"Secret":23725,"password":28712}'
+        out = cf.build_response_filter()(_response({"content-type": ["application/json"]}, raw))
+        assert out["body"]["string"] == raw
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param({"value": "sk-live-abc123"}, id="dict"),
+            pytest.param(["sk-live-abc123"], id="list"),
+            pytest.param("sk-live-abc123", id="str"),
+        ],
+    )
+    def test_a_container_or_string_value_is_still_redacted_wholesale(self, value: object) -> None:
+        """The trap in the obvious version of the #875 fix.
+
+        "Only redact strings" looks right and quietly leaks: the nested
+        key (``value``) is not on the filter list, so recursing into the
+        subtree finds nothing and the secret survives. Containers must
+        keep going wholesale — only scalars that cannot carry a
+        credential are exempt.
+        """
+        out = self._redact({"secret": value})
+        assert out["secret"] == cf.SECRET_PLACEHOLDER
+        assert "sk-live-abc123" not in json.dumps(out)
+
     def test_a_redacted_body_keeps_its_shape(self) -> None:
         """The key survives; only the value goes.
 

@@ -382,19 +382,46 @@ def is_json_content_type(value: object) -> bool:
     return str(value).strip().lower().startswith(_JSON_CONTENT_TYPE_PREFIX)
 
 
+def is_secret_body_value(value: object) -> bool:
+    """True when a value found under a secret-named key must be redacted.
+
+    Public, and imported by the committed-cassette audit
+    (:mod:`clm.workers.notebook.cassette_doctor`) rather than reimplemented
+    there: scanner and recorder have to agree exactly, or ``clm cassette
+    scan`` reports findings that re-recording cannot clear and its non-zero
+    exit makes a repo audit unsatisfiable. The two *were* written twice and
+    drifted (issue #875), which is why this is one function now.
+
+    The key name alone is not enough. ``encoder.json`` — GPT-2's BPE
+    vocabulary, fetched by the text-chunking deck — maps each token to an
+    integer id, and ``secret`` and ``password`` are ordinary words. Keying
+    on the name wrote the placeholder *string* over four integer ids,
+    handing the replayed tokenizer a corrupted vocabulary and changing the
+    JSON value type under whatever reads it.
+
+    So numbers, booleans and null are exempt: no credential this filter
+    exists for is one. Note the inverse — "redact only strings" — is
+    **wrong** and leaks: ``{"secret": {"value": "sk-live-…"}}`` would then
+    be recursed into, and ``value`` is not on the key list, so the secret
+    survives. Containers stay redacted wholesale.
+    """
+    return not isinstance(value, (int, float, type(None)))
+
+
 def _redact_json_values(payload: object, keys: frozenset[str]) -> object:
     """Recursively replace the values of *keys* with the placeholder.
 
     Keys are compared case-insensitively but **whole** — see
     :data:`FILTER_RESPONSE_BODY_KEYS` for why substring matching is not
-    an option. Containers are rebuilt rather than mutated so the caller's
+    an option — and the value must be one :func:`is_secret_body_value`
+    accepts. Containers are rebuilt rather than mutated so the caller's
     parsed payload is untouched.
     """
     if isinstance(payload, dict):
         return {
             key: (
                 SECRET_PLACEHOLDER
-                if isinstance(key, str) and key.lower() in keys
+                if isinstance(key, str) and key.lower() in keys and is_secret_body_value(value)
                 else _redact_json_values(value, keys)
             )
             for key, value in payload.items()

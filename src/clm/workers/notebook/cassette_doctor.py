@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 
 from attrs import define, field
@@ -471,19 +471,30 @@ def _json_or_none(raw: object) -> object | None:
 
 
 def _iter_secret_body_keys(
-    payload: object, keys: frozenset[str], placeholder: str
+    payload: object,
+    keys: frozenset[str],
+    placeholder: str,
+    is_secret_value: Callable[[object], bool],
 ) -> Iterator[str]:
-    """Yield each secret-shaped key whose value is not already redacted."""
+    """Yield each secret-shaped key whose value the recorder would redact.
+
+    *is_secret_value* is the recorder's own
+    :func:`cassette_format.is_secret_body_value`, threaded in from the
+    caller (which already holds the module) rather than reimplemented here:
+    a finding the recorder would not act on is a finding nobody can clear,
+    and this scan gates a repo audit on its exit code. The two copies of
+    this test had already drifted once (issue #875).
+    """
     if isinstance(payload, dict):
         for key, value in payload.items():
-            if isinstance(key, str) and key.lower() in keys:
+            if isinstance(key, str) and key.lower() in keys and is_secret_value(value):
                 if value != placeholder:
                     yield key
                 continue
-            yield from _iter_secret_body_keys(value, keys, placeholder)
+            yield from _iter_secret_body_keys(value, keys, placeholder, is_secret_value)
     elif isinstance(payload, list):
         for item in payload:
-            yield from _iter_secret_body_keys(item, keys, placeholder)
+            yield from _iter_secret_body_keys(item, keys, placeholder, is_secret_value)
 
 
 def _form_body_keys(raw: object) -> list[str]:
@@ -596,7 +607,10 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
         if cf.is_json_content_type(_response_content_type(response)):
             response_payload = _json_or_none(body.get("string") if isinstance(body, dict) else None)
             for key in _iter_secret_body_keys(
-                response_payload, response_body_keys, cf.SECRET_PLACEHOLDER
+                response_payload,
+                response_body_keys,
+                cf.SECRET_PLACEHOLDER,
+                cf.is_secret_body_value,
             ):
                 findings.append(SecretFinding(index, "response body", key, uri))
 
