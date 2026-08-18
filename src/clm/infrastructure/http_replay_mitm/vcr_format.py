@@ -420,6 +420,21 @@ def replace_query_parameters(request: Request, replacements) -> Request:
     return request
 
 
+def _is_json_content_type(value: object) -> bool:
+    """True when a ``Content-Type`` value denotes JSON.
+
+    A deliberate divergence from vcrpy, which compares for equality:
+    ``application/json; charset=utf-8`` is the same media type, and the
+    equality check let those bodies skip secret filtering entirely
+    (finding S9, #798). Replay is unaffected — the body matcher is
+    JSON-semantic, so the re-dumped bytes still compare equal to what a
+    cassette recorded through the old path holds.
+    """
+    if value is None:
+        return False
+    return str(value).strip().lower().startswith("application/json")
+
+
 def replace_post_data_parameters(request: Request, replacements) -> Request:
     """Remove/replace form/JSON body parameters; value ``None`` removes.
 
@@ -443,8 +458,21 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
                     if rv is not None:
                         new_body[k] = rv
             request.body = new_body
-        elif request.headers.get("Content-Type") == "application/json":
-            json_data = json.loads(request.body)
+        elif _is_json_content_type(request.headers.get("Content-Type")):
+            try:
+                json_data = json.loads(request.body)
+            except (ValueError, UnicodeDecodeError):
+                # A JSON content-type on a body that will not parse. vcrpy
+                # would raise here; the addon turns any filter exception
+                # into "forward without recording", so raising would drop
+                # the interaction from the cassette silently. Leave the
+                # body untouched instead — there is nothing to filter in
+                # something we cannot read (finding S9, #798).
+                return request
+            if not isinstance(json_data, dict):
+                # A JSON array or scalar has no top-level keys to filter,
+                # and re-dumping it would rewrite bytes for nothing.
+                return request
             for k, rv in replacements.items():
                 if k in json_data:
                     ov = json_data.pop(k)

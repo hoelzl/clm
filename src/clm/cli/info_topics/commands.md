@@ -3096,6 +3096,7 @@ Inspect and repair HTTP-replay cassettes.
 | Subcommand | Description |
 |------------|-------------|
 | `cassette doctor` | Detect (and optionally repair) orphan chain-pointing interactions |
+| `cassette scan` | Audit committed cassettes for recorded secrets (read-only) |
 
 #### `clm cassette doctor [SPEC-FILE]`
 
@@ -3136,6 +3137,46 @@ clm cassette doctor course-specs/python-course.xml          # report only
 clm cassette doctor course-specs/python-course.xml --fix    # repair
 clm cassette doctor course-specs/python-course.xml --json   # CI gate
 clm cassette doctor                                          # walk cwd
+```
+
+#### `clm cassette scan [SPEC-FILE]` (since {version})
+
+Audits committed cassettes for values the recorder would strip today, and
+**never rewrites anything**. Cassettes are tracked files in course repos, so
+whatever the recorder wrote is what landed in a PR — and before {version} the
+recorder filtered *requests only*, so `Set-Cookie` headers and OAuth-shaped
+response bodies were committed verbatim.
+
+Reports the file, the interaction index and the offending key for:
+
+- secret request headers (`authorization`, `cookie`, `x-api-key`, `api-key`,
+  `x-goog-api-key`, `proxy-authorization`, `x-amz-security-token`,
+  `x-auth-token`);
+- secret query parameters (`api_key`, `token`, `key`, `access_token`,
+  `apikey`, `subscription-key`, `X-Amz-Signature`);
+- secret request-body parameters (`password`, `token`, `api_key`);
+- `Set-Cookie` response headers;
+- OAuth-shaped keys anywhere in a JSON response body (`access_token`,
+  `refresh_token`, `id_token`, `client_secret`, `api_key`, `apikey`,
+  `authorization`, `password`, `secret`, `session_token`) whose value is not
+  already the recorder's placeholder.
+
+Key names are matched **exactly**, never as substrings: an LLM response
+legitimately contains `completion_tokens` / `total_tokens`, and flagging those
+would mark every LLM cassette in the repo as dirty.
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Emit a machine-readable JSON report on stdout instead of the text report. |
+
+Exits non-zero when anything is found, so it can gate a repo audit. The fix
+for a flagged cassette is to **re-record that deck** against the live service
+(`--http-replay=refresh`); the recorder strips these on the way in now.
+
+```bash
+clm cassette scan course-specs/python-course.xml           # audit a repo
+clm cassette scan course-specs/python-course.xml --json    # CI gate
+clm cassette scan                                           # walk cwd
 ```
 
 ### `clm config`

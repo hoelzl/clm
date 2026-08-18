@@ -260,11 +260,18 @@ def test_round_trip_load(tmp_path):
 
 
 def test_filter_pins_vcrpy_before_record_request_behavior():
-    """The filter's exact output, including two vcrpy conventions committed
+    """The filter's exact output, including the vcrpy convention committed
     cassettes depend on: a matched JSON body is re-dumped with default
-    separators, while a ``charset``-suffixed content-type skips the JSON
-    rewrite entirely (vcrpy's exact-match gate). Validated byte-identical to
-    ``vcr.VCR._build_before_record_request`` at migration time (#355)."""
+    separators. Validated byte-identical to
+    ``vcr.VCR._build_before_record_request`` at migration time (#355).
+
+    One deliberate divergence since S9 (#798): a ``charset``-suffixed
+    content-type is now *also* treated as JSON. vcrpy's exact-string gate
+    meant ``application/json; charset=utf-8`` skipped body filtering
+    entirely, so secrets in those bodies were recorded verbatim. The
+    re-dump is byte-visible but replay-safe — the body matcher is
+    JSON-semantic, so a cassette recorded through the old path still
+    matches."""
     ours = cf.build_request_filter(ignore_hosts=("api.smith.langchain.com",))
 
     filtered = ours(
@@ -291,17 +298,18 @@ def test_filter_pins_vcrpy_before_record_request_behavior():
         },
     }
 
-    # charset-suffixed content-type: vcrpy's exact-string gate skips the JSON
-    # rewrite, so the body stays byte-identical.
+    # charset-suffixed content-type: matched by prefix since S9, so the
+    # body goes through the JSON path (and is re-dumped) like any other
+    # JSON body — that is what lets secrets in it be filtered at all.
     charset = ours(
         cf.vcr_request_from_parts(
             "POST",
             "https://o.ai/v1",
             [(b"content-type", b"application/json; charset=utf-8")],
-            b'{"k":1}',
+            b'{"k":1,"password":"p"}',
         )
     )
-    assert charset.body == b'{"k":1}'
+    assert charset.body == b'{"k": 1}'
 
 
 def test_filter_removes_secrets():
@@ -368,9 +376,31 @@ def test_filter_constants_and_matchers_are_pinned():
     same. Widening the filters is fine; narrowing or reordering silently
     changes what gets recorded/matched and needs a deliberate decision.
     """
-    assert cf.FILTER_HEADERS == ["authorization", "cookie", "x-api-key", "set-cookie"]
+    # The original entries keep their identity *and* their leading
+    # position; S9 (#798) appended provider-specific spellings, which is
+    # the widening this docstring calls fine.
+    assert cf.FILTER_HEADERS == [
+        "authorization",
+        "cookie",
+        "x-api-key",
+        "set-cookie",
+        "api-key",
+        "x-goog-api-key",
+        "proxy-authorization",
+        "x-amz-security-token",
+        "x-auth-token",
+    ]
     assert cf.FILTER_POST_DATA_PARAMETERS == ["password", "token", "api_key"]
-    assert cf.FILTER_QUERY_PARAMETERS == ["api_key", "token"]
+    assert cf.FILTER_QUERY_PARAMETERS == [
+        "api_key",
+        "token",
+        "key",
+        "access_token",
+        "apikey",
+        "subscription-key",
+        "X-Amz-Signature",
+    ]
+    assert cf.FILTER_RESPONSE_HEADERS == ["set-cookie"]
     names = [m.__name__ for m in cf.REPLAY_MATCHERS]
     assert names[:6] == ["method", "scheme", "host", "port", "path", "query"]
     assert "json_body" in names[6]

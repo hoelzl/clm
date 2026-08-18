@@ -389,3 +389,159 @@ def diagnose_cassettes(
 ) -> list[CassetteReport]:
     """Diagnose (and optionally repair) every cassette in ``paths``."""
     return [diagnose_cassette(path, min_text_len=min_text_len, fix=fix) for path in paths]
+
+
+# ---------------------------------------------------------------------------
+# Secret audit (finding S9, #798)
+# ---------------------------------------------------------------------------
+# Tightening the record-time filters does nothing for the thousands of
+# cassettes already committed across the course repos. Re-recording them
+# blindly is not an option — each needs a live service, and most hold
+# nothing sensitive — so this reports *which* cassette, interaction and key,
+# and never rewrites anything. The record-time filter lists are the single
+# source of truth for what counts, so the audit cannot drift from the policy.
+
+
+@define
+class SecretFinding:
+    """One secret-shaped value found in a committed cassette.
+
+    Attributes:
+        index: Interaction index within the cassette.
+        location: Where it sits — ``request header``, ``request query``,
+            ``request body``, ``response header`` or ``response body``.
+        key: The offending key/header/parameter name.
+        uri: The interaction's request URI, for orientation.
+    """
+
+    index: int
+    location: str
+    key: str
+    uri: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "index": self.index,
+            "location": self.location,
+            "key": self.key,
+            "uri": self.uri,
+        }
+
+
+@define
+class SecretScanReport:
+    """Audit result for a single cassette."""
+
+    path: Path
+    interaction_count: int = 0
+    findings: list[SecretFinding] = field(factory=list)
+    error: str | None = None
+
+    @property
+    def is_dirty(self) -> bool:
+        return bool(self.findings)
+
+    def to_dict(self) -> dict:
+        return {
+            "path": str(self.path),
+            "interaction_count": self.interaction_count,
+            "findings": [f.to_dict() for f in self.findings],
+            "error": self.error,
+        }
+
+
+def _json_or_none(raw: object) -> object | None:
+    """Parse *raw* as JSON, or ``None`` when it is not JSON at all.
+
+    A cassette body may be bytes or str, and may be anything from an SSE
+    stream to HTML — the audit only reads the ones it can parse.
+    """
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed: object = json.loads(raw)
+    except ValueError:
+        return None
+    return parsed
+
+
+def _iter_secret_body_keys(
+    payload: object, keys: frozenset[str], placeholder: str
+) -> Iterator[str]:
+    """Yield each secret-shaped key whose value is not already redacted."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if isinstance(key, str) and key.lower() in keys:
+                if value != placeholder:
+                    yield key
+                continue
+            yield from _iter_secret_body_keys(value, keys, placeholder)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _iter_secret_body_keys(item, keys, placeholder)
+
+
+def scan_cassette_secrets(path: Path) -> SecretScanReport:
+    """Report secret-shaped values in one committed cassette. Never writes.
+
+    What counts is exactly what the recorder would strip today (see
+    ``cassette_format``'s filter lists), so an interaction is flagged only
+    if re-recording it would actually change something. A value already
+    replaced by the recorder's placeholder is clean.
+    """
+    from clm.infrastructure.http_replay_mitm import cassette_format as cf
+    from clm.infrastructure.http_replay_mitm.vcr_format import load_cassette
+
+    try:
+        requests, responses = load_cassette(path)
+    except Exception as exc:  # noqa: BLE001 — one bad file must not abort the walk
+        logger.warning(f"Could not load cassette '{path}' ({type(exc).__name__}: {exc}); skipping.")
+        return SecretScanReport(path=path, error=f"{type(exc).__name__}: {exc}")
+
+    request_headers = frozenset(h.lower() for h in cf.FILTER_HEADERS)
+    query_params = frozenset(p.lower() for p in cf.FILTER_QUERY_PARAMETERS)
+    body_params = frozenset(p.lower() for p in cf.FILTER_POST_DATA_PARAMETERS)
+    response_headers = frozenset(h.lower() for h in cf.FILTER_RESPONSE_HEADERS)
+    response_body_keys = frozenset(k.lower() for k in cf.FILTER_RESPONSE_BODY_KEYS)
+
+    findings: list[SecretFinding] = []
+    for index, (request, response) in enumerate(zip(requests, responses, strict=False)):
+        uri = str(getattr(request, "uri", "") or "")
+
+        for name in getattr(request, "headers", {}) or {}:
+            if str(name).lower() in request_headers:
+                findings.append(SecretFinding(index, "request header", str(name), uri))
+
+        for name, _value in getattr(request, "query", []) or []:
+            if str(name).lower() in query_params:
+                findings.append(SecretFinding(index, "request query", str(name), uri))
+
+        payload = _json_or_none(getattr(request, "body", None))
+        if isinstance(payload, dict):
+            for key in payload:
+                if isinstance(key, str) and key.lower() in body_params:
+                    findings.append(SecretFinding(index, "request body", key, uri))
+
+        headers = (response or {}).get("headers") or {}
+        for name in headers:
+            if str(name).lower() in response_headers:
+                findings.append(SecretFinding(index, "response header", str(name), uri))
+
+        body = (response or {}).get("body") or {}
+        response_payload = _json_or_none(body.get("string") if isinstance(body, dict) else None)
+        for key in _iter_secret_body_keys(
+            response_payload, response_body_keys, cf.SECRET_PLACEHOLDER
+        ):
+            findings.append(SecretFinding(index, "response body", key, uri))
+
+    return SecretScanReport(path=path, interaction_count=len(requests), findings=findings)
+
+
+def scan_cassettes_for_secrets(paths: Iterable[Path]) -> list[SecretScanReport]:
+    """Audit every cassette in ``paths`` (read-only)."""
+    return [scan_cassette_secrets(path) for path in paths]

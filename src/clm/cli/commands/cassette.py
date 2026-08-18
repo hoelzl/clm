@@ -18,8 +18,10 @@ from clm.core.course_paths import resolve_course_paths
 from clm.workers.notebook.cassette_doctor import (
     DEFAULT_MIN_TEXT_LEN,
     CassetteReport,
+    SecretScanReport,
     diagnose_cassettes,
     iter_cassette_paths,
+    scan_cassettes_for_secrets,
 )
 
 logger = get_logger(__name__)
@@ -171,3 +173,100 @@ def doctor(spec_file: Path | None, fix: bool, min_text_len: int, as_json: bool) 
         return
 
     _render_text_report(reports, fix=fix)
+
+
+def _render_secret_report(reports: list[SecretScanReport]) -> int:
+    """Print the audit and return the number of findings."""
+    console = cli_console
+    total = 0
+    dirty = 0
+    skipped = 0
+
+    for report in reports:
+        if report.error is not None:
+            skipped += 1
+            console.print(f"[yellow]! {report.path}[/yellow]: skipped ({report.error})")
+            continue
+        if not report.findings:
+            continue
+        dirty += 1
+        total += len(report.findings)
+        console.print(f"[red]x {report.path}[/red]: {len(report.findings)} finding(s)")
+        for finding in report.findings:
+            console.print(
+                f"    interaction {finding.index}: {finding.location} "
+                f"'{finding.key}'  {finding.uri}"
+            )
+
+    console.print(
+        f"\n{len(reports)} cassette(s) scanned, {dirty} with secrets "
+        f"({total} finding(s)), {skipped} unreadable."
+    )
+    if total:
+        console.print(
+            "Re-record the affected deck(s) against the live service; the "
+            "recorder strips these on the way in now. Nothing was rewritten."
+        )
+    return total
+
+
+@cassette_group.command("scan")
+@click.argument(
+    "spec-file",
+    required=False,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit a machine-readable JSON report on stdout instead of text.",
+)
+def scan(spec_file: Path | None, as_json: bool) -> None:
+    """Audit committed cassettes for recorded secrets (read-only).
+
+    Walks every ``*.http-cassette.yaml`` under the spec's source tree (or
+    the current directory when SPEC-FILE is omitted) and reports any value
+    the recorder would strip today: secret request headers and query
+    parameters, secret request-body parameters, ``Set-Cookie`` response
+    headers, and OAuth-shaped keys in JSON response bodies. Cassettes
+    recorded before CLM {version} predate the response-side filter
+    entirely, so this is how you find the ones worth re-recording.
+
+    Exits non-zero when anything is found, so it can gate a repo audit.
+    Never rewrites: a cassette flagged here is fixed by re-recording the
+    deck against the live service (``clm cassette doctor --fix`` is a
+    different, narrower repair).
+
+    \b
+    Examples:
+        clm cassette scan course.xml            # audit a course repo
+        clm cassette scan course.xml --json     # machine-readable
+        clm cassette scan                       # walk current dir
+    """
+    root = _resolve_walk_root(spec_file)
+    paths = list(iter_cassette_paths(root))
+    reports = scan_cassettes_for_secrets(paths)
+    finding_count = sum(len(r.findings) for r in reports)
+
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "root": str(root),
+                    "cassette_count": len(reports),
+                    "finding_count": finding_count,
+                    "cassettes": [r.to_dict() for r in reports],
+                },
+                indent=2,
+            )
+        )
+    elif not paths:
+        cli_console.print(f"No cassettes found under {root}.")
+        return
+    else:
+        _render_secret_report(reports)
+
+    if finding_count:
+        raise SystemExit(1)

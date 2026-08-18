@@ -75,10 +75,17 @@ class _CountingHandler(BaseHTTPRequestHandler):
     # was stripped before forwarding upstream).
     last_seen: dict | None = None
 
+    #: Sent on every response. A real service hands out session cookies and
+    #: token payloads; before the response-side filter (S9, #798) they were
+    #: committed into the cassette verbatim, so every recording test here
+    #: now also proves they do not land on disk.
+    COOKIE_SECRET = "session=COOKIESECRET; HttpOnly"
+
     def _respond(self, payload: dict) -> None:
         body = json.dumps(payload).encode()
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Set-Cookie", type(self).COOKIE_SECRET)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -86,6 +93,17 @@ class _CountingHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 — required by BaseHTTPRequestHandler
         type(self).upstream_hits += 1
         type(self).last_seen = {"method": "GET", "path": self.path, "headers": dict(self.headers)}
+        if self.path.startswith("/oauth"):
+            # An OAuth token response next to LLM-shaped usage counters:
+            # the tokens must be redacted, the counters must survive.
+            self._respond(
+                {
+                    "access_token": "ya29.TOKENSECRET",
+                    "refresh_token": "1//REFRESHSECRET",
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33},
+                }
+            )
+            return
         # Echo only the path without the query string: a real API never reflects
         # your api_key/token query params back into its response body (and
         # responses are not secret-filtered), so reflecting them here would be
@@ -461,6 +479,45 @@ def test_secret_request_headers_and_params_stripped_from_recording(
     assert "token" not in text and "TTT" not in text
     # The non-secret query param survives (the request is still recorded).
     assert "keep=1" in text
+
+
+def test_response_secrets_stripped_from_recording(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """S9 (#798): the response side is scrubbed too — through a real proxy.
+
+    vcrpy filters requests only, and the addon passed no response hook, so
+    a ``Set-Cookie`` and an OAuth token body were committed verbatim into a
+    file that lives in a course repo. The counters next to them are the
+    control: an LLM response legitimately carries ``completion_tokens``,
+    and a substring match on ``token`` would corrupt every replay.
+    """
+    confdir = tmp_path / "mitm-confdir"
+    cass = tmp_path / "topicR" / "_cassettes" / "slidesR.http-cassette.yaml"
+
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        resp = _get_via_proxy(f"{upstream_server}/oauth", proxy.proxy_url, tag=str(cass))
+    assert resp.status_code == 200
+    # The live response really did carry both secrets...
+    assert resp.json()["access_token"] == "ya29.TOKENSECRET"
+    assert "set-cookie" in {k.lower() for k in resp.headers}
+
+    staging = _staging_files(cass)
+    assert len(staging) == 1, staging
+    text = staging[0].read_text(encoding="utf-8")
+
+    # ...and none of it reached the cassette.
+    assert "COOKIESECRET" not in text
+    assert "set-cookie" not in text.lower()
+    assert "TOKENSECRET" not in text
+    assert "REFRESHSECRET" not in text
+    # The keys survive with a placeholder (the payload keeps its shape) …
+    assert "access_token" in text
+    # … and the usage counters are untouched.
+    assert '"completion_tokens": 22' in text or '"completion_tokens":22' in text
+    assert "33" in text
 
 
 def test_ignore_hosts_forwarded_but_not_recorded(

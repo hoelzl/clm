@@ -2,6 +2,50 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Cassette recording scrubs responses; the mitmproxy CA moved (#798, {version})
+
+**Breaking only for existing recordings that carried now-filtered values.**
+HTTP-replay cassettes are committed files in course repos, and the recorder
+filtered *requests only* — `Set-Cookie` headers and OAuth-shaped response
+bodies were written verbatim into files that then went out in a PR.
+
+**What changed at record time:**
+
+- Response `Set-Cookie` headers are dropped, and the values of OAuth-shaped
+  keys in JSON response bodies (`access_token`, `refresh_token`, `id_token`,
+  `client_secret`, `api_key`, `apikey`, `authorization`, `password`, `secret`,
+  `session_token`) are replaced with `[REDACTED-BY-CLM]`. Keys are matched
+  **exactly** — `completion_tokens` and `total_tokens` are untouched, so
+  replayed LLM usage data stays correct.
+- The request-side header and query-parameter lists gained the Azure, Gemini,
+  proxy and AWS spellings (`api-key`, `x-goog-api-key`, `proxy-authorization`,
+  `x-amz-security-token`, `x-auth-token`; `key`, `access_token`, `apikey`,
+  `subscription-key`, `X-Amz-Signature`).
+- A JSON content-type is matched by prefix, so `application/json;
+  charset=utf-8` bodies are filtered too — they were skipped entirely before.
+
+**Do you need to re-record?** Run `clm cassette scan <spec>` in each course
+repo. It is read-only and reports file, interaction index and key. Re-record
+only the decks it flags (`clm build --http-replay refresh`); everything else
+keeps replaying unchanged. Responses are not part of the replay match key, so
+the response-side change cannot cause a replay miss.
+
+One case *can* cause a miss: a cassette recorded with a **now-filtered query
+parameter** in its URL (`?key=…` on Gemini, a presigned AWS URL). The replay
+lookup filters the incoming request the same way before matching, so the
+recorded URL no longer matches. That surfaces as a loud replay miss, not as
+wrong output — re-record the deck. The scanner flags exactly these cassettes.
+
+**The mitmproxy CA moved.** The proxy's confdir — which holds the CA
+**private key** — was created next to the jobs database, i.e. inside the
+course working tree, where `umask_secret()` is a no-op on Windows and a
+`CLM_JOBS_DB_PATH` on a network share put the key on that share. It now lives
+in the per-user data dir alongside `kernel-envs/`
+(`%LOCALAPPDATA%\clm\mitm-ca` on Windows, `~/.local/share/clm/mitm-ca` on
+Linux). Consequences: one stable CA per machine instead of one per build, and
+the old `<jobs-db-dir>/mitm/confdir` directories can be deleted (do delete
+them — they contain a private key).
+
 ## Spec-driven writes are contained; destructive output ops need proof of ownership (#798, {version})
 
 **Breaking for specs with an absolute `<output-target><path>`, and for
