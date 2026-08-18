@@ -850,25 +850,65 @@ class BaselineOutcome:
     new: list[SecretFinding] = field(factory=list)
     stale: list[BaselineEntry] = field(factory=list)
     unreadable: int = 0
+    #: Entry count of the baseline this outcome was produced against, so a
+    #: caller can tell "nothing matched because the baseline is empty" from
+    #: "nothing matched because we scanned the wrong tree".
+    entry_count: int = 0
 
     @property
-    def is_clean(self) -> bool:
-        """True when this run should exit zero."""
-        return not self.new and not self.unreadable
+    def describes_nothing(self) -> bool:
+        """True when a non-empty baseline matched **no** finding at all.
+
+        The gate's own evidence that it is pointed at the wrong tree. A CI
+        job with the wrong working directory, a checkout where the course
+        content did not materialise, or a renamed content root all produce
+        this — and without the check they produce a **green** run over a repo
+        nothing looked at, which is the failure this feature exists to
+        prevent, arrived at from the other side.
+
+        A repo that legitimately re-recorded *every* baselined deck lands
+        here too. That is fine: the answer in both cases is the same, and it
+        is to regenerate the file rather than to trust it.
+        """
+        return bool(self.entry_count) and not self.accepted
+
+
+def _to_posix(text: str) -> str:
+    """Normalise a stored/parsed baseline path to forward slashes.
+
+    Applied on **both** sides. Writing needs it because CLM is developed on
+    Windows and its CI runs on Linux, so a native separator would match
+    locally and miss in the one place the gate is meant to run; reading needs
+    it to accept a hand-edited or older file. Doing it on one side only makes
+    the round trip asymmetric — a POSIX file legitimately named ``a\\b.yaml``
+    would be written verbatim and read back as ``a/b.yaml``, so
+    ``--write-baseline`` followed by ``--baseline`` on an unchanged tree
+    would not be green.
+
+    The cost of normalising both sides is that ``a\\b.yaml`` and ``a/b.yaml``
+    — two distinct files on POSIX, both pathological — collapse to one entry.
+    Consistently, on both sides, which is what keeps the round trip
+    satisfiable.
+    """
+    return text.replace("\\", "/")
 
 
 def _relative_posix(path: Path, root: Path) -> str:
     """*path* relative to *root*, with forward slashes.
 
-    Forward slashes are not cosmetic: CLM is developed on Windows and its CI
-    runs on Linux, so a baseline written with native separators would match
-    locally and miss in the one place the gate is meant to run.
+    Raises :class:`BaselineError` when the two share no common root — on
+    Windows, different drives. Unreachable through the CLI (paths come from
+    ``root.rglob``), and it raises rather than falling back to the file's
+    *name* because that fallback would collapse every same-named cassette in
+    the tree into one entry: in a course repo, 95 different
+    ``deck.http-cassette.yaml`` files accepting each other's findings. Dead
+    defensive code should not choose the unsafe degradation.
     """
     try:
         relative = Path(os.path.relpath(path, root))
-    except ValueError:  # different drive on Windows — fall back to the name
-        relative = Path(path.name)
-    return relative.as_posix()
+    except ValueError as exc:
+        raise BaselineError(f"cassette '{path}' is not under the scan root '{root}'") from exc
+    return _to_posix(relative.as_posix())
 
 
 def _entry_for(report_path: str, finding: SecretFinding) -> BaselineEntry:
@@ -897,6 +937,13 @@ def build_baseline(reports: Iterable[SecretScanReport], root: Path) -> dict:
     }
     return {
         "version": BASELINE_VERSION,
+        # A hint, not an identity: entries are keyed on a path *relative* to
+        # the scan root, so applying the file at a different root silently
+        # re-interprets every one of them. Recording the root's name lets a
+        # mismatch be reported instead of guessed at. Only the basename —
+        # an absolute path would differ between a Windows dev box and Linux
+        # CI, which is exactly where this needs to work.
+        "root_name": Path(root).name,
         "entries": [
             entry.to_dict() for entry in sorted(entries, key=lambda e: (e.path, e.location, e.key))
         ],
@@ -913,7 +960,9 @@ def baseline_entries_from_document(document: object) -> frozenset[BaselineEntry]
     if not isinstance(document, dict):
         raise BaselineError("baseline must be a JSON object")
     version = document.get("version")
-    if version != BASELINE_VERSION:
+    # ``isinstance(True, int)`` is True and ``1.0 == 1``, so a bare equality
+    # check accepts ``{"version": true}`` and ``{"version": 1.0}``.
+    if isinstance(version, bool) or not isinstance(version, int) or version != BASELINE_VERSION:
         raise BaselineError(
             f"unsupported baseline version {version!r} (this clm writes {BASELINE_VERSION}); "
             "regenerate it with `clm cassette scan --write-baseline`"
@@ -932,24 +981,47 @@ def baseline_entries_from_document(document: object) -> frozenset[BaselineEntry]
             raise BaselineError(f"baseline entry is missing {exc.args[0]!r}") from exc
         if not all(isinstance(v, str) for v in (path, location, key)):
             raise BaselineError("baseline entry fields must be strings")
-        # Liberal in what we read: a hand-edited file (or one written by an
-        # older clm) may carry native separators, and refusing to match them
-        # would fail the gate for a cosmetic reason. Writing stays strict.
-        entries.add(BaselineEntry(path.replace("\\", "/"), location, key.lower()))
+        # Normalised the same way the writer normalises, so a hand-edited or
+        # Windows-written file matches and the round trip stays symmetric.
+        entries.add(BaselineEntry(_to_posix(path), location, key.lower()))
     return frozenset(entries)
+
+
+def baseline_root_name(document: object) -> str | None:
+    """The root name a baseline document was built against, if it records one."""
+    if isinstance(document, dict):
+        name = document.get("root_name")
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def load_baseline_document(path: Path) -> object:
+    """Read and JSON-parse a baseline file. Raises :class:`BaselineError`.
+
+    Bytes go straight to ``json.loads``, which sniffs BOMs and UTF-16/32
+    itself (RFC 8259 §8.1) — the lesson :func:`_json_or_none` learned in
+    #875, where a strict UTF-8 pre-decode threw away every body with a BOM.
+    A baseline written by PowerShell's ``Out-File`` is UTF-16 by default, so
+    this is the ordinary case on the platform CLM is developed on.
+
+    The guard covers ``RecursionError`` for the same reason the recorder's
+    does: a pathologically nested document must produce a legible error, not
+    a traceback out of a CI gate.
+    """
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise BaselineError(f"could not read baseline '{path}': {exc}") from exc
+    try:
+        return json.loads(raw)
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        raise BaselineError(f"baseline '{path}' is not valid JSON: {exc}") from exc
 
 
 def load_baseline(path: Path) -> frozenset[BaselineEntry]:
     """Read and validate a baseline file. Raises :class:`BaselineError`."""
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise BaselineError(f"could not read baseline '{path}': {exc}") from exc
-    try:
-        document = json.loads(text)
-    except ValueError as exc:
-        raise BaselineError(f"baseline '{path}' is not valid JSON: {exc}") from exc
-    return baseline_entries_from_document(document)
+    return baseline_entries_from_document(load_baseline_document(path))
 
 
 def apply_baseline(
@@ -961,7 +1033,7 @@ def apply_baseline(
     and JSON reports can show both, and returns the split plus the baseline
     entries nothing matched.
     """
-    outcome = BaselineOutcome()
+    outcome = BaselineOutcome(entry_count=len(entries))
     matched: set[BaselineEntry] = set()
 
     for report in reports:

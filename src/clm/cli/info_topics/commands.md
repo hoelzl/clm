@@ -3239,7 +3239,9 @@ in a body, say) is still reported.
 Key names are stored lowercased, since the audit matches them
 case-insensitively and a repo can hold both `set-cookie` and `Set-Cookie`.
 Paths are stored with forward slashes so a baseline written on Windows matches
-on Linux CI; native separators are accepted when reading.
+on Linux CI. Both are normalized on read as well as write, so a hand-edited
+entry naming `Set-Cookie` or using backslashes still matches — but paths are
+otherwise compared **literally**: a `./` or `sub/../` prefix will not match.
 
 Entries that match nothing — usually a deck that *was* re-recorded — are
 reported as **stale** and never fail the run; regenerate with
@@ -3247,10 +3249,22 @@ reported as **stale** and never fail the run; regenerate with
 failing the gate, which is why `--write-baseline` exits non-zero (after
 writing) when it meets one. The two options are mutually exclusive.
 
+**A baseline that matches nothing at all is an error**, not a green run.
+Entries are keyed on paths *relative* to the scan root, so pointing the gate at
+the wrong tree — a CI job with the wrong working directory, a checkout where
+the content did not materialize — would otherwise find nothing, accept nothing
+and exit 0 over a repo it never looked at. The document also records the name
+of the root it was built for (`root_name`) and the scan warns when that
+differs; it is a hint rather than a refusal, since a repo may legitimately
+check out under another directory name. Note the walk does **not** follow
+symlinked directories (issue #886), so cassettes behind one are not scanned.
+
 With `--json`, a baselined run adds `accepted_count`, `new_count`,
-`stale_count` and `stale_entries`, and every finding carries `accepted`.
-`finding_count` keeps meaning *all* findings, so a consumer that already reads
-it is unaffected; the exit code keys on `new_count`.
+`stale_count` and `stale_entries`. `finding_count` keeps meaning *all*
+findings, so a consumer that already reads it is unaffected; the exit code
+keys on `new_count`. Every finding carries `accepted` in **all** runs — it is
+simply always `false` without a baseline. `--write-baseline --json` reports
+`entry_count` and the paths instead of a finding report.
 
 Exits non-zero when anything is found **or when a cassette could not be read
 at all** (an unreadable file is not evidence of cleanliness), so it can gate a

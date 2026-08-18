@@ -277,9 +277,21 @@ reported, never fatal, or the gate would punish the fix; an unreadable cassette
 is not baselineable and still fails, which is why `--write-baseline` exits
 non-zero after writing when it meets one; a malformed baseline raises rather
 than degrading to accept-nothing (unsatisfiable) or accept-everything (a false
-all-clear); keys are stored lowercased and paths POSIX, because the repo holds
-both `set-cookie` and `Set-Cookie` and a Windows-written baseline has to match
-on Linux CI.
+all-clear); keys are stored lowercased and paths POSIX **on both the read and
+the write side**, because the repo holds both `set-cookie` and `Set-Cookie`, a
+Windows-written baseline has to match on Linux CI, and normalising one side
+only makes the round trip asymmetric.
+
+**The review's Critical, worth internalising**: a baselined run over a tree
+with no cassettes exited **0**. The signal was right there — every entry stale,
+none accepted — and an early `return` on "no cassettes found" threw it away.
+Wrong CI working directory, a checkout where content did not materialise, a
+renamed content root: all green, over a repo nothing looked at. This feature's
+own failure mode, reached from the other side. `BaselineOutcome.describes_nothing`
+now makes it an error. The related hole it does *not* close is a **partially**
+symlinked tree — `iter_cassette_paths` does not follow directory symlinks, so
+those cassettes are silently unscanned; pre-existing, tracked as **#886**, and
+newly worth fixing because this PR turns the command into a gate.
 
 ## 5. Test-suite flakiness on the Windows dev box (read before panicking)
 

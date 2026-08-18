@@ -16,6 +16,10 @@
   could not avoid in any case, since it only ever sees the header name. Entries
   matching nothing are reported as stale and never fail; an unreadable cassette
   is not baselineable and still fails, which is why `--write-baseline` exits
-  non-zero when it meets one. `--json` gains `accepted_count`, `new_count`,
-  `stale_count` and `stale_entries`, and each finding carries `accepted`;
-  `finding_count` keeps its existing meaning.
+  non-zero when it meets one. A baseline that matches **nothing** is an error
+  rather than a green run: entries are relative to the scan root, so a gate
+  pointed at the wrong tree would otherwise find nothing, accept nothing and
+  pass over a repo it never looked at. `--json` gains `accepted_count`,
+  `new_count`, `stale_count` and `stale_entries`; `finding_count` keeps its
+  existing meaning, and every finding now carries an `accepted` field (always
+  `false` without a baseline).

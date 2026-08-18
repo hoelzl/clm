@@ -8,7 +8,9 @@ and repair logic.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
 
 import click
@@ -22,10 +24,12 @@ from clm.workers.notebook.cassette_doctor import (
     CassetteReport,
     SecretScanReport,
     apply_baseline,
+    baseline_entries_from_document,
+    baseline_root_name,
     build_baseline,
     diagnose_cassettes,
     iter_cassette_paths,
-    load_baseline,
+    load_baseline_document,
     scan_cassettes_for_secrets,
 )
 
@@ -180,6 +184,25 @@ def doctor(spec_file: Path | None, fix: bool, min_text_len: int, as_json: bool) 
     _render_text_report(reports, fix=fix)
 
 
+def secret_report_summary(
+    reports: list[SecretScanReport], baselined: bool = False
+) -> tuple[int, int, int, int]:
+    """``(cassettes with findings, findings, gating findings, unreadable)``.
+
+    Pure, so the sentence the report ends on can be tested — the Rich console
+    binds to the real stderr at import time and is invisible to ``CliRunner``,
+    which left the whole summary unasserted and let it say "0 findings" on a
+    run that had just listed one (found in review).
+    """
+    dirty = sum(1 for r in reports if r.error is None and r.findings)
+    total = sum(len(r.findings) for r in reports if r.error is None)
+    gating = sum(
+        1 for r in reports if r.error is None for f in r.findings if not (baselined and f.accepted)
+    )
+    skipped = sum(1 for r in reports if r.error is not None)
+    return dirty, total, gating, skipped
+
+
 def _render_secret_report(
     reports: list[SecretScanReport], outcome: BaselineOutcome | None = None
 ) -> int:
@@ -190,20 +213,15 @@ def _render_secret_report(
     but marked, and only the rest count.
     """
     console = cli_console
-    total = 0
-    dirty = 0
-    skipped = 0
+    dirty, total, gating_total, skipped = secret_report_summary(reports, outcome is not None)
 
     for report in reports:
         if report.error is not None:
-            skipped += 1
             console.print(f"[yellow]! {report.path}[/yellow]: skipped ({report.error})")
             continue
         if not report.findings:
             continue
         gating = [f for f in report.findings if not (outcome and f.accepted)]
-        dirty += 1 if gating else 0
-        total += len(gating)
         colour = "red" if gating else "dim"
         console.print(
             f"[{colour}]{'x' if gating else '-'} {report.path}[/{colour}]: "
@@ -216,12 +234,17 @@ def _render_secret_report(
                 f"'{finding.key}'  {finding.uri}{mark}"
             )
 
+    # Say what is true. Recomputing "with secrets" to mean "with *gating*
+    # secrets" made the summary read "0 with secrets (0 finding(s))"
+    # immediately below a listed finding — the repo demonstrably has one.
     console.print(
-        f"\n{len(reports)} cassette(s) scanned, {dirty} with secrets "
+        f"\n{len(reports)} cassette(s) scanned, {dirty} with findings "
         f"({total} finding(s)), {skipped} unreadable."
     )
     if outcome is not None:
-        console.print(f"{len(outcome.accepted)} finding(s) accepted by the baseline.")
+        console.print(
+            f"{len(outcome.accepted)} finding(s) accepted by the baseline, {len(outcome.new)} new."
+        )
         if outcome.stale:
             # Not a failure: a stale entry usually means a deck was
             # re-recorded, i.e. somebody did the thing the audit asks for.
@@ -232,12 +255,12 @@ def _render_secret_report(
             )
             for entry in outcome.stale:
                 console.print(f"    {entry.path}: {entry.location} '{entry.key}'")
-    if total:
+    if gating_total:
         console.print(
             "Re-record the affected deck(s) against the live service; the "
             "recorder strips these on the way in now. Nothing was rewritten."
         )
-    return total
+    return gating_total
 
 
 @cassette_group.command("scan")
@@ -324,10 +347,26 @@ def scan(
     unreadable = sum(1 for r in reports if r.error is not None)
 
     if write_baseline_path is not None:
-        _write_baseline(write_baseline_path, reports, root)
-        cli_console.print(
-            f"Wrote baseline for {finding_count} finding(s) to {write_baseline_path}."
-        )
+        entry_count = _write_baseline(write_baseline_path, reports, root)
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "baseline": str(write_baseline_path),
+                        "entry_count": entry_count,
+                        "cassette_count": len(reports),
+                        "finding_count": finding_count,
+                        "unreadable_count": unreadable,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            cli_console.print(
+                f"Wrote {entry_count} baseline entr(y/ies) for {finding_count} finding(s) "
+                f"to {write_baseline_path}."
+            )
         # An unreadable cassette is not baselineable, so a later
         # ``--baseline`` run would still fail on it. Exiting zero here
         # would promise a green gate this file cannot deliver.
@@ -342,12 +381,43 @@ def scan(
     outcome = None
     if baseline_path is not None:
         try:
-            entries = load_baseline(baseline_path)
+            document = load_baseline_document(baseline_path)
+            entries = baseline_entries_from_document(document)
         except BaselineError as exc:
             # Never degrade to "accept everything" (a false all-clear) or
             # "accept nothing" (an unsatisfiable gate) — stop and say why.
             raise click.ClickException(str(exc)) from exc
-        outcome = apply_baseline(reports, root, entries)
+        try:
+            outcome = apply_baseline(reports, root, entries)
+        except BaselineError as exc:  # a cassette outside the scan root
+            raise click.ClickException(str(exc)) from exc
+
+        # The gate must not go green over a tree it did not actually scan.
+        # A wrong working directory, a checkout where the content did not
+        # materialise, a renamed course root — each yields "no cassettes"
+        # or "nothing matched", and without this each yielded **exit 0**.
+        # That is this feature's own failure mode from the other side, and
+        # the worst outcome a gate can have.
+        if outcome.describes_nothing:
+            raise click.ClickException(
+                f"none of the {outcome.entry_count} baseline entr(y/ies) matched anything under "
+                f"{root} ({len(paths)} cassette(s) scanned). Either the scan root is wrong — a "
+                "baseline is keyed on paths *relative* to it — or every baselined deck has been "
+                "re-recorded. Regenerate with --write-baseline once you are sure which."
+            )
+        recorded_root = baseline_root_name(document)
+        if recorded_root and recorded_root != root.name:
+            # A hint, not proof: entries are relative, so applying a
+            # baseline at a different root silently re-interprets all of
+            # them, and a colliding relative path is then accepted without
+            # ever having been baselined. Warned rather than refused
+            # because a repo may legitimately check out under a different
+            # directory name.
+            cli_console.print(
+                f"[yellow]Baseline was written for a root named '{recorded_root}', "
+                f"scanning '{root.name}'[/yellow] — entries are relative to the root, so "
+                "check this is the tree you meant."
+            )
 
     gating_count = len(outcome.new) if outcome else finding_count
 
@@ -373,8 +443,10 @@ def scan(
             payload["stale_entries"] = [e.to_dict() for e in outcome.stale]
         click.echo(json.dumps(payload, indent=2))
     elif not paths:
+        # No ``return`` here: an empty tree is a legitimate zero-finding
+        # result for a bare scan, but it must still fall through to the
+        # exit-code check rather than short-circuiting past it.
         cli_console.print(f"No cassettes found under {root}.")
-        return
     else:
         _render_secret_report(reports, outcome)
 
@@ -386,12 +458,26 @@ def scan(
         raise SystemExit(1)
 
 
-def _write_baseline(path: Path, reports: list[SecretScanReport], root: Path) -> None:
-    """Write the baseline document, with a trailing newline and LF endings.
+def _write_baseline(path: Path, reports: list[SecretScanReport], root: Path) -> int:
+    """Write the baseline document; return its entry count.
 
     The file is committed to a course repo, so it must not flap between
-    checkouts: LF-only, sorted entries, ``indent=2``.
+    checkouts: LF-only, sorted entries, ``indent=2``. Written through a
+    sibling temp file and ``os.replace`` so a crash mid-write cannot leave a
+    half-written baseline that the next run reads as a corrupt gate.
     """
-    document = build_baseline(reports, root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+    try:
+        document = build_baseline(reports, root)
+    except BaselineError as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload = json.dumps(document, indent=2) + "\n"
+    tmp = path.parent / f"{path.name}.tmp-{os.getpid()}"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(payload, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise click.ClickException(f"could not write baseline '{path}': {exc}") from exc
+    return len(document["entries"])

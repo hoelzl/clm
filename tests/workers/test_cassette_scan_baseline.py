@@ -26,6 +26,7 @@ name — and the docs must not imply otherwise.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,86 @@ class TestBuildingABaseline:
         """You cannot bless what you cannot read."""
         (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
         assert build_baseline(_scan(tmp_path), tmp_path)["entries"] == []
+
+
+class TestTheWrittenFileDoesNotChurn:
+    """It is committed, so two writes of the same tree must be byte-equal.
+
+    In-process this is untestable: both writes share one ``PYTHONHASHSEED``,
+    so the entry set iterates identically whether or not it is sorted, and
+    dropping the ``sorted()`` leaves the suite green. Separate interpreters
+    are what make the difference visible.
+    """
+
+    def test_two_processes_write_the_same_bytes(self, tmp_path: Path) -> None:
+        import subprocess
+        import sys
+        import textwrap
+
+        for i in range(12):
+            _cookie_deck(tmp_path, f"m{i:03d}/deck.http-cassette.yaml")
+
+        script = textwrap.dedent(
+            """
+            import json, sys
+            from pathlib import Path
+            from clm.workers.notebook.cassette_doctor import (
+                build_baseline, iter_cassette_paths, scan_cassettes_for_secrets,
+            )
+            root = Path(sys.argv[1])
+            reports = scan_cassettes_for_secrets(iter_cassette_paths(root))
+            print(json.dumps(build_baseline(reports, root), indent=2))
+            """
+        )
+        outputs = set()
+        for _ in range(4):
+            proc = subprocess.run(
+                [sys.executable, "-c", script, str(tmp_path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                # A fresh hash seed per run: this is what makes an unsorted
+                # set iterate differently, and therefore what makes the
+                # missing sort visible at all.
+                env={**os.environ, "PYTHONHASHSEED": "random"},
+            )
+            outputs.add(proc.stdout)
+        assert len(outputs) == 1, f"{len(outputs)} distinct baselines across 4 processes"
+
+
+class TestTheSummaryLineSaysWhatIsTrue:
+    """The sentence the report ends on, which nothing used to assert.
+
+    The Rich console binds to the real stderr at import time and is invisible
+    to ``CliRunner``, so the whole summary went untested — and it read
+    "0 with secrets (0 finding(s))" directly below a finding it had just
+    listed, because the counters had been redefined to mean *gating*
+    findings. Counting is pure and testable; printing is not.
+    """
+
+    def test_without_a_baseline_everything_gates(self, tmp_path: Path) -> None:
+        from clm.cli.commands.cassette import secret_report_summary
+
+        _cookie_deck(tmp_path)
+        dirty, total, gating, skipped = secret_report_summary(_scan(tmp_path))
+        assert (dirty, total, gating, skipped) == (1, 1, 1, 0)
+
+    def test_an_accepted_finding_is_counted_but_does_not_gate(self, tmp_path: Path) -> None:
+        from clm.cli.commands.cassette import secret_report_summary
+
+        _cookie_deck(tmp_path)
+        reports = _scan(tmp_path)
+        apply_baseline(reports, tmp_path, _entries(build_baseline(reports, tmp_path)))
+        dirty, total, gating, skipped = secret_report_summary(reports, baselined=True)
+        assert (dirty, total, gating, skipped) == (1, 1, 0, 0)
+
+    def test_an_unreadable_cassette_is_counted_separately(self, tmp_path: Path) -> None:
+        from clm.cli.commands.cassette import secret_report_summary
+
+        _cookie_deck(tmp_path)
+        (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
+        dirty, total, gating, skipped = secret_report_summary(_scan(tmp_path))
+        assert (dirty, total, gating, skipped) == (1, 1, 1, 1)
 
 
 class TestApplyingABaseline:
@@ -350,15 +431,55 @@ class TestLoadingABaseline:
         assert outcome.new == []
         assert outcome.stale == []
 
+    def test_the_key_is_lowercased_on_the_way_in_too(self, tmp_path: Path) -> None:
+        """Liberal reading covers casing, not just separators.
+
+        A hand-written entry naming ``Set-Cookie`` has to match the
+        lowercased key the writer stores, or the gate fails for a cosmetic
+        reason nobody can see.
+        """
+        _cookie_deck(tmp_path, "deck.http-cassette.yaml")
+        path = tmp_path / "baseline.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": BASELINE_VERSION,
+                    "entries": [
+                        {
+                            "path": "deck.http-cassette.yaml",
+                            "location": "response header",
+                            "key": "Set-Cookie",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        outcome = apply_baseline(_scan(tmp_path), tmp_path, load_baseline(path))
+        assert outcome.new == []
+        assert outcome.stale == []
+
     @pytest.mark.parametrize(
         "text",
         [
             "not json at all",
             '{"version": 1}',
             '{"version": 99, "entries": []}',
+            # ``isinstance(True, int)`` and ``1.0 == 1``, so a bare equality
+            # check waves these through.
+            '{"version": true, "entries": []}',
+            '{"version": 1.0, "entries": []}',
+            '{"version": "1", "entries": []}',
             '{"version": 1, "entries": "nope"}',
             '{"version": 1, "entries": [{"path": "a"}]}',
+            # An entry that is not an object, and fields that are not
+            # strings: without their guards these raise TypeError /
+            # AttributeError, i.e. a traceback out of a CI gate.
+            '{"version": 1, "entries": [["a", "b", "c"]]}',
+            '{"version": 1, "entries": [{"path": 1, "location": "x", "key": "y"}]}',
+            '{"version": 1, "entries": [{"path": "a", "location": "x", "key": null}]}',
             "[]",
+            "",
         ],
     )
     def test_a_malformed_baseline_is_an_error_not_a_silent_pass(
@@ -380,6 +501,63 @@ class TestLoadingABaseline:
         with pytest.raises(BaselineError):
             load_baseline(tmp_path / "nope.json")
 
+    def test_a_directory_is_an_error(self, tmp_path: Path) -> None:
+        (tmp_path / "adir").mkdir()
+        with pytest.raises(BaselineError):
+            load_baseline(tmp_path / "adir")
+
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "utf-16", "utf-32"])
+    def test_an_encoded_baseline_is_read_not_crashed_on(
+        self, encoding: str, tmp_path: Path
+    ) -> None:
+        """``json.loads`` sniffs these itself; a strict UTF-8 pre-decode does not.
+
+        PowerShell's ``Out-File`` writes UTF-16 by default, so on the
+        platform CLM is developed on this is the ordinary way to end up with
+        a hand-made baseline — and the pre-decode raised ``UnicodeDecodeError``
+        straight out of the CLI as a traceback. Same lesson as #875, where
+        the audit lost every response body carrying a BOM.
+        """
+        _cookie_deck(tmp_path, "deck.http-cassette.yaml")
+        path = tmp_path / "baseline.json"
+        path.write_bytes(json.dumps(build_baseline(_scan(tmp_path), tmp_path)).encode(encoding))
+        assert len(load_baseline(path)) == 1
+
+    def test_bytes_that_are_no_encoding_at_all_are_an_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "baseline.json"
+        path.write_bytes(b"\xff\xfe\x00\x00not json")
+        with pytest.raises(BaselineError):
+            load_baseline(path)
+
+    def test_a_pathologically_nested_baseline_is_an_error(self, tmp_path: Path) -> None:
+        """``RecursionError`` must not escape either — same guard as the audit."""
+        path = tmp_path / "baseline.json"
+        path.write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
+        with pytest.raises(BaselineError):
+            load_baseline(path)
+
+    def test_a_cassette_outside_the_scan_root_is_an_error_not_a_basename(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The unsafe degradation this used to choose.
+
+        Falling back to the file's *name* would collapse every same-named
+        cassette in a course repo — 95 different ``deck.http-cassette.yaml``
+        — into one entry, each accepting the others' findings. Unreachable
+        through the CLI, so the raise is forced here rather than reproduced
+        with a second drive letter, which only exists on one platform.
+        """
+        import os
+
+        _cookie_deck(tmp_path)
+
+        def _boom(*_args, **_kwargs):
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        monkeypatch.setattr(os.path, "relpath", _boom)
+        with pytest.raises(BaselineError):
+            build_baseline(_scan(tmp_path), tmp_path)
+
 
 def _entries(document: dict) -> frozenset:
     """Load a freshly-built document the way the CLI would."""
@@ -396,7 +574,7 @@ class TestScanCliBaseline:
     is asserted through ``--json`` and text mode is pinned on its exit code.
     """
 
-    def _run(self, args: list[str], cwd: Path):
+    def _run(self, args: list[str], cwd: Path | None = None):
         from click.testing import CliRunner
 
         from clm.cli.commands.cassette import cassette_group
@@ -520,7 +698,7 @@ class TestScanCliBaseline:
         assert result.exit_code != 0
         assert not (tmp_path / "b.json").exists()
 
-    def test_the_written_file_is_lf_and_stable(self, tmp_path: Path, monkeypatch) -> None:
+    def test_the_written_file_is_lf(self, tmp_path: Path, monkeypatch) -> None:
         """It is committed to a course repo — it must not flap on checkout.
 
         CLM is Windows-first and the repo normalises to LF, so writing
@@ -528,13 +706,151 @@ class TestScanCliBaseline:
         """
         monkeypatch.chdir(tmp_path)
         _cookie_deck(tmp_path, "b/deck.http-cassette.yaml")
-        _cookie_deck(tmp_path, "a/deck.http-cassette.yaml")
         baseline = tmp_path / "baseline.json"
-        self._run(["--write-baseline", str(baseline)], tmp_path)
+        self._run(["--write-baseline", str(baseline)])
 
         raw = baseline.read_bytes()
         assert b"\r\n" not in raw
         assert raw.endswith(b"\n")
-        first = raw
-        self._run(["--write-baseline", str(baseline)], tmp_path)
-        assert baseline.read_bytes() == first
+
+    def test_json_mode_reports_what_was_written(self, tmp_path: Path, monkeypatch) -> None:
+        """``--json`` used to be silently ignored by --write-baseline."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        payload = self._payload(self._run(["--write-baseline", str(baseline), "--json"]))
+        assert payload["entry_count"] == 1
+        assert payload["finding_count"] == 1
+        assert payload["baseline"] == str(baseline)
+
+    def test_an_unwritable_target_is_a_clean_error_not_a_traceback(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A CI gate must not print a stack trace at somebody."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        result = CliRunner().invoke(
+            cassette_group, ["scan", "--write-baseline", str(blocker / "b.json")]
+        )
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+class TestTheGateCannotGoGreenOverTheWrongTree:
+    """The Critical from review round 1 of #883.
+
+    Everything else here guards against accepting a secret that *is* in the
+    tree. This guards the other direction: a gate that scanned the wrong
+    tree, found nothing, and said so with a green tick. A CI job with the
+    wrong ``working-directory``, a checkout where course content did not
+    materialise, a renamed content root — each produced **exit 0** over a
+    repo nothing had looked at.
+
+    The signal was there the whole time: every baseline entry stale, none
+    accepted. It was just discarded by an early ``return``.
+    """
+
+    def _run(self, args: list[str]):
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        return CliRunner().invoke(cassette_group, ["scan", *args])
+
+    def test_a_baselined_run_over_an_empty_tree_fails(self, tmp_path: Path, monkeypatch) -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        _cookie_deck(source)
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.chdir(source)
+        assert self._run(["--write-baseline", str(baseline)]).exit_code == 0
+
+        empty = tmp_path / "elsewhere"
+        empty.mkdir()
+        monkeypatch.chdir(empty)
+        result = self._run(["--baseline", str(baseline)])
+        assert result.exit_code != 0
+        assert "matched anything" in result.output
+
+    def test_a_baselined_run_at_the_wrong_root_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """Same failure, reached by scanning a sibling tree that has cassettes."""
+        source = tmp_path / "source"
+        _cookie_deck(source, "m550/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.chdir(source)
+        self._run(["--write-baseline", str(baseline)])
+
+        other = tmp_path / "other"
+        _cookie_deck(other, "m999/different.http-cassette.yaml")
+        monkeypatch.chdir(other)
+        assert self._run(["--baseline", str(baseline)]).exit_code != 0
+
+    def test_a_bare_scan_of_an_empty_tree_is_still_green(self, tmp_path: Path, monkeypatch) -> None:
+        """An empty tree is a legitimate zero-finding result without a baseline.
+
+        CppCourses and CSharpCourses hold no cassettes at all, so this must
+        not become an error — only a *baseline* that describes nothing does.
+        """
+        monkeypatch.chdir(tmp_path)
+        assert self._run([]).exit_code == 0
+
+    def test_an_empty_baseline_over_an_empty_tree_is_green(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Nothing to accept and nothing found is not evidence of a wrong root."""
+        monkeypatch.chdir(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        assert self._run(["--write-baseline", str(baseline)]).exit_code == 0
+        assert self._run(["--baseline", str(baseline)]).exit_code == 0
+
+    def test_partial_staleness_stays_green(self, tmp_path: Path, monkeypatch) -> None:
+        """The check is "nothing matched", not "something went stale".
+
+        A deck that was re-recorded is somebody doing the right thing, and
+        the gate must not punish it — the single most-repeated claim in this
+        feature, and nothing pinned it at the CLI level before.
+        """
+        monkeypatch.chdir(tmp_path)
+        kept = _cookie_deck(tmp_path, "keep/deck.http-cassette.yaml")
+        gone = _cookie_deck(tmp_path, "cleaned/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)])
+        assert kept.exists()
+
+        gone.write_text(
+            yaml.safe_dump({"interactions": [_interaction()], "version": 1}, sort_keys=True),
+            encoding="utf-8",
+        )
+        result = self._run(["--baseline", str(baseline), "--json"])
+        payload = json.loads(result.output[result.output.index("{") :])
+        assert payload["stale_count"] == 1
+        assert payload["accepted_count"] == 1
+        assert result.exit_code == 0
+
+    def test_the_root_name_is_recorded_and_a_mismatch_does_not_fail(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A hint, deliberately not a refusal.
+
+        Entries are relative to the scan root, so applying a baseline at a
+        different root re-interprets all of them — but a repo may legitimately
+        check out under a different directory name, so this warns rather than
+        breaking the build.
+        """
+        source = tmp_path / "namedroot"
+        _cookie_deck(source, "deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        monkeypatch.chdir(source)
+        self._run(["--write-baseline", str(baseline)])
+        assert json.loads(baseline.read_text(encoding="utf-8"))["root_name"] == "namedroot"
+
+        renamed = tmp_path / "othername"
+        _cookie_deck(renamed, "deck.http-cassette.yaml")
+        monkeypatch.chdir(renamed)
+        assert self._run(["--baseline", str(baseline)]).exit_code == 0
