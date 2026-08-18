@@ -2,6 +2,72 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Cassette recording scrubs responses; the mitmproxy CA moved (#798, {version})
+
+**Breaking only for existing recordings that carried now-filtered values.**
+HTTP-replay cassettes are committed files in course repos, and the recorder
+filtered *requests only* — `Set-Cookie` headers and OAuth-shaped response
+bodies were written verbatim into files that then went out in a PR.
+
+**What changed at record time:**
+
+- Response `Set-Cookie` headers are dropped, and the values of OAuth-shaped
+  keys in JSON response bodies (`access_token`, `refresh_token`, `id_token`,
+  `client_secret`, `api_key`, `apikey`, `authorization`, `password`, `secret`,
+  `session_token`) are replaced with `[REDACTED-BY-CLM]`. Keys are matched
+  **exactly** — `completion_tokens` and `total_tokens` are untouched, so
+  replayed LLM usage data stays correct.
+- The request-side header and query-parameter lists gained the Azure, Gemini,
+  proxy and AWS spellings (`api-key`, `x-goog-api-key`, `proxy-authorization`,
+  `x-amz-security-token`, `x-auth-token`; `key`, `access_token`, `apikey`,
+  `subscription-key`, `X-Amz-Signature`).
+- A JSON content-type is matched by prefix, so `application/json;
+  charset=utf-8` bodies are filtered too — they were skipped entirely before.
+
+- Query *and* body parameter names are matched case-insensitively, and
+  request bodies are filtered on any method (not just `POST`) — both were
+  holes through which `?API_KEY=…` and a `PUT` payload recorded verbatim.
+  A body that is not text (a binary upload) is recorded untouched.
+
+**Do you need to re-record?** Run `clm cassette scan <spec>` in each course
+repo. It is read-only and reports file, interaction index and key. Re-record
+only the decks it flags (`clm build --http-replay refresh`); everything else
+keeps replaying unchanged.
+
+**Two of those flags also predict a replay miss**, because the replay lookup
+filters the *incoming* request the same way before matching, and both the URL
+query and the request body are part of the match key:
+
+- a cassette recorded with a **now-filtered query parameter** (`?key=…` on
+  Gemini, a presigned AWS URL, or any casing variant like `?API_KEY=`);
+- a cassette whose **request body** kept a `password` / `token` / `api_key` —
+  which happens when its content-type carried a charset (`application/json;
+  charset=utf-8`), when the request was not a `POST` (form-encoded `POST`
+  bodies were already filtered), or when the key was spelled with different
+  casing (`API_KEY`). The incoming request now has that key removed, so it no
+  longer matches what was recorded.
+
+Both surface as a loud replay miss (a build failure under `replay`, a
+re-record under `new-episodes`), never as wrong output, and `clm cassette
+scan` flags exactly these cassettes — its "request query" and "request body"
+findings are the ones to treat as urgent.
+
+Response-side changes cannot cause a miss: responses are not part of the match
+key. They do change what a replayed cell *receives* — a deck whose API returns
+a field literally named `password`, `secret`, `api_key` or `authorization`
+renders the real value on the recording run and `[REDACTED-BY-CLM]` on every
+replay.
+
+**The mitmproxy CA moved.** The proxy's confdir — which holds the CA
+**private key** — was created next to the jobs database, i.e. inside the
+course working tree, where `umask_secret()` is a no-op on Windows and a
+`CLM_JOBS_DB_PATH` on a network share put the key on that share. It now lives
+in the per-user data dir alongside `kernel-envs/`
+(`%LOCALAPPDATA%\clm\mitm-ca` on Windows, `~/.local/share/clm/mitm-ca` on
+Linux). Consequences: one stable CA per machine instead of one per build, and
+the old `<jobs-db-dir>/mitm/confdir` directories can be deleted (do delete
+them — they contain a private key).
+
 ## Spec-driven writes are contained; destructive output ops need proof of ownership (#798, {version})
 
 **Breaking for specs with an absolute `<output-target><path>`, and for

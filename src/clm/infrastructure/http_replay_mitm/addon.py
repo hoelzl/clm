@@ -246,6 +246,11 @@ class ClmReplayAddon:
         # recorded request and returns None for ignore_hosts so telemetry passes
         # straight through (never recorded). Mirrors the in-kernel vcrpy filters.
         self._request_filter: Callable[..., object] | None = None
+        # Built alongside it: strips Set-Cookie and redacts secret-shaped
+        # keys in JSON response bodies before anything is written to disk
+        # (finding S9, #798). vcrpy filtered requests only, so a session
+        # cookie or an OAuth token body was committed verbatim.
+        self._response_filter: Callable[..., object] | None = None
         # Keyed by canonical-path string; "" is the untagged catch-all.
         self._targets: dict[str, _Target] = {}
         # Once-per-build latch for the untagged-flow warning (see request()).
@@ -317,6 +322,7 @@ class ClmReplayAddon:
         # filter_* default to cassette_format's constants — the single source
         # of truth for cassette secret-filtering (pinned by a constants test).
         self._request_filter = cf.build_request_filter(ignore_hosts=ignore_hosts)
+        self._response_filter = cf.build_response_filter()
 
         # ``once``/``refresh`` strictness is resolved per target in
         # ``_modes_for`` (``once`` depends on whether the target cassette
@@ -463,6 +469,9 @@ class ClmReplayAddon:
             flow.response.raw_content or b"",
             decode_compressed=True,
         )
+        response = self._filter_response(response)
+        if response is None:
+            return  # never record a response we could not scrub
         # Sequence-aware key: same request + same response collapses (cheap eager
         # rewrite), but the same request returning a *different* response is kept
         # as a new ordered interaction so the replay sequence is complete.
@@ -612,6 +621,39 @@ class ClmReplayAddon:
         except Exception as exc:  # noqa: BLE001 — never crash the proxy
             logger.warning(
                 "Request filtering failed (%s: %s); forwarding without recording",
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
+    def _filter_response(self, response: dict):
+        """Scrub a response dict before it is recorded, or return ``None``.
+
+        ``None`` means "do not record this interaction". Same stance as
+        :meth:`_filter_request`: recording the unfiltered response is
+        never an option, because a ``Set-Cookie`` or an OAuth token body
+        in a committed cassette is a live credential (finding S9, #798).
+
+        Dropping is not free, though, and the docstring used to claim it
+        was: a *repeated* identical request whose second response is
+        dropped replays the first one again (``_select_serve_index``
+        repeats the last match) rather than missing. So the filter itself
+        avoids raising wherever it can — an unparseable, pathologically
+        nested, or surrogate-bearing body is left alone rather than
+        thrown — and anything that still reaches here is logged at ERROR
+        with its URL, because the resulting cassette is incomplete in a
+        way replay will not announce.
+        """
+        response_filter = self._response_filter
+        if response_filter is None:
+            return None
+        try:
+            return response_filter(response)
+        except Exception as exc:  # noqa: BLE001 — never crash the proxy
+            logger.error(
+                "Response filtering failed (%s: %s); this interaction is NOT "
+                "recorded, so the cassette will be short one response — "
+                "re-record this deck",
                 type(exc).__name__,
                 exc,
             )

@@ -118,6 +118,22 @@ def _resolve_worker_workspace_path(course: Course, worker_config: object | None)
     return course.output_root
 
 
+def _mitm_ca_dir() -> Path:
+    """Per-user directory holding the mitmproxy CA (key + certificate).
+
+    ``platformdirs.user_data_dir("clm")`` — the same persistent, per-user
+    location ``kernel-envs/`` uses, and deliberately **not** anywhere
+    inside a course repository: the directory contains the proxy's CA
+    private key, and a build whose jobs DB sat in the course tree (or on
+    a network share via ``CLM_JOBS_DB_PATH``) wrote it there (finding S9,
+    #798). One CA per machine also means a client that trusted it once
+    keeps trusting it, instead of a fresh CA per build.
+    """
+    import platformdirs
+
+    return Path(platformdirs.user_data_dir("clm", appauthor=False)) / "mitm-ca"
+
+
 def _maybe_start_mitmproxy_transport(
     mode: str | None, jobs_db_path: Path, worker_config: object | None = None
 ):
@@ -165,7 +181,13 @@ def _maybe_start_mitmproxy_transport(
     base = Path(jobs_db_path).resolve().parent / "mitm"
     base.mkdir(parents=True, exist_ok=True)
     cassette = base / "transport.http-cassette.yaml"
-    confdir = base / "confdir"
+    # The mitmproxy confdir holds the proxy's **CA private key**. It used to
+    # live next to the jobs DB — i.e. inside the course working tree, where
+    # `umask_secret()` is a no-op on Windows and a `CLM_JOBS_DB_PATH=Z:\…`
+    # put it on a network share (finding S9, #798). One stable CA per user
+    # instead, in the same per-user data dir as `kernel-envs/`: nothing
+    # secret in any repo, and clients stop re-trusting a new CA per build.
+    confdir = _mitm_ca_dir()
     # Bind a wildcard address only when a Docker notebook worker must reach us
     # via host.docker.internal; Direct-only (and diagram-only-Docker) builds keep
     # the loopback bind so the replay proxy is never exposed beyond the host.

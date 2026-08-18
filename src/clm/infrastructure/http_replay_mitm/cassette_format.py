@@ -69,9 +69,66 @@ decode_response = vf.decode_response
 # request headers only; response ``set-cookie`` is left as vcrpy leaves it).
 # ``filter_query_parameters`` / ``filter_post_data_parameters`` strip secrets
 # from the URL query and JSON/form request body respectively.
-FILTER_HEADERS = ["authorization", "cookie", "x-api-key", "set-cookie"]
+#
+# Widening these lists is safe; **narrowing or reordering is not** — the
+# replay lookup filters the incoming request the same way before matching,
+# so the leading entries are load-bearing for every committed cassette.
+# The entries after the original four/two were added for finding S9
+# (#798): one spelling per provider family CLM's own LLM client or a
+# course notebook can reach.
+FILTER_HEADERS = [
+    "authorization",
+    "cookie",
+    "x-api-key",
+    "set-cookie",
+    "api-key",  # Azure OpenAI
+    "x-goog-api-key",  # Gemini / Google AI
+    "proxy-authorization",
+    "x-amz-security-token",  # AWS session credentials
+    "x-auth-token",  # OpenStack/Keystone-style APIs
+]
 FILTER_POST_DATA_PARAMETERS = ["password", "token", "api_key"]
-FILTER_QUERY_PARAMETERS = ["api_key", "token"]
+FILTER_QUERY_PARAMETERS = [
+    "api_key",
+    "token",
+    "key",  # Gemini: ?key=…
+    "access_token",
+    "apikey",
+    "subscription-key",  # Azure API Management
+    "X-Amz-Signature",  # AWS SigV4 presigned URLs (capitalized on the wire)
+]
+
+# --- response side ---------------------------------------------------------
+# vcrpy filters requests only; the addon passed no response hook at all, so
+# ``Set-Cookie`` and OAuth-shaped token bodies were committed verbatim.
+FILTER_RESPONSE_HEADERS = ["set-cookie"]
+
+#: Response-body keys whose *values* are redacted, matched **exactly**.
+#:
+#: Never substring/prefix-match these: an LLM response legitimately carries
+#: ``completion_tokens`` / ``prompt_tokens`` / ``total_tokens``, and clipping
+#: those would corrupt the usage data of every replayed cassette — silently
+#: wrong numbers in cached output rather than a loud failure.
+FILTER_RESPONSE_BODY_KEYS = [
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "client_secret",
+    "api_key",
+    "apikey",
+    "authorization",
+    "password",
+    "secret",
+    "session_token",
+]
+
+#: What a redacted response-body value is replaced with. The request-side
+#: filters *remove* the header/param instead; a response body keeps its
+#: shape, because replayed code reads these payloads and a missing key is a
+#: different failure than a redacted one.
+SECRET_PLACEHOLDER = "[REDACTED-BY-CLM]"
+
+_JSON_CONTENT_TYPE_PREFIX = "application/json"
 
 # A single recorded HTTP interaction: a vcr Request paired with the
 # serialized-response dict (``{"status", "headers", "body"}``) that vcrpy
@@ -86,9 +143,23 @@ HeaderFields = Iterable[tuple[object, object]]
 
 
 def _decode_ascii(value: object) -> str:
-    """Decode a header name/value to ``str`` the way vcrpy does (ASCII)."""
+    """Decode a header name/value to ``str`` the way vcrpy does (ASCII).
+
+    vcrpy raises on a non-ASCII header byte. CLM cannot afford to: this
+    runs *upstream* of the request filter, and the addon reads any filter
+    exception as "unfilterable", which it handles like an ignore-host —
+    forwarding the request to the live network in every mode, including
+    strict replay in CI, and recording nothing (finding S9, #798). A
+    German deck setting OpenRouter's ``X-Title`` to ``"Übung 3"`` is
+    enough to trigger it through ``requests``.
+
+    So a non-ASCII byte is replaced rather than raised. Headers are not
+    part of the replay match key, so the substitution cannot cause a
+    miss; it only means such a header reads approximately in the
+    cassette, which beats the interaction not existing.
+    """
     if isinstance(value, bytes):
-        return value.decode("ascii")
+        return value.decode("ascii", errors="replace")
     return str(value)
 
 
@@ -292,6 +363,145 @@ def build_request_filter(
         return request
 
     return before_record_request
+
+
+def is_json_content_type(value: object) -> bool:
+    """True when a content-type header value denotes JSON.
+
+    Public because the committed-cassette audit
+    (:mod:`clm.workers.notebook.cassette_doctor`) must gate on exactly the
+    same predicate the recorder uses — a finding the recorder would not
+    act on is a finding nobody can clear.
+
+    Prefix, not equality: ``application/json; charset=utf-8`` is the
+    same media type, and an equality check let those bodies skip
+    filtering entirely (finding S9, #798).
+    """
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value).strip().lower().startswith(_JSON_CONTENT_TYPE_PREFIX)
+
+
+def _redact_json_values(payload: object, keys: frozenset[str]) -> object:
+    """Recursively replace the values of *keys* with the placeholder.
+
+    Keys are compared case-insensitively but **whole** — see
+    :data:`FILTER_RESPONSE_BODY_KEYS` for why substring matching is not
+    an option. Containers are rebuilt rather than mutated so the caller's
+    parsed payload is untouched.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: (
+                SECRET_PLACEHOLDER
+                if isinstance(key, str) and key.lower() in keys
+                else _redact_json_values(value, keys)
+            )
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_redact_json_values(item, keys) for item in payload]
+    return payload
+
+
+def build_response_filter(
+    *,
+    filter_headers: Iterable[str] = FILTER_RESPONSE_HEADERS,
+    filter_body_keys: Iterable[str] = FILTER_RESPONSE_BODY_KEYS,
+):
+    """Return ``before_record_response(response_dict) -> response_dict``.
+
+    The response-side counterpart the recorder never had. Two rules, both
+    deliberately narrow (finding S9, #798):
+
+    * drop the named response headers outright (``Set-Cookie``: a session
+      cookie in a committed cassette is a live credential);
+    * in a JSON body, replace the values of the named keys with
+      :data:`SECRET_PLACEHOLDER`, recursively, matching key names
+      **exactly**.
+
+    Everything else is left byte-identical — a non-JSON body, an
+    unparseable one, and any key not on the list. Responses are not part
+    of the replay match key, so this cannot affect matching; it only
+    changes what is written to disk.
+
+    The input dict is not mutated: the caller's copy still holds the
+    original bytes (the addon fingerprints the *filtered* response, and a
+    surprise in-place edit there would be very hard to see).
+    """
+    header_names = frozenset(name.lower() for name in filter_headers)
+    body_keys = frozenset(key.lower() for key in filter_body_keys)
+
+    def before_record_response(response: dict) -> dict:
+        filtered = dict(response)
+        headers = response.get("headers")
+        headers = headers if isinstance(headers, dict) else {}
+
+        # The two rules are independent: disabling header filtering must
+        # not silently disable body redaction (they were nested once, and
+        # ``build_response_filter(filter_headers=())`` then left tokens in
+        # place — found in review).
+        if header_names:
+            filtered["headers"] = {
+                name: value
+                for name, value in headers.items()
+                if str(name).lower() not in header_names
+            }
+        content_type = next(
+            (v for k, v in headers.items() if str(k).lower() == "content-type"), None
+        )
+
+        body = response.get("body")
+        if not (body_keys and isinstance(body, dict) and is_json_content_type(content_type)):
+            return filtered
+
+        raw = body.get("string")
+        if not isinstance(raw, (bytes, bytearray, str)):
+            return filtered
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            # Mislabelled, truncated, or pathologically nested body: leave
+            # the bytes exactly as recorded rather than guessing at their
+            # structure. (``RecursionError`` matters because the addon
+            # treats a raised filter as "do not record at all".)
+            return filtered
+
+        redacted = _redact_json_values(payload, body_keys)
+        if redacted == payload:
+            # Nothing matched — keep the original bytes rather than
+            # re-serializing (json.dumps would rewrite separators and
+            # unicode escapes for every untouched response).
+            return filtered
+
+        text = json.dumps(redacted, ensure_ascii=False)
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                encoded: bytes | str = text.encode("utf-8")
+            except UnicodeEncodeError:
+                # A lone surrogate survives json.loads but cannot be
+                # encoded. Escaping it keeps the interaction recordable —
+                # dropping it would leave the cassette short one response,
+                # which replays as the *previous* one rather than failing.
+                encoded = json.dumps(redacted, ensure_ascii=True).encode("utf-8")
+        else:
+            encoded = text
+
+        filtered["body"] = dict(body)
+        filtered["body"]["string"] = encoded
+        # Keep the length header honest — ``decode_response`` maintains
+        # this invariant for decompression, and a cassette whose
+        # content-length disagrees with its body misleads every reader.
+        length = len(encoded if isinstance(encoded, bytes) else encoded.encode("utf-8"))
+        current = filtered.get("headers")
+        if isinstance(current, dict):
+            filtered["headers"] = {
+                name: ([str(length)] if str(name).lower() == "content-length" else value)
+                for name, value in current.items()
+            }
+        return filtered
+
+    return before_record_response
 
 
 def clm_json_body_matcher(r1: Request, r2: Request) -> None:
