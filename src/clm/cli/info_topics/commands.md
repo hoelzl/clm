@@ -3243,26 +3243,37 @@ on Linux CI. Both are normalized on read as well as write, so a hand-edited
 entry naming `Set-Cookie` or using backslashes still matches — but paths are
 otherwise compared **literally**: a `./` or `sub/../` prefix will not match.
 
-Entries that match nothing — usually a deck that *was* re-recorded — are
-reported as **stale** and never fail the run; regenerate with
-`--write-baseline`. An **unreadable** cassette is not baselineable and keeps
-failing the gate, which is why `--write-baseline` exits non-zero (after
-writing) when it meets one. The two options are mutually exclusive.
+Entries that match nothing are **stale**, and the two reasons are reported
+separately because they mean opposite things:
 
-**A baseline that matches nothing at all is an error**, not a green run.
-Entries are keyed on paths *relative* to the scan root, so pointing the gate at
-the wrong tree — a CI job with the wrong working directory, a checkout where
-the content did not materialize — would otherwise find nothing, accept nothing
-and exit 0 over a repo it never looked at. The document also records the name
-of the root it was built for (`root_name`) and the scan warns when that
-differs; it is a hint rather than a refusal, since a repo may legitimately
-check out under another directory name. Note the walk does **not** follow
-symlinked directories (issue #886), so cassettes behind one are not scanned.
+| Stale kind | Meaning | Effect |
+|---|---|---|
+| **cleared** — the file was scanned, the finding is gone | that deck was re-recorded, i.e. exactly what the audit asks for | never fails; regenerate at your convenience |
+| **missing** — the file was not scanned at all | a sparse checkout, content that did not materialize, decks that moved or were deleted, or the wrong scan root | **fails the run** |
+
+That split is what lets the gate be strict about coverage without punishing
+remediation. **A baseline naming files this scan never saw is an error**, not a
+green run: entries are keyed on paths *relative* to the scan root, so a gate
+pointed at the wrong tree would otherwise find nothing, accept nothing and exit
+0 over a repo it never looked at. A repo that re-recorded *every* baselined deck
+also matches nothing — and stays green, because the files are still there.
+
+The report is always printed **before** any such refusal, so a run that has both
+stale-missing entries and a genuinely new finding shows the finding. The
+document also records the name of the root it was built for (`root_name`) and
+the scan warns when that differs; a hint rather than a refusal, since a repo may
+legitimately check out under another directory name.
+
+An **unreadable** cassette is not baselineable and keeps failing the gate, which
+is why `--write-baseline` exits non-zero (after writing) when it meets one. The
+two options are mutually exclusive. Note the walk does **not** follow symlinked
+directories (issue #886), so cassettes behind one are not scanned.
 
 With `--json`, a baselined run adds `accepted_count`, `new_count`,
-`stale_count` and `stale_entries`. `finding_count` keeps meaning *all*
-findings, so a consumer that already reads it is unaffected; the exit code
-keys on `new_count`. Every finding carries `accepted` in **all** runs — it is
+`stale_count`, `stale_cleared_count`, `stale_missing_count` and
+`stale_entries`. `finding_count` keeps meaning *all* findings, so a consumer
+that already reads it is unaffected; the exit code keys on `new_count` and on
+`stale_missing_count`. Every finding carries `accepted` in **all** runs — it is
 simply always `false` without a baseline. `--write-baseline --json` reports
 `entry_count` and the paths instead of a finding report.
 

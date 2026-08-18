@@ -282,16 +282,40 @@ the write side**, because the repo holds both `set-cookie` and `Set-Cookie`, a
 Windows-written baseline has to match on Linux CI, and normalising one side
 only makes the round trip asymmetric.
 
-**The review's Critical, worth internalising**: a baselined run over a tree
-with no cassettes exited **0**. The signal was right there — every entry stale,
-none accepted — and an early `return` on "no cassettes found" threw it away.
-Wrong CI working directory, a checkout where content did not materialise, a
-renamed content root: all green, over a repo nothing looked at. This feature's
-own failure mode, reached from the other side. `BaselineOutcome.describes_nothing`
-now makes it an error. The related hole it does *not* close is a **partially**
-symlinked tree — `iter_cassette_paths` does not follow directory symlinks, so
-those cassettes are silently unscanned; pre-existing, tracked as **#886**, and
-newly worth fixing because this PR turns the command into a gate.
+**Two review Criticals, and they are the same shape — read this before
+touching the gate.** Both were the gate going green, or looking green, over
+something nobody had checked.
+
+1. *Round 1*: a baselined run over a tree with **no cassettes** exited 0. The
+   signal was there — every entry unmatched, none accepted — and it simply was
+   not acted on. Wrong CI working directory, content that did not materialise,
+   a renamed root: all green over a repo nothing looked at.
+2. *Round 2*: the fix for (1) refused **before rendering the report**. So a
+   repo that had re-recorded its baselined decks *and* grown a new secret was
+   told its scan root was wrong, never shown the secret — and the message's own
+   advice (`--write-baseline`) would then have blessed it. A guided false
+   all-clear, strictly worse than the silent one it replaced.
+
+So: **report first, refuse second**, and never suggest regenerating while
+`outcome.new` is non-empty.
+
+The check itself keys on **missing files**, not on "nothing matched".
+`stale_cleared` (file scanned, finding gone) is a deck that was re-recorded —
+the audit's request carried out — and must stay green, or the gate punishes its
+own fix. `stale_missing` (file never scanned) is a sparse checkout, moved decks,
+or the wrong root, and fails. Keying on "nothing matched" conflated the two and
+turned a fully-remediated repo red.
+
+Also of note: an early `return` on "no cassettes found" was blamed for (1) in
+an earlier draft of this document. It was not the cause — removing it changes
+nothing, since an empty tree has no findings either way.
+`describes_another_tree` is the whole fix.
+
+The hole this does **not** close is a **partially** symlinked tree —
+`iter_cassette_paths` does not follow directory symlinks, so those cassettes are
+silently unscanned. Pre-existing, tracked as **#886**, and newly worth fixing
+because this arc turns the command into a gate. Those entries now at least
+surface as `stale_missing`.
 
 ## 5. Test-suite flakiness on the Windows dev box (read before panicking)
 

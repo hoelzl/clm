@@ -782,9 +782,9 @@ clm cassette scan --baseline .clm-cassette-baseline.json         # in CI
 
 Two things that look like problems and are not:
 
-- **"N baseline entries matched nothing."** Stale entries, almost always
-  because a deck *was* re-recorded and its findings are gone. Never fatal;
-  regenerate the file with `--write-baseline`.
+- **"N baseline entries are cleared."** Those decks were re-recorded and their
+  findings are gone. Never fatal — the gate must not punish the fix it exists
+  to ask for. Regenerate the file with `--write-baseline` at your convenience.
 - **A new finding in a file that is already in the baseline.** Entries match on
   `(path, location, key)`, so a new finding *kind* in a baselined file is
   correctly reported. The flip side is that a second `set-cookie` in that same
@@ -795,29 +795,38 @@ An unreadable cassette is never accepted by a baseline, and
 `--write-baseline` exits non-zero if it meets one — otherwise it would promise
 a green gate that the next run cannot deliver.
 
-### `none of the N baseline entries matched anything under …`
+### `N baseline entries name files that were not scanned at all`
 
-The gate refusing to vouch for a tree it did not scan. Entries are keyed on
-paths **relative to the scan root**, so the two invocation styles resolve
-different roots:
+The gate refusing to vouch for a tree it did not scan. This is **not** the
+same as a re-recorded deck: those files are still there and their entries are
+reported as *cleared*, which never fails. These files were not seen at all.
+
+Entries are keyed on paths **relative to the scan root**, and the two
+invocation styles resolve different roots:
 
 | Invocation | Root |
 |---|---|
 | `clm cassette scan` | the current directory |
 | `clm cassette scan course.xml` | the course root the spec resolves to |
 
-Write and read the baseline the same way. If CI runs from a different
-directory than you did, every entry goes stale and the run fails — which is
-the point: without the check it would have *passed*, green, over a repo
-nothing looked at. The scan also warns when the root's directory name differs
-from the one the baseline was written for.
+Write and read the baseline the same way. Other causes: a sparse checkout,
+content that did not materialize (LFS, submodules), or decks that were moved or
+deleted. The scan also warns when the root's directory name differs from the
+one the baseline was written for — that warning prints *before* this error, so
+check for it.
 
-The same message appears if every baselined deck has genuinely been
-re-recorded. The answer is the same either way: `--write-baseline` again once
-you have confirmed which it is.
+Without this check the run would have *passed*, green, over a repo nothing
+looked at. If the cause is a genuine move or deletion, regenerate with
+`--write-baseline`.
+
+**Read the report above the error first.** A run can have both missing entries
+and a genuinely new finding; the report is printed before the refusal precisely
+so that regenerating the baseline cannot quietly bless a secret you were never
+shown.
 
 Note the walk does not follow **symlinked directories** ([#886][i886]), so
-cassettes behind one are silently not scanned.
+cassettes behind one are silently not scanned — and they will show up here as
+missing.
 
 [i886]: https://github.com/hoelzl/clm/issues/886
 

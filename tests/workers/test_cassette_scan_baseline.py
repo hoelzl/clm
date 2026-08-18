@@ -25,6 +25,7 @@ name — and the docs must not imply otherwise.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,18 @@ from clm.workers.notebook.cassette_doctor import (
     load_baseline,
     scan_cassettes_for_secrets,
 )
+
+
+def _json_object(text: str) -> dict:
+    """The first JSON object in *text*, ignoring anything after it.
+
+    A run can now print the report *and then* fail with a ``ClickException``,
+    so the JSON is no longer the tail of the output and slicing from the
+    first brace to the end stopped parsing. ``raw_decode`` stops at the
+    object's close.
+    """
+    decoded: dict = json.JSONDecoder().raw_decode(text[text.index("{") :])[0]
+    return decoded
 
 
 def _interaction(
@@ -151,6 +164,24 @@ class TestBuildingABaseline:
         """You cannot bless what you cannot read."""
         (tmp_path / "broken.http-cassette.yaml").write_text("a: b: c", encoding="utf-8")
         assert build_baseline(_scan(tmp_path), tmp_path)["entries"] == []
+
+    def test_paths_are_normalised_on_the_write_side_too(self, monkeypatch) -> None:
+        """The one line that makes a Windows-written baseline match on Linux.
+
+        It is the *write* side, so on Linux — where CI runs — it never fires
+        naturally and deleting it changes nothing observable. Forcing
+        ``relpath`` to hand back a native Windows path is what makes the
+        rule testable on both platforms; routing the result through ``Path``
+        instead would hide the deletion again on Windows, since a backslash
+        is already a separator there.
+        """
+        from clm.workers.notebook.cassette_doctor import _relative_posix, _to_posix
+
+        assert _to_posix("a\\b.yaml") == "a/b.yaml"
+        assert _to_posix("a/b.yaml") == "a/b.yaml"
+
+        monkeypatch.setattr(os.path, "relpath", lambda *_a, **_k: "m550\\topic\\deck.yaml")
+        assert _relative_posix(Path("ignored"), Path("ignored")) == "m550/topic/deck.yaml"
 
 
 class TestTheWrittenFileDoesNotChurn:
@@ -583,7 +614,7 @@ class TestScanCliBaseline:
         return runner.invoke(cassette_group, ["scan", *args], catch_exceptions=False)
 
     def _payload(self, result) -> dict:
-        return json.loads(result.output[result.output.index("{") :])
+        return _json_object(result.output)
 
     def test_write_then_gate_is_green(self, tmp_path: Path, monkeypatch) -> None:
         """The whole point, end to end."""
@@ -723,6 +754,80 @@ class TestScanCliBaseline:
         assert payload["finding_count"] == 1
         assert payload["baseline"] == str(baseline)
 
+    def test_no_temp_file_is_left_behind(self, tmp_path: Path, monkeypatch) -> None:
+        """The write goes through a sibling temp file and ``os.replace``.
+
+        A crash mid-write must not leave a half-written baseline the next run
+        reads as a corrupt gate — but the temp file must also not survive a
+        *successful* write, since it would land next to a committed baseline
+        in a course repo with nothing to clean it up.
+        """
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)])
+        assert baseline.exists()
+        assert list(tmp_path.glob("baseline.json.tmp-*")) == []
+
+    def test_a_failed_write_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        target = tmp_path / "out" / "baseline.json"
+        target.parent.mkdir()
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "replace", _boom)
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        result = CliRunner().invoke(cassette_group, ["scan", "--write-baseline", str(target)])
+        assert result.exit_code != 0
+        assert list(target.parent.glob("*.tmp-*")) == []
+
+    def test_a_baseline_error_while_writing_is_a_clean_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Both CLI wrappers matter; neither was pinned through the CLI."""
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+
+        def _boom(*_args, **_kwargs):
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        monkeypatch.setattr(os.path, "relpath", _boom)
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        result = CliRunner().invoke(
+            cassette_group, ["scan", "--write-baseline", str(tmp_path / "b.json")]
+        )
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    def test_a_baseline_error_while_applying_is_a_clean_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _cookie_deck(tmp_path)
+        baseline = tmp_path / "b.json"
+        self._run(["--write-baseline", str(baseline)])
+
+        def _boom(*_args, **_kwargs):
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        monkeypatch.setattr(os.path, "relpath", _boom)
+        from click.testing import CliRunner
+
+        from clm.cli.commands.cassette import cassette_group
+
+        result = CliRunner().invoke(cassette_group, ["scan", "--baseline", str(baseline)])
+        assert result.exit_code != 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
     def test_an_unwritable_target_is_a_clean_error_not_a_traceback(
         self, tmp_path: Path, monkeypatch
     ) -> None:
@@ -776,7 +881,7 @@ class TestTheGateCannotGoGreenOverTheWrongTree:
         monkeypatch.chdir(empty)
         result = self._run(["--baseline", str(baseline)])
         assert result.exit_code != 0
-        assert "matched anything" in result.output
+        assert "not scanned at all" in result.output
 
     def test_a_baselined_run_at_the_wrong_root_fails(self, tmp_path: Path, monkeypatch) -> None:
         """Same failure, reached by scanning a sibling tree that has cassettes."""
@@ -828,7 +933,7 @@ class TestTheGateCannotGoGreenOverTheWrongTree:
             encoding="utf-8",
         )
         result = self._run(["--baseline", str(baseline), "--json"])
-        payload = json.loads(result.output[result.output.index("{") :])
+        payload = _json_object(result.output)
         assert payload["stale_count"] == 1
         assert payload["accepted_count"] == 1
         assert result.exit_code == 0
@@ -854,3 +959,166 @@ class TestTheGateCannotGoGreenOverTheWrongTree:
         _cookie_deck(renamed, "deck.http-cassette.yaml")
         monkeypatch.chdir(renamed)
         assert self._run(["--baseline", str(baseline)]).exit_code == 0
+
+    def test_a_fully_cleared_baseline_stays_green(self, tmp_path: Path, monkeypatch) -> None:
+        """Finishing the remediation must not turn the build red.
+
+        Every baselined deck re-recorded is the audit's request carried out
+        in full. An earlier version of this check keyed on "nothing matched"
+        and failed here — the gate punishing its own fix, which is how gates
+        get switched off. Keying on *missing files* separates it from a
+        wrong scan root, because the decks are still there.
+        """
+        monkeypatch.chdir(tmp_path)
+        deck = _cookie_deck(tmp_path)
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)])
+
+        deck.write_text(
+            yaml.safe_dump({"interactions": [_interaction()], "version": 1}, sort_keys=True),
+            encoding="utf-8",
+        )
+        result = self._run(["--baseline", str(baseline), "--json"])
+        payload = _json_object(result.output)
+        assert payload["stale_cleared_count"] == 1
+        assert payload["stale_missing_count"] == 0
+        assert result.exit_code == 0
+
+    def test_a_missing_baselined_file_fails_even_when_others_match(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The partial case — a sparse checkout, not a re-record.
+
+        One entry matching was enough to call the tree "described" before
+        this, so a checkout holding 1 of 50 baselined decks passed green with
+        a console line reading "re-record cleanup, most likely". A file that
+        is not there is not cleanup.
+        """
+        monkeypatch.chdir(tmp_path)
+        for i in range(4):
+            _cookie_deck(tmp_path, f"m{i}/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)])
+
+        for i in range(1, 4):
+            (tmp_path / f"m{i}" / "deck.http-cassette.yaml").unlink()
+        result = self._run(["--baseline", str(baseline), "--json"])
+        payload = _json_object(result.output)
+        assert payload["accepted_count"] == 1
+        assert payload["stale_missing_count"] == 3
+        assert payload["stale_cleared_count"] == 0
+        assert result.exit_code != 0
+
+    def test_a_new_finding_is_reported_before_the_refusal(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The review-round-2 Critical, and the worst bug of this feature.
+
+        When a repo re-recorded its baselined decks *and* grew a new secret,
+        the refusal fired first — so the operator never saw the secret, was
+        told the scan root was wrong, and following the message's own advice
+        (`--write-baseline`) would have blessed it. A guided false all-clear.
+        Report first, refuse second.
+        """
+        monkeypatch.chdir(tmp_path)
+        old = _cookie_deck(tmp_path, "old/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._run(["--write-baseline", str(baseline)])
+        old.unlink()
+        _write(
+            tmp_path,
+            "new/leak.http-cassette.yaml",
+            [_interaction(request_headers={"authorization": "Bearer LEAK"})],
+        )
+
+        result = self._run(["--baseline", str(baseline), "--json"])
+        assert result.exit_code != 0
+        payload = _json_object(result.output)
+        assert payload["new_count"] == 1
+        assert [
+            f["key"] for c in payload["cassettes"] for f in c["findings"] if not f["accepted"]
+        ] == ["authorization"]
+        # And the refusal must not send them off to launder it.
+        assert "clear those before regenerating" in result.output
+
+
+class TestTheRootNameWarning:
+    """Pure, because a Rich-printed warning is one nothing can assert.
+
+    Three separate mutations of this rule survived the entire suite: never
+    emitting the warning, never computing it, and emitting it for a baseline
+    that records no root at all.
+    """
+
+    def test_a_mismatch_warns(self) -> None:
+        from clm.cli.commands.cassette import root_name_warning
+
+        message = root_name_warning("slides", "otherdir")
+        assert message is not None
+        assert "slides" in message and "otherdir" in message
+
+    def test_the_recorded_root_is_read_back_out_of_the_document(self, tmp_path: Path) -> None:
+        """Otherwise the warning is computed from ``None`` and never fires.
+
+        Making ``baseline_root_name`` always return ``None`` left the whole
+        suite green: the pure warning tests bypass it, and the CLI test only
+        asserted an exit code the warning does not affect.
+        """
+        from clm.workers.notebook.cassette_doctor import baseline_root_name
+
+        _cookie_deck(tmp_path, "deck.http-cassette.yaml")
+        document = build_baseline(_scan(tmp_path), tmp_path)
+        assert baseline_root_name(document) == tmp_path.name
+
+    @pytest.mark.parametrize("document", [{}, {"root_name": 7}, {"root_name": None}, [], "x"])
+    def test_a_document_without_a_usable_root_name_reads_as_none(self, document) -> None:
+        from clm.workers.notebook.cassette_doctor import baseline_root_name
+
+        assert baseline_root_name(document) is None
+
+    def test_a_match_is_silent(self) -> None:
+        from clm.cli.commands.cassette import root_name_warning
+
+        assert root_name_warning("slides", "slides") is None
+
+    @pytest.mark.parametrize("recorded", [None, ""])
+    def test_a_baseline_without_a_root_name_is_silent(self, recorded) -> None:
+        """An older or hand-written file records none — do not invent one.
+
+        The mutant that dropped the ``recorded and`` guard printed
+        "written for a root named 'None'" on every such run.
+        """
+        from clm.cli.commands.cassette import root_name_warning
+
+        assert root_name_warning(recorded, "slides") is None
+
+    def test_a_bracket_in_a_directory_name_is_escaped(self) -> None:
+        """``PythonCourses[old]`` is a legal directory name.
+
+        Unescaped, Rich ate the bracketed part and printed the *wrong* name
+        — in the one message whose whole job is telling two roots apart —
+        and an unbalanced closing tag raised ``MarkupError`` straight out of
+        the CLI.
+        """
+        from rich.console import Console
+
+        from clm.cli.commands.cassette import root_name_warning
+
+        message = root_name_warning("PythonCourses[old]", "x[/notatag]y")
+        assert message is not None
+        console = Console(file=io.StringIO(), width=200, no_color=True)
+        console.print(message)
+        rendered = console.file.getvalue()
+        assert "PythonCourses[old]" in rendered
+        assert "x[/notatag]y" in rendered
+
+    def test_a_bracket_in_a_finding_does_not_crash_the_report(self, tmp_path: Path) -> None:
+        """Paths, header names and URIs all come from outside too."""
+        from clm.cli.commands.cassette import _render_secret_report
+
+        _write(
+            tmp_path,
+            "deck.http-cassette.yaml",
+            [_interaction(response_headers={"set-cookie": "s=1"}, uri="https://x/[/red]")],
+        )
+        _render_secret_report(_scan(tmp_path))  # must not raise MarkupError

@@ -838,39 +838,58 @@ class BaselineOutcome:
     Attributes:
         accepted: Findings a baseline entry blessed. Reported, not fatal.
         new: Everything else. These decide the exit code.
-        stale: Baseline entries nothing matched this run — usually a deck
-            that was re-recorded, i.e. somebody doing the right thing.
-            Reported so the file can be regenerated, never fatal.
+        stale: Baseline entries nothing matched this run, split below.
+        stale_cleared: Stale entries whose **file was scanned** and simply no
+            longer has that finding — a deck that was re-recorded, i.e.
+            somebody doing exactly what the audit asks for. Never fatal;
+            failing here would make the gate punish the fix.
+        stale_missing: Stale entries whose **file was not scanned at all**.
+            A different thing entirely, and the one worth stopping for: a
+            sparse checkout, content that did not materialise, decks that
+            moved, or the wrong scan root. Telling these two apart is what
+            lets the gate be strict about coverage without being wrong about
+            remediation.
         unreadable: Cassettes that could not be parsed. Not baselineable and
             still fatal: a file the audit cannot read is not one it can
             vouch for.
+        entry_count: Size of the baseline this ran against, so a caller can
+            tell "nothing matched because the baseline is empty" from
+            "nothing matched because we scanned the wrong tree".
     """
 
     accepted: list[SecretFinding] = field(factory=list)
     new: list[SecretFinding] = field(factory=list)
-    stale: list[BaselineEntry] = field(factory=list)
+    stale_cleared: list[BaselineEntry] = field(factory=list)
+    stale_missing: list[BaselineEntry] = field(factory=list)
     unreadable: int = 0
-    #: Entry count of the baseline this outcome was produced against, so a
-    #: caller can tell "nothing matched because the baseline is empty" from
-    #: "nothing matched because we scanned the wrong tree".
     entry_count: int = 0
 
     @property
-    def describes_nothing(self) -> bool:
-        """True when a non-empty baseline matched **no** finding at all.
+    def stale(self) -> list[BaselineEntry]:
+        """Every entry nothing matched, cleared and missing together."""
+        return sorted(
+            self.stale_cleared + self.stale_missing, key=lambda e: (e.path, e.location, e.key)
+        )
 
-        The gate's own evidence that it is pointed at the wrong tree. A CI
-        job with the wrong working directory, a checkout where the course
-        content did not materialise, or a renamed content root all produce
-        this — and without the check they produce a **green** run over a repo
-        nothing looked at, which is the failure this feature exists to
-        prevent, arrived at from the other side.
+    @property
+    def describes_another_tree(self) -> bool:
+        """True when the baseline names files this scan did not even see.
 
-        A repo that legitimately re-recorded *every* baselined deck lands
-        here too. That is fine: the answer in both cases is the same, and it
-        is to regenerate the file rather than to trust it.
+        The gate's own evidence that it is pointed at the wrong — or an
+        incomplete — tree. A CI job with the wrong working directory, a
+        checkout where the course content did not materialise, a sparse
+        checkout, a renamed content root: each leaves baselined *paths* with
+        no cassette behind them, and without this check each produced a
+        **green** run over a repo nothing looked at. That is the failure this
+        feature exists to prevent, arrived at from the other side.
+
+        Deliberately keyed on **missing files**, not on "nothing matched".
+        A repo that re-recorded every baselined deck also matches nothing —
+        and that is the audit's request being carried out, so it must stay
+        green. The two are only distinguishable because the files are still
+        there in one case and not in the other.
         """
-        return bool(self.entry_count) and not self.accepted
+        return bool(self.stale_missing)
 
 
 def _to_posix(text: str) -> str:
@@ -896,19 +915,28 @@ def _to_posix(text: str) -> str:
 def _relative_posix(path: Path, root: Path) -> str:
     """*path* relative to *root*, with forward slashes.
 
-    Raises :class:`BaselineError` when the two share no common root — on
-    Windows, different drives. Unreachable through the CLI (paths come from
-    ``root.rglob``), and it raises rather than falling back to the file's
-    *name* because that fallback would collapse every same-named cassette in
-    the tree into one entry: in a course repo, 95 different
-    ``deck.http-cassette.yaml`` files accepting each other's findings. Dead
-    defensive code should not choose the unsafe degradation.
+    Raises :class:`BaselineError` when ``os.path.relpath`` cannot express the
+    relation — in practice only across Windows drive letters; a same-drive
+    path outside the root yields ``../…`` and does not raise, and on POSIX
+    the raise is unreachable altogether. Unreachable through the CLI in any
+    case, since paths come from ``root.rglob``.
+
+    It raises rather than falling back to the file's *name* because that
+    fallback would collapse every same-named cassette in the tree into one
+    entry: in a course repo, 95 different ``deck.http-cassette.yaml`` files
+    accepting each other's findings. Dead defensive code should not choose
+    the unsafe degradation.
     """
     try:
-        relative = Path(os.path.relpath(path, root))
+        relative = os.path.relpath(path, root)
     except ValueError as exc:
         raise BaselineError(f"cassette '{path}' is not under the scan root '{root}'") from exc
-    return _to_posix(relative.as_posix())
+    # ``_to_posix`` does the whole conversion rather than ``Path.as_posix()``
+    # doing most of it: routing through ``Path`` made the normalisation a
+    # no-op on Windows (where a backslash is already a separator), so the
+    # one line that keeps a Windows-written baseline matching on Linux CI
+    # could be deleted with the suite still green.
+    return _to_posix(relative)
 
 
 def _entry_for(report_path: str, finding: SecretFinding) -> BaselineEntry:
@@ -1031,16 +1059,23 @@ def apply_baseline(
 
     Mutates each :class:`SecretFinding`'s ``accepted`` flag so the rendered
     and JSON reports can show both, and returns the split plus the baseline
-    entries nothing matched.
+    entries nothing matched — those separated into "the file was scanned and
+    is clean now" and "the file was not scanned at all", which mean opposite
+    things (see :class:`BaselineOutcome`).
     """
     outcome = BaselineOutcome(entry_count=len(entries))
     matched: set[BaselineEntry] = set()
+    # Every path this run looked at, whether or not it had findings — an
+    # unreadable cassette counts as *seen* here, since it is a file that
+    # exists and fails the gate on its own account.
+    scanned: set[str] = set()
 
     for report in reports:
+        relative = _relative_posix(report.path, root)
+        scanned.add(relative)
         if report.error is not None:
             outcome.unreadable += 1
             continue
-        relative = _relative_posix(report.path, root)
         for finding in report.findings:
             entry = _entry_for(relative, finding)
             if entry in entries:
@@ -1051,5 +1086,9 @@ def apply_baseline(
                 finding.accepted = False
                 outcome.new.append(finding)
 
-    outcome.stale = sorted(entries - matched, key=lambda e: (e.path, e.location, e.key))
+    for entry in sorted(entries - matched, key=lambda e: (e.path, e.location, e.key)):
+        if entry.path in scanned:
+            outcome.stale_cleared.append(entry)
+        else:
+            outcome.stale_missing.append(entry)
     return outcome

@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 
 import click
+from rich.markup import escape
 
 from clm.cli.commands.shared import cli_console, get_logger
 from clm.core.course_paths import resolve_course_paths
@@ -184,6 +185,29 @@ def doctor(spec_file: Path | None, fix: bool, min_text_len: int, as_json: bool) 
     _render_text_report(reports, fix=fix)
 
 
+def root_name_warning(recorded: str | None, actual: str) -> str | None:
+    """The "this baseline was written for another root" line, or ``None``.
+
+    Pure and public for the same reason :func:`secret_report_summary` is: the
+    Rich console binds to the real stderr at import time and is invisible to
+    ``CliRunner``, so a warning printed inline is a warning nothing can
+    assert — and three separate mutations of this rule survived the whole
+    suite (review round 2).
+
+    Both names are Rich-escaped. A directory called ``PythonCourses[old]``
+    is perfectly legal and made the message print the *wrong* name, silently,
+    in the one place whose job is telling two roots apart; a name with an
+    unbalanced closing tag raised ``MarkupError`` out of the CLI.
+    """
+    if not recorded or recorded == actual:
+        return None
+    return (
+        f"[yellow]Baseline was written for a root named '{escape(recorded)}', "
+        f"scanning '{escape(actual)}'[/yellow] — entries are relative to the root, "
+        "so check this is the tree you meant."
+    )
+
+
 def secret_report_summary(
     reports: list[SecretScanReport], baselined: bool = False
 ) -> tuple[int, int, int, int]:
@@ -205,33 +229,40 @@ def secret_report_summary(
 
 def _render_secret_report(
     reports: list[SecretScanReport], outcome: BaselineOutcome | None = None
-) -> int:
-    """Print the audit and return the number of findings that fail the gate.
+) -> None:
+    """Print the audit.
 
-    Without a baseline that is every finding. With one, accepted findings
-    are still listed — a repo should be able to see what it has accepted —
-    but marked, and only the rest count.
+    Without a baseline every finding gates. With one, accepted findings are
+    still listed — a repo should be able to see what it has accepted — but
+    marked, and only the rest count.
+
+    Every interpolated value is Rich-escaped: paths, header names and URIs
+    all come from the filesystem or from a cassette, i.e. from outside, and
+    a stray ``[/x]`` in one of them would raise ``MarkupError`` out of a CI
+    gate (or worse, quietly restyle the report).
     """
     console = cli_console
     dirty, total, gating_total, skipped = secret_report_summary(reports, outcome is not None)
 
     for report in reports:
         if report.error is not None:
-            console.print(f"[yellow]! {report.path}[/yellow]: skipped ({report.error})")
+            console.print(
+                f"[yellow]! {escape(str(report.path))}[/yellow]: skipped ({escape(report.error)})"
+            )
             continue
         if not report.findings:
             continue
         gating = [f for f in report.findings if not (outcome and f.accepted)]
         colour = "red" if gating else "dim"
         console.print(
-            f"[{colour}]{'x' if gating else '-'} {report.path}[/{colour}]: "
+            f"[{colour}]{'x' if gating else '-'} {escape(str(report.path))}[/{colour}]: "
             f"{len(report.findings)} finding(s)"
         )
         for finding in report.findings:
             mark = " [dim](accepted)[/dim]" if outcome and finding.accepted else ""
             console.print(
-                f"    interaction {finding.index}: {finding.location} "
-                f"'{finding.key}'  {finding.uri}{mark}"
+                f"    interaction {finding.index}: {escape(finding.location)} "
+                f"'{escape(finding.key)}'  {escape(finding.uri)}{mark}"
             )
 
     # Say what is true. Recomputing "with secrets" to mean "with *gating*
@@ -245,22 +276,32 @@ def _render_secret_report(
         console.print(
             f"{len(outcome.accepted)} finding(s) accepted by the baseline, {len(outcome.new)} new."
         )
-        if outcome.stale:
-            # Not a failure: a stale entry usually means a deck was
-            # re-recorded, i.e. somebody did the thing the audit asks for.
-            # Failing here would make the gate punish the fix.
+        if outcome.stale_cleared:
+            # Not a failure, and the wording matters: these are decks that
+            # were re-recorded, i.e. somebody doing the thing the audit asks
+            # for. Failing here would make the gate punish the fix.
             console.print(
-                f"[yellow]{len(outcome.stale)} baseline entr(y/ies) matched nothing[/yellow] "
-                "— re-record cleanup, most likely. Regenerate with --write-baseline:"
+                f"[dim]{len(outcome.stale_cleared)} baseline entr(y/ies) are cleared[/dim] "
+                "— those decks were re-recorded. Regenerate with --write-baseline:"
             )
-            for entry in outcome.stale:
-                console.print(f"    {entry.path}: {entry.location} '{entry.key}'")
+            for entry in outcome.stale_cleared:
+                console.print(f"    {escape(entry.path)}: {escape(entry.location)}")
+        if outcome.stale_missing:
+            # A different thing entirely, and it used to be reported with
+            # the reassuring "re-record cleanup, most likely" wording above:
+            # these files were never scanned. Sparse checkout, content that
+            # did not materialise, moved decks, wrong root.
+            console.print(
+                f"[yellow]{len(outcome.stale_missing)} baseline entr(y/ies) name files that "
+                f"were not scanned at all[/yellow] — not re-record cleanup; check the scan root:"
+            )
+            for entry in outcome.stale_missing:
+                console.print(f"    {escape(entry.path)}: {escape(entry.location)}")
     if gating_total:
         console.print(
             "Re-record the affected deck(s) against the live service; the "
             "recorder strips these on the way in now. Nothing was rewritten."
         )
-    return gating_total
 
 
 @cassette_group.command("scan")
@@ -392,32 +433,17 @@ def scan(
         except BaselineError as exc:  # a cassette outside the scan root
             raise click.ClickException(str(exc)) from exc
 
-        # The gate must not go green over a tree it did not actually scan.
-        # A wrong working directory, a checkout where the content did not
-        # materialise, a renamed course root — each yields "no cassettes"
-        # or "nothing matched", and without this each yielded **exit 0**.
-        # That is this feature's own failure mode from the other side, and
-        # the worst outcome a gate can have.
-        if outcome.describes_nothing:
-            raise click.ClickException(
-                f"none of the {outcome.entry_count} baseline entr(y/ies) matched anything under "
-                f"{root} ({len(paths)} cassette(s) scanned). Either the scan root is wrong — a "
-                "baseline is keyed on paths *relative* to it — or every baselined deck has been "
-                "re-recorded. Regenerate with --write-baseline once you are sure which."
-            )
-        recorded_root = baseline_root_name(document)
-        if recorded_root and recorded_root != root.name:
-            # A hint, not proof: entries are relative, so applying a
-            # baseline at a different root silently re-interprets all of
-            # them, and a colliding relative path is then accepted without
-            # ever having been baselined. Warned rather than refused
-            # because a repo may legitimately check out under a different
-            # directory name.
-            cli_console.print(
-                f"[yellow]Baseline was written for a root named '{recorded_root}', "
-                f"scanning '{root.name}'[/yellow] — entries are relative to the root, so "
-                "check this is the tree you meant."
-            )
+        # A hint, not proof: entries are relative, so applying a baseline at
+        # a different root silently re-interprets all of them, and a
+        # colliding relative path is then accepted without ever having been
+        # baselined. Warned rather than refused because a repo may
+        # legitimately check out under a different directory name — and
+        # printed *before* any refusal below, because it is the single most
+        # useful thing to know when a run is about to fail for a root the
+        # operator cannot see.
+        warning = root_name_warning(baseline_root_name(document), root.name)
+        if warning:
+            cli_console.print(warning)
 
     gating_count = len(outcome.new) if outcome else finding_count
 
@@ -440,6 +466,12 @@ def scan(
             payload["accepted_count"] = len(outcome.accepted)
             payload["new_count"] = len(outcome.new)
             payload["stale_count"] = len(outcome.stale)
+            # Split, because the two mean opposite things: "cleared" is a
+            # deck that was re-recorded, "missing" is a file this run never
+            # saw. A CI consumer wanting to be strict about coverage keys on
+            # the second.
+            payload["stale_cleared_count"] = len(outcome.stale_cleared)
+            payload["stale_missing_count"] = len(outcome.stale_missing)
             payload["stale_entries"] = [e.to_dict() for e in outcome.stale]
         click.echo(json.dumps(payload, indent=2))
     elif not paths:
@@ -449,6 +481,23 @@ def scan(
         cli_console.print(f"No cassettes found under {root}.")
     else:
         _render_secret_report(reports, outcome)
+
+    # Only *after* reporting. Failing before it hid any new finding the run
+    # had also turned up — and then told the operator to regenerate the
+    # baseline, which would have blessed the very secret it never showed
+    # them (found in review round 2). Report first, refuse second.
+    if outcome is not None and outcome.describes_another_tree:
+        raise click.ClickException(
+            f"{len(outcome.stale_missing)} of {outcome.entry_count} baseline entr(y/ies) name "
+            f"files that were not scanned at all under {root} ({len(paths)} cassette(s) found). "
+            "Either this is not the tree the baseline was written for — entries are keyed on "
+            "paths *relative* to the scan root — or those decks moved or were deleted."
+            + (
+                " Note the report above lists new findings too: clear those before regenerating."
+                if outcome.new
+                else " Regenerate with --write-baseline once you are sure which."
+            )
+        )
 
     # Fails closed on an unreadable cassette too: a file the audit could
     # not parse is not a file it can vouch for, and a repo where every
