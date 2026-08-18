@@ -559,10 +559,25 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             if str(name).lower() in query_params:
                 findings.append(SecretFinding(index, "request query", str(name), uri))
 
+        # Dispatch on the request content-type exactly as the recorder
+        # does — JSON there, form-encoded everywhere else. Reading the
+        # body both ways would flag a JSON payload served as text/plain
+        # (which the recorder leaves alone), i.e. a finding no re-record
+        # can clear.
         raw_body = getattr(request, "body", None)
-        payload = _json_or_none(raw_body)
-        if isinstance(payload, dict):
-            body_names: Iterable[str] = [k for k in payload if isinstance(k, str)]
+        request_content_type = next(
+            (
+                v
+                for k, v in (getattr(request, "headers", {}) or {}).items()
+                if str(k).lower() == "content-type"
+            ),
+            None,
+        )
+        if cf.is_json_content_type(request_content_type):
+            payload = _json_or_none(raw_body)
+            body_names: Iterable[str] = (
+                [k for k in payload if isinstance(k, str)] if isinstance(payload, dict) else []
+            )
         else:
             body_names = _form_body_keys(raw_body)
         for key in body_names:

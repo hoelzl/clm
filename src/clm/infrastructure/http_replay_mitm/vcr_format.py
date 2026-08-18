@@ -445,6 +445,30 @@ def _is_json_content_type(value: object) -> bool:
     return str(value).strip().lower().startswith("application/json")
 
 
+def _replace_form_parameters(request: Request, body: bytes, replacements: dict) -> bytes:
+    """Filter an ``application/x-www-form-urlencoded`` body.
+
+    Raises ``UnicodeDecodeError`` when the body is not UTF-8 text; the
+    caller decides what that means (see the call site).
+    """
+    splits = [p.partition(b"=") for p in body.split(b"&")]
+    new_splits = []
+    for k, sep, ov in splits:
+        if sep is None:
+            new_splits.append((k, sep, ov))
+            continue
+        rk = k.decode("utf-8")
+        if rk.lower() not in replacements:
+            new_splits.append((k, sep, ov))
+            continue
+        rv = replacements[rk.lower()]
+        if callable(rv):
+            rv = rv(key=rk, value=ov.decode("utf-8"), request=request)
+        if rv is not None:
+            new_splits.append((k, sep, rv.encode("utf-8")))
+    return b"&".join(k if sep is None else b"".join([k, sep, v]) for k, sep, v in new_splits)
+
+
 def replace_post_data_parameters(request: Request, replacements) -> Request:
     """Remove/replace form/JSON body parameters; value ``None`` removes.
 
@@ -456,21 +480,28 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
     if not request.body:
         return request
 
-    replacements = dict(replacements)
+    # Names are compared case-insensitively, like the query filter: nobody
+    # writes ``API_KEY`` in a body meaning something other than ``api_key``,
+    # and the case-sensitive lookup let those record verbatim (finding S9,
+    # #798). The surviving parameter keeps its original casing.
+    replacements = {str(k).lower(): v for k, v in dict(replacements).items()}
     # Any method that carries a body, not just POST. vcrpy gated this on
     # POST; a ``PUT``/``PATCH`` with a JSON body carrying ``api_key`` is
     # ordinary in an API-teaching deck, and it recorded verbatim (finding
     # S9, #798). Bodyless requests already returned above.
     if not isinstance(request.body, BytesIO):
         if isinstance(request.body, dict):
-            new_body = request.body.copy()
-            for k, rv in replacements.items():
-                if k in new_body:
-                    ov = new_body.pop(k)
-                    if callable(rv):
-                        rv = rv(key=k, value=ov, request=request)
-                    if rv is not None:
-                        new_body[k] = rv
+            new_body = dict(request.body)
+            for key in list(new_body):
+                lowered = str(key).lower()
+                if lowered not in replacements:
+                    continue
+                rv = replacements[lowered]
+                ov = new_body.pop(key)
+                if callable(rv):
+                    rv = rv(key=key, value=ov, request=request)
+                if rv is not None:
+                    new_body[key] = rv
             request.body = new_body
         elif _is_json_content_type(request.headers.get("Content-Type")):
             try:
@@ -487,35 +518,33 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
                 # A JSON array or scalar has no top-level keys to filter,
                 # and re-dumping it would rewrite bytes for nothing.
                 return request
-            for k, rv in replacements.items():
-                if k in json_data:
-                    ov = json_data.pop(k)
-                    if callable(rv):
-                        rv = rv(key=k, value=ov, request=request)
-                    if rv is not None:
-                        json_data[k] = rv
+            for key in list(json_data):
+                lowered = str(key).lower()
+                if lowered not in replacements:
+                    continue
+                rv = replacements[lowered]
+                ov = json_data.pop(key)
+                if callable(rv):
+                    rv = rv(key=key, value=ov, request=request)
+                if rv is not None:
+                    json_data[key] = rv
             request.body = json.dumps(json_data).encode("utf-8")
         else:
             if isinstance(request.body, str):
                 request.body = request.body.encode("utf-8")
-            splits = [p.partition(b"=") for p in request.body.split(b"&")]
-            new_splits = []
-            for k, sep, ov in splits:
-                if sep is None:
-                    new_splits.append((k, sep, ov))
-                else:
-                    rk = k.decode("utf-8")
-                    if rk not in replacements:
-                        new_splits.append((k, sep, ov))
-                    else:
-                        rv = replacements[rk]
-                        if callable(rv):
-                            rv = rv(key=rk, value=ov.decode("utf-8"), request=request)
-                        if rv is not None:
-                            new_splits.append((k, sep, rv.encode("utf-8")))
-            request.body = b"&".join(
-                k if sep is None else b"".join([k, sep, v]) for k, sep, v in new_splits
-            )
+            try:
+                form_body = _replace_form_parameters(request, request.body, replacements)
+            except UnicodeDecodeError:
+                # A body that is not text at all — a PNG upload, a latin-1
+                # payload. There are no form parameters to filter in it,
+                # and raising would be far worse than doing nothing: the
+                # addon treats an unfilterable request as an ignore-host,
+                # forwarding it to the live network in *every* mode
+                # (including strict replay) and recording nothing. That
+                # silent bypass is what removing the POST gate would
+                # otherwise have opened up (finding S9, #798).
+                return request
+            request.body = form_body
     return request
 
 

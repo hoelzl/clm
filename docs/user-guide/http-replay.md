@@ -276,8 +276,11 @@ removed outright:
   `proxy-authorization`, `x-amz-security-token`, `x-auth-token`
 - Query parameters (case-insensitive): `api_key`, `token`, `key`,
   `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature`
-- Body parameters, JSON or form-encoded, on any method: `password`,
-  `token`, `api_key`
+- Body parameters (case-insensitive), JSON or form-encoded, on any
+  method: `password`, `token`, `api_key`
+
+A body that is not text — a binary upload — is recorded untouched; there
+are no parameters to filter in it.
 
 **Responses** — `Set-Cookie` is dropped, and in a JSON body the *values*
 of `access_token`, `refresh_token`, `id_token`, `client_secret`,

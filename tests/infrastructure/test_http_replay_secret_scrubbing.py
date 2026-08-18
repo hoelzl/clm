@@ -294,6 +294,55 @@ class TestRequestFiltersCoverTheRecordedShapes:
         assert b"hunter2" not in (out.body or b"")
         assert b"username=bob" in (out.body or b"")
 
+    @pytest.mark.parametrize(
+        "content_type", ["application/json", "application/x-www-form-urlencoded"]
+    )
+    def test_body_parameter_case_does_not_matter(self, content_type: str) -> None:
+        """``API_KEY`` is the same secret as ``api_key``, in either encoding.
+
+        Query names were made case-insensitive for exactly this reason;
+        leaving body names case-sensitive meant the audit flagged a
+        cassette the recorder would not have cleaned.
+        """
+        body = (
+            b'{"API_KEY": "SHHH", "keep": 1}' if "json" in content_type else b"API_KEY=SHHH&keep=1"
+        )
+        out = _filtered(
+            vf.Request("POST", "https://api.example.com/x", body, {"content-type": content_type})
+        )
+        assert b"SHHH" not in (out.body or b"")
+        assert b"keep" in (out.body or b"")
+
+    @pytest.mark.parametrize("method", ["PUT", "POST"])
+    def test_a_binary_body_is_left_alone_not_refused(self, method: str) -> None:
+        """A PNG upload must still be *recorded*.
+
+        The form branch decodes every ``&``-chunk as UTF-8. Raising there
+        makes ``_filter_request`` return None, which the addon treats as
+        an ignore-host: the request is forwarded to the live network in
+        every mode — including strict replay in CI — and never recorded.
+        Silent egress, no miss, no cassette entry. Dropping the POST gate
+        routed binary uploads (a presigned S3 PUT) straight into it.
+        """
+        body = b"\x89PNG\r\n\x1a\n" + bytes(range(64))
+        out = _filtered(
+            vf.Request(method, "https://s3.example.com/o", body, {"content-type": "image/png"})
+        )
+        assert out is not None, "an unfilterable body must not become a network bypass"
+        assert out.body == body
+
+    def test_a_latin1_form_body_is_left_alone(self) -> None:
+        out = _filtered(
+            vf.Request(
+                "POST",
+                "https://api.example.com/x",
+                "naïve=1".encode("latin-1"),
+                {"content-type": "application/x-www-form-urlencoded"},
+            )
+        )
+        assert out is not None
+        assert out.body == "naïve=1".encode("latin-1")
+
 
 class TestTheRecorderRefusesRatherThanLeaks:
     """``_filter_response`` returning ``None`` means "do not record".

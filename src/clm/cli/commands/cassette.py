@@ -263,6 +263,11 @@ def scan(spec_file: Path | None, as_json: bool) -> None:
                     "root": str(root),
                     "cassette_count": len(reports),
                     "finding_count": finding_count,
+                    # Reported next to the findings so a CI consumer
+                    # keying on ``finding_count == 0`` cannot read
+                    # "unreadable" as "clean" — the exit code already
+                    # treats them as a failure.
+                    "unreadable_count": unreadable,
                     "cassettes": [r.to_dict() for r in reports],
                 },
                 indent=2,

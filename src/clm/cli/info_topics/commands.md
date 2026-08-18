@@ -3152,9 +3152,10 @@ Reports the file, the interaction index and the offending key for:
 - secret request headers (`authorization`, `cookie`, `x-api-key`, `api-key`,
   `x-goog-api-key`, `proxy-authorization`, `x-amz-security-token`,
   `x-auth-token`);
-- secret query parameters (`api_key`, `token`, `key`, `access_token`,
-  `apikey`, `subscription-key`, `X-Amz-Signature`);
-- secret request-body parameters (`password`, `token`, `api_key`);
+- secret query parameters, case-insensitively (`api_key`, `token`, `key`,
+  `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature`);
+- secret request-body parameters (`password`, `token`, `api_key`), JSON or
+  form-encoded, on any method, case-insensitively;
 - `Set-Cookie` response headers;
 - OAuth-shaped keys anywhere in a JSON response body (`access_token`,
   `refresh_token`, `id_token`, `client_secret`, `api_key`, `apikey`,
@@ -3169,9 +3170,24 @@ would mark every LLM cassette in the repo as dirty.
 |--------|-------------|
 | `--json` | Emit a machine-readable JSON report on stdout instead of the text report. |
 
-Exits non-zero when anything is found, so it can gate a repo audit. The fix
-for a flagged cassette is to **re-record that deck** against the live service
-(`--http-replay=refresh`); the recorder strips these on the way in now.
+Every finding is one that re-recording the deck actually clears: the audit
+asks "would the recorder change this file today?", not "is this file free of
+every secret". So it deliberately says nothing about a token in a body the
+recorder does not touch — an SSE stream, an HTML error page, a JSON payload
+served as `text/plain`.
+
+Exits non-zero when anything is found **or when a cassette could not be read
+at all** (an unreadable file is not evidence of cleanliness), so it can gate a
+repo audit; `--json` reports `finding_count` and `unreadable_count`
+separately. The fix for a flagged cassette is to **re-record that deck**
+against the live service (`--http-replay=refresh`); the recorder strips these
+on the way in now.
+
+Two finding kinds are urgent beyond the leak itself, because the request
+query and body are part of the replay match key: a `request query` or
+`request body` finding means that cassette will **replay-miss** on the next
+build (loudly — a build failure under `replay`), since the incoming request is
+filtered before matching. See `clm info migration`.
 
 ```bash
 clm cassette scan course-specs/python-course.xml           # audit a repo

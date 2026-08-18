@@ -24,9 +24,10 @@ bodies were written verbatim into files that then went out in a PR.
 - A JSON content-type is matched by prefix, so `application/json;
   charset=utf-8` bodies are filtered too — they were skipped entirely before.
 
-- Query parameter names are matched case-insensitively, and request bodies
-  are filtered on any method (not just `POST`) — both were holes through
-  which `?API_KEY=…` and a `PUT` payload recorded verbatim.
+- Query *and* body parameter names are matched case-insensitively, and
+  request bodies are filtered on any method (not just `POST`) — both were
+  holes through which `?API_KEY=…` and a `PUT` payload recorded verbatim.
+  A body that is not text (a binary upload) is recorded untouched.
 
 **Do you need to re-record?** Run `clm cassette scan <spec>` in each course
 repo. It is read-only and reports file, interaction index and key. Re-record
@@ -41,9 +42,10 @@ query and the request body are part of the match key:
   Gemini, a presigned AWS URL, or any casing variant like `?API_KEY=`);
 - a cassette whose **request body** kept a `password` / `token` / `api_key` —
   which happens when its content-type carried a charset (`application/json;
-  charset=utf-8`), when the request was not a `POST`, or when the body was
-  form-encoded and predates this release. The incoming request now has that
-  key removed, so it no longer matches what was recorded.
+  charset=utf-8`), when the request was not a `POST` (form-encoded `POST`
+  bodies were already filtered), or when the key was spelled with different
+  casing (`API_KEY`). The incoming request now has that key removed, so it no
+  longer matches what was recorded.
 
 Both surface as a loud replay miss (a build failure under `replay`, a
 re-record under `new-episodes`), never as wrong output, and `clm cassette
