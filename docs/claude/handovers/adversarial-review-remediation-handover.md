@@ -2,6 +2,18 @@
 
 **Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 4, 7, 8 DONE — **Phase 4 COMPLETE 2026-08-18** (S4, S8, S12, S11, S9, S10+D7; #798 closed). Remaining work is **Phase 5** (#799, job-queue correctness) and **Phase 6** (#800, cross-machine coordination), neither started | **Owner**: unassigned
 
+**2026-08-18 update (2)**: the S9 audit was **run** against PythonCourses, and
+it found a bug in the auditor rather than in the corpus. Three cassette
+follow-ups came out of that: **#875** (redaction keyed on the key name alone,
+corrupting a word-keyed JSON map) and **#878** (`RecursionError` escaping the
+filter → the request goes to the **live network**) are fixed in PR #876;
+**#877** (the request-body filter does not recurse — a nested `api_key` is
+recorded and the audit calls the file clean) and **#874** (the re-record pass
+itself) are **open**. Details under Phase 4 item 6. The transferable part: the
+recorder and the audit are two implementations of one contract, and there is now
+an executable parity suite holding them together — extend it, do not re-derive
+it.
+
 **2026-08-18 update**: **Phase 4 is COMPLETE** and **#798 is closed**. S11
 (PR #864), S9 (PR #866) and S10+D7 (PR #872) landed in that order, each
 against the implementation contract locked with the owner on 2026-08-17 —
@@ -1541,6 +1553,56 @@ CLM owns, and secrets stay out of logs and commits.
 
    Course-repo cassettes remain follow-up: run the scanner per repo,
    re-record only what it flags.
+
+   **Post-S9 arc (2026-08-18), because the audit is what found these.**
+   Running the scanner over PythonCourses surfaced a defect in the thing
+   doing the auditing, and the fix cycle turned up two more. All three are
+   the same shape: **the scanner and the recorder are two implementations
+   of one contract** — *the audit flags a body iff re-recording would
+   rewrite it* — and every bug was a place where that silently stopped
+   holding. Since #876 the contract is executable rather than asserted by
+   inspection: `tests/infrastructure/test_cassette_scanner_recorder_parity.py`
+   runs ~60 payload shapes through **both** sides and requires the same
+   verdict. Add a row whenever you touch either walk.
+
+   - **#875 (fixed, PR #876)** — redaction keyed on the key *name* alone.
+     GPT-2's `encoder.json` maps `"secret"` to the integer `21078`, so
+     recording the text-chunking deck wrote a placeholder **string** over
+     four token ids. Numbers/bools/null are exempt now. The tempting
+     inverse, "redact only strings", **leaks**:
+     `{"secret":{"value":"sk-live-…"}}` gets recursed into and `value` is
+     not on the key list, so containers stay redacted *wholesale* — which
+     means an object becomes a string and replayed `x["secret"]["id"]`
+     raises. Deliberate, and now documented in `clm info commands` and
+     `docs/user-guide/http-replay.md`.
+   - **#878 (fixed, same PR)** — `RecursionError` escaping the response
+     filter. This is the S9 landmine in its worst form: the addon reads a
+     raised filter as "unfilterable" and handles it **like an ignore-host**,
+     forwarding to the live network in every mode including strict
+     `replay`, recording nothing. The same overflow escaping the scanner
+     aborted the entire repo walk. **Guard the parse and the traversal
+     together** — which half overflows is a property of the interpreter
+     build (depth 1200 bails on Windows and Linux 3.13, *completes* on
+     Linux 3.12), so splitting the guard makes behaviour
+     platform-dependent. Two CI round-trips were spent learning that.
+   - **#877 (OPEN — the one to do next)** — the **request-body** filter
+     does not recurse, and neither does the scanner, so
+     `{"data":{"api_key":"sk-live-…"}}` is recorded verbatim and the audit
+     reports the file **clean**. A shared blind spot, so parity holds and
+     the new suite passes: invisible by construction, which is exactly why
+     the parity suite is necessary but not sufficient. **Care**: request
+     bodies *are* part of the replay match key, so widening the filter
+     creates replay misses for existing cassettes — the same class the S9
+     migration note already describes.
+   - **#874 (OPEN)** — the course-repo audit itself. PythonCourses went
+     from 97 dirty / 302 findings to **95 / 294** once the `encoder.json`
+     false positives cleared. **No credentials**: the only recorded cookies
+     are `__cf_bm` (Cloudflare bot-management, ~30 min TTL), two Wikimedia
+     analytics cookies and a routing-affinity one. **Zero request-side
+     findings**, which is the decisive part — those are the only class in
+     the replay match key, so nothing will start failing to replay and
+     re-recording is hygiene that can ride along with other work.
+     CppCourses and CSharpCourses have no cassettes at all.
 
    Original finding text, for reference: `cassette_format.py:72-74`: add
    `api-key`
