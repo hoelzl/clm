@@ -310,6 +310,21 @@ response body can legitimately be a map keyed by ordinary words, where
 `21078`, and overwriting it with a placeholder string would hand the
 replayed tokenizer a corrupted vocabulary.
 
+One more case, rare but worth knowing because the handling looks
+surprising. If one of those names appears **twice in the same JSON
+object**, the recorder rewrites the body rather than preserving its bytes,
+even when the surviving value needs no redaction:
+
+```json
+{"secret": "sk-live-…", "secret": 1}
+```
+
+A JSON parser keeps only the last pair, so the first value cannot be
+inspected — and it might be a live token. Rewriting drops it. `clm
+cassette scan` reports the same case as `response body (repeated name)`.
+Repeated names are not legal-but-common; RFC 8259 says names SHOULD be
+unique, and nothing CLM talks to emits them.
+
 Two consequences worth knowing:
 
 - A replayed cell *receives* the redacted body. If your API returns a

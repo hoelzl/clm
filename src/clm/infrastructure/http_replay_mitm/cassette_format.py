@@ -124,8 +124,11 @@ FILTER_RESPONSE_BODY_KEYS = [
 
 #: What a redacted response-body value is replaced with. The request-side
 #: filters *remove* the header/param instead; a response body keeps its
-#: shape, because replayed code reads these payloads and a missing key is a
-#: different failure than a redacted one.
+#: **keys**, because replayed code reads these payloads and a missing key is
+#: a different failure than a redacted one. Not its types, though: the
+#: replacement is a string, so an object or array under a matched key
+#: becomes one (redaction stops at the match rather than descending, or a
+#: secret filed under an unlisted inner name would survive).
 SECRET_PLACEHOLDER = "[REDACTED-BY-CLM]"
 
 _JSON_CONTENT_TYPE_PREFIX = "application/json"
@@ -420,8 +423,8 @@ def is_secret_body_value(value: object) -> bool:
 
 def load_json_noting_duplicate_secrets(
     raw: bytes | bytearray | str, keys: frozenset[str]
-) -> tuple[object, bool]:
-    """``json.loads(raw)`` plus "did a repeated name hide a secret?".
+) -> tuple[object, frozenset[str]]:
+    """``json.loads(raw)`` plus "which repeated names hid a secret?".
 
     ``json.loads`` keeps the **last** of a repeated name, so the parse tree
     cannot see the earlier one. That is invisible everywhere except the one
@@ -433,26 +436,43 @@ def load_json_noting_duplicate_secrets(
     parses to the exempt number, redacts to nothing, and re-emits the
     plaintext verbatim. The audit reading the same tree calls it clean.
 
-    Returning the flag keeps both sides honest with one implementation:
-    the recorder re-serializes (dropping the shadowed pair), the scanner
-    reports a finding. Narrow on purpose — only a repeat of a *filter-list*
-    name counts, so an ordinary ``{"a":1,"a":2}`` stays on the fast path
-    and out of the audit. Repeated names are vanishingly rare anyway (RFC
-    8259 says names SHOULD be unique); this is about not being silently
-    wrong when one shows up, not about expecting it.
+    Returning the repeated names keeps both sides honest with one
+    implementation: the recorder re-serializes (dropping the shadowed
+    pair), the scanner reports them. Narrow on purpose — only a repeat of a
+    *filter-list* name counts, so an ordinary ``{"a":1,"a":2}`` stays on
+    the fast path and out of the audit. Repeated names are vanishingly rare
+    anyway (RFC 8259 says names SHOULD be unique); this is about not being
+    silently wrong when one shows up, not about expecting it.
+
+    Note both sides of the narrowing: a repeat whose values are *both*
+    exempt (``{"secret":1,"secret":2}``) is still reported, because the
+    shadowed value cannot be inspected for what it might have been. That is
+    conservative rather than precise, and it stays satisfiable — a
+    re-record emits no duplicate, so the finding clears.
+
+    *keys* must already be lowercased; the JSON name is lowered here, the
+    set entries are not.
+
+    Cost: the hook makes the parse ~1.6x slower (~17 ms → ~26 ms on the
+    805 KB GPT-2 vocabulary that motivated #875, about 20% of the whole
+    response filter). Record-time only, and dwarfed by the network call it
+    accompanies.
     """
-    hidden = False
+    repeated: set[str] = set()
 
     def hook(pairs: list[tuple[str, object]]) -> dict:
-        nonlocal hidden
+        # One ``seen`` per object: the hook fires once per JSON object,
+        # innermost first, so sharing it across objects would make
+        # ``{"a":{"api_key":1},"b":{"api_key":2}}`` — two *different*
+        # objects — look like a repeat.
         seen: dict = {}
         for key, value in pairs:
-            if key in seen and isinstance(key, str) and key.lower() in keys:
-                hidden = True
+            if key in seen and key.lower() in keys:
+                repeated.add(key)
             seen[key] = value
         return seen
 
-    return json.loads(raw, object_pairs_hook=hook), hidden
+    return json.loads(raw, object_pairs_hook=hook), frozenset(repeated)
 
 
 def _redact_json_values(payload: object, keys: frozenset[str]) -> object:
@@ -533,7 +553,7 @@ def build_response_filter(
         if not isinstance(raw, (bytes, bytearray, str)):
             return filtered
         try:
-            payload, hidden_secret = load_json_noting_duplicate_secrets(raw, body_keys)
+            payload, shadowed_names = load_json_noting_duplicate_secrets(raw, body_keys)
         except (ValueError, UnicodeDecodeError, RecursionError):
             # Mislabelled, truncated, or pathologically nested body: leave
             # the bytes exactly as recorded rather than guessing at their
@@ -542,12 +562,12 @@ def build_response_filter(
             return filtered
 
         redacted = _redact_json_values(payload, body_keys)
-        if redacted == payload and not hidden_secret:
+        if redacted == payload and not shadowed_names:
             # Nothing matched — keep the original bytes rather than
             # re-serializing (json.dumps would rewrite separators and
             # unicode escapes for every untouched response). Equality is
             # over *parse trees*, so the shortcut is only sound while the
-            # tree describes the bytes fully; ``hidden_secret`` is the one
+            # tree describes the bytes fully; a repeated name is the one
             # case where it does not.
             return filtered
 

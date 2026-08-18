@@ -409,7 +409,10 @@ class SecretFinding:
     Attributes:
         index: Interaction index within the cassette.
         location: Where it sits — ``request header``, ``request query``,
-            ``request body``, ``response header`` or ``response body``.
+            ``request body``, ``response header``, ``response body``, or
+            ``response body (repeated name)`` for a name that appears twice
+            in the same object, where ``json.loads`` keeps only the last
+            pair and the earlier value is unreadable (issue #875).
         key: The offending key/header/parameter name.
         uri: The interaction's request URI, for orientation.
     """
@@ -450,35 +453,51 @@ class SecretScanReport:
         }
 
 
-def _json_or_none(raw: object, secret_keys: frozenset[str] = frozenset()) -> tuple[object, bool]:
-    """Parse *raw* as JSON; ``(None, False)`` when it is not JSON at all.
+def _json_or_none(
+    raw: object, secret_keys: frozenset[str] = frozenset()
+) -> tuple[object, frozenset[str]]:
+    """Parse *raw* as JSON; ``(None, empty)`` when it is not JSON at all.
 
     A cassette body may be bytes or str, and may be anything from an SSE
     stream to HTML — the audit only reads the ones it can parse.
 
-    The second element is the recorder's "a repeated name hid a secret"
-    flag (see
+    **Bytes are handed to the parser as bytes**, exactly as the recorder
+    does. Decoding them here as strict UTF-8 first used to throw away every
+    body carrying a BOM or encoded as UTF-16/32 — ``json.loads`` sniffs
+    those itself (RFC 8259 §8.1 / ``json.detect_encoding``) — so the
+    recorder redacted a plaintext ``access_token`` while the audit reported
+    the file **clean**. A false all-clear is the one outcome a gate must
+    never produce, and the audit's whole target population is bodies
+    recorded verbatim, BOM included (issue #875 review).
+
+    The second element is the set of repeated names that hid a value from
+    the parse tree (see
     :func:`cassette_format.load_json_noting_duplicate_secrets`). The audit
-    has to ask for it because the parse tree alone cannot show it: the
-    earlier of two identically-named pairs is dropped by ``json.loads``,
-    so a body carrying a plaintext token in the shadowed pair looks clean
-    in the tree while the recorder would rewrite the file.
+    has to ask for it because the tree alone cannot show it: the earlier of
+    two identically-named pairs is dropped by ``json.loads``, so a body
+    carrying a plaintext token in the shadowed pair looks clean while the
+    recorder would rewrite the file.
+
+    The ``except`` mirrors the recorder's, deliberately. ``RecursionError``
+    on a pathologically nested body used to escape and abort the **whole
+    repo walk** — one unparseable cassette taking down an audit is worse
+    than a finding. (The traversal below can still raise it; that half is
+    issue #878.)
     """
     from clm.infrastructure.http_replay_mitm.cassette_format import (
         load_json_noting_duplicate_secrets,
     )
 
+    empty: frozenset[str] = frozenset()
     if isinstance(raw, (bytes, bytearray)):
-        try:
-            raw = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None, False
-    if not isinstance(raw, str) or not raw.strip():
-        return None, False
+        if not raw.strip():
+            return None, empty
+    elif not isinstance(raw, str) or not raw.strip():
+        return None, empty
     try:
         return load_json_noting_duplicate_secrets(raw, secret_keys)
-    except ValueError:
-        return None, False
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None, empty
 
 
 def _iter_secret_body_keys(
@@ -621,7 +640,7 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
         # text/plain is not something re-recording would redact, so
         # flagging it would be an unfixable finding.
         if cf.is_json_content_type(_response_content_type(response)):
-            response_payload, shadowed_secret = _json_or_none(
+            response_payload, shadowed_names = _json_or_none(
                 body.get("string") if isinstance(body, dict) else None, response_body_keys
             )
             for key in _iter_secret_body_keys(
@@ -631,12 +650,15 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
                 cf.is_secret_body_value,
             ):
                 findings.append(SecretFinding(index, "response body", key, uri))
-            if shadowed_secret:
+            for name in sorted(shadowed_names):
                 # A repeated name whose earlier pair the parse tree threw
                 # away. Invisible to the walk above, and the recorder
                 # rewrites the file for it, so the audit must say so or it
-                # vouches for a body holding a plaintext token.
-                findings.append(SecretFinding(index, "response body", "duplicate key", uri))
+                # vouches for a body holding a plaintext token. The
+                # *location* carries the reason so ``key`` stays what it
+                # says it is — a real name from the body, which is what a
+                # consumer grouping findings by key expects.
+                findings.append(SecretFinding(index, "response body (repeated name)", name, uri))
 
     return SecretScanReport(path=path, interaction_count=len(requests), findings=findings)
 

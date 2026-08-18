@@ -62,8 +62,9 @@ bodies were written verbatim into files that then went out in a PR.
   keys in JSON response bodies (`access_token`, `refresh_token`, `id_token`,
   `client_secret`, `api_key`, `apikey`, `authorization`, `password`, `secret`,
   `session_token`) are replaced with `[REDACTED-BY-CLM]`. Keys are matched
-  **exactly** — `completion_tokens` and `total_tokens` are untouched, so
-  replayed LLM usage data stays correct. A **number, boolean or `null`**
+  **exactly but case-insensitively** — `completion_tokens` and `total_tokens`
+  are untouched, so replayed LLM usage data stays correct, while
+  `{"Password": …}` is redacted. A **number, boolean or `null`**
   under one of those keys is also left alone (#875): a response body can be
   a map keyed by ordinary words, and GPT-2's `encoder.json` maps `"secret"`
   to the integer `21078`. Strings, objects and arrays are still redacted —

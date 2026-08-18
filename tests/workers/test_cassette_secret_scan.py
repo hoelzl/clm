@@ -276,6 +276,30 @@ class TestScannerRobustness:
         assert reports[clean].findings == []
         assert len(reports[dirty].findings) == 1
 
+    def test_a_body_too_deep_to_parse_does_not_abort_the_walk(self, tmp_path: Path) -> None:
+        """One pathological cassette must not take down a repo audit.
+
+        ``json.loads`` raises ``RecursionError`` — not ``ValueError`` —
+        past a few thousand levels, and the scan is a repo-wide walk whose
+        exit code gates #874. Letting it escape meant the *second*
+        cassette's real finding was never reported. The recorder guards
+        the identical case, so parity holds: neither side acts on a body
+        it cannot parse.
+
+        (Bodies that parse but overflow the *traversal* are issue #878;
+        this pins the parse half, which is the one in this diff.)
+        """
+        deep = '{"a":' * 4000 + "1" + "}" * 4000
+        nested = _cassette(tmp_path, [_interaction(response_body=deep)], name="deep")
+        dirty = _cassette(
+            tmp_path,
+            [_interaction(response_body=json.dumps({"access_token": "ya29.REAL"}))],
+            name="dirty",
+        )
+        reports = {r.path: r for r in scan_cassettes_for_secrets([nested, dirty])}
+        assert reports[nested].findings == []
+        assert [f.key for f in reports[dirty].findings] == ["access_token"]
+
 
 class TestScanCli:
     """The text report goes through the shared Rich console, which binds to

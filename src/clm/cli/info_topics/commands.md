@@ -3160,11 +3160,25 @@ Reports the file, the interaction index and the offending key for:
 - OAuth-shaped keys anywhere in a JSON response body (`access_token`,
   `refresh_token`, `id_token`, `client_secret`, `api_key`, `apikey`,
   `authorization`, `password`, `secret`, `session_token`) whose value is not
-  already the recorder's placeholder.
+  already the recorder's placeholder;
+- one of those names **appearing twice in the same JSON object** — reported
+  with location `response body (repeated name)`. `json.loads` keeps only the
+  last pair, so the earlier value cannot be read at all; the recorder rewrites
+  such a body rather than trusting its bytes, and the audit says so rather
+  than vouching for a value nobody can see.
 
-Key names are matched **exactly**, never as substrings: an LLM response
-legitimately contains `completion_tokens` / `total_tokens`, and flagging those
-would mark every LLM cassette in the repo as dirty.
+Key names are matched **exactly** but **case-insensitively**: never as
+substrings, because an LLM response legitimately contains `completion_tokens` /
+`total_tokens` and flagging those would mark every LLM cassette in the repo as
+dirty — but `{"Password": …}` is reported, because the recorder redacts it.
+
+The **value type** matters too: a number, boolean or `null` under one of those
+names is not a finding, since no credential is one and a JSON body can be a map
+keyed by ordinary words (GPT-2's `encoder.json` maps `"secret"` to `21078`).
+Strings, objects and arrays are findings — and note the recorder replaces an
+object or array **wholesale with the placeholder string**, so replayed code
+indexing into `response["secret"]["id"]` raises rather than reading a redacted
+field.
 
 | Option | Description |
 |--------|-------------|

@@ -19,8 +19,17 @@
   parsed to the exempt number, redacted to nothing, and the byte-preservation
   shortcut re-emitted the plaintext verbatim while `clm cassette scan` reported
   the file clean. The recorder now re-serializes such a body and the audit
-  reports a `duplicate key` finding. Scoped to filter-list names, so an
-  ordinary `{"a":1,"a":2}` still takes the fast path.
+  reports it under the new location `response body (repeated name)`. Scoped to
+  filter-list names, so an ordinary `{"a":1,"a":2}` still takes the fast path.
+
+- **`clm cassette scan` no longer reports a false all-clear for a response body
+  with a byte-order mark** (#875). The audit decoded cassette bodies as strict
+  UTF-8 before parsing, so a body carrying a BOM — or encoded as UTF-16/32,
+  both of which `json.loads` detects on its own — was silently unparseable and
+  reported **clean**, while the recorder redacted the token inside it. That is
+  the worst direction for a gate, and it hit exactly the population the audit
+  exists for: bodies written verbatim before the response filter existed. The
+  scan now hands bytes to the parser exactly as the recorder does.
 
   `clm cassette scan` applies the same value rule as the recorder. It has to: a
   finding the recorder would not act on is one that re-recording cannot clear,
@@ -28,7 +37,8 @@
   unsatisfiable. The two implementations never disagreed — they agreed and were
   wrong together, which is the more dangerous shape, because one bug then needs
   fixing in two files and nothing notices if you fix only one. The value test is
-  shared now, and a new parity suite runs ~50 payload shapes through *both*
+  shared now, and a new parity suite runs ~60 payload shapes — including raw
+  bodies and non-UTF-8 encodings a Python dict cannot express — through *both*
   sides and requires the same verdict.
 
   No committed cassette was damaged — the affected decks predate the
