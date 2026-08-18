@@ -307,9 +307,21 @@ class TestScannerRobustness:
         assert [f.key for f in reports[dirty].findings] == ["access_token"]
 
     @pytest.mark.parametrize("depth", [1200, 4000])
-    def test_the_recorder_agrees_about_a_deep_body(self, depth: int) -> None:
-        """Parity at both depths: neither side acts on what it cannot walk."""
-        raw = ('{"a":' * depth + '{"secret":"sk-live-LEAK"}' + "}" * depth).encode()
+    def test_the_recorder_and_scanner_agree_about_a_deep_body(
+        self, depth: int, tmp_path: Path
+    ) -> None:
+        """Whatever the two do about a deep body, they must do it together.
+
+        Do **not** assert a particular outcome here — that is the mistake
+        this test has now made twice. How deep a walk can go before it
+        overflows varies by platform *and* by Python version: 3.13 on
+        Linux bails at 1200 where 3.12 on Linux completes, redacting the
+        secret and rewriting the body. Both behaviours are fine on their
+        own; what must never differ is whether the audit agrees, because
+        a re-record is only a remedy for what the recorder would change.
+        """
+        text = '{"a":' * depth + '{"secret":"sk-live-LEAK"}' + "}" * depth
+        raw = text.encode()
         out = cf.build_response_filter()(
             {
                 "status": {"code": 200, "message": "OK"},
@@ -317,7 +329,21 @@ class TestScannerRobustness:
                 "body": {"string": raw},
             }
         )
-        assert out["body"]["string"] == raw
+        rewrites = out["body"]["string"] != raw
+        # Whichever way it went, the recorder must not have leaked the
+        # plaintext *into a rewritten body* — bailing and keeping the
+        # original bytes is the documented limitation, rewriting and
+        # keeping the secret would be a bug.
+        if rewrites:
+            assert b"sk-live-LEAK" not in out["body"]["string"]
+
+        path = _cassette(tmp_path, [_interaction(response_body=text)], name=f"deep{depth}")
+        report = scan_cassette_secrets(path)
+        assert report.error is None
+        flags = any(f.location.startswith("response body") for f in report.findings)
+        assert rewrites == flags, (
+            f"depth {depth}: recorder rewrites={rewrites} but scanner flags={flags}"
+        )
 
 
 class TestScanCli:
