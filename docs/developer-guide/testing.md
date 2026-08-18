@@ -345,6 +345,56 @@ desync that two rounds of individually written cases had missed.
 `tests/web/studio/test_tier2_preview.py` is the reference example for all of
 the above.
 
+### Two implementations of one contract need a parity test
+
+When the same rule is written twice — because one copy runs at write time and
+the other audits what was written, or because one lives where the other cannot
+be imported — the duplication is the defect, and hand-mirrored test *pairs* do
+not contain it.
+
+Issue #875 is the worked example. The cassette secret filter
+(`cassette_format`) decides what to redact when recording; `clm cassette scan`
+(`cassette_doctor`) decides what to report about already-committed files. Their
+contract is *the audit flags a body iff re-recording would rewrite it* — break
+it one way and the audit's exit-1 gate becomes unsatisfiable, break it the other
+and it returns a **false all-clear**. The two walks were byte-identical on the
+key test and **wrong together**, so every mirrored test pair passed. What
+finally held them was one suite —
+`tests/infrastructure/test_cassette_scanner_recorder_parity.py` — that pushes a
+shared payload table through *both* and asserts only that they agree.
+
+Three things that suite had to learn, all of which generalise:
+
+1. **Assert agreement, not outcomes** — the parity test must not encode what
+   either side does, or it becomes a second copy of the thing it is checking.
+2. **Pin the direction separately.** Parity alone is satisfied by both sides
+   ignoring a case. A handful of tests must assert the *result* (here: the
+   plaintext is gone from what the recorder writes).
+3. **Do not normalise the inputs.** The first version passed `text.encode()` to
+   one side and `text` to the other, so an entire limb — byte decoding — went
+   untested, and the BOM bug that lived there survived the suite that existed to
+   catch it.
+
+### Assert the contract, not the platform's implementation limits
+
+A test whose outcome depends on *where* an implementation limit falls will pass
+on the machine you wrote it on and fail in CI. Measured on a deeply nested JSON
+body (PR #876): at depth 1200 the recursive walk overflows on Windows and Linux
+3.13 but **completes** on Linux 3.12, and the C-implemented `json` scanner has
+its own ceiling distinct from `sys.getrecursionlimit()`, so the parse and the
+walk can give out independently, in either order.
+
+Both behaviours were correct. Two CI round-trips were spent asserting one of
+them. Write the invariant that holds on every side of the limit — usually a
+relational property (*the two components agree*, *no secret survives*, *the walk
+continues*) — and reproduce the other regime locally with
+`sys.setrecursionlimit(...)` rather than pushing to find out. The same shape
+applies to path-length limits, `os.cpu_count()`-derived budgets, float
+formatting and locale-dependent ordering.
+
+Corollary for the code: guard the parse and the traversal **together**. Splitting
+that guard is what made the behaviour platform-dependent in the first place.
+
 ## Troubleshooting
 
 ### "I don't see any logs during test execution"

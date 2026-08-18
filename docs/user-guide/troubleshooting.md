@@ -741,6 +741,44 @@ rather than something to route around.
 3. **If several builds share the machine**: set `CLM_WORKER_API_PORT=0` to let
    the OS assign a free port to each one.
 
+## Cassette Issues
+
+### `clm cassette scan` reports findings — do I have to re-record everything?
+
+No. The scan answers *"would the recorder change this file today?"*, not *"does
+this file contain a secret"*, so a finding is a byte-hygiene item unless it is
+one of the two classes that also affect replay.
+
+```bash
+clm cassette scan course.xml          # text report, exit 1 while findings remain
+clm cassette scan course.xml --json   # per-file, per-interaction detail
+```
+
+Triage by the `location` field:
+
+| Location | Affects replay? | What to do |
+|---|---|---|
+| `request query`, `request body` | **Yes** — both are in the replay match key, so the recorded entry no longer matches the filtered incoming request | Re-record the deck (`clm build --http-replay refresh`) |
+| `response header`, `response body`, `response body (repeated name)` | No — responses are not in the match key | Re-record opportunistically, when the deck is next touched |
+
+Read the recorded value before assuming the worst: a `set-cookie` finding is
+very often `__cf_bm` (a Cloudflare bot-management token with a ~30 minute
+lifetime) or an analytics cookie, not a credential.
+
+The scan also exits non-zero when a cassette could not be **read**, because an
+unreadable file is not evidence of cleanliness. Check the `error` field in
+`--json` output to tell that apart from a real finding.
+
+### A replayed cell reads a redacted field and raises
+
+Expected, and the shape is worth knowing: when a secret-named key holds an
+object or array, the whole value is replaced by the placeholder **string**, so
+`response["secret"]["id"]` raises a `TypeError` rather than returning a redacted
+field. Redacting only the strings *inside* would miss a secret stored under a
+key that is not on the filter list, so this is deliberate. If a deck genuinely
+needs the structure, rename the field to something outside the filter list — see
+`clm info migration` for the full list.
+
 ## Getting More Help
 
 ### Enable Debug Logging
