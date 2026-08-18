@@ -66,7 +66,10 @@ bodies were written verbatim into files that then went out in a PR.
   replayed LLM usage data stays correct. A **number, boolean or `null`**
   under one of those keys is also left alone (#875): a response body can be
   a map keyed by ordinary words, and GPT-2's `encoder.json` maps `"secret"`
-  to the integer `21078`. Strings, objects and arrays are still redacted.
+  to the integer `21078`. Strings, objects and arrays are still redacted —
+  and note an object or array is replaced **wholesale by the placeholder
+  string**, so replayed code that indexes into `response["secret"]["id"]`
+  raises rather than reading a redacted field.
 - The request-side header and query-parameter lists gained the Azure, Gemini,
   proxy and AWS spellings (`api-key`, `x-goog-api-key`, `proxy-authorization`,
   `x-amz-security-token`, `x-auth-token`; `key`, `access_token`, `apikey`,

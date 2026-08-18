@@ -146,6 +146,14 @@ class TestResponseBodyRedaction:
             "password",
             "secret",
             "session_token",
+            # Casing variants. Every literal above is lowercase, so a
+            # mutation of ``key.lower() in keys`` to ``key in keys`` left
+            # the entire suite green — while the audit stopped reporting
+            # a plaintext ``{"Password": …}`` that the recorder still
+            # redacts (found in review).
+            "Password",
+            "SECRET",
+            "Access_Token",
         ],
     )
     def test_secret_key_values_are_redacted(self, key: str) -> None:
@@ -182,7 +190,7 @@ class TestResponseBodyRedaction:
 
         Byte-identical, not merely equal-as-JSON: nothing matched, so the
         recorder must take the untouched-body shortcut rather than
-        re-serialize a 1.8 MB vocabulary and rewrite its separators.
+        re-serialize a ~1 MB vocabulary and rewrite its separators.
         """
         raw = b'{"hello":31373,"secret":21078,"Secret":23725,"password":28712}'
         out = cf.build_response_filter()(_response({"content-type": ["application/json"]}, raw))

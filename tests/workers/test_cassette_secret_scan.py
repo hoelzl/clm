@@ -169,6 +169,19 @@ class TestDirtyCassettesAreFlagged:
         assert [f.key for f in findings] == ["set-cookie"]
         assert "response" in findings[0].location
 
+    @pytest.mark.parametrize("key", ["Password", "SECRET", "Access_Token"])
+    def test_a_capitalized_secret_key_is_still_flagged(self, key: str, tmp_path: Path) -> None:
+        """The recorder lowercases before matching; the audit must too.
+
+        Nothing used to pin this on either side, so ``key.lower() in keys``
+        could be "simplified" to ``key in keys`` here with the whole suite
+        staying green — and `clm cassette scan` would then exit 0 on a
+        repo holding a plaintext ``{"Password": …}`` the recorder does
+        redact. A false all-clear is the worst outcome for a gate.
+        """
+        path = _cassette(tmp_path, [_interaction(response_body=json.dumps({key: "hunter2"}))])
+        assert [f.key for f in scan_cassette_secrets(path).findings] == [key]
+
     def test_token_in_a_nested_response_body(self, tmp_path: Path) -> None:
         path = _cassette(
             tmp_path,

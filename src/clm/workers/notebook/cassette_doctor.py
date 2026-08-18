@@ -450,24 +450,35 @@ class SecretScanReport:
         }
 
 
-def _json_or_none(raw: object) -> object | None:
-    """Parse *raw* as JSON, or ``None`` when it is not JSON at all.
+def _json_or_none(raw: object, secret_keys: frozenset[str] = frozenset()) -> tuple[object, bool]:
+    """Parse *raw* as JSON; ``(None, False)`` when it is not JSON at all.
 
     A cassette body may be bytes or str, and may be anything from an SSE
     stream to HTML — the audit only reads the ones it can parse.
+
+    The second element is the recorder's "a repeated name hid a secret"
+    flag (see
+    :func:`cassette_format.load_json_noting_duplicate_secrets`). The audit
+    has to ask for it because the parse tree alone cannot show it: the
+    earlier of two identically-named pairs is dropped by ``json.loads``,
+    so a body carrying a plaintext token in the shadowed pair looks clean
+    in the tree while the recorder would rewrite the file.
     """
+    from clm.infrastructure.http_replay_mitm.cassette_format import (
+        load_json_noting_duplicate_secrets,
+    )
+
     if isinstance(raw, (bytes, bytearray)):
         try:
             raw = raw.decode("utf-8")
         except UnicodeDecodeError:
-            return None
+            return None, False
     if not isinstance(raw, str) or not raw.strip():
-        return None
+        return None, False
     try:
-        parsed: object = json.loads(raw)
+        return load_json_noting_duplicate_secrets(raw, secret_keys)
     except ValueError:
-        return None
-    return parsed
+        return None, False
 
 
 def _iter_secret_body_keys(
@@ -482,8 +493,13 @@ def _iter_secret_body_keys(
     :func:`cassette_format.is_secret_body_value`, threaded in from the
     caller (which already holds the module) rather than reimplemented here:
     a finding the recorder would not act on is a finding nobody can clear,
-    and this scan gates a repo audit on its exit code. The two copies of
-    this test had already drifted once (issue #875).
+    and this scan gates a repo audit on its exit code.
+
+    The walk itself is still a second copy of the recorder's, so the guard
+    that matters is executable: ``test_scanner_and_recorder_agree`` runs a
+    shared payload table through both and requires the same verdict. The
+    two agreeing *by inspection* is what allowed issue #875 — the same
+    wrong test, written twice, wrong in both places at once.
     """
     if isinstance(payload, dict):
         for key, value in payload.items():
@@ -585,7 +601,7 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             None,
         )
         if cf.is_json_content_type(request_content_type):
-            payload = _json_or_none(raw_body)
+            payload, _ = _json_or_none(raw_body)
             body_names: Iterable[str] = (
                 [k for k in payload if isinstance(k, str)] if isinstance(payload, dict) else []
             )
@@ -605,7 +621,9 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
         # text/plain is not something re-recording would redact, so
         # flagging it would be an unfixable finding.
         if cf.is_json_content_type(_response_content_type(response)):
-            response_payload = _json_or_none(body.get("string") if isinstance(body, dict) else None)
+            response_payload, shadowed_secret = _json_or_none(
+                body.get("string") if isinstance(body, dict) else None, response_body_keys
+            )
             for key in _iter_secret_body_keys(
                 response_payload,
                 response_body_keys,
@@ -613,6 +631,12 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
                 cf.is_secret_body_value,
             ):
                 findings.append(SecretFinding(index, "response body", key, uri))
+            if shadowed_secret:
+                # A repeated name whose earlier pair the parse tree threw
+                # away. Invisible to the walk above, and the recorder
+                # rewrites the file for it, so the audit must say so or it
+                # vouches for a body holding a plaintext token.
+                findings.append(SecretFinding(index, "response body", "duplicate key", uri))
 
     return SecretScanReport(path=path, interaction_count=len(requests), findings=findings)
 

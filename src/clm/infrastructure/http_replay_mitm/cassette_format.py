@@ -389,8 +389,11 @@ def is_secret_body_value(value: object) -> bool:
     (:mod:`clm.workers.notebook.cassette_doctor`) rather than reimplemented
     there: scanner and recorder have to agree exactly, or ``clm cassette
     scan`` reports findings that re-recording cannot clear and its non-zero
-    exit makes a repo audit unsatisfiable. The two *were* written twice and
-    drifted (issue #875), which is why this is one function now.
+    exit makes a repo audit unsatisfiable. The two never *drifted* — they
+    agreed perfectly and were wrong together, which is the more dangerous
+    shape: one bug needed fixing in two files, and nothing detects it if
+    you fix only one (issue #875). ``test_scanner_and_recorder_agree`` is
+    what detects it now.
 
     The key name alone is not enough. ``encoder.json`` — GPT-2's BPE
     vocabulary, fetched by the text-chunking deck — maps each token to an
@@ -404,8 +407,52 @@ def is_secret_body_value(value: object) -> bool:
     **wrong** and leaks: ``{"secret": {"value": "sk-live-…"}}`` would then
     be recursed into, and ``value`` is not on the key list, so the secret
     survives. Containers stay redacted wholesale.
+
+    The residual cost, worth stating because it is silent: the audit uses
+    this same predicate, so if a numeric credential *did* exist somewhere,
+    ``clm cassette scan`` would now report a false all-clear rather than a
+    finding nobody could clear. That is the right trade for a gate — an
+    unsatisfiable gate gets switched off — but it is a trade, not a
+    free win.
     """
     return not isinstance(value, (int, float, type(None)))
+
+
+def load_json_noting_duplicate_secrets(
+    raw: bytes | bytearray | str, keys: frozenset[str]
+) -> tuple[object, bool]:
+    """``json.loads(raw)`` plus "did a repeated name hide a secret?".
+
+    ``json.loads`` keeps the **last** of a repeated name, so the parse tree
+    cannot see the earlier one. That is invisible everywhere except the one
+    place it matters: the recorder's byte-preservation shortcut compares
+    *parse trees* and then keeps the **original bytes**, so
+
+        {"secret":"sk-live-LEAK","secret":1}
+
+    parses to the exempt number, redacts to nothing, and re-emits the
+    plaintext verbatim. The audit reading the same tree calls it clean.
+
+    Returning the flag keeps both sides honest with one implementation:
+    the recorder re-serializes (dropping the shadowed pair), the scanner
+    reports a finding. Narrow on purpose — only a repeat of a *filter-list*
+    name counts, so an ordinary ``{"a":1,"a":2}`` stays on the fast path
+    and out of the audit. Repeated names are vanishingly rare anyway (RFC
+    8259 says names SHOULD be unique); this is about not being silently
+    wrong when one shows up, not about expecting it.
+    """
+    hidden = False
+
+    def hook(pairs: list[tuple[str, object]]) -> dict:
+        nonlocal hidden
+        seen: dict = {}
+        for key, value in pairs:
+            if key in seen and isinstance(key, str) and key.lower() in keys:
+                hidden = True
+            seen[key] = value
+        return seen
+
+    return json.loads(raw, object_pairs_hook=hook), hidden
 
 
 def _redact_json_values(payload: object, keys: frozenset[str]) -> object:
@@ -486,7 +533,7 @@ def build_response_filter(
         if not isinstance(raw, (bytes, bytearray, str)):
             return filtered
         try:
-            payload = json.loads(raw)
+            payload, hidden_secret = load_json_noting_duplicate_secrets(raw, body_keys)
         except (ValueError, UnicodeDecodeError, RecursionError):
             # Mislabelled, truncated, or pathologically nested body: leave
             # the bytes exactly as recorded rather than guessing at their
@@ -495,10 +542,13 @@ def build_response_filter(
             return filtered
 
         redacted = _redact_json_values(payload, body_keys)
-        if redacted == payload:
+        if redacted == payload and not hidden_secret:
             # Nothing matched — keep the original bytes rather than
             # re-serializing (json.dumps would rewrite separators and
-            # unicode escapes for every untouched response).
+            # unicode escapes for every untouched response). Equality is
+            # over *parse trees*, so the shortcut is only sound while the
+            # tree describes the bytes fully; ``hidden_secret`` is the one
+            # case where it does not.
             return filtered
 
         text = json.dumps(redacted, ensure_ascii=False)

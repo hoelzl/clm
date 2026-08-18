@@ -13,11 +13,23 @@
   recursed into, and `value` is not on the key list, so the secret would
   survive. There is a regression test for that.
 
-  `clm cassette scan` applies the same rule. It has to: a finding the recorder
-  would not act on is one that re-recording cannot clear, and the scan exits
-  non-zero on findings, so a divergence makes a repo audit unsatisfiable. The
-  test was written twice and had drifted; it is one shared function now
-  (`cassette_format.is_secret_body_value`).
+  Also fixed, found while reviewing the above: a **repeated JSON name** could
+  hide a secret from both the filter and the audit. `json.loads` keeps only the
+  last of two identically-named pairs, so `{"secret":"sk-live-…","secret":1}`
+  parsed to the exempt number, redacted to nothing, and the byte-preservation
+  shortcut re-emitted the plaintext verbatim while `clm cassette scan` reported
+  the file clean. The recorder now re-serializes such a body and the audit
+  reports a `duplicate key` finding. Scoped to filter-list names, so an
+  ordinary `{"a":1,"a":2}` still takes the fast path.
+
+  `clm cassette scan` applies the same value rule as the recorder. It has to: a
+  finding the recorder would not act on is one that re-recording cannot clear,
+  and the scan exits non-zero on findings, so a divergence makes a repo audit
+  unsatisfiable. The two implementations never disagreed — they agreed and were
+  wrong together, which is the more dangerous shape, because one bug then needs
+  fixing in two files and nothing notices if you fix only one. The value test is
+  shared now, and a new parity suite runs ~50 payload shapes through *both*
+  sides and requires the same verdict.
 
   No committed cassette was damaged — the affected decks predate the
   response-side filter, so this fixes what re-recording them *would* have done.
