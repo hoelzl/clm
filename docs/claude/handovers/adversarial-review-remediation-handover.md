@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 7, 8 DONE; Phase 4: S4/S8/S12/S11 DONE, S9 and S10+D7 remain with **locked implementation contracts** (2026-08-17 — read the per-item contract blocks, do not re-derive the design decisions) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 7, 8 DONE; Phase 4: S4/S8/S12/S11/S9 DONE, **S10+D7 is the last open item** with a locked implementation contract (2026-08-17 — read the contract block, do not re-derive the design decisions) | **Owner**: unassigned
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1154,7 +1154,7 @@ keep the security change reviewable in one sitting, and neither is blocked.
 
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress — S4, S8, S12, S11 DONE; remaining **S9 → S10+D7** (recommended order; **implementation contracts locked with the owner 2026-08-17** — see each item) ▸ TRACKED: #798
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: in progress — S4, S8, S12, S11, S9 DONE; remaining **S10+D7** only (**implementation contract locked with the owner 2026-08-17** — see the item) ▸ TRACKED: #798
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -1364,7 +1364,79 @@ CLM owns, and secrets stay out of logs and commits.
    applies) and log a warning, never silently disable the guard. Note the
    image-identity cache keying (#744): rebuilt images re-render cached
    notebooks — expected, mention it in the changelog fragment.
-6. **S9 — cassette scrubbing.** `cassette_format.py:72-74`: add `api-key`
+6. **S9 — cassette scrubbing.** ▸ **DONE 2026-08-18** (PR #866, merge
+   13501628; refs umbrella #798). Response side, request-side gaps, CA
+   move and the audit all landed.
+
+   **Response side** (`cassette_format.build_response_filter`, applied in
+   `addon.response()` before the interaction is fingerprinted): `Set-Cookie`
+   dropped; in a JSON body the values of the contracted key list replaced
+   with `SECRET_PLACEHOLDER = "[REDACTED-BY-CLM]"`, recursively,
+   **exact-key** matching (the `completion_tokens` trap), payload shape
+   preserved. Untouched bodies keep their exact bytes — re-serializing every
+   clean response would rewrite separators across the whole corpus.
+
+   **Request side**: the contracted header/query entries, plus **four**
+   application gaps the contract did not anticipate: JSON content-type by
+   prefix, query *and* body names case-insensitive, and body filtering on any
+   method rather than `POST` alone.
+
+   **The landmine this arc turned on** — and the thing to internalize before
+   touching the filters again: `_filter_request` returning `None` means
+   "unfilterable", and `addon.py:380-386` handles that **exactly like an
+   ignore-host** — the request is forwarded to the live network in *every*
+   mode, strict `replay` in CI included, and nothing is recorded. No miss, no
+   cassette entry, one warning line. So a filter that *raises* is far worse
+   than one that does nothing. Four inputs used to raise: a binary upload
+   (a presigned S3 `PUT`), a latin-1 form body, a non-ASCII request header
+   (`X-Title: Übung 3`, reachable through `requests` — `_decode_ascii` runs
+   upstream of the filter chain), and a pathologically nested JSON body.
+   Removing the `POST` gate *created* the first one; review caught it. All
+   four now record instead of refusing. Any future filter work must keep that
+   direction: leave it alone rather than raise.
+
+   Second landmine: **a dropped response is not a loud miss.** The first two
+   drafts claimed it was. `_select_serve_index` repeats the last match, so a
+   dropped response to a *repeated* request replays the previous one —
+   silently different output. That is why the response filter guards
+   `RecursionError` and the surrogate-encode path rather than relying on the
+   drop.
+
+   **Replay compatibility** (the reason the contract called re-recording a
+   landmine): responses are not in the match key, so the response side cannot
+   miss. Two request-side classes can, loudly — a now-filtered **query
+   parameter**, and a **request body** that kept a `password`/`token`/
+   `api_key` (charset content-type, non-`POST` method, or a casing variant).
+   `clm cassette scan`'s `request query` / `request body` findings are exactly
+   that population.
+
+   **Audit, not blanket re-recording**: `clm cassette scan [SPEC-FILE]`
+   (read-only; exits non-zero on findings *or* an unreadable cassette).
+   Scanner and recorder are held equivalent on purpose — every finding is one
+   a re-record clears, verified in both directions across 15 constructed
+   cassettes. Break that equivalence and the gate becomes unsatisfiable.
+   clm's own cassettes needed **no** re-recording: the scanner reports one
+   finding, the golden fixture's `set-cookie`, which is hand-built (a format
+   pin for multi-value headers), and the recorded course cassette is clean —
+   the e2e replay suite passing is the independent check.
+
+   **CA**: the mitm confdir moved to `platformdirs.user_data_dir("clm")/
+   mitm-ca` (`engine._mitm_ca_dir`), beside `kernel-envs/`. One stable CA per
+   machine; the old `<jobs-db-dir>/mitm/confdir` holds a private key and
+   should be deleted.
+
+   Tests: `tests/infrastructure/test_http_replay_secret_scrubbing.py`,
+   `tests/workers/test_cassette_secret_scan.py`, and the acceptance case
+   through a real `mitmdump` in `test_http_replay_mitm.py` (the stub returns a
+   `Set-Cookie` and an OAuth body with usage counters on every response).
+   Three review rounds; mutation testing showed the placeholder value and the
+   byte-preservation shortcut were unpinned at first — both are pinned now.
+
+   Course-repo cassettes remain follow-up: run the scanner per repo,
+   re-record only what it flags.
+
+   Original finding text, for reference: `cassette_format.py:72-74`: add
+   `api-key`
    (Azure OpenAI), `x-goog-api-key` (Gemini), `proxy-authorization`,
    `x-amz-security-token`, `x-auth-token`; add `key`, `access_token`, `apikey`,
    `subscription-key`, `X-Amz-Signature` to query filtering; match content-type
