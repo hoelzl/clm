@@ -285,19 +285,52 @@ are no parameters to filter in it.
 **Responses** — `Set-Cookie` is dropped, and in a JSON body the *values*
 of `access_token`, `refresh_token`, `id_token`, `client_secret`,
 `api_key`, `apikey`, `authorization`, `password`, `secret` and
-`session_token` are replaced with `[REDACTED-BY-CLM]`, recursively. The
-keys stay, so the payload keeps its shape.
+`session_token` are replaced with `[REDACTED-BY-CLM]`. The search walks
+the whole body, but it **stops at a match**: the key stays and everything
+under it is replaced by the placeholder *string*, so
 
-Key names are matched **exactly**, never as substrings: an LLM response
-legitimately carries `completion_tokens` / `total_tokens`, and clipping
-those would corrupt replayed usage data.
+```json
+{"data": {"secret": {"id": 1, "value": "sk-live-…"}}}
+```
+
+records as `{"data": {"secret": "[REDACTED-BY-CLM]"}}` — an object
+becomes a string. Code that replays this and indexes into `secret` will
+raise. That is deliberate: redacting only the strings *inside* would miss
+a secret stored under a key that is not on the list.
+
+Key names are matched **exactly** and case-insensitively, never as
+substrings: an LLM response legitimately carries `completion_tokens` /
+`total_tokens`, and clipping those would corrupt replayed usage data.
+
+The *value* has to be redactable too. A number, boolean or `null` under
+one of those keys is left alone, because no credential is one — and a
+response body can legitimately be a map keyed by ordinary words, where
+`secret` and `password` are just entries. GPT-2's BPE vocabulary
+(`encoder.json`) is exactly that: it maps `"secret"` to the integer
+`21078`, and overwriting it with a placeholder string would hand the
+replayed tokenizer a corrupted vocabulary.
+
+One more case, rare but worth knowing because the handling looks
+surprising. If one of those names appears **twice in the same JSON
+object**, the recorder rewrites the body rather than preserving its bytes,
+even when the surviving value needs no redaction:
+
+```json
+{"secret": "sk-live-…", "secret": 1}
+```
+
+A JSON parser keeps only the last pair, so the first value cannot be
+inspected — and it might be a live token. Rewriting drops it. `clm
+cassette scan` reports the same case as `response body (repeated name)`.
+Repeated names are not legal-but-common; RFC 8259 says names SHOULD be
+unique, and nothing CLM talks to emits them.
 
 Two consequences worth knowing:
 
 - A replayed cell *receives* the redacted body. If your API returns a
-  field literally named `password` or `secret` and the notebook prints
-  it, the recording run shows the real value and every replay shows the
-  placeholder.
+  string field literally named `password` or `secret` and the notebook
+  prints it, the recording run shows the real value and every replay
+  shows the placeholder.
 - Only JSON response bodies are redacted. A token inside an SSE stream,
   an HTML error page, or a JSON payload served as `text/plain` is
   recorded as-is.

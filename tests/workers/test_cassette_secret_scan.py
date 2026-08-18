@@ -99,8 +99,44 @@ class TestCleanCassettesPass:
         )
         assert scan_cassette_secrets(path).findings == []
 
+    def test_a_word_keyed_vocabulary_is_not_a_secret(self, tmp_path: Path) -> None:
+        """The scanner has to move with the recorder (issue #875).
+
+        ``encoder.json`` maps words to integer token ids, and ``secret``
+        and ``password`` are words. The recorder now leaves numeric values
+        alone, so a scanner that still flagged them would report findings
+        no re-record can clear — and `clm cassette scan` exits non-zero on
+        findings, which makes the repo audit gate unsatisfiable. That
+        equivalence is the point of the scanner, not a nicety.
+        """
+        path = _cassette(
+            tmp_path,
+            [
+                _interaction(
+                    response_body=json.dumps(
+                        {"hello": 31373, "secret": 21078, "password": 28712, "flag": None}
+                    )
+                )
+            ],
+        )
+        assert scan_cassette_secrets(path).findings == []
+
 
 class TestDirtyCassettesAreFlagged:
+    def test_a_container_valued_secret_key_is_still_flagged(self, tmp_path: Path) -> None:
+        """The other half of #875: exempting scalars must not exempt subtrees.
+
+        The recorder redacts a dict- or list-valued secret key wholesale,
+        so the scanner must keep flagging it — otherwise the audit calls a
+        cassette clean that the recorder would still rewrite.
+        """
+        path = _cassette(
+            tmp_path,
+            [_interaction(response_body=json.dumps({"secret": {"value": "sk-live-abc123"}}))],
+        )
+        findings = scan_cassette_secrets(path).findings
+        assert [(f.location, f.key) for f in findings] == [("response body", "secret")]
+
     def test_secret_request_header(self, tmp_path: Path) -> None:
         path = _cassette(
             tmp_path, [_interaction(request_headers={"authorization": "Bearer SECRET"})]
@@ -132,6 +168,19 @@ class TestDirtyCassettesAreFlagged:
         findings = scan_cassette_secrets(path).findings
         assert [f.key for f in findings] == ["set-cookie"]
         assert "response" in findings[0].location
+
+    @pytest.mark.parametrize("key", ["Password", "SECRET", "Access_Token"])
+    def test_a_capitalized_secret_key_is_still_flagged(self, key: str, tmp_path: Path) -> None:
+        """The recorder lowercases before matching; the audit must too.
+
+        Nothing used to pin this on either side, so ``key.lower() in keys``
+        could be "simplified" to ``key in keys`` here with the whole suite
+        staying green — and `clm cassette scan` would then exit 0 on a
+        repo holding a plaintext ``{"Password": …}`` the recorder does
+        redact. A false all-clear is the worst outcome for a gate.
+        """
+        path = _cassette(tmp_path, [_interaction(response_body=json.dumps({key: "hunter2"}))])
+        assert [f.key for f in scan_cassette_secrets(path).findings] == [key]
 
     def test_token_in_a_nested_response_body(self, tmp_path: Path) -> None:
         path = _cassette(
@@ -226,6 +275,75 @@ class TestScannerRobustness:
         reports = {r.path: r for r in scan_cassettes_for_secrets([clean, dirty])}
         assert reports[clean].findings == []
         assert len(reports[dirty].findings) == 1
+
+    @pytest.mark.parametrize("depth", [1200, 4000])
+    def test_a_pathologically_deep_body_does_not_abort_the_walk(
+        self, depth: int, tmp_path: Path
+    ) -> None:
+        """One pathological cassette must not take down a repo audit.
+
+        Both depths matter, and the reason is the bug this test was
+        written wrong for the first time: **which** half overflows is a
+        property of the interpreter build. At 4000 levels CPython on
+        Windows raises inside ``json.loads``; the same body parses fine on
+        Linux and the *traversal* raises instead. A test pinned to one
+        depth passed on one platform and failed CI on the other.
+
+        So assert the contract rather than the mechanism: whichever half
+        gives out, the walk keeps going and the *next* cassette's real
+        finding is still reported. Reporting nothing for the deep body is
+        the parity-preserving answer — the recorder leaves such a body's
+        bytes untouched, so a finding would be one no re-record clears.
+        """
+        deep = '{"a":' * depth + "1" + "}" * depth
+        nested = _cassette(tmp_path, [_interaction(response_body=deep)], name="deep")
+        dirty = _cassette(
+            tmp_path,
+            [_interaction(response_body=json.dumps({"access_token": "ya29.REAL"}))],
+            name="dirty",
+        )
+        reports = {r.path: r for r in scan_cassettes_for_secrets([nested, dirty])}
+        assert reports[nested].findings == []
+        assert [f.key for f in reports[dirty].findings] == ["access_token"]
+
+    @pytest.mark.parametrize("depth", [1200, 4000])
+    def test_the_recorder_and_scanner_agree_about_a_deep_body(
+        self, depth: int, tmp_path: Path
+    ) -> None:
+        """Whatever the two do about a deep body, they must do it together.
+
+        Do **not** assert a particular outcome here — that is the mistake
+        this test has now made twice. How deep a walk can go before it
+        overflows varies by platform *and* by Python version: 3.13 on
+        Linux bails at 1200 where 3.12 on Linux completes, redacting the
+        secret and rewriting the body. Both behaviours are fine on their
+        own; what must never differ is whether the audit agrees, because
+        a re-record is only a remedy for what the recorder would change.
+        """
+        text = '{"a":' * depth + '{"secret":"sk-live-LEAK"}' + "}" * depth
+        raw = text.encode()
+        out = cf.build_response_filter()(
+            {
+                "status": {"code": 200, "message": "OK"},
+                "headers": {"content-type": ["application/json"]},
+                "body": {"string": raw},
+            }
+        )
+        rewrites = out["body"]["string"] != raw
+        # Whichever way it went, the recorder must not have leaked the
+        # plaintext *into a rewritten body* — bailing and keeping the
+        # original bytes is the documented limitation, rewriting and
+        # keeping the secret would be a bug.
+        if rewrites:
+            assert b"sk-live-LEAK" not in out["body"]["string"]
+
+        path = _cassette(tmp_path, [_interaction(response_body=text)], name=f"deep{depth}")
+        report = scan_cassette_secrets(path)
+        assert report.error is None
+        flags = any(f.location.startswith("response body") for f in report.findings)
+        assert rewrites == flags, (
+            f"depth {depth}: recorder rewrites={rewrites} but scanner flags={flags}"
+        )
 
 
 class TestScanCli:

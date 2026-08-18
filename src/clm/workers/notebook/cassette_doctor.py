@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 
 from attrs import define, field
@@ -409,7 +409,10 @@ class SecretFinding:
     Attributes:
         index: Interaction index within the cassette.
         location: Where it sits — ``request header``, ``request query``,
-            ``request body``, ``response header`` or ``response body``.
+            ``request body``, ``response header``, ``response body``, or
+            ``response body (repeated name)`` for a name that appears twice
+            in the same object, where ``json.loads`` keeps only the last
+            pair and the earlier value is unreadable (issue #875).
         key: The offending key/header/parameter name.
         uri: The interaction's request URI, for orientation.
     """
@@ -450,40 +453,83 @@ class SecretScanReport:
         }
 
 
-def _json_or_none(raw: object) -> object | None:
-    """Parse *raw* as JSON, or ``None`` when it is not JSON at all.
+def _json_or_none(
+    raw: object, secret_keys: frozenset[str] = frozenset()
+) -> tuple[object, frozenset[str]]:
+    """Parse *raw* as JSON; ``(None, empty)`` when it is not JSON at all.
 
     A cassette body may be bytes or str, and may be anything from an SSE
     stream to HTML — the audit only reads the ones it can parse.
+
+    **Bytes are handed to the parser as bytes**, exactly as the recorder
+    does. Decoding them here as strict UTF-8 first used to throw away every
+    body carrying a BOM or encoded as UTF-16/32 — ``json.loads`` sniffs
+    those itself (RFC 8259 §8.1 / ``json.detect_encoding``) — so the
+    recorder redacted a plaintext ``access_token`` while the audit reported
+    the file **clean**. A false all-clear is the one outcome a gate must
+    never produce, and the audit's whole target population is bodies
+    recorded verbatim, BOM included (issue #875 review).
+
+    The second element is the set of repeated names that hid a value from
+    the parse tree (see
+    :func:`cassette_format.load_json_noting_duplicate_secrets`). The audit
+    has to ask for it because the tree alone cannot show it: the earlier of
+    two identically-named pairs is dropped by ``json.loads``, so a body
+    carrying a plaintext token in the shadowed pair looks clean while the
+    recorder would rewrite the file.
+
+    The ``except`` mirrors the recorder's, deliberately. ``RecursionError``
+    on a pathologically nested body used to escape and abort the **whole
+    repo walk** — one unparseable cassette taking down an audit is worse
+    than a finding. (The traversal below can still raise it; that half is
+    issue #878.)
     """
+    from clm.infrastructure.http_replay_mitm.cassette_format import (
+        load_json_noting_duplicate_secrets,
+    )
+
+    empty: frozenset[str] = frozenset()
     if isinstance(raw, (bytes, bytearray)):
-        try:
-            raw = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-    if not isinstance(raw, str) or not raw.strip():
-        return None
+        if not raw.strip():
+            return None, empty
+    elif not isinstance(raw, str) or not raw.strip():
+        return None, empty
     try:
-        parsed: object = json.loads(raw)
-    except ValueError:
-        return None
-    return parsed
+        return load_json_noting_duplicate_secrets(raw, secret_keys)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None, empty
 
 
 def _iter_secret_body_keys(
-    payload: object, keys: frozenset[str], placeholder: str
+    payload: object,
+    keys: frozenset[str],
+    placeholder: str,
+    is_secret_value: Callable[[object], bool],
 ) -> Iterator[str]:
-    """Yield each secret-shaped key whose value is not already redacted."""
+    """Yield each secret-shaped key whose value the recorder would redact.
+
+    *is_secret_value* is the recorder's own
+    :func:`cassette_format.is_secret_body_value`, threaded in from the
+    caller (which already holds the module) rather than reimplemented here:
+    a finding the recorder would not act on is a finding nobody can clear,
+    and this scan gates a repo audit on its exit code.
+
+    The walk itself is still a second copy of the recorder's, so the guard
+    that matters is executable: ``test_scanner_and_recorder_agree`` runs a
+    shared payload table through both and requires the same verdict. The
+    two agreeing *by inspection* is what allowed issue #875 — the same
+    wrong test, written twice, wrong in both places at once.
+    """
     if isinstance(payload, dict):
         for key, value in payload.items():
-            if isinstance(key, str) and key.lower() in keys:
+            if isinstance(key, str) and key.lower() in keys and is_secret_value(value):
                 if value != placeholder:
                     yield key
                 continue
-            yield from _iter_secret_body_keys(value, keys, placeholder)
+            yield from _iter_secret_body_keys(value, keys, placeholder, is_secret_value)
     elif isinstance(payload, list):
         for item in payload:
-            yield from _iter_secret_body_keys(item, keys, placeholder)
+            yield from _iter_secret_body_keys(item, keys, placeholder, is_secret_value)
 
 
 def _form_body_keys(raw: object) -> list[str]:
@@ -574,7 +620,7 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             None,
         )
         if cf.is_json_content_type(request_content_type):
-            payload = _json_or_none(raw_body)
+            payload, _ = _json_or_none(raw_body)
             body_names: Iterable[str] = (
                 [k for k in payload if isinstance(k, str)] if isinstance(payload, dict) else []
             )
@@ -594,11 +640,45 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
         # text/plain is not something re-recording would redact, so
         # flagging it would be an unfixable finding.
         if cf.is_json_content_type(_response_content_type(response)):
-            response_payload = _json_or_none(body.get("string") if isinstance(body, dict) else None)
-            for key in _iter_secret_body_keys(
-                response_payload, response_body_keys, cf.SECRET_PLACEHOLDER
-            ):
+            response_payload, shadowed_names = _json_or_none(
+                body.get("string") if isinstance(body, dict) else None, response_body_keys
+            )
+            try:
+                body_keys_found = list(
+                    _iter_secret_body_keys(
+                        response_payload,
+                        response_body_keys,
+                        cf.SECRET_PLACEHOLDER,
+                        cf.is_secret_body_value,
+                    )
+                )
+            except RecursionError:
+                # A body deep enough to overflow the walk. Where the
+                # *parse* overflows depends on the interpreter build —
+                # CPython on Windows raises inside ``json.loads`` at a
+                # depth Linux parses happily — so this and the guard in
+                # ``_json_or_none`` are two halves of one case, and both
+                # must hold or the behaviour is platform-dependent.
+                #
+                # Yield nothing rather than a finding: the recorder's twin
+                # guard leaves such a body's bytes untouched, so
+                # re-recording clears nothing and a finding here would be
+                # unsatisfiable. Crucially it must not *escape* — this is
+                # a repo-wide walk, and one pathological cassette used to
+                # take down the audit of every file after it (issue #878
+                # covers the remaining recorder half).
+                body_keys_found = []
+            for key in body_keys_found:
                 findings.append(SecretFinding(index, "response body", key, uri))
+            for name in sorted(shadowed_names):
+                # A repeated name whose earlier pair the parse tree threw
+                # away. Invisible to the walk above, and the recorder
+                # rewrites the file for it, so the audit must say so or it
+                # vouches for a body holding a plaintext token. The
+                # *location* carries the reason so ``key`` stays what it
+                # says it is — a real name from the body, which is what a
+                # consumer grouping findings by key expects.
+                findings.append(SecretFinding(index, "response body (repeated name)", name, uri))
 
     return SecretScanReport(path=path, interaction_count=len(requests), findings=findings)
 
