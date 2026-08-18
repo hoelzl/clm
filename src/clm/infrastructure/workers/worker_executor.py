@@ -317,7 +317,7 @@ def _container_user() -> str | None:
     Docker Desktop maps ownership there). A container writing rendered diagrams into the
     mounted source tree, or notebook output into ``/workspace``, must run
     as the host user or the writes fail (a GitHub runner is uid 1001, the
-    image default is 1000). So on POSIX hosts the executor pins the host
+    image default is 1000). So on native Linux the executor pins the host
     uid, which is the "uid remapping" caveat the images deliberately do
     not try to bake in.
 
@@ -396,10 +396,6 @@ class DockerWorkerExecutor(WorkerExecutor):
                 host.docker.internal support on Windows/WSL2)
             log_level: Logging level for workers
         """
-        _refuse_whole_volume_mount(workspace_path, label="workspace (output) directory")
-        if data_dir:
-            _refuse_whole_volume_mount(data_dir, label="data directory (course sources)")
-
         self.docker_client = docker_client
         self.db_path = db_path
         self.workspace_path = workspace_path
@@ -420,6 +416,16 @@ class DockerWorkerExecutor(WorkerExecutor):
         import docker.errors  # type: ignore[import-not-found]
 
         container_name = f"clm-{worker_type}-worker-{index}"
+
+        # Checked here, not in ``__init__``: a Direct-mode build still
+        # *constructs* this executor (the lifecycle manager builds one
+        # whenever Docker is importable), and refusing there aborted builds
+        # that never start a container — on Docker-equipped machines only,
+        # which is the worst kind of difference. This is the last moment
+        # before a mount actually exists.
+        _refuse_whole_volume_mount(self.workspace_path, label="workspace (output) directory")
+        if self.data_dir:
+            _refuse_whole_volume_mount(self.data_dir, label="data directory (course sources)")
 
         try:
             # Check if container already exists

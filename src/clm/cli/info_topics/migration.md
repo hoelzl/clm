@@ -13,12 +13,18 @@ code — could rewrite the repository it was built from.
   root.
 - **`/source` is mounted read-only for the notebook worker.** PlantUML and
   Draw.io keep it writable: they render diagrams into the source tree.
-  Notebooks are unaffected — the kernel now runs in a writable temporary
-  directory in Docker mode, exactly as it always has in Direct mode, so a cell
-  doing `open("data.txt", "w")` or `savefig("plot.png")` still works and its
-  files are discarded with the temp dir. What changed is that such a write can
-  no longer land *in the course repository*, and the two worker modes no
-  longer differ.
+  Cells that *write* are unaffected — the kernel now runs in a writable
+  temporary directory in Docker mode, exactly as it always has in Direct
+  mode, so `open("data.txt", "w")` or `savefig("plot.png")` still works and
+  the files are discarded with the temp dir. What changed is that such a
+  write can no longer land *in the course repository*.
+- **One Docker-only read stops working**: a cell that read an *image* from
+  its own directory (`plt.imread("img/x.png")`) could do so in Docker mode
+  because the kernel ran inside the mount. It now runs beside the topic's
+  non-image siblings, like Direct mode has always done — images and image
+  sources are deliberately excluded from the payload. Direct mode never
+  supported this, so the two modes now agree; if a deck relies on it, read
+  the image through an absolute path or ship it as a non-image data file.
 - **Whole-volume mounts are refused.** A data dir or output root that resolves
   to a drive/filesystem root (`C:\`, `/`) is rejected before any container
   starts — it would have handed the container the entire disk. Previously only
@@ -33,9 +39,11 @@ Docker Desktop on Windows/macOS virtualizes the mount and needs nothing. If
 `clm` itself runs as root on Linux, containers inherit uid 0 so their writes
 keep working, and a warning says the containment is gone.
 
-*Cache note*: the images change, and the worker image identity feeds the
-execution cache key (#744), so the first build after upgrading re-renders
-cached notebooks once. Expected, not a bug.
+*Cache note*: the worker image identity that feeds the execution cache key is
+the image **tag**, not its content (#744), so rebuilt images under the same tag
+do **not** invalidate anything — cached notebook executions are replayed as
+before. Pass `--ignore-cache` if you want them re-executed against the new
+image.
 
 *macOS note*: only native **Linux** keeps real uid ownership on a bind mount,
 so only there does `clm` override the container user. Docker Desktop on

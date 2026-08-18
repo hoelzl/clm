@@ -360,6 +360,14 @@ class TestDockerJobExecution:
 
         The kernel now gets a writable temp cwd in both modes, so this
         executes — and nothing lands in the source tree.
+
+        ``format`` is **html** on purpose: ``create_contents`` only routes
+        to ``_create_using_nbconvert`` — the branch that starts a kernel —
+        for html. With ``notebook`` it goes through jupytext, no kernel
+        runs, and this test passes against a completely unfixed tree
+        (which is exactly what the first version of it did). The asserted
+        marker is likewise a value only *execution* can produce: the cell
+        source contains the multiplication, never the product.
         """
         if not docker_image_available:
             pytest.skip("Docker image not available (run: clm docker build)")
@@ -372,8 +380,8 @@ class TestDockerJobExecution:
             [
                 "# %%",
                 f"with open({written_name!r}, 'w') as f:",
-                "    f.write('written by the kernel')",
-                f"print(open({written_name!r}).read())",
+                "    f.write(str(6 * 7))",
+                f"print('MARKER-' + open({written_name!r}).read())",
                 "",
             ]
         )
@@ -402,7 +410,7 @@ class TestDockerJobExecution:
             queue = JobQueue(env["db_path"])
             input_file = env["topic_dir"] / "writes_a_file.py"
             input_file.write_text(notebook_source, encoding="utf-8")
-            output_file = env["workspace"] / "writes_a_file.ipynb"
+            output_file = env["workspace"] / "writes_a_file.html"
 
             job_id = queue.add_job(
                 job_type="notebook",
@@ -414,12 +422,13 @@ class TestDockerJobExecution:
                     "kind": "completed",
                     "prog_lang": "python",
                     "language": "en",
-                    "format": "notebook",
+                    # html → the nbconvert branch → a kernel actually runs.
+                    "format": "html",
                     "source_topic_dir": str(env["topic_dir"]),
                 },
             )
 
-            max_wait = 120
+            max_wait = 180
             start = time.time()
             while time.time() - start < max_wait:
                 job = queue.get_job(job_id)
@@ -432,7 +441,9 @@ class TestDockerJobExecution:
                 f"a cell writing a relative file failed in Docker mode: {job.error}"
             )
             assert output_file.exists()
-            assert "written by the kernel" in output_file.read_text(encoding="utf-8")
+            # "MARKER-42" exists only if the cell ran: the source has the
+            # multiplication, never its result.
+            assert "MARKER-42" in output_file.read_text(encoding="utf-8")
             # …and the read-only mount is intact: nothing leaked into the repo.
             assert not (env["topic_dir"] / written_name).exists()
 

@@ -641,6 +641,13 @@ class WorkerPoolManager:
                             f"✗ Failed to start {config.worker_type}-{i} "
                             f"({completed}/{total_workers})"
                         )
+                except WholeVolumeMountError:
+                    # Every worker would hit this; letting the pool come up
+                    # empty turns a misconfigured mount root into a capacity
+                    # stall with no mention of the directory (finding D7,
+                    # #798). The re-raise in ``_start_worker`` is inert
+                    # without this one.
+                    raise
                 except Exception as e:
                     failed_workers.append((config.worker_type, i))
                     logger.error(

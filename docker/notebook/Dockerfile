@@ -499,22 +499,24 @@ ENV HOME=/home/clm \
     DOTNET_NOLOGO=1 \
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
-    # A *different* variable from DOTNET_CLI_TELEMETRY_OPTOUT: without it the
-    # .NET Interactive first-run banner prints on every kernel start, because
-    # the build-time sentinel lives under /root/.dotnet and HOME no longer
-    # points there.
-    DOTNET_INTERACTIVE_CLI_TELEMETRY_OPTOUT=1
+    DOTNET_INTERACTIVE_CLI_TELEMETRY_OPTOUT=1 \
+    # .NET keeps its per-user state here. Pointing it at the same writable
+    # HOME the first-run sentinel was primed under (see the dotnet-interactive
+    # install above) is what actually silences the welcome banner — the
+    # telemetry variables above do not gate it.
+    DOTNET_CLI_HOME=/home/clm
 
 # ``/root`` only needs to be traversable — the toolchains inside it were made
 # readable in the layers that installed them, so no bulk copy-up happens here.
 RUN set -eu; \
-    mkdir -p /home/clm /usr/local/share/jupyter/kernels; \
+    mkdir -p /home/clm/.dotnet /usr/local/share/jupyter/kernels; \
     if [ -d /root/.local/share/jupyter/kernels ]; then \
         cp -a /root/.local/share/jupyter/kernels/. /usr/local/share/jupyter/kernels/; \
     fi; \
+    cp -a /root/.dotnet/*entinel* /home/clm/.dotnet/ 2>/dev/null || true; \
     chmod a+rx /root; \
     chmod -R a+rX /app /usr/local/share/jupyter; \
-    chmod 0777 /home/clm
+    chmod -R a+rwX /home/clm
 
 # Strip every setuid/setgid bit: a worker needs none of them (su, mount,
 # passwd), and a container that executes course-authored code should not ship

@@ -25,7 +25,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from clm.infrastructure.workers.worker_executor import DockerWorkerExecutor, WorkerConfig
+from clm.infrastructure.workers.worker_executor import (
+    DockerWorkerExecutor,
+    WholeVolumeMountError,
+    WorkerConfig,
+)
 
 
 @pytest.fixture
@@ -193,6 +197,10 @@ class TestContainerUser:
         monkeypatch.setattr(we, "_HOST_KEEPS_MOUNT_OWNERSHIP", True)
         monkeypatch.setattr(we.os, "getuid", lambda: 0, raising=False)
         monkeypatch.setattr(we.os, "getgid", lambda: 0, raising=False)
+        # The latch is module state: without resetting it this test passes or
+        # fails depending on whether something earlier in the session already
+        # ran as root (a devcontainer, docker-in-docker).
+        monkeypatch.setattr(we, "_WARNED_RUNNING_AS_ROOT", False)
 
         records: list[logging.LogRecord] = []
 
@@ -211,11 +219,35 @@ class TestContainerUser:
 
 
 class TestWholeVolumeMountsAreRefused:
-    """Neither mount root may be a drive or filesystem root."""
+    """Neither mount root may be a drive or filesystem root.
+
+    Checked when a container is about to be created, not when the executor
+    is constructed: a **Direct-mode** build still constructs one — the
+    lifecycle manager does whenever Docker is importable — so refusing at
+    construction aborted builds that start no container at all, and only
+    on machines that happen to have Docker installed.
+    """
 
     def _root_of(self, path: Path) -> Path:
         resolved = path.resolve()
         return Path(resolved.anchor)
+
+    def _executor(self, db_path: Path, workspace_path: Path, data_dir: Path | None = None):
+        return DockerWorkerExecutor(
+            docker_client=MagicMock(),
+            db_path=db_path,
+            workspace_path=workspace_path,
+            data_dir=data_dir,
+        )
+
+    def _start(self, executor) -> None:
+        executor.start_worker(
+            "notebook",
+            0,
+            WorkerConfig(
+                worker_type="notebook", count=1, execution_mode="docker", image="nb:latest"
+            ),
+        )
 
     @patch("docker.DockerClient")
     def test_a_drive_root_data_dir_is_refused(
@@ -227,24 +259,24 @@ class TestWholeVolumeMountsAreRefused:
         mount was passed through untouched, so a course root of ``C:\\``
         or ``/`` mounted the whole disk at ``/source``.
         """
-        with pytest.raises(ValueError, match="whole"):
-            DockerWorkerExecutor(
-                docker_client=MagicMock(),
-                db_path=db_path,
-                workspace_path=workspace_path,
-                data_dir=self._root_of(tmp_path),
-            )
+        executor = self._executor(db_path, workspace_path, self._root_of(tmp_path))
+        with pytest.raises(WholeVolumeMountError, match="whole volume"):
+            self._start(executor)
 
     @patch("docker.DockerClient")
     def test_a_drive_root_workspace_is_refused(
         self, _mock_docker, db_path: Path, tmp_path: Path
     ) -> None:
-        with pytest.raises(ValueError, match="whole"):
-            DockerWorkerExecutor(
-                docker_client=MagicMock(),
-                db_path=db_path,
-                workspace_path=self._root_of(tmp_path),
-            )
+        executor = self._executor(db_path, self._root_of(tmp_path))
+        with pytest.raises(WholeVolumeMountError, match="whole volume"):
+            self._start(executor)
+
+    @patch("docker.DockerClient")
+    def test_constructing_the_executor_never_refuses(
+        self, _mock_docker, db_path: Path, tmp_path: Path
+    ) -> None:
+        """A Direct-mode build constructs one of these and starts nothing."""
+        self._executor(db_path, self._root_of(tmp_path), self._root_of(tmp_path))
 
     @patch("docker.DockerClient")
     def test_ordinary_paths_are_accepted(
@@ -252,12 +284,7 @@ class TestWholeVolumeMountsAreRefused:
     ) -> None:
         data_dir = tmp_path / "course"
         data_dir.mkdir()
-        executor = DockerWorkerExecutor(
-            docker_client=MagicMock(),
-            db_path=db_path,
-            workspace_path=workspace_path,
-            data_dir=data_dir,
-        )
+        executor = self._executor(db_path, workspace_path, data_dir)
         assert executor.data_dir == data_dir
 
 

@@ -116,3 +116,40 @@ def test_the_notebook_image_home_is_writable_by_an_arbitrary_uid() -> None:
     image = _image_or_skip("notebook")
     out = _run(image, 'touch "$HOME/probe" && echo writable')
     assert "writable" in out
+
+
+def test_the_plantuml_image_renders_as_an_arbitrary_uid() -> None:
+    """The JVM path, not just the metadata."""
+    image = _image_or_skip("plantuml")
+    out = _run(
+        image,
+        'printf "@startuml\\nA -> B: hi\\n@enduml\\n" > /tmp/d.puml '
+        "&& java -jar /app/plantuml.jar -tpng /tmp/d.puml "
+        "&& test -f /tmp/d.png && echo rendered",
+        timeout=300,
+    )
+    assert "rendered" in out
+
+
+def test_the_drawio_entrypoint_starts_under_an_arbitrary_uid() -> None:
+    """The entrypoint is the most fragile piece of this change.
+
+    Electron throws in ``os.userInfo()`` when the running uid has no
+    password-database entry, and D-Bus refuses to start for one — both
+    of which the entrypoint works around at run time, and both of whose
+    failure mode is a **hang**, not a message. So drive the real
+    entrypoint and require it to reach the worker, which then refuses
+    for the expected reason (no jobs DB, no API URL).
+    """
+    image = _image_or_skip("drawio")
+    result = subprocess.run(
+        ["docker", "run", "--rm", "--user", "4242:4242", image],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    combined = result.stdout + result.stderr
+    assert "Running DrawIO worker" in combined, combined[-2000:]
+    # The worker's own refusal — proof it got past D-Bus, Xvfb and Electron's
+    # password-database lookup rather than hanging or dying earlier.
+    assert "CLM_JOBS_DB_PATH" in combined, combined[-2000:]

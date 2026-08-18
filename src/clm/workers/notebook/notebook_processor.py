@@ -2345,7 +2345,12 @@ class NotebookProcessor:
             file_path = path / extra_file
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(contents)
-        if hasattr(os, "sync"):
+        # ``os.sync()`` is global and not namespaced — it flushes the whole
+        # filesystem, not just these files. It runs on the Docker path too
+        # now (S10, #798, where the kernel moved into a temp dir), i.e. on
+        # every worker of a large pool, so skip it when there was nothing
+        # to write.
+        if payload.other_files and hasattr(os, "sync"):
             os.sync()
 
     def _create_cpp_code_export(self, processed_nb) -> str:

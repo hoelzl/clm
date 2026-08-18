@@ -40,6 +40,10 @@
   **Breaking**: anyone running the images by hand on native Linux needs
   `--user "$(id -u):$(id -g)"` to write into a bind mount, and a data dir or
   output root at a drive root is now rejected before any container starts.
-  Because the worker image identity feeds the execution cache key (#744), the
-  first build after upgrading re-renders cached notebooks once. See
-  `clm info migration` and `docker/README.md`.
+  Note that rebuilt images do *not* invalidate the execution cache: the
+  identity in the key is the image tag, not its content (#744), so pass
+  `--ignore-cache` to re-execute against the new image. One Docker-only read
+  also changes — a cell reading an image from its own directory worked in
+  Docker because the kernel ran inside the mount, and now behaves like Direct
+  mode, which never supported it. See `clm info migration` and
+  `docker/README.md`.
