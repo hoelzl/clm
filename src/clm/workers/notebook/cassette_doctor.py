@@ -563,26 +563,50 @@ def _form_body_keys(raw: object) -> list[str]:
     OAuth password and client-credentials grants — so the audit has to
     read them too, not just JSON.
 
-    A field with no ``=`` counts. ``parse_qsl(keep_blank_values=True)``
-    reads ``token`` as ``("token", "")``, and so does the recorder — its
-    ``partition(b"=")`` yields an empty separator, not ``None``, so the
-    valueless name is stripped like any other. Skipping bodies without an
-    ``=`` made those a false all-clear: the audit vouched for a cassette
-    the recorder rewrites, and a rewritten request body is a replay miss.
+    This mirrors :func:`vcr_format._replace_form_parameters`' name
+    extraction **exactly**, rather than reaching for ``parse_qsl``, and
+    every difference between the two mattered:
+
+    * ``parse_qsl`` **percent-decodes** names; the recorder's
+      ``partition(b"=")`` does not. So the audit read ``api%5Fkey=SECRET``
+      as ``api_key`` and reported a finding no re-record could ever clear.
+      That the recorder misses such a name is a real leak, but it is a
+      *recorder* bug (issue #881) — the audit's question is only "would
+      the recorder change this file today?".
+    * ``parse_qsl`` also turns ``+`` into a space, with the same effect.
+    * A field with **no ``=``** still counts: the recorder's ``partition``
+      yields an empty separator, not ``None``, so a bare ``token`` is
+      stripped like any other name. ``parse_qsl`` needed
+      ``keep_blank_values`` for that, and skipping ``=``-less bodies
+      outright made them a false all-clear.
+    * Decoding is **per field name**, not over the whole body. The
+      recorder only ever decodes names, so a non-UTF-8 byte in a *value*
+      (``password=h\\xfcnter2``) does not stop it — but decoding the whole
+      body first made the audit report nothing at all, on a body the
+      recorder does rewrite. A false all-clear in the replay-miss class.
+    * An undecodable *name* bails the **whole body**, because that is what
+      the recorder does: ``_replace_form_parameters`` lets the
+      ``UnicodeDecodeError`` escape and
+      ``replace_post_data_parameters`` turns it into "leave this body
+      alone" — every field, not just the offending one.
     """
     if isinstance(raw, (bytes, bytearray)):
+        data = bytes(raw)
+    elif isinstance(raw, str):
         try:
-            raw = raw.decode("utf-8")
+            data = raw.encode("utf-8")
+        except UnicodeEncodeError:  # a lone surrogate: not a form body
+            return []
+    else:
+        return []
+
+    names: list[str] = []
+    for chunk in data.split(b"&"):
+        try:
+            names.append(chunk.partition(b"=")[0].decode("utf-8"))
         except UnicodeDecodeError:
             return []
-    if not isinstance(raw, str):
-        return []
-    from urllib.parse import parse_qsl
-
-    try:
-        return [name for name, _ in parse_qsl(raw, keep_blank_values=True)]
-    except ValueError:
-        return []
+    return names
 
 
 def _response_content_type(response: object) -> object | None:

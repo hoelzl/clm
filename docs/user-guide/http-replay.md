@@ -292,11 +292,17 @@ here, unlike responses (below): `{"a": {"token": 5}}` loses the key too.
 The exemption exists to stop redaction corrupting what replayed code
 *reads*, and a request body is never handed back to the notebook.
 
+In a form-encoded body the name is taken **literally**: everything before
+the first `=`, not percent-decoded, with `+` left alone. So `api%5Fkey=…`
+is *not* stripped — worth knowing if you ever hand-encode a parameter
+name, though no HTTP client CLM talks to does.
+
 A body that is not text — a binary upload — is recorded untouched; there
-are no parameters to filter in it. So is a JSON body too deeply nested to
-walk: leaving it alone is the only safe answer, because a filter that
-*raises* is treated as "unfilterable" and sends the request to the live
-network without recording it.
+are no parameters to filter in it. So is a form body with a non-UTF-8
+parameter *name*, and a JSON body too deeply nested to walk: leaving them
+alone is the only safe answer, because a filter that *raises* is treated
+as "unfilterable" and sends the request to the live network without
+recording it.
 
 Request filtering is the half that can bite you later, because request
 bodies and query parameters are part of the replay match key and the

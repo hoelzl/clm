@@ -317,13 +317,20 @@ def test_a_nested_secret_under_a_matched_key_is_one_finding(tmp_path: Path) -> N
 JSON = "application/json"
 FORM = "application/x-www-form-urlencoded"
 
-# Request bodies, as the **raw text** a cassette holds. Same contract as
-# the response table, and the reason it exists is #877: the recorder and
-# the audit were *both* top-level-only, so they agreed — and the table
-# above, which only ever fed response bodies, could not see it. A shared
-# blind spot is the one failure a parity suite cannot catch by itself, so
-# these rows are here to pin the shapes rather than to have discovered them.
-REQUEST_BODIES: dict[str, tuple[str, str]] = {
+# Request bodies, as the raw ``bytes`` (or convenience ``str``) a cassette
+# holds, paired with the request content-type. Same contract as the response
+# table. The reason it exists is #877: the recorder and the audit were *both*
+# top-level-only, so they agreed — but the table above only ever fed
+# *response* bodies, so nothing here was exercised at all.
+#
+# **A row may be `bytes`.** Not decoration: the response table's first
+# version handed `text` to one side and `text.encode()` to the other, so the
+# byte-decoding limb went untested and the BOM bug lived there. A str-only
+# request table repeats that trap — it cannot express a body that is not
+# valid UTF-8, and the audit's form branch used to decode the whole body
+# strictly and report a body the recorder *does* rewrite as clean. Both
+# sides get the identical bytes, converted once by ``_body_bytes``.
+REQUEST_BODIES: dict[str, tuple[bytes | str, str]] = {
     # --- JSON, nothing to strip -------------------------------------------
     "req_empty_object": ("{}", JSON),
     "req_empty_body": ("", JSON),
@@ -364,6 +371,14 @@ REQUEST_BODIES: dict[str, tuple[str, str]] = {
     # response side there is no shadowed-value blind spot to report around.
     "req_duplicate_secret": ('{"api_key":"sk-live-LEAK","api_key":1}', JSON),
     "req_duplicate_secret_nested": ('{"d":{"token":"sk-live-LEAK","token":2}}', JSON),
+    # --- JSON, encodings ``json.loads`` sniffs for itself -------------------
+    # RFC 8259 §8.1 / ``json.detect_encoding``. The recorder hands raw bytes
+    # to the parser and so must the audit; decoding as strict UTF-8 first is
+    # what made BOM'd response bodies a false all-clear (#875 review).
+    "req_bom_nested_secret": ('{"data":{"api_key":"sk-live-LEAK"}}'.encode("utf-8-sig"), JSON),
+    "req_utf16_nested_secret": ('{"data":{"api_key":"sk-live-LEAK"}}'.encode("utf-16"), JSON),
+    # Not text at all under a JSON content-type: neither side may act.
+    "req_undecodable_json": (b'{"api_key":"\xff\xfe"}', JSON),
     # --- form-encoded -----------------------------------------------------
     "form_empty": ("", FORM),
     "form_clean": ("a=1&b=2", FORM),
@@ -372,17 +387,44 @@ REQUEST_BODIES: dict[str, tuple[str, str]] = {
     "form_secret": ("grant_type=password&password=hunter2", FORM),
     "form_case": ("API_KEY=sk-live-LEAK&keep=1", FORM),
     "form_blank_secret": ("password=", FORM),
+    "form_repeated_secret": ("password=a&password=hunter2", FORM),
+    "form_empty_field": ("a=1&&password=hunter2", FORM),
     # No ``=`` at all: the recorder strips it (``partition`` yields an empty
     # separator, not ``None``), and the audit used to skip such bodies
     # wholesale — a false all-clear on a body that will replay-miss.
     "form_valueless_secret": ("token", FORM),
     "form_secret_and_valueless": ("token&keep=1", FORM),
+    # A non-UTF-8 byte in a *value* does not stop the recorder — it only ever
+    # decodes names. Decoding the whole body first made the audit report
+    # nothing on a body that *is* rewritten: a false all-clear, in the
+    # replay-miss class, and the direction the handover calls the worse one.
+    "form_non_utf8_value": (b"client_secret=x&api_key=SECRET&note=caf\xe9", FORM),
+    "form_non_utf8_secret_value": (b"grant_type=password&password=h\xfcnter2", FORM),
+    # A non-UTF-8 byte in a *name* bails the **whole body**: the recorder's
+    # decode raises and `replace_post_data_parameters` turns that into "leave
+    # this body alone" — every field, not just the offending one.
+    "form_non_utf8_name": ("naïve=1".encode("latin-1") + b"&password=x", FORM),
+    # ``parse_qsl`` percent-decodes names and turns ``+`` into a space; the
+    # recorder's ``partition`` does neither. Reading these as ``api_key`` /
+    # ``password`` gave the audit findings no re-record could clear. The
+    # recorder missing them is a genuine leak, but a *recorder* one — see
+    # the note under the table.
+    "form_percent_encoded_name": (b"api%5Fkey=SECRET", FORM),
+    "form_percent_encoded_valueless": (b"passwor%64", FORM),
+    "form_plus_in_name": (b"api+key=SECRET&password=hunter2", FORM),
     # --- not filtered at all ----------------------------------------------
     # A JSON payload under a content-type the recorder does not read as
     # JSON goes down the form branch, which finds no ``&``/``=`` parameters
     # in it. Neither side may act.
     "json_under_text_plain": ('{"api_key":"sk-live-LEAK"}', "text/plain"),
 }
+
+# Issue #881, recorded here because the shape *is* in the table above and
+# passes: the recorder does not percent-decode a form parameter **name**, so
+# ``api%5Fkey=SECRET`` records verbatim. The audit agreeing is correct — its
+# question is "would the recorder change this file today?", and the answer is
+# no — so this is a leak to fix on the **recorder** side, which changes the
+# form-encoded replay match key and is therefore its own migration.
 
 #: Rows that carry a leak marker and which **neither** side may act on,
 #: with the reason. Explicit rather than inferred, and checked by its own
@@ -391,22 +433,44 @@ REQUEST_BODIES: dict[str, tuple[str, str]] = {
 REQUEST_BODIES_DELIBERATELY_UNFILTERED = {
     "req_response_only_key": "`secret` is on the response key list, not the request one",
     "json_under_text_plain": "the recorder does not read this content-type as JSON",
+    "form_percent_encoded_name": "the recorder does not percent-decode names (#881)",
+    "form_percent_encoded_valueless": "the recorder does not percent-decode names (#881)",
+    "form_non_utf8_name": "an undecodable field name makes the recorder skip the whole body",
 }
 
-#: Names above whose *bodies* the recorder must not leave the plaintext in.
-#: Parity alone is satisfied by both sides ignoring a row, so pin the
-#: direction too, exactly as the response table does.
-REQUEST_BODIES_THAT_MUST_LOSE_THE_PLAINTEXT = [
-    name
-    for name, (text, _ct) in REQUEST_BODIES.items()
-    if ("sk-live-LEAK" in text or "hunter2" in text)
+_PLAINTEXT_MARKERS = (b"sk-live-LEAK", b"hunter2")
+
+
+def _body_bytes(body: bytes | str) -> bytes:
+    """The exact bytes **both** sides must see.
+
+    Converted once, here, rather than inside each helper. Normalising
+    separately per side is how the response table's BOM bug hid: one side
+    was handed ``text`` and the other ``text.encode()``, so the limb where
+    the bug lived never ran.
+    """
+    return body if isinstance(body, bytes) else body.encode("utf-8")
+
+
+#: Row name -> the plaintext byte strings that must be **gone** from what the
+#: recorder writes. Parity alone is satisfied by both sides ignoring a row, so
+#: pin the direction too, exactly as the response table does.
+REQUEST_BODY_PLAINTEXT: dict[str, list[bytes]] = {
+    name: [m for m in _PLAINTEXT_MARKERS if m in _body_bytes(body)]
+    for name, (body, _ct) in REQUEST_BODIES.items()
+    if any(m in _body_bytes(body) for m in _PLAINTEXT_MARKERS)
     and name not in REQUEST_BODIES_DELIBERATELY_UNFILTERED
-]
+}
+# UTF-16 hides the marker from a UTF-8 substring test, so the derivation
+# above skips the row — silently, which is the failure mode. Spelled out
+# instead: the recorder re-dumps as UTF-8, so a surviving secret surfaces as
+# UTF-8 in what it writes.
+REQUEST_BODY_PLAINTEXT["req_utf16_nested_secret"] = [b"sk-live-LEAK"]
 
 
-def _request_cassette(body: str, content_type: str, tmp_path: Path, name: str) -> Path:
+def _request_cassette(body: bytes, content_type: str, tmp_path: Path, name: str) -> Path:
     path = tmp_path / f"{name}.http-cassette.yaml"
-    path.write_text(
+    path.write_bytes(
         yaml.safe_dump(
             {
                 "interactions": [
@@ -427,24 +491,22 @@ def _request_cassette(body: str, content_type: str, tmp_path: Path, name: str) -
                 "version": 1,
             },
             sort_keys=True,
-        ),
-        encoding="utf-8",
+            encoding="utf-8",
+        )
     )
     return path
 
 
-def _recorded_request_body(body: str, content_type: str) -> bytes:
+def _recorded_request_body(body: bytes, content_type: str) -> bytes:
     out = cf.build_request_filter()(
-        cf.Request(
-            "POST", "https://api.example.com/v1/chat", body.encode(), {"content-type": content_type}
-        )
+        cf.Request("POST", "https://api.example.com/v1/chat", body, {"content-type": content_type})
     )
     assert out is not None, "an unfilterable request must never become a network bypass"
     recorded = out.body
     return recorded if isinstance(recorded, bytes) else str(recorded).encode()
 
 
-def _recorder_strips_request_param(body: str, content_type: str) -> bool:
+def _recorder_strips_request_param(body: bytes, content_type: str) -> bool:
     """True when the recorder *removes a parameter* from this request body.
 
     Deliberately not "the bytes changed", which is the response-side
@@ -456,21 +518,24 @@ def _recorder_strips_request_param(body: str, content_type: str) -> bool:
     still catching a repeated name (``json.loads`` keeps the last pair, so
     a dropped one shows up as a tree difference).
     """
-    recorded = _recorded_request_body(body, content_type)
+    raw = _body_bytes(body)
+    recorded = _recorded_request_body(raw, content_type)
     if content_type.startswith("application/json"):
 
-        def parse(raw: bytes) -> object:
+        def parse(data: bytes) -> object:
             try:
-                return json.loads(raw)
+                return json.loads(data)
             except (ValueError, RecursionError):
                 return "<unparseable>"
 
-        return parse(body.encode()) != parse(recorded)
-    return recorded != body.encode()
+        return parse(raw) != parse(recorded)
+    return recorded != raw
 
 
-def _scanner_request_findings(body: str, content_type: str, tmp_path: Path, name: str) -> list:
-    path = _request_cassette(body, content_type, tmp_path, name)
+def _scanner_request_findings(
+    body: bytes | str, content_type: str, tmp_path: Path, name: str
+) -> list:
+    path = _request_cassette(_body_bytes(body), content_type, tmp_path, name)
     report = scan_cassette_secrets(path)
     assert report.error is None, report.error
     return [f for f in report.findings if f.location == "request body"]
@@ -501,16 +566,17 @@ def test_the_request_table_covers_both_verdicts() -> None:
     assert verdicts == {True, False}
 
 
-@pytest.mark.parametrize("name", sorted(REQUEST_BODIES_THAT_MUST_LOSE_THE_PLAINTEXT))
+@pytest.mark.parametrize("name", sorted(REQUEST_BODY_PLAINTEXT))
 def test_a_request_side_secret_never_survives_in_the_recorded_bytes(
     name: str, tmp_path: Path
 ) -> None:
     """Direction, not just agreement — and the audit must point at it."""
     body, content_type = REQUEST_BODIES[name]
-    recorded = _recorded_request_body(body, content_type)
-    for plaintext in (b"sk-live-LEAK", b"hunter2"):
-        if plaintext in body.encode():
-            assert plaintext not in recorded, recorded
+    recorded = _recorded_request_body(_body_bytes(body), content_type)
+    markers = REQUEST_BODY_PLAINTEXT[name]
+    assert markers, f"{name} is direction-pinned but names no plaintext to look for"
+    for plaintext in markers:
+        assert plaintext not in recorded, recorded
     assert _scanner_request_findings(body, content_type, tmp_path, name)
 
 
@@ -518,14 +584,42 @@ def test_a_request_side_secret_never_survives_in_the_recorded_bytes(
 def test_a_deliberately_unfiltered_row_really_is_unfiltered(name: str, tmp_path: Path) -> None:
     """The exclusions above are claims, so check them.
 
-    Both rows carry a leak marker and are excused from the direction
-    check. If either ever *did* get filtered, the excuse would silently
-    stop being true and the row would quietly test nothing.
+    Each of these rows carries something that *looks* like a secret and is
+    excused from the direction check. If one ever did get filtered, the
+    excuse would silently stop being true and the row would quietly test
+    nothing.
     """
     body, content_type = REQUEST_BODIES[name]
     reason = REQUEST_BODIES_DELIBERATELY_UNFILTERED[name]
     assert not _recorder_strips_request_param(body, content_type), reason
     assert not _scanner_request_findings(body, content_type, tmp_path, name), reason
+
+
+def test_a_bad_byte_in_a_form_value_does_not_blind_the_audit(tmp_path: Path) -> None:
+    """The false-all-clear the ``=`` fix nearly shipped alongside (review).
+
+    The recorder only ever decodes field *names*, so a latin-1 byte in a
+    value does not stop it stripping the secret next door. The audit used
+    to decode the whole body as strict UTF-8 and report nothing — vouching
+    for a cassette that will replay-miss, which is the worse direction.
+    """
+    body = b"client_secret=x&api_key=SECRET&note=caf\xe9"
+    assert b"SECRET" not in _recorded_request_body(body, FORM)
+    findings = _scanner_request_findings(body, FORM, tmp_path, "badbyte")
+    assert [f.key for f in findings] == ["api_key"]
+
+
+def test_an_undecodable_form_field_name_stops_both_sides(tmp_path: Path) -> None:
+    """And it stops them on the **whole** body, not just that field.
+
+    ``_replace_form_parameters`` lets the ``UnicodeDecodeError`` escape and
+    ``replace_post_data_parameters`` turns that into "leave this body
+    alone", so the ``password`` beside it survives too. Reporting it would
+    be a finding no re-record can clear.
+    """
+    body = "naïve=1".encode("latin-1") + b"&password=hunter2"
+    assert _recorded_request_body(body, FORM) == body
+    assert _scanner_request_findings(body, FORM, tmp_path, "badname") == []
 
 
 def test_the_request_side_has_no_value_type_exemption(tmp_path: Path) -> None:
@@ -550,16 +644,30 @@ def test_a_matched_request_container_yields_exactly_one_finding(tmp_path: Path) 
     assert [(f.location, f.key) for f in findings] == [("request body", "api_key")]
 
 
-# Known, deliberate divergence — tracked separately rather than silently
-# omitted from the table above, because an untested shape and a shape
-# tested to diverge look identical in a passing suite.
-#
-# A percent-encoded parameter *name* (``api%5Fkey=SECRET``) is decoded by
-# the audit's ``parse_qsl`` and not by the recorder's raw ``partition``,
-# so the audit reports a finding re-recording cannot clear. Fixing it on
-# the recorder side changes the form-encoded replay match key, which is a
-# migration and a separate decision; fixing it on the audit side would
-# make the audit blind to a genuinely leaked credential. See issue #881.
+def test_request_body_findings_are_one_per_occurrence(tmp_path: Path) -> None:
+    """Four removals, four findings — not one per distinct *name*.
+
+    Both docstrings promise "one entry per occurrence", and nothing pinned
+    it: wrapping the walk's result in ``dict.fromkeys`` left the whole
+    suite green while collapsing a four-deck re-record list to two entries
+    (found in review). The report is what a repo owner works from.
+    """
+    body = '{"a":{"api_key":"1"},"b":{"api_key":"2"},"c":[{"token":"3"},{"token":"4"}]}'
+    findings = _scanner_request_findings(body, JSON, tmp_path, "occurrences")
+    assert [f.key for f in findings] == ["api_key", "api_key", "token", "token"]
+    assert json.loads(_recorded_request_body(_body_bytes(body), JSON)) == {
+        "a": {},
+        "b": {},
+        "c": [{}, {}],
+    }
+
+
+def test_a_repeated_form_parameter_is_one_finding_per_occurrence(tmp_path: Path) -> None:
+    """Same rule on the form side, where the recorder drops both fields."""
+    body = b"password=a&keep=1&password=b"
+    findings = _scanner_request_findings(body, FORM, tmp_path, "form_occurrences")
+    assert [f.key for f in findings] == ["password", "password"]
+    assert _recorded_request_body(body, FORM) == b"keep=1"
 
 
 class TestBodyEncodings:

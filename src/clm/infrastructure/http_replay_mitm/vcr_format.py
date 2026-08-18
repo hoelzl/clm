@@ -486,6 +486,14 @@ def filter_json_parameters(
     the value, and a callable is invoked as
     ``rv(key=…, value=…, request=…)``, both inherited from vcrpy.
 
+    One deliberate divergence from vcrpy on that last path: a *replaced*
+    key keeps its **position**, where vcrpy popped and re-inserted it and
+    so moved it to the end of the object. Unreachable through CLM, whose
+    filter lists all map to ``None``, and replay-neutral either way (the
+    body matcher compares parse trees) — but the module docstring promises
+    byte-for-byte vcrpy compatibility, and that promise does not extend to
+    this one path.
+
     Two properties worth stating because they are easy to "simplify" away:
 
     * **It recurses.** ``{"data": {"api_key": "sk-live-…"}}`` used to record
@@ -559,7 +567,17 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
     # S9, #798). Bodyless requests already returned above.
     if not isinstance(request.body, BytesIO):
         if isinstance(request.body, dict):
-            request.body, _ = filter_json_parameters(request.body, replacements, request)
+            try:
+                request.body, _ = filter_json_parameters(request.body, replacements, request)
+            except RecursionError:
+                # Same guard as the JSON branch below, and for the same
+                # reason. This branch could not recurse before, so it could
+                # not overflow either; now it can, and an escaping
+                # ``RecursionError`` reads to the addon as "unfilterable" —
+                # live network in every mode, nothing recorded. Unreachable
+                # through the mitmproxy path (bodies arrive as ``bytes``),
+                # kept because the cost of being wrong here is silent egress.
+                return request
         elif _is_json_content_type(request.headers.get("Content-Type")):
             try:
                 json_data = json.loads(request.body)

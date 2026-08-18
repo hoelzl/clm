@@ -141,10 +141,12 @@ recorded verbatim *and* the audit reported the file clean:
 
 Now the filter walks the whole body — nested objects, arrays, and a
 top-level array root — and removes a matched key together with everything
-under it. Anything it does not match keeps its bytes: a JSON *object* body is
-still re-dumped by `json.dumps` (the long-standing quirk committed cassettes
-were recorded through), while an array or scalar root is left byte-identical
-unless something actually matched.
+under it. Anything it does not match keeps its *content*: a JSON **object**
+body is still re-dumped by `json.dumps`, so its bytes are reformatted whether
+or not anything matched (the long-standing quirk committed cassettes were
+recorded through, absorbed by the JSON-semantic replay matcher), while an
+array or scalar root is left byte-identical unless something actually
+matched.
 
 Unlike the response side there is **no value-type exemption**: `{"a":
 {"token": 5}}` loses the key. Response bodies exempt numbers because
@@ -158,6 +160,15 @@ bodies are part of the replay match key, and the lookup filters the incoming
 request through this same code before matching. A cassette holding a nested
 secret will therefore stop matching, loudly (a build failure under `replay`, a
 re-record under `new-episodes`), never as wrong output.
+
+The audit's **form-encoded** reading was tightened to match the recorder
+exactly at the same time, in both directions. A parameter with no `=` (a bare
+`token`) is now reported, because the recorder strips it — that was a false
+all-clear. A percent-encoded *name* (`api%5Fkey=…`) is now **not** reported,
+because the recorder does not strip it — that was a finding no re-record could
+clear. And a non-UTF-8 byte in a *value* no longer hides the whole body from
+the audit: the recorder only decodes names, so it strips the secret next door
+regardless.
 
 One consequence worth knowing even without a re-record: two requests that
 differ *only* in a filtered parameter now collapse to the same match key —

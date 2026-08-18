@@ -3149,8 +3149,8 @@ response bodies were committed verbatim.
 
 Reports the file, the interaction index and the offending key for:
 
-- secret request headers (`authorization`, `cookie`, `x-api-key`, `api-key`,
-  `x-goog-api-key`, `proxy-authorization`, `x-amz-security-token`,
+- secret request headers (`authorization`, `cookie`, `set-cookie`, `x-api-key`,
+  `api-key`, `x-goog-api-key`, `proxy-authorization`, `x-amz-security-token`,
   `x-auth-token`);
 - secret query parameters, case-insensitively (`api_key`, `token`, `key`,
   `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature`);
@@ -3159,7 +3159,10 @@ Reports the file, the interaction index and the offending key for:
   body, including inside arrays and under a top-level array (since {version};
   before that the request body was read top-level only, on both the recording
   and the auditing side, so `{"data": {"api_key": …}}` recorded verbatim and
-  scanned clean);
+  scanned clean). A form-encoded name is read exactly as the recorder reads it
+  — **not** percent-decoded, `+` not treated as a space — so `api%5Fkey=…` is
+  not reported: the recorder does not strip it either, and a finding no
+  re-record can clear is worse than no finding;
 - `Set-Cookie` response headers;
 - OAuth-shaped keys anywhere in a JSON response body (`access_token`,
   `refresh_token`, `id_token`, `client_secret`, `api_key`, `apikey`,

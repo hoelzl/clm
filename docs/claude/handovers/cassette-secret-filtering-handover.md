@@ -25,8 +25,8 @@ implementations of one contract**:
 Since PR #876 that contract is executable:
 `tests/infrastructure/test_cassette_scanner_recorder_parity.py` pushes ~60
 response-body shapes through **both** sides and asserts only that they agree;
-#877 added a second table of ~35 **request** bodies (JSON and form-encoded).
-**Add a row whenever you touch either side.**
+#877 added a second table of ~45 **request** bodies (JSON and form-encoded,
+`str` or raw `bytes`). **Add a row whenever you touch either side.**
 
 Three properties of that suite, learned the hard way — preserve them:
 
@@ -37,11 +37,17 @@ Three properties of that suite, learned the hard way — preserve them:
    what the recorder writes).
 3. **It does not normalise its inputs.** The first version passed
    `text.encode()` to one side and `text` to the other, so the byte-decoding
-   limb went untested — and that is exactly where the BOM bug lived.
+   limb went untested — and that is exactly where the BOM bug lived. The
+   request table repeated the trap in a different shape: typed `str`-only, it
+   *could not express* a non-UTF-8 body, and that is where the form-body
+   false all-clear lived. Both tables now carry `bytes` and convert once.
 4. **It cannot catch a shared blind spot** (the #877 lesson). Two sides that
    are consistently wrong *agree*, so the suite stays green. Nothing structural
    fixes that; the only defence is asking what the table does not cover — and
-   the answer for a year was "request bodies".
+   the answer for a year was "request bodies". Note the precise history: the
+   suite was green because it never fed a request body through *either* side,
+   not because the sides agreed on one. Both are true, and only the first
+   explains why nobody noticed.
 
 ## 2. Where the code is
 
@@ -54,6 +60,8 @@ Three properties of that suite, learned the hard way — preserve them:
 | Request filter | `src/clm/infrastructure/http_replay_mitm/vcr_format.py` (`replace_post_data_parameters`) |
 | — the shared request-body walk | `filter_json_parameters` (same module; the audit calls it too) |
 | Audit / `clm cassette scan` | `src/clm/workers/notebook/cassette_doctor.py` (`scan_cassette_secrets`, `_iter_secret_body_keys`, `_json_or_none`) |
+| — request JSON bodies | `_json_body_param_names` (delegates to the recorder's walk) |
+| — request form bodies | `_form_body_keys` (hand-mirrors `_replace_form_parameters`) |
 | CLI | `src/clm/cli/commands/cassette.py` |
 | Parity suite | `tests/infrastructure/test_cassette_scanner_recorder_parity.py` |
 | Recorder tests | `tests/infrastructure/test_http_replay_secret_scrubbing.py` |
@@ -109,64 +117,93 @@ is not installed. Do not add a `clm` import to either.
 #874 gates on. The response side recursed; the request side did not, and neither
 did the scanner's request-body branch.
 
-Why it was invisible: the two sides were *consistently* top-level-only, so
-parity held and the suite passed. A shared blind spot, not a divergence — the
-failure mode a parity test structurally cannot catch, and worth remembering
-before trusting that suite too much.
+Why it was invisible, precisely: the parity suite had **no request-body rows at
+all**, so neither side was ever exercised. And adding rows would not have caught
+it either, because the two sides were *consistently* top-level-only and
+therefore agreed. Both facts matter — the first explains why nobody noticed, the
+second is the durable lesson (a parity test cannot catch a shared blind spot).
 
 What landed:
 
 - `vcr_format.filter_json_parameters` — one recursive walk, used by **both** the
-  recorder and the audit. The request side is now single-implementation, unlike
-  the response side's two walks; the parity rows guard a future
+  recorder and the audit. The request JSON side is now single-implementation,
+  unlike the response side's two walks; the parity rows guard a future
   reimplementation rather than a live divergence.
 - Recursion covers nested objects, arrays, and a top-level array root. A
   matched key takes its subtree with it (stop-at-match, like the response
   side). **No value-type exemption** on the request side — see the landmine
   below.
-- Parse, walk *and* `json.dumps` under one guard. `dumps` used to sit outside
-  it: at a lowered recursion limit a `RecursionError` escaped the filter, which
-  the addon reads as "unfilterable" → live network, nothing recorded.
-- `_form_body_keys` no longer skips a body without an `=`. `token` on its own is
-  stripped by the recorder (`partition` yields an empty separator, not `None`),
-  so skipping it was a false all-clear.
-- Docs: `clm info migration` gained a `#877` section (new replay-miss class),
-  `clm info commands` and `docs/user-guide/http-replay.md` updated.
+- Parse, walk *and* `json.dumps` under one guard, on the JSON branch and the
+  (CLM-unreachable) `dict`-body branch alike. An escaping `RecursionError`
+  reads to the addon as "unfilterable" → live network in every mode, nothing
+  recorded. The limb actually reproduced escaping is the new Python-level
+  *walk*, at `setrecursionlimit(300)` / depth 400; on this box's CPython 3.13
+  the parse always blows before `json.dumps` would, so the dumps half is
+  hardening rather than a demonstrated bug.
+- **`_form_body_keys` now hand-mirrors `_replace_form_parameters` instead of
+  using `parse_qsl`.** Three divergences, found in review:
+  - a name with **no `=`** (bare `token`) is stripped by the recorder
+    (`partition` yields an empty separator, not `None`) — was a false
+    all-clear;
+  - `parse_qsl` **percent-decodes** names and turns `+` into a space, the
+    recorder does neither — those were findings no re-record could clear;
+  - decoding the **whole body** as strict UTF-8 hid every body with a
+    non-UTF-8 byte in a *value*, though the recorder only ever decodes names
+    and does strip the secret next door. That was a false all-clear in the
+    replay-miss class. An undecodable *name* still bails the whole body,
+    because that is exactly what the recorder does.
 
-Two things it left behind:
+  Verified by differential fuzz: 12 000 form bodies, 0 divergences.
+- Docs: `clm info migration` gained a `#877` section (new replay-miss class,
+  plus the form-reading change in both directions), `clm info commands` and
+  `docs/user-guide/http-replay.md` updated.
 
-- **#881** — a percent-encoded form parameter *name* (`api%5Fkey=SECRET`) is
-  decoded by the audit's `parse_qsl` and not by the recorder's raw `partition`,
-  so the audit reports a finding no re-record can clear. Pre-existing; fixing it
-  on the recorder side is a match-key migration, which is why it is its own
-  issue. Named in a comment after the request-body table so the shape reads as
-  known-divergent rather than untested.
+Three things it left behind:
+
+- **#881** — the recorder does not percent-decode a form parameter *name*, so
+  `api%5Fkey=SECRET` records verbatim. The audit agreeing (not reporting it) is
+  now correct under the contract, so this is a **recorder-side leak**, not a
+  parity bug. Fixing it changes the form-encoded replay match key, hence its own
+  issue. The shape is a passing row in the parity table with a note above it.
 - The request-side parity predicate is **"the recorder removes a parameter"**,
   not "the bytes changed". A JSON *object* request body is re-dumped through
   `json.dumps` even when nothing matched, so byte inequality would call every
   JSON request body dirty.
+- `scan_cassettes_for_secrets` still only guards `load_cassette` against a
+  rogue exception; anything else escaping kills the whole repo walk.
+  Unreachable today (payloads come from `json.loads`), left alone rather than
+  wrapped in a blanket `except` that would mask real bugs.
 
 ### #874 — course-repo cassette audit
 
 Unblocked by #876. **Already measured, do not re-run to learn this** (2026-08-18,
 PythonCourses `slides/`):
 
-| | before #876 | after #876 |
-|---|---|---|
-| cassettes | 204 (all git-tracked) | 204 |
-| dirty files | 97 | **95** |
-| findings | 302 | **294** |
-| by location | 294 response header + 8 response body | 294 response header |
+| | before #876 | after #876 | after #877 |
+|---|---|---|---|
+| cassettes | 204 (all git-tracked) | 204 | 204 |
+| dirty files | 97 | **95** | **95** |
+| findings | 302 | **294** | **294** |
+| by location | 294 response header + 8 response body | 294 response header | 294 response header |
+
+The #877 column is the important one: the widened recursive walk finds
+**nothing new**, so no PythonCourses cassette will replay-miss because of it.
 
 - The 8 that disappeared were the `encoder.json` false positives (#875).
-- **No credentials.** The only recorded cookies across all 204 files are
-  `__cf_bm` (Cloudflare bot-management, ~30 min TTL) ×268, `WMF-Last-Access`
-  ×18, `WMF-Uniq` ×6, `grokipedia-affinity` ×2.
-- **Zero request-side findings** — decisive, because those are the only class in
-  the replay match key. Nothing will start failing to replay, so re-recording is
-  byte-hygiene and can ride along with other work rather than being a batch job.
+- **No credentials.** Enumerating the `Set-Cookie` *names* across all 204 files
+  (the scan records only the header name, so this needs its own pass) gives
+  exactly eight, none of them a credential: `__cf_bm` ×270 (Cloudflare
+  bot-management, ~30 min TTL), `WMF-Uniq` ×24, `WMF-Last-Access` ×18,
+  `WMF-Last-Access-Global` ×18, `GeoIP` ×18, `NetworkProbeLimit` ×18, `WMF-DP`
+  ×10 (all Wikimedia analytics/geo), `grokipedia-affinity` ×2 (routing).
+- **Zero request-side findings**, confirmed again *after* #877 — decisive,
+  because those are the only class in the replay match key. Nothing will start
+  failing to replay, so re-recording is byte-hygiene and can ride along with
+  other work rather than being a batch job.
 - **CppCourses and CSharpCourses have no cassettes at all.** PythonCourses is
-  the entire scope.
+  the entire scope. Within it the dirty files are `module_550_ml_azav` (84 of
+  its 104), `module_545_ml_azav_cohort_2026_04` (9) and
+  `module_555_ml_azav_deep_dive` (2).
 
 Re-run with:
 
@@ -174,10 +211,25 @@ Re-run with:
 cd <PythonCourses>/slides && clm cassette scan --json
 ```
 
-**#877 has landed**, so a green scan is now evidence — and the numbers above
-predate it. Re-run the scan before acting on them: the widened request-body
-walk can only *add* findings, and any it adds are request-side, i.e. the
-replay-miss class.
+**#877 has landed and the scan was re-run against it** — same numbers, so a
+green request-side is now evidence rather than an artefact of a top-level-only
+walk.
+
+The open question is **not** measurement, it is what to do:
+
+- A batch re-record of the 95 costs live OpenRouter/OpenAI calls and, because
+  LLM responses are nondeterministic, rewrites the *recorded output* of 84
+  decks of live AZAV teaching material — course churn for byte-hygiene with no
+  security gain, plus a fresh chance of the chain-orphan failure mode
+  `clm cassette doctor` exists for.
+- The issue's own suggestion — opportunistic, when a deck is next touched —
+  costs nothing and loses nothing.
+- The blocker for the "wire the scan into CI" item is that `clm cassette scan`
+  exits 1 on all 294 benign findings, so the gate can never be green until
+  every deck is re-recorded. A course-repo job can gate on request-side
+  findings only, today, with no clm change: `--json` reports each finding's
+  `location`. Anything more (a baseline file, a `--fail-on` filter) is a clm
+  feature and needs deciding first.
 
 ## 5. Test-suite flakiness on the Windows dev box (read before panicking)
 
