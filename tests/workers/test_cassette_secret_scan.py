@@ -15,6 +15,7 @@ exactly the decks that need it. It never rewrites — the repair path
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -211,6 +212,27 @@ class TestDirtyCassettesAreFlagged:
         )
         assert [f.key for f in scan_cassette_secrets(path).findings] == ["password"]
 
+    def test_a_valueless_form_parameter_is_flagged(self, tmp_path: Path) -> None:
+        """``token`` with no ``=`` is stripped by the recorder, so report it.
+
+        The audit used to skip any body without an ``=`` outright, which
+        made this a false all-clear: the recorder's ``partition(b"=")``
+        yields an *empty* separator rather than ``None``, so the valueless
+        name is removed like any other — and a rewritten request body is a
+        replay miss, since request bodies are in the match key.
+        """
+        path = _cassette(
+            tmp_path,
+            [
+                _interaction(
+                    request_headers={"content-type": "application/x-www-form-urlencoded"},
+                    request_body="token",
+                )
+            ],
+        )
+        findings = scan_cassette_secrets(path).findings
+        assert [(f.location, f.key) for f in findings] == [("request body", "token")]
+
     def test_a_json_body_under_a_non_json_content_type_is_not_flagged(self, tmp_path: Path) -> None:
         """Content-type gated, exactly like the recorder.
 
@@ -251,6 +273,100 @@ class TestDirtyCassettesAreFlagged:
         )
         findings = scan_cassette_secrets(path).findings
         assert [f.index for f in findings] == [1]
+
+
+class TestNestedRequestBodySecrets:
+    """The audit reads request bodies at any depth (issue #877).
+
+    It used to read top-level keys only — and so did the recorder, so
+    ``{"data": {"api_key": "sk-live-…"}}`` was recorded verbatim *and*
+    reported clean. Both sides agreeing made the parity suite pass, which
+    is why this needed its own tests on both sides rather than a table row.
+
+    These findings are the urgent kind: request bodies are part of the
+    replay match key, so a flagged cassette will replay-miss on the next
+    build once the incoming request has the key stripped.
+    """
+
+    def _json_request(self, tmp_path: Path, body: str, name: str = "deck") -> list:
+        path = _cassette(
+            tmp_path,
+            [_interaction(request_headers={"content-type": "application/json"}, request_body=body)],
+            name=name,
+        )
+        report = scan_cassette_secrets(path)
+        assert report.error is None, report.error
+        return [f for f in report.findings if f.location == "request body"]
+
+    @pytest.mark.parametrize("key", ["api_key", "password", "token", "API_KEY", "Password"])
+    def test_a_nested_secret_parameter_is_reported(self, key: str, tmp_path: Path) -> None:
+        findings = self._json_request(tmp_path, json.dumps({"data": {key: "sk-live-LEAK"}}))
+        assert [f.key for f in findings] == [key]
+
+    def test_a_secret_inside_a_list_is_reported(self, tmp_path: Path) -> None:
+        findings = self._json_request(
+            tmp_path, json.dumps({"items": [{"id": 1}, {"api_key": "sk-live-LEAK"}]})
+        )
+        assert [f.key for f in findings] == ["api_key"]
+
+    def test_a_secret_in_a_top_level_array_is_reported(self, tmp_path: Path) -> None:
+        findings = self._json_request(tmp_path, json.dumps([{"api_key": "sk-live-LEAK"}]))
+        assert [f.key for f in findings] == ["api_key"]
+
+    def test_a_deeply_nested_secret_is_reported(self, tmp_path: Path) -> None:
+        payload: dict = {"password": "hunter2"}
+        for _ in range(12):
+            payload = {"wrap": payload}
+        assert [f.key for f in self._json_request(tmp_path, json.dumps(payload))] == ["password"]
+
+    def test_a_matched_container_is_exactly_one_finding(self, tmp_path: Path) -> None:
+        """The recorder removes the subtree wholesale — report it once.
+
+        Recursing past a match would report three things to re-record
+        where the recorder makes one removal, and the report is what a
+        repo owner works from.
+        """
+        body = json.dumps({"api_key": {"password": "a", "inner": {"token": "b"}}})
+        findings = self._json_request(tmp_path, body)
+        assert [(f.location, f.key) for f in findings] == [("request body", "api_key")]
+
+    def test_a_numeric_nested_value_is_still_reported(self, tmp_path: Path) -> None:
+        """No value-type exemption on the request side, unlike responses.
+
+        The response filter exempts numbers because redaction rewrites
+        what replayed code *reads* (GPT-2's ``encoder.json`` maps
+        ``"secret"`` to an integer). A request body is never handed back to
+        the notebook, so the recorder removes the key whatever its type —
+        and the audit must say so, or it vouches for a body the recorder
+        rewrites.
+        """
+        assert [f.key for f in self._json_request(tmp_path, '{"a": {"token": 5}}')] == ["token"]
+
+    def test_a_clean_nested_body_is_not_flagged(self, tmp_path: Path) -> None:
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 10})
+        assert self._json_request(tmp_path, body) == []
+
+    def test_a_body_too_deep_to_walk_is_not_a_finding(self, tmp_path: Path) -> None:
+        """The recorder leaves it untouched, so a finding could never clear.
+
+        And it must not *escape*: this is a repo-wide walk, and one
+        pathological cassette taking down the audit of every file after it
+        is the failure mode #878 fixed on the response side.
+        """
+        depth = 400
+        body = '{"a":' * depth + '{"api_key":"sk-live-LEAK"}' + "}" * depth
+        path = _cassette(
+            tmp_path,
+            [_interaction(request_headers={"content-type": "application/json"}, request_body=body)],
+        )
+        old = sys.getrecursionlimit()
+        sys.setrecursionlimit(300)
+        try:
+            report = scan_cassette_secrets(path)
+        finally:
+            sys.setrecursionlimit(old)
+        assert report.error is None
+        assert report.findings == []
 
 
 class TestScannerRobustness:

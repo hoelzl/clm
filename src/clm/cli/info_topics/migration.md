@@ -97,9 +97,10 @@ query and the request body are part of the match key:
 - a cassette whose **request body** kept a `password` / `token` / `api_key` —
   which happens when its content-type carried a charset (`application/json;
   charset=utf-8`), when the request was not a `POST` (form-encoded `POST`
-  bodies were already filtered), or when the key was spelled with different
-  casing (`API_KEY`). The incoming request now has that key removed, so it no
-  longer matches what was recorded.
+  bodies were already filtered), when the key was spelled with different
+  casing (`API_KEY`), or — since {version}, see below — when the key sat
+  anywhere below the top level of a JSON body. The incoming request now has
+  that key removed, so it no longer matches what was recorded.
 
 Both surface as a loud replay miss (a build failure under `replay`, a
 re-record under `new-episodes`), never as wrong output, and `clm cassette
@@ -121,6 +122,58 @@ in the per-user data dir alongside `kernel-envs/`
 Linux). Consequences: one stable CA per machine instead of one per build, and
 the old `<jobs-db-dir>/mitm/confdir` directories can be deleted (do delete
 them — they contain a private key).
+
+## Request-body secrets are stripped at any depth (#877, {version})
+
+**Breaking only for cassettes whose request body carries a `password` /
+`token` / `api_key` below the top level.** The same class as the S9 request
+widening above, and it is fixed the same way — re-record the deck — but it
+is called out separately because the trigger is different and the audit did
+not use to report it.
+
+Until {version} the request-body filter read **top-level keys only**, and so
+did `clm cassette scan`. Because the two agreed, a nested credential was
+recorded verbatim *and* the audit reported the file clean:
+
+```json
+{"data": {"api_key": "sk-live-…"}}
+```
+
+Now the filter walks the whole body — nested objects, arrays, and a
+top-level array root — and removes a matched key together with everything
+under it. Anything it does not match keeps its *content*: a JSON **object**
+body is still re-dumped by `json.dumps`, so its bytes are reformatted whether
+or not anything matched (the long-standing quirk committed cassettes were
+recorded through, absorbed by the JSON-semantic replay matcher), while an
+array or scalar root is left byte-identical unless something actually
+matched.
+
+Unlike the response side there is **no value-type exemption**: `{"a":
+{"token": 5}}` loses the key. Response bodies exempt numbers because
+redaction rewrites what replayed code *reads*; a request body is never handed
+back to the notebook, so removing a key from one cannot corrupt anything.
+
+**Do you need to re-record?** Only if `clm cassette scan` reports a `request
+body` finding — and it now reports the nested ones, which is the point. Those
+findings **predict a replay miss**, for the reason spelled out above: request
+bodies are part of the replay match key, and the lookup filters the incoming
+request through this same code before matching. A cassette holding a nested
+secret will therefore stop matching, loudly (a build failure under `replay`, a
+re-record under `new-episodes`), never as wrong output.
+
+The audit's **form-encoded** reading was tightened to match the recorder
+exactly at the same time, in both directions. A parameter with no `=` (a bare
+`token`) is now reported, because the recorder strips it — that was a false
+all-clear. A percent-encoded *name* (`api%5Fkey=…`) is now **not** reported,
+because the recorder does not strip it — that was a finding no re-record could
+clear. And a non-UTF-8 byte in a *value* no longer hides the whole body from
+the audit: the recorder only decodes names, so it strips the secret next door
+regardless.
+
+One consequence worth knowing even without a re-record: two requests that
+differ *only* in a filtered parameter now collapse to the same match key —
+paginating on a nested `token` cursor, say — and replay in recorded order.
+The top-level filter has always behaved that way; recursing widens it.
 
 ## Spec-driven writes are contained; destructive output ops need proof of ownership (#798, {version})
 

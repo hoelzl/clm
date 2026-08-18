@@ -532,6 +532,37 @@ def _iter_secret_body_keys(
             yield from _iter_secret_body_keys(item, keys, placeholder, is_secret_value)
 
 
+def _json_body_param_names(payload: object, names: frozenset[str]) -> list[str]:
+    """Request-body parameter names the recorder would strip, at any depth.
+
+    Unlike the response side this is **not** a second walk: it calls the
+    recorder's own :func:`vcr_format.filter_json_parameters` and reports
+    exactly the keys it acted on. The response side pays for two walks and
+    a parity suite to keep them honest; the request side has one
+    implementation and cannot drift by construction (issue #877).
+
+    ``RecursionError`` is caught for the same reason it is on the response
+    side: the recorder's guard leaves a pathologically nested body's bytes
+    untouched, so a finding here would be one no re-record can clear — and
+    letting it escape would abort the whole repo walk.
+
+    The two guards do not cover *exactly* the same depth, and the residue is
+    worth knowing rather than chasing. The recorder runs parse + walk +
+    ``json.dumps`` under one guard while this runs parse + walk, so it gives
+    up one nesting level earlier: at a single depth around 1000 the audit
+    reports a body the recorder would no-op on. Measured; always in the
+    benign direction (an unsatisfiable finding, never a false all-clear), and
+    it needs a request body nested a thousand deep to reach.
+    """
+    from clm.infrastructure.http_replay_mitm.vcr_format import filter_json_parameters
+
+    try:
+        _, matched = filter_json_parameters(payload, dict.fromkeys(names))
+    except RecursionError:
+        return []
+    return matched
+
+
 def _form_body_keys(raw: object) -> list[str]:
     """Parameter names of a form-encoded body, or ``[]``.
 
@@ -539,20 +570,53 @@ def _form_body_keys(raw: object) -> list[str]:
     ``api_key`` from ``application/x-www-form-urlencoded`` bodies — the
     OAuth password and client-credentials grants — so the audit has to
     read them too, not just JSON.
+
+    This mirrors :func:`vcr_format._replace_form_parameters`' name
+    extraction **exactly**, rather than reaching for ``parse_qsl``, and
+    every difference between the two mattered:
+
+    * ``parse_qsl`` **percent-decodes** names; the recorder's
+      ``partition(b"=")`` does not. So the audit read ``api%5Fkey=SECRET``
+      as ``api_key`` and reported a finding no re-record could ever clear.
+      That the recorder misses such a name is a real leak, but it is a
+      *recorder* bug (issue #881) — the audit's question is only "would
+      the recorder change this file today?".
+      (``parse_qsl`` also turns ``+`` into a space, but that one could never
+      diverge either way: no name on the filter list contains a space, so
+      plus-decoding can neither create a match nor destroy one.)
+    * A field with **no ``=``** still counts: the recorder's ``partition``
+      yields an empty separator, not ``None``, so a bare ``token`` is
+      stripped like any other name. ``parse_qsl`` needed
+      ``keep_blank_values`` for that, and skipping ``=``-less bodies
+      outright made them a false all-clear.
+    * Decoding is **per field name**, not over the whole body. The
+      recorder only ever decodes names, so a non-UTF-8 byte in a *value*
+      (``password=h\\xfcnter2``) does not stop it — but decoding the whole
+      body first made the audit report nothing at all, on a body the
+      recorder does rewrite. A false all-clear in the replay-miss class.
+    * An undecodable *name* bails the **whole body**, because that is what
+      the recorder does: ``_replace_form_parameters`` lets the
+      ``UnicodeDecodeError`` escape and
+      ``replace_post_data_parameters`` turns it into "leave this body
+      alone" — every field, not just the offending one.
     """
     if isinstance(raw, (bytes, bytearray)):
+        data = bytes(raw)
+    elif isinstance(raw, str):
         try:
-            raw = raw.decode("utf-8")
+            data = raw.encode("utf-8")
+        except UnicodeEncodeError:  # a lone surrogate: not a form body
+            return []
+    else:
+        return []
+
+    names: list[str] = []
+    for chunk in data.split(b"&"):
+        try:
+            names.append(chunk.partition(b"=")[0].decode("utf-8"))
         except UnicodeDecodeError:
             return []
-    if not isinstance(raw, str) or "=" not in raw:
-        return []
-    from urllib.parse import parse_qsl
-
-    try:
-        return [name for name, _ in parse_qsl(raw, keep_blank_values=True)]
-    except ValueError:
-        return []
+    return names
 
 
 def _response_content_type(response: object) -> object | None:
@@ -605,9 +669,10 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             if str(name).lower() in query_params:
                 findings.append(SecretFinding(index, "request query", str(name), uri))
 
-        # Dispatch on the request content-type exactly as the recorder
-        # does — JSON there, form-encoded everywhere else. Reading the
-        # body both ways would flag a JSON payload served as text/plain
+        # Dispatch exactly as the recorder does, **including the order**:
+        # a mapping body first (whatever the content-type says), then JSON
+        # by content-type, then form-encoded for everything else. Reading
+        # the body both ways would flag a JSON payload served as text/plain
         # (which the recorder leaves alone), i.e. a finding no re-record
         # can clear.
         raw_body = getattr(request, "body", None)
@@ -619,16 +684,28 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
             ),
             None,
         )
-        if cf.is_json_content_type(request_content_type):
+        if isinstance(raw_body, dict):
+            # ``load_cassette`` yields a mapping for a hand-written
+            # cassette whose ``body:`` is a YAML mapping rather than a
+            # string. Nothing CLM writes produces one, but the recorder's
+            # ``isinstance(request.body, dict)`` branch fires on it before
+            # any content-type check — so an audit that fell through to the
+            # form reader here reported such a file clean while the recorder
+            # would strip it. A false all-clear, however contrived the file.
+            body_names: Iterable[str] = _json_body_param_names(raw_body, body_params)
+        elif cf.is_json_content_type(request_content_type):
             payload, _ = _json_or_none(raw_body)
-            body_names: Iterable[str] = (
-                [k for k in payload if isinstance(k, str)] if isinstance(payload, dict) else []
-            )
+            # At any depth, like the recorder: a nested
+            # ``{"data": {"api_key": …}}`` was recorded verbatim while the
+            # audit — reading top-level keys only — vouched for the file
+            # (issue #877). Scanner and recorder were consistently
+            # top-level, so the parity suite passed on it: a shared blind
+            # spot, which is the one shape a parity test cannot catch.
+            body_names = _json_body_param_names(payload, body_params)
         else:
-            body_names = _form_body_keys(raw_body)
+            body_names = [k for k in _form_body_keys(raw_body) if k.lower() in body_params]
         for key in body_names:
-            if key.lower() in body_params:
-                findings.append(SecretFinding(index, "request body", key, uri))
+            findings.append(SecretFinding(index, "request body", key, uri))
 
         headers = (response or {}).get("headers") or {}
         for name in headers:
