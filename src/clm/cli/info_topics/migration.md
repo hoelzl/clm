@@ -2,6 +2,38 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Docker workers run as a non-root user; /source is read-only for notebooks (#798, {version})
+
+**Breaking for notebooks that write into the course tree, and for anyone who
+runs the worker images by hand.** Docker-mode workers ran as **root** with the
+course sources mounted **read-write**, so a notebook cell — course-authored
+code — could rewrite the repository it was built from.
+
+- **All three worker images now run as uid 1000** (`USER 1000:1000`) instead of
+  root.
+- **`/source` is mounted read-only for the notebook worker.** PlantUML and
+  Draw.io keep it writable: they render diagrams into the source tree. If a
+  notebook cell writes next to its slides, that write now fails in Docker mode
+  (it still works in Direct mode). Write to the output tree instead, or run
+  that deck with `--workers direct`.
+- **Whole-volume mounts are refused.** A data dir or output root that resolves
+  to a drive/filesystem root (`C:\`, `/`) is rejected before any container
+  starts — it would have handed the container the entire disk. Previously only
+  the multi-target output case was guarded; a single target at a drive root,
+  and the data dir, were not.
+
+*Running the images by hand*: on native Linux, a bind mount keeps host
+ownership, so a container writing into it must run as the host user —
+`docker run --user "$(id -u):$(id -g)" …`. `clm` does this for you (it passes
+the host uid on POSIX hosts); the images are built to work under any uid.
+Docker Desktop on Windows/macOS virtualizes the mount and needs nothing. If
+`clm` itself runs as root on Linux, containers inherit uid 0 so their writes
+keep working, and a warning says the containment is gone.
+
+*Cache note*: the images change, and the worker image identity feeds the
+execution cache key (#744), so the first build after upgrading re-renders
+cached notebooks once. Expected, not a bug.
+
 ## Cassette recording scrubs responses; the mitmproxy CA moved (#798, {version})
 
 **Breaking only for existing recordings that carried now-filtered values.**

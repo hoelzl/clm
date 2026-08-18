@@ -25,6 +25,46 @@ Still in-tree:
 So only the Draw.io image needs `git lfs pull`; the others need none. See
 `BUILDING.md` for version-bump and checksum-mismatch notes.
 
+## Containment: non-root workers and read-only sources
+
+All three images run as **uid 1000 by default** (`USER 1000:1000`) rather than
+root, and the notebook worker gets the course sources mounted **read-only** at
+`/source`. PlantUML and Draw.io keep `/source` writable — they render diagrams
+into the source tree, which is their job. `/workspace` (the output tree) is
+writable for every worker.
+
+The notebook worker is the one that executes course-authored code, so it is the
+one worth containing: a notebook cell no longer runs as uid 0 and can no longer
+write into the course repository.
+
+### The uid caveat on native Linux
+
+A bind mount keeps **host** ownership. A container running as uid 1000 can only
+write into the mount if the host directory is writable by uid 1000 — and a
+GitHub Actions runner, for instance, is uid 1001. Baking a build-time uid into
+the image cannot solve this, because the right uid is a property of the machine
+running the build, not of the image.
+
+So `clm` resolves it at run time: on POSIX hosts the executor starts each
+container with `--user <host-uid>:<host-gid>`, and the image's own `USER` stands
+on Docker Desktop (Windows/macOS), where the mount is virtualized. The images
+are therefore written to work under **any** uid — installs are world-readable,
+`$HOME` is world-writable, and caches/runtime dirs point at `/tmp`. Keep it that
+way when editing them: nothing may depend on the process being uid 1000.
+
+Running these images by hand follows the same rule:
+
+```bash
+# Ordinary use: the image's own non-root user
+docker run --rm clm-notebook-processor:lite
+
+# Writing into a bind mount on native Linux
+docker run --rm --user "$(id -u):$(id -g)"     -v "$PWD/output:/workspace" clm-notebook-processor:lite
+```
+
+If `clm` itself runs as root on Linux, containers inherit uid 0 (otherwise
+their writes would fail) and a warning says so.
+
 ## Building Images
 
 From the repository root:

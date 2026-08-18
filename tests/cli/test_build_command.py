@@ -2056,17 +2056,19 @@ class TestBuildHasDockerNotebookWorker:
     worker using the replay proxy) — decides the wildcard bind (issue #165 P4)."""
 
     def test_none_config_is_direct_only(self) -> None:
-        assert engine_module._build_has_docker_notebook_worker(None) is False
+        assert (
+            engine_module._build_has_docker_notebook_worker(None, default_on_error=False) is False
+        )
 
     def test_all_direct_is_false(self) -> None:
         wc = _fake_worker_config(
             [("notebook", "direct", 4), ("plantuml", "direct", 1), ("drawio", "direct", 1)]
         )
-        assert engine_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is False
 
     def test_docker_notebook_is_true(self) -> None:
         wc = _fake_worker_config([("notebook", "docker", 2), ("plantuml", "direct", 1)])
-        assert engine_module._build_has_docker_notebook_worker(wc) is True
+        assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is True
 
     def test_docker_only_for_non_notebook_is_false(self) -> None:
         # Diagram converters never use the replay proxy, so a docker plantuml/
@@ -2074,18 +2076,18 @@ class TestBuildHasDockerNotebookWorker:
         wc = _fake_worker_config(
             [("notebook", "direct", 4), ("plantuml", "docker", 1), ("drawio", "docker", 1)]
         )
-        assert engine_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is False
 
     def test_docker_notebook_with_zero_count_is_false(self) -> None:
         wc = _fake_worker_config([("notebook", "docker", 0), ("plantuml", "direct", 1)])
-        assert engine_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is False
 
     def test_resolution_error_is_treated_as_direct_only(self) -> None:
         def _boom():
             raise RuntimeError("cannot resolve")
 
         wc = SimpleNamespace(get_all_worker_configs=_boom)
-        assert engine_module._build_has_docker_notebook_worker(wc) is False
+        assert engine_module._build_has_docker_notebook_worker(wc, default_on_error=False) is False
 
 
 class _FakeMitmManager:

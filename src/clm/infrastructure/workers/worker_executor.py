@@ -284,6 +284,72 @@ class WorkerExecutor(ABC):
         return None
 
 
+#: Worker types that legitimately write into the mounted source tree.
+#: PlantUML and DrawIO render diagrams next to their sources; the notebook
+#: worker reads slide sources and writes only to ``/workspace``, so it gets
+#: the mount read-only (finding S10, #798). It is also the worker that
+#: executes course-authored code, i.e. the one most worth containing.
+_SOURCE_WRITING_WORKER_TYPES = frozenset({"plantuml", "drawio"})
+
+
+#: Whether the host keeps real uid ownership on bind mounts. Read through a
+#: module attribute rather than ``os.name`` at the call site so a test can
+#: flip it without patching ``os.name`` globally — that also makes
+#: ``pathlib`` build ``PosixPath`` objects and blow up on Windows.
+_HOST_IS_POSIX = os.name == "posix"
+
+
+def _container_user() -> str | None:
+    """The ``uid:gid`` a worker container should run as, or ``None``.
+
+    The images run as a non-root user by default (finding S10, #798), but
+    the *specific* uid matters wherever a bind mount keeps host ownership
+    — i.e. on native Linux. A container writing rendered diagrams into the
+    mounted source tree, or notebook output into ``/workspace``, must run
+    as the host user or the writes fail (a GitHub runner is uid 1001, the
+    image default is 1000). So on POSIX hosts the executor pins the host
+    uid, which is the "uid remapping" caveat the images deliberately do
+    not try to bake in.
+
+    On Docker Desktop (Windows/macOS) the mount is virtualized and
+    ownership is handled by the VM, so the image's own ``USER`` stands and
+    this returns ``None``.
+    """
+    if not _HOST_IS_POSIX:
+        return None
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:  # pragma: no cover — POSIX always has these
+        return None
+    uid, gid = getuid(), getgid()
+    if uid == 0:
+        logger.warning(
+            "clm is running as root, so worker containers inherit uid 0 to keep "
+            "bind-mount writes working. The images default to a non-root user; "
+            "run clm as an ordinary user to get that containment."
+        )
+    return f"{uid}:{gid}"
+
+
+def _refuse_whole_volume_mount(path: Path, *, label: str) -> None:
+    """Refuse to bind-mount a whole drive or filesystem root.
+
+    ``Course.workspace_root`` refuses this for the *output* side when
+    several targets force it, but a path can reach the executor without
+    passing through that computation — a single target at a drive root,
+    or the data dir, which had no guard at all (finding D7, #798). One
+    check here covers both mounts and every construction site.
+    """
+    resolved = Path(path).resolve()
+    if resolved == resolved.parent:
+        raise ValueError(
+            f"Docker mode refuses to mount a whole volume: the {label} "
+            f"resolves to {resolved}, a drive/filesystem root. The container "
+            f"would get everything on that disk. Point it at a directory "
+            f"below the root instead."
+        )
+
+
 class DockerWorkerExecutor(WorkerExecutor):
     """Executor for running workers in Docker containers."""
 
@@ -307,6 +373,10 @@ class DockerWorkerExecutor(WorkerExecutor):
                 host.docker.internal support on Windows/WSL2)
             log_level: Logging level for workers
         """
+        _refuse_whole_volume_mount(workspace_path, label="workspace (output) directory")
+        if data_dir:
+            _refuse_whole_volume_mount(data_dir, label="data directory (course sources)")
+
         self.docker_client = docker_client
         self.db_path = db_path
         self.workspace_path = workspace_path
@@ -382,10 +452,14 @@ class DockerWorkerExecutor(WorkerExecutor):
             if db_worker_id is not None:
                 environment["CLM_WORKER_ID"] = str(db_worker_id)
 
-            # Mount source directory if provided (for reading input files AND writing generated images)
-            # Note: read-write is required because PlantUML/DrawIO generate images in the source tree
+            # Mount the source directory when provided. Read-write only for
+            # the workers that render diagrams *into* the source tree;
+            # the notebook worker — which executes course-authored code and
+            # writes its output to /workspace — gets it read-only (finding
+            # S10, #798).
             if self.data_dir:
-                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "rw"}
+                source_mode = "rw" if worker_type in _SOURCE_WRITING_WORKER_TYPES else "ro"
+                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": source_mode}
                 environment["CLM_HOST_DATA_DIR"] = str(self.data_dir.absolute())
 
             # Forensic HTTP-replay trace harness. When the host activated
@@ -437,7 +511,7 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:
-                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (rw)"
+                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source ({source_mode})"
             else:
                 log_mounts += "\n  Source: NOT MOUNTED (data_dir not set)"
 
@@ -472,6 +546,12 @@ class DockerWorkerExecutor(WorkerExecutor):
                 "environment": environment,
                 "extra_hosts": extra_hosts,
             }
+
+            # Run as the host user where bind mounts keep host ownership
+            # (native Linux); elsewhere the image's non-root USER stands.
+            container_user = _container_user()
+            if container_user is not None:
+                run_kwargs["user"] = container_user
 
             if self.network_name:
                 run_kwargs["network"] = self.network_name

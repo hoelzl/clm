@@ -464,7 +464,40 @@ COPY . ./clm
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python --no-deps ./clm
 
+#=============================================================================
+# NON-ROOT RUNTIME (finding S10 + D7, #798)
+#=============================================================================
+# The notebook worker executes course-authored code. Running that as uid 0
+# means a notebook cell owns the container; with /source now mounted
+# read-only, dropping root is the other half of the containment.
+#
+# The image must work under an *arbitrary* uid, not only 1000: on native
+# Linux the executor runs the container as the host user so bind-mount
+# writes land with the right ownership (a GitHub runner is uid 1001), and
+# some platforms assign a random uid. So nothing here may depend on the
+# process being 1000 or on $HOME being a specific user's directory:
+#
+#  * kernelspecs installed into root's user directory are copied to the
+#    system-wide Jupyter path, which every uid searches;
+#  * the toolchains under /root (dotnet, uv) are made traversable and
+#    readable — the image holds no secrets, only tools;
+#  * HOME is a world-writable directory, and every cache/runtime dir that
+#    a kernel writes to is pointed at /tmp.
+ENV HOME=/home/clm     JUPYTER_RUNTIME_DIR=/tmp/jupyter-runtime     JUPYTER_DATA_DIR=/tmp/jupyter-data     MPLCONFIGDIR=/tmp/matplotlib     DENO_DIR=/tmp/deno     XDG_CACHE_HOME=/tmp/cache     DOTNET_NOLOGO=1     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+
+RUN set -eu;     mkdir -p /home/clm /usr/local/share/jupyter/kernels;     if [ -d /root/.local/share/jupyter/kernels ]; then         cp -a /root/.local/share/jupyter/kernels/. /usr/local/share/jupyter/kernels/;     fi;     chmod -R a+rX /root /opt/conda /app /usr/local/share/jupyter;     chmod 0777 /home/clm
+
+# Strip every setuid/setgid bit. A worker needs none of them (su, mount,
+# passwd, chrome-sandbox with --no-sandbox), and removing them is what makes
+# the writable password database below harmless: without a setuid binary
+# there is nothing to escalate *to*.
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+
 EXPOSE 8888
+
+# Numeric on purpose: the uid need not exist in /etc/passwd, and the
+# executor may override it with the host uid (see docs/user-guide/docker.md).
+USER 1000:1000
 
 # Run the notebook worker
 CMD ["python3", "-m", "clm.workers.notebook"]

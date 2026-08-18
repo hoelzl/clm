@@ -100,4 +100,30 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY ${DOCKER_PATH}/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+#=============================================================================
+# NON-ROOT RUNTIME (finding S10 + D7, #798)
+#=============================================================================
+# Draw.io is Electron under Xvfb. It runs unprivileged given a writable
+# HOME, a *session* D-Bus (the entrypoint starts one; the system bus needs
+# root) and --no-sandbox, which the converter already passes. The image must
+# tolerate an arbitrary uid — on native Linux the executor runs the container
+# as the host user so rendered diagrams land in the mounted source tree with
+# the right ownership.
+# Electron calls ``os.userInfo()`` during startup and *throws* when the
+# running uid has no password-database entry — and an arbitrary uid (the
+# executor runs the container as the host user) never does. The entrypoint
+# appends an entry for whatever uid it finds, which needs /etc/passwd
+# writable; the setuid strip below is what keeps that safe.
+ENV HOME=/home/clm     XDG_CACHE_HOME=/tmp/cache     ELECTRON_DISABLE_SECURITY_WARNINGS=1
+
+RUN set -eu;     mkdir -p /home/clm /tmp/.X11-unix;     chmod 0777 /home/clm;     chmod 1777 /tmp/.X11-unix;     chmod 0666 /etc/passwd;     chmod -R a+rX /app
+
+# Strip every setuid/setgid bit. A worker needs none of them (su, mount,
+# passwd, chrome-sandbox with --no-sandbox), and removing them is what makes
+# the writable password database below harmless: without a setuid binary
+# there is nothing to escalate *to*.
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+
+USER 1000:1000
+
 ENTRYPOINT ["/app/entrypoint.sh"]
