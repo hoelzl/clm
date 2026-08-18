@@ -2020,26 +2020,36 @@ class NotebookProcessor:
                         ExecutePreprocessor.log_level = logging.DEBUG  # type: ignore[attr-defined]
                         loop = asyncio.get_running_loop()
 
-                        # Determine execution path: use source_dir if available (Docker mode
-                        # with source mount), otherwise create temp directory for other_files
-                        if source_dir is not None:
-                            # Docker mode with source mount: files already available
-                            path = source_dir
-                            logger.debug(f"{cid}:Using source mount for execution: {source_dir}")
+                        # The kernel always runs in a writable temp directory,
+                        # in every mode. Docker mode used to execute *in* the
+                        # mounted source dir, which was the one place a
+                        # notebook could write into the course repository —
+                        # and once that mount became read-only (S10, #798) the
+                        # same cells started failing instead. Teaching decks
+                        # legitimately do ``open("my-data-file.txt", "w")``,
+                        # ``savefig("plot.png")`` and ``%%writefile``: real
+                        # courses have dozens of them.
+                        #
+                        # The payload carries ``other_files`` in *both* modes
+                        # (``ProcessNotebookOperation.compute_other_files`` is
+                        # unconditional), so the source mount was only ever an
+                        # optimization. Writing them into a throwaway directory
+                        # instead means Docker and Direct now behave
+                        # identically — same cwd semantics, same siblings
+                        # visible, writes land somewhere harmless — while
+                        # nothing can touch the sources. ``source_dir`` stays
+                        # in play for the read-only uses (the Jinja loader and
+                        # image resolution in ``create_contents``).
+                        #
+                        # (HTTP-replay recordings are unaffected by the temp
+                        # dir's destruction — the replay proxy writes staging
+                        # cassettes on the host, never the kernel.)
+                        with TemporaryDirectory() as temp_dir:
+                            path = Path(temp_dir)
+                            await self.write_other_files(cid, path, payload)
                             await self._execute_notebook_with_path(
                                 cid, path, processed_nb, payload, loop, source_dir
                             )
-                        else:
-                            # Standard mode: write other_files to temp directory.
-                            # (HTTP-replay recordings are unaffected by the temp
-                            # dir's destruction — the replay proxy writes staging
-                            # cassettes on the host, never the kernel.)
-                            with TemporaryDirectory() as temp_dir:
-                                path = Path(temp_dir)
-                                await self.write_other_files(cid, path, payload)
-                                await self._execute_notebook_with_path(
-                                    cid, path, processed_nb, payload, loop, None
-                                )
                 except Exception as e:
                     file_name = payload.input_file_name
                     logger.error(
@@ -2309,28 +2319,21 @@ class NotebookProcessor:
 
         return None, None
 
-    async def write_other_files(
-        self, cid: str, path: Path, payload: NotebookPayload, source_dir: Path | None = None
-    ):
-        """Write supporting files to the execution directory.
+    async def write_other_files(self, cid: str, path: Path, payload: NotebookPayload):
+        """Write the topic's supporting files into the execution directory.
 
-        In Docker mode with source mount (source_dir is set), files are already
-        available at the source directory and don't need to be written.
-        In other modes, files are decoded from base64 and written to temp directory.
+        Runs in **every** mode. Docker mode used to skip this because the
+        files were already visible on the ``/source`` mount — but the
+        kernel no longer executes there (see the execution branch in
+        ``create_contents``), so the siblings a notebook reads have to be
+        materialized next to it like they are for a Direct worker. The
+        payload always carried them, so nothing new is shipped.
 
         Args:
             cid: Correlation ID for logging
-            path: Target directory to write files to (temp directory)
+            path: Target directory to write files to (the execution temp dir)
             payload: Notebook payload containing other_files
-            source_dir: Optional source directory (Docker mode with source mount)
         """
-        if source_dir is not None:
-            # Docker mode with source mount: files are already available
-            # No need to write anything
-            logger.debug(f"{cid}:Source mount mode - files available at {source_dir}")
-            return
-
-        # Standard mode: decode and write files from payload
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.write_other_files_sync, cid, path, payload)
 
@@ -2342,7 +2345,12 @@ class NotebookProcessor:
             file_path = path / extra_file
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(contents)
-        if hasattr(os, "sync"):
+        # ``os.sync()`` is global and not namespaced — it flushes the whole
+        # filesystem, not just these files. It runs on the Docker path too
+        # now (S10, #798, where the kernel moved into a temp dir), i.e. on
+        # every worker of a large pool, so skip it when there was nothing
+        # to write.
+        if payload.other_files and hasattr(os, "sync"):
             os.sync()
 
     def _create_cpp_code_export(self, processed_nb) -> str:

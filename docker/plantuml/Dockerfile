@@ -53,5 +53,28 @@ COPY . ./clm
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install ./clm[plantuml]
 
+#=============================================================================
+# NON-ROOT RUNTIME (finding S10 + D7, #798)
+#=============================================================================
+# Renders repo-supplied .puml through a JVM; no reason to be uid 0. The
+# image must tolerate an arbitrary uid — on native Linux the executor runs
+# the container as the host user so the diagrams it writes into the mounted
+# source tree are owned correctly (a GitHub runner is uid 1001).
+ENV HOME=/home/clm \
+    XDG_CACHE_HOME=/tmp/cache
+
+RUN set -eu; \
+    mkdir -p /home/clm; \
+    chmod 0777 /home/clm; \
+    chmod -R a+rX /app
+
+# Strip every setuid/setgid bit: a worker needs none of them (su, mount,
+# passwd), and a container rendering repo-supplied input should not ship a
+# local privilege-escalation surface. Pinned by a docker-marked test, so an
+# apt-get added below this line cannot silently re-arm it.
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+
+USER 1000:1000
+
 # Run the PlantUML worker
 CMD ["python", "-m", "clm.workers.plantuml"]

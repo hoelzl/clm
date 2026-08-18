@@ -284,6 +284,95 @@ class WorkerExecutor(ABC):
         return None
 
 
+#: Worker types that legitimately write into the mounted source tree. An
+#: allowlist, so a *new* worker type gets the read-only mount by default —
+#: the safe direction, but a silent one: a type that does need to write
+#: would fail at run time rather than here.
+#: PlantUML and DrawIO render diagrams next to their sources; the notebook
+#: worker reads slide sources and writes only to ``/workspace``, so it gets
+#: the mount read-only (finding S10, #798). It is also the worker that
+#: executes course-authored code, i.e. the one most worth containing.
+_SOURCE_WRITING_WORKER_TYPES = frozenset({"plantuml", "drawio"})
+
+
+#: Whether the host keeps real uid ownership on bind mounts — i.e. native
+#: Linux. Deliberately not ``os.name == "posix"``: that is also true on
+#: macOS, where Docker Desktop virtualizes the mount and maps ownership, so
+#: overriding the image's own USER there would contradict what the docs
+#: promise and gain nothing. Read through a module attribute rather than
+#: inline so a test can flip it without patching ``sys.platform`` globally.
+_HOST_KEEPS_MOUNT_OWNERSHIP = sys.platform.startswith("linux")
+
+
+#: One warning per process, not one per worker in the pool.
+_WARNED_RUNNING_AS_ROOT = False
+
+
+def _container_user() -> str | None:
+    """The ``uid:gid`` a worker container should run as, or ``None``.
+
+    The images run as a non-root user by default (finding S10, #798), but
+    the *specific* uid matters wherever a bind mount keeps host ownership
+    — i.e. on native **Linux** (not merely POSIX: macOS is POSIX, and
+    Docker Desktop maps ownership there). A container writing rendered diagrams into the
+    mounted source tree, or notebook output into ``/workspace``, must run
+    as the host user or the writes fail (a GitHub runner is uid 1001, the
+    image default is 1000). So on native Linux the executor pins the host
+    uid, which is the "uid remapping" caveat the images deliberately do
+    not try to bake in.
+
+    On Docker Desktop (Windows/macOS) the mount is virtualized and
+    ownership is handled by the VM, so the image's own ``USER`` stands and
+    this returns ``None``.
+    """
+    if not _HOST_KEEPS_MOUNT_OWNERSHIP:
+        return None
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:  # pragma: no cover — POSIX always has these
+        return None
+    uid, gid = getuid(), getgid()
+    global _WARNED_RUNNING_AS_ROOT
+    if uid == 0 and not _WARNED_RUNNING_AS_ROOT:
+        _WARNED_RUNNING_AS_ROOT = True
+        logger.warning(
+            "clm is running as root, so worker containers inherit uid 0 to keep "
+            "bind-mount writes working. The images default to a non-root user; "
+            "run clm as an ordinary user to get that containment."
+        )
+    return f"{uid}:{gid}"
+
+
+class WholeVolumeMountError(ValueError):
+    """A Docker mount root resolves to a whole drive/filesystem root.
+
+    Its own type because both construction sites wrap executor creation in
+    a broad ``except Exception`` — one of them logging "Docker not
+    available" — which turned this refusal into a build that came up with
+    zero workers and stalled, instead of one that says which directory is
+    the problem (finding D7, #798).
+    """
+
+
+def _refuse_whole_volume_mount(path: Path, *, label: str) -> None:
+    """Refuse to bind-mount a whole drive or filesystem root.
+
+    ``Course.workspace_root`` refuses this for the *output* side when
+    several targets force it, but a path can reach the executor without
+    passing through that computation — a single target at a drive root,
+    or the data dir, which had no guard at all (finding D7, #798). One
+    check here covers both mounts and every construction site.
+    """
+    resolved = Path(path).resolve()
+    if resolved == resolved.parent:
+        raise WholeVolumeMountError(
+            f"Docker mode refuses to mount a whole volume: the {label} "
+            f"resolves to {resolved}, a drive/filesystem root. The container "
+            f"would get everything on that disk. Point it at a directory "
+            f"below the root instead."
+        )
+
+
 class DockerWorkerExecutor(WorkerExecutor):
     """Executor for running workers in Docker containers."""
 
@@ -327,6 +416,16 @@ class DockerWorkerExecutor(WorkerExecutor):
         import docker.errors  # type: ignore[import-not-found]
 
         container_name = f"clm-{worker_type}-worker-{index}"
+
+        # Checked here, not in ``__init__``: a Direct-mode build still
+        # *constructs* this executor (the lifecycle manager builds one
+        # whenever Docker is importable), and refusing there aborted builds
+        # that never start a container — on Docker-equipped machines only,
+        # which is the worst kind of difference. This is the last moment
+        # before a mount actually exists.
+        _refuse_whole_volume_mount(self.workspace_path, label="workspace (output) directory")
+        if self.data_dir:
+            _refuse_whole_volume_mount(self.data_dir, label="data directory (course sources)")
 
         try:
             # Check if container already exists
@@ -382,10 +481,14 @@ class DockerWorkerExecutor(WorkerExecutor):
             if db_worker_id is not None:
                 environment["CLM_WORKER_ID"] = str(db_worker_id)
 
-            # Mount source directory if provided (for reading input files AND writing generated images)
-            # Note: read-write is required because PlantUML/DrawIO generate images in the source tree
+            # Mount the source directory when provided. Read-write only for
+            # the workers that render diagrams *into* the source tree;
+            # the notebook worker — which executes course-authored code and
+            # writes its output to /workspace — gets it read-only (finding
+            # S10, #798).
             if self.data_dir:
-                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": "rw"}
+                source_mode = "rw" if worker_type in _SOURCE_WRITING_WORKER_TYPES else "ro"
+                volumes[str(self.data_dir.absolute())] = {"bind": "/source", "mode": source_mode}
                 environment["CLM_HOST_DATA_DIR"] = str(self.data_dir.absolute())
 
             # Forensic HTTP-replay trace harness. When the host activated
@@ -437,7 +540,7 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:
-                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source (rw)"
+                log_mounts += f"\n  Source: {self.data_dir.absolute()} -> /source ({source_mode})"
             else:
                 log_mounts += "\n  Source: NOT MOUNTED (data_dir not set)"
 
@@ -472,6 +575,12 @@ class DockerWorkerExecutor(WorkerExecutor):
                 "environment": environment,
                 "extra_hosts": extra_hosts,
             }
+
+            # Run as the host user where bind mounts keep host ownership
+            # (native Linux); elsewhere the image's non-root USER stands.
+            container_user = _container_user()
+            if container_user is not None:
+                run_kwargs["user"] = container_user
 
             if self.network_name:
                 run_kwargs["network"] = self.network_name

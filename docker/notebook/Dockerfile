@@ -164,7 +164,13 @@ RUN set -eu; \
         sleep 15; \
     done; \
     rm -f dotnet-install.sh; \
-    [ "${ok}" -eq 1 ]
+    [ "${ok}" -eq 1 ]; \
+    chmod -R a+rX /root/.dotnet
+# The chmod belongs to *this* layer on purpose. The image runs as a non-root
+# (and possibly arbitrary) uid, so the toolchain has to be readable by
+# anyone — but doing it in a later `chmod -R` copies up all ~1530 .NET files
+# for a permission bit, ~280 MB of overlay on an image whose CI layer-cache
+# budget is already rationed (see .github/workflows/ci.yml).
 
 # Install uv (modern Python package installer).
 #
@@ -176,7 +182,8 @@ RUN curl --fail --location --silent --show-error \
         --retry 5 --retry-delay 5 --retry-all-errors \
         https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
     && sh /tmp/uv-install.sh \
-    && rm -f /tmp/uv-install.sh
+    && rm -f /tmp/uv-install.sh \
+    && chmod -R a+rX /root/.local
 
 # Install micromamba for Python environment management.
 # This provides a clean Python installation without PEP 668 restrictions.
@@ -464,7 +471,64 @@ COPY . ./clm
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python --no-deps ./clm
 
+#=============================================================================
+# NON-ROOT RUNTIME (finding S10 + D7, #798)
+#=============================================================================
+# The notebook worker executes course-authored code. Running that as uid 0
+# means a notebook cell owns the container; with /source now mounted
+# read-only, dropping root is the other half of the containment.
+#
+# The image must work under an *arbitrary* uid, not only 1000: on native
+# Linux the executor runs the container as the host user so bind-mount
+# writes land with the right ownership (a GitHub runner is uid 1001), and
+# some platforms assign a random uid. So nothing here may depend on the
+# process being 1000 or on $HOME being a specific user's directory:
+#
+#  * kernelspecs installed into root's user directory are copied to the
+#    system-wide Jupyter path, which every uid searches;
+#  * the toolchains under /root (dotnet, uv) are made traversable and
+#    readable — the image holds no secrets, only tools;
+#  * HOME is a world-writable directory, and every cache/runtime dir that
+#    a kernel writes to is pointed at /tmp.
+ENV HOME=/home/clm \
+    JUPYTER_RUNTIME_DIR=/tmp/jupyter-runtime \
+    JUPYTER_DATA_DIR=/tmp/jupyter-data \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    DENO_DIR=/tmp/deno \
+    XDG_CACHE_HOME=/tmp/cache \
+    DOTNET_NOLOGO=1 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_INTERACTIVE_CLI_TELEMETRY_OPTOUT=1 \
+    # .NET keeps its per-user state here. Pointing it at the same writable
+    # HOME the first-run sentinel was primed under (see the dotnet-interactive
+    # install above) is what actually silences the welcome banner — the
+    # telemetry variables above do not gate it.
+    DOTNET_CLI_HOME=/home/clm
+
+# ``/root`` only needs to be traversable — the toolchains inside it were made
+# readable in the layers that installed them, so no bulk copy-up happens here.
+RUN set -eu; \
+    mkdir -p /home/clm/.dotnet /usr/local/share/jupyter/kernels; \
+    if [ -d /root/.local/share/jupyter/kernels ]; then \
+        cp -a /root/.local/share/jupyter/kernels/. /usr/local/share/jupyter/kernels/; \
+    fi; \
+    cp -a /root/.dotnet/*entinel* /home/clm/.dotnet/ 2>/dev/null || true; \
+    chmod a+rx /root; \
+    chmod -R a+rX /app /usr/local/share/jupyter; \
+    chmod -R a+rwX /home/clm
+
+# Strip every setuid/setgid bit: a worker needs none of them (su, mount,
+# passwd), and a container that executes course-authored code should not ship
+# a local privilege-escalation surface. Pinned by a docker-marked test, so an
+# apt-get added below this line cannot silently re-arm it.
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+
 EXPOSE 8888
+
+# Numeric on purpose: the uid need not exist in /etc/passwd, and the executor
+# overrides it with the host uid on native Linux (see docker/README.md).
+USER 1000:1000
 
 # Run the notebook worker
 CMD ["python3", "-m", "clm.workers.notebook"]

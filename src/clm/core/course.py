@@ -62,6 +62,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _refuse_whole_volume_workspace(candidate: Path, sorted_roots: list[str]) -> None:
+    """Refuse a ``/workspace`` mount that would cover a whole drive.
+
+    Applies to both shapes the workspace root can take — the single
+    target root and the common ancestor of several — because the single
+    case used to return before the check ran (finding D7, #798). The
+    advice differs: with one target there is nothing to split apart, so
+    telling the user to build targets separately would be nonsense.
+    """
+    if candidate != candidate.parent:
+        return
+    if len(sorted_roots) == 1:
+        raise ValueError(
+            f"Docker-mode builds would have to mount a whole drive: the "
+            f"<output-target> path resolves to {sorted_roots[0]}, a "
+            f"drive/filesystem root. Point it at a directory below the root."
+        )
+    raise ValueError(
+        "Docker-mode builds would have to mount a whole drive to cover "
+        f"these <output-targets>: {sorted_roots}. Build each target "
+        "separately with `--targets <name>`, or place the target "
+        "output roots under a shared parent directory."
+    )
+
+
 @define
 class Course(NotebookMixin):
     spec: CourseSpec
@@ -318,10 +343,17 @@ class Course(NotebookMixin):
         """
         roots = [t.output_root for t in self.output_targets] or [self.output_root]
         resolved = {r.resolve() for r in roots}
-        if len(resolved) == 1:
-            return next(iter(resolved))
-
         sorted_roots = sorted(str(r) for r in resolved)
+
+        if len(resolved) == 1:
+            # The whole-volume check applies here too. This early return used
+            # to skip it, so a *single* target at a drive root mounted the
+            # entire disk — while two targets that merely shared that root
+            # were correctly refused below (finding D7, #798).
+            only = next(iter(resolved))
+            _refuse_whole_volume_workspace(only, sorted_roots)
+            return only
+
         try:
             common = Path(os.path.commonpath(list(resolved)))
         except ValueError as err:
@@ -337,13 +369,7 @@ class Course(NotebookMixin):
         # Refuse to bind-mount an entire volume: if the only shared ancestor is
         # a drive/filesystem root, the mount would expose far more than the
         # build output. Treat it like the no-common-ancestor case.
-        if common == common.parent:
-            raise ValueError(
-                "Docker-mode builds would have to mount a whole drive to cover "
-                f"these <output-targets>: {sorted_roots}. Build each target "
-                "separately with `--targets <name>`, or place the target "
-                "output roots under a shared parent directory."
-            )
+        _refuse_whole_volume_workspace(common, sorted_roots)
         return common
 
     @property

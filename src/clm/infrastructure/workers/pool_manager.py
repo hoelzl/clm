@@ -28,6 +28,7 @@ from clm.infrastructure.workers.discovery import (
 from clm.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
     DockerWorkerExecutor,
+    WholeVolumeMountError,
     WorkerConfig,
     WorkerExecutor,
     ensure_docker_worker_deps,
@@ -640,6 +641,13 @@ class WorkerPoolManager:
                             f"✗ Failed to start {config.worker_type}-{i} "
                             f"({completed}/{total_workers})"
                         )
+                except WholeVolumeMountError:
+                    # Every worker would hit this; letting the pool come up
+                    # empty turns a misconfigured mount root into a capacity
+                    # stall with no mention of the directory (finding D7,
+                    # #798). The re-raise in ``_start_worker`` is inert
+                    # without this one.
+                    raise
                 except Exception as e:
                     failed_workers.append((config.worker_type, i))
                     logger.error(
@@ -814,6 +822,14 @@ class WorkerPoolManager:
                 "started_at": datetime.now(),
             }
 
+        except WholeVolumeMountError:
+            # A misconfigured mount root is not a per-worker failure to log
+            # and swallow: every worker would hit it, the pool would come up
+            # empty, and the build would stall as a capacity abort instead of
+            # naming the directory (finding D7, #798).
+            if db_worker_id is not None:
+                self._cleanup_pre_registered_worker(db_worker_id)
+            raise
         except Exception as e:
             logger.error(f"Failed to start worker {config.worker_type}-{index}: {e}", exc_info=True)
             # Clean up the pre-registered worker record if it was created

@@ -39,6 +39,7 @@ from clm.core.build_data_classes import BuildSummary
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
+from clm.infrastructure.workers.worker_executor import WholeVolumeMountError
 
 logger = get_logger(__name__)
 
@@ -347,6 +348,11 @@ async def main_build(
     except UnownedOutputRootError as e:
         # The refusal message names the directory and the remedy; a raw
         # traceback would bury both (finding S11, #798).
+        raise click.ClickException(str(e)) from None
+    except WholeVolumeMountError as e:
+        # Same reasoning for the mount-root refusal (finding D7, #798):
+        # the whole point of raising it instead of logging and coming up
+        # with zero workers is that the user sees which directory is wrong.
         raise click.ClickException(str(e)) from None
     except BuildOptionError as e:
         raise click.UsageError(str(e)) from None

@@ -71,7 +71,9 @@ logger = logging.getLogger(__name__)
 _console = Console(file=sys.stderr)
 
 
-def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
+def _build_has_docker_notebook_worker(
+    worker_config: object | None, *, default_on_error: bool
+) -> bool:
     """True when this build will start a Docker-mode **notebook** worker.
 
     Only the notebook worker makes the LLM HTTP traffic the replay proxy
@@ -84,6 +86,16 @@ def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
     LAN-exposure window — see ``_maybe_start_mitmproxy_transport``) off builds
     whose only Docker workers are diagram converters that never use the proxy.
     ``None`` worker_config (older callers / tests) is treated as Direct-only.
+
+    ``default_on_error`` is what an *undeterminable* answer means for the
+    caller, and it is required because the two callers have **opposite**
+    safe directions (finding D7, #798). The workspace resolver must assume
+    Docker — that routes through the whole-volume-guarded
+    ``course.workspace_root``, and guessing Direct would silently return the
+    unguarded ``output_root``. The replay proxy must assume Direct — guessing
+    Docker binds ``0.0.0.0`` and opens a LAN listener for the build's
+    duration. Swallowing the exception and returning a constant, as this used
+    to, is wrong for exactly one of them whichever constant you pick.
     """
     if worker_config is None:
         return False
@@ -92,9 +104,15 @@ def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
             c.worker_type == "notebook" and c.execution_mode == "docker" and c.count > 0
             for c in worker_config.get_all_worker_configs()  # type: ignore[attr-defined]
         )
-    except Exception:  # noqa: BLE001 — detection must never break the build
-        logger.debug("Could not resolve worker execution modes; assuming Direct-only")
-        return False
+    except Exception as exc:  # noqa: BLE001 — detection must never break the build
+        logger.warning(
+            "Could not resolve worker execution modes (%s: %s); assuming %s "
+            "for this decision — the safe direction here.",
+            type(exc).__name__,
+            exc,
+            "a Docker notebook worker" if default_on_error else "Direct-only",
+        )
+        return default_on_error
 
 
 def _resolve_worker_workspace_path(course: Course, worker_config: object | None) -> Path:
@@ -113,7 +131,9 @@ def _resolve_worker_workspace_path(course: Course, worker_config: object | None)
     then. Direct-mode builds never translate paths, so they keep the historical
     ``output_root`` and are unaffected by the multi-target validation.
     """
-    if _build_has_docker_notebook_worker(worker_config):
+    # Undeterminable → assume Docker: ``workspace_root`` carries the
+    # whole-volume guard, ``output_root`` does not (finding D7, #798).
+    if _build_has_docker_notebook_worker(worker_config, default_on_error=True):
         return course.workspace_root
     return course.output_root
 
@@ -197,7 +217,11 @@ def _maybe_start_mitmproxy_transport(
     # existing 0.0.0.0 WorkerApiServer and is gated to opt-in Docker builds, but a
     # future hardening should bind the docker-bridge gateway IP or add
     # mitmdump --proxyauth with a per-build credential.
-    listen_host = "0.0.0.0" if _build_has_docker_notebook_worker(worker_config) else "127.0.0.1"
+    # Undeterminable → assume Direct: a wildcard bind is the *less*
+    # contained answer here, so the safe default is the opposite of the
+    # workspace resolver's (finding D7, #798).
+    _docker_notebook = _build_has_docker_notebook_worker(worker_config, default_on_error=False)
+    listen_host = "0.0.0.0" if _docker_notebook else "127.0.0.1"
     # Telemetry-suppression policy: LangSmith by default, overridable via
     # CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon forwards these hosts but never
     # records them into a cassette.
