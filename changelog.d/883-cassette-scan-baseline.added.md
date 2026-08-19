@@ -14,11 +14,12 @@
   accepting `set-cookie` for a file accepts any `set-cookie` in it — a limit
   documented in `clm info commands` rather than implied away, and one the audit
   could not avoid in any case, since it only ever sees the header name.
-  Entries matching nothing are **stale**, split by cause because the two mean
-  opposite things: *cleared* (the file was scanned and the finding is gone —
-  that deck was re-recorded, which is exactly what the audit asks for) never
-  fails, while *missing* (the file was not scanned at all — a sparse checkout,
-  content that did not materialize, moved decks, or the wrong scan root) does.
+  Entries matching nothing are **stale**, split by cause because the reasons
+  mean different things: *cleared* (scanned and parsed, finding gone — that
+  deck was re-recorded, which is exactly what the audit asks for) never fails;
+  *unreadable* (the file is there but will not parse) and *missing* (the file
+  was not scanned at all — a sparse checkout, content that did not
+  materialize, moved decks, or the wrong scan root) both do.
   Entries are relative to the scan root, so without that a gate pointed at the
   wrong tree would find nothing, accept nothing and pass over a repo it never
   looked at. The report is always printed *before* such a refusal, so a run
@@ -26,6 +27,6 @@
   finding. An unreadable cassette is not baselineable and still fails, which
   is why `--write-baseline` exits non-zero when it meets one. `--json` gains
   `accepted_count`, `new_count`, `stale_count`, `stale_cleared_count`,
-  `stale_missing_count` and `stale_entries`; `finding_count` keeps its
-  existing meaning, and every finding now carries an `accepted` field (always
-  `false` without a baseline).
+  `stale_unreadable_count`, `stale_missing_count` and `stale_entries`;
+  `finding_count` keeps its existing meaning, and every finding now carries an
+  `accepted` field (always `false` without a baseline).

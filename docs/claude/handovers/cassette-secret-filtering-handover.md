@@ -306,10 +306,20 @@ own fix. `stale_missing` (file never scanned) is a sparse checkout, moved decks,
 or the wrong root, and fails. Keying on "nothing matched" conflated the two and
 turned a fully-remediated repo red.
 
-Also of note: an early `return` on "no cassettes found" was blamed for (1) in
-an earlier draft of this document. It was not the cause — removing it changes
-nothing, since an empty tree has no findings either way.
-`describes_another_tree` is the whole fix.
+A note on the early `return` in the "no cassettes found" branch, because an
+earlier draft of this document got it backwards and that is the kind of error
+that causes the next one. It was **not** the cause of (1) — the round-0 code
+had no refusal to skip, so removing it alone changed nothing. But with
+`describes_another_tree` in place it is **load-bearing**: restoring it makes a
+baselined run over an empty tree exit 0 again, in text mode only. Measured:
+
+| scenario | as shipped | with the `return` restored |
+|---|---|---|
+| empty tree, no baseline | 0 | 0 |
+| **empty tree, baseline with entries** | **1** | **0** |
+| same, `--json` | 1 | 1 |
+
+So: not the historical cause, load-bearing now. Both halves matter.
 
 The hole this does **not** close is a **partially** symlinked tree —
 `iter_cassette_paths` does not follow directory symlinks, so those cassettes are

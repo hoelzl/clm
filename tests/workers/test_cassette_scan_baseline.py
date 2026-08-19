@@ -1039,7 +1039,166 @@ class TestTheGateCannotGoGreenOverTheWrongTree:
             f["key"] for c in payload["cassettes"] for f in c["findings"] if not f["accepted"]
         ] == ["authorization"]
         # And the refusal must not send them off to launder it.
-        assert "clear those before regenerating" in result.output
+        assert "regenerating accepts whatever is there" in result.output
+
+
+class TestTheTextReport:
+    """What the operator actually sees — asserted through a real process.
+
+    The rest of this file works through ``CliRunner``, which cannot see the
+    Rich console (it binds to the real stderr at import time), and several
+    docstrings here concluded from that that the text report was
+    unassertable. It is not: it is unassertable *in-process*. Running the
+    CLI as a subprocess and capturing stderr pins it fine — and without
+    that, deleting the whole baselined report block, or the escaping, or
+    the ordering the round-2 Critical was about, all left the suite green.
+    """
+
+    def _scan(self, root: Path, *args: str) -> tuple[int, str]:
+        import subprocess
+        import sys
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "clm", "cassette", "scan", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env={**os.environ, "COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"},
+        )
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def test_a_new_finding_is_printed_before_the_refusal(self, tmp_path: Path) -> None:
+        """The round-2 Critical, in the mode its narrative is about.
+
+        It was pinned only through ``--json``. The failure it describes —
+        "the operator never saw the secret" — is about the *text* report,
+        which nothing asserted, so a text-mode-only regression would have
+        slipped straight back in.
+        """
+        old = _cookie_deck(tmp_path, "old/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._scan(tmp_path, "--write-baseline", str(baseline))
+        old.unlink()
+        _write(
+            tmp_path,
+            "new/leak.http-cassette.yaml",
+            [_interaction(request_headers={"authorization": "Bearer LEAK"})],
+        )
+
+        code, output = self._scan(tmp_path, "--baseline", str(baseline))
+        assert code != 0
+        assert "authorization" in output
+        assert "Error" in output
+        assert output.index("authorization") < output.index("Error"), output
+
+    def test_cleared_and_missing_entries_are_reported_differently(self, tmp_path: Path) -> None:
+        """Deleting either block left the suite green."""
+        _cookie_deck(tmp_path, "kept/deck.http-cassette.yaml")
+        cleared = _cookie_deck(tmp_path, "cleared/deck.http-cassette.yaml")
+        gone = _cookie_deck(tmp_path, "gone/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._scan(tmp_path, "--write-baseline", str(baseline))
+
+        cleared.write_text(
+            yaml.safe_dump({"interactions": [_interaction()], "version": 1}, sort_keys=True),
+            encoding="utf-8",
+        )
+        gone.unlink()
+
+        code, output = self._scan(tmp_path, "--baseline", str(baseline))
+        assert code != 0
+        assert "those decks were re-recorded" in output
+        assert "not scanned at all" in output
+        # The two must not be conflated: the cleared deck is cleanup, the
+        # deleted one is not.
+        assert "cleared/deck.http-cassette.yaml" in output
+        assert "gone/deck.http-cassette.yaml" in output
+
+    def test_an_accepted_finding_is_marked_as_such(self, tmp_path: Path) -> None:
+        """Otherwise the report lists it indistinguishably from a new one."""
+        _cookie_deck(tmp_path, "m0/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._scan(tmp_path, "--write-baseline", str(baseline))
+
+        code, output = self._scan(tmp_path, "--baseline", str(baseline))
+        assert code == 0
+        assert "(accepted)" in output, output
+
+    def test_the_root_name_warning_reaches_the_console(self, tmp_path: Path) -> None:
+        """The pure helper is tested; that the CLI *prints* it was not.
+
+        Suppressing the print left the whole suite green, and this is the
+        one line that tells an operator their baseline belongs to a
+        different tree.
+        """
+        source = tmp_path / "writtenroot"
+        _cookie_deck(source, "deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._scan(source, "--write-baseline", str(baseline))
+
+        renamed = tmp_path / "otherroot"
+        _cookie_deck(renamed, "deck.http-cassette.yaml")
+        code, output = self._scan(renamed, "--baseline", str(baseline))
+        assert code == 0
+        assert "writtenroot" in output and "otherroot" in output, output
+
+    def test_an_unreadable_cassette_is_not_called_re_recorded(self, tmp_path: Path) -> None:
+        """The report used to contradict itself in consecutive lines.
+
+        It said the file could not be read, then listed its baseline entry
+        as "cleared — that deck was re-recorded". And `troubleshooting.md`
+        files "cleared" under things that are *not* a problem, so the doc
+        vouched for a corrupt cassette. The bracketed directory name keeps
+        the skipped-file line honest too — that line prints a path.
+        """
+        deck = _cookie_deck(tmp_path, "m0[raw]/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._scan(tmp_path, "--write-baseline", str(baseline))
+        deck.write_text("a: b: c", encoding="utf-8")
+
+        code, output = self._scan(tmp_path, "--baseline", str(baseline))
+        assert code != 0
+        assert "could not be read" in output
+        assert "re-recorded" not in output
+        # The *skipped-file* line specifically — asserting the bracket
+        # anywhere in the output was satisfied by the stale-entry list
+        # below it, so dropping the escaping here went unnoticed.
+        skipped_lines = [line for line in output.splitlines() if "skipped (" in line]
+        assert skipped_lines, output
+        assert any("m0[raw]" in line for line in skipped_lines), skipped_lines
+
+    def test_a_bracketed_path_survives_the_report(self, tmp_path: Path) -> None:
+        """``PythonCourses[old]`` is a legal directory name.
+
+        Rich ate the bracketed part, so the report named a path that does
+        not exist — and an unbalanced closing tag raised ``MarkupError``
+        straight out of the CLI. The **stale-entry list** is exactly where
+        such a path gets printed, so the bracket goes in a path *inside* the
+        root as well as on the root itself.
+        """
+        root = tmp_path / "PythonCourses[old]"
+        deck = _cookie_deck(root, "m0[v2]/deck.http-cassette.yaml")
+        baseline = tmp_path / "baseline.json"
+        self._scan(root, "--write-baseline", str(baseline))
+        deck.unlink()
+
+        code, output = self._scan(root, "--baseline", str(baseline))
+        assert code != 0
+        assert "PythonCourses[old]" in output, output
+        assert "m0[v2]/deck.http-cassette.yaml" in output, output
+
+    def test_an_empty_tree_names_a_bracketed_root_correctly(self, tmp_path: Path) -> None:
+        """The same bug in the empty-tree branch — the round-1 scenario.
+
+        An operator asking "why did nothing get scanned?" was shown a path
+        with the brackets silently eaten, i.e. a directory that does not
+        exist.
+        """
+        root = tmp_path / "dist[v2]"
+        root.mkdir()
+        code, output = self._scan(root)
+        assert code == 0
+        assert "dist[v2]" in output, output
 
 
 class TestTheRootNameWarning:

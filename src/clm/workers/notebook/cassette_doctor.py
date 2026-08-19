@@ -838,16 +838,23 @@ class BaselineOutcome:
     Attributes:
         accepted: Findings a baseline entry blessed. Reported, not fatal.
         new: Everything else. These decide the exit code.
-        stale: Baseline entries nothing matched this run, split below.
-        stale_cleared: Stale entries whose **file was scanned** and simply no
-            longer has that finding — a deck that was re-recorded, i.e.
-            somebody doing exactly what the audit asks for. Never fatal;
-            failing here would make the gate punish the fix.
+        stale: Baseline entries nothing matched this run, split three ways
+            below because the reasons mean different things.
+        stale_cleared: Stale entries whose **file was scanned and parsed**
+            and simply no longer has that finding — a deck that was
+            re-recorded, i.e. somebody doing exactly what the audit asks
+            for. Never fatal; failing here would make the gate punish the
+            fix.
+        stale_unreadable: Stale entries whose file is *there* but could not
+            be parsed. It matched nothing only because nothing could be read
+            out of it, so calling it "re-recorded" is a lie the report used
+            to tell — in the same breath as reporting the file unreadable.
+            Already fatal by way of ``unreadable``.
         stale_missing: Stale entries whose **file was not scanned at all**.
             A different thing entirely, and the one worth stopping for: a
             sparse checkout, content that did not materialise, decks that
-            moved, or the wrong scan root. Telling these two apart is what
-            lets the gate be strict about coverage without being wrong about
+            moved, or the wrong scan root. Telling these apart is what lets
+            the gate be strict about coverage without being wrong about
             remediation.
         unreadable: Cassettes that could not be parsed. Not baselineable and
             still fatal: a file the audit cannot read is not one it can
@@ -860,15 +867,17 @@ class BaselineOutcome:
     accepted: list[SecretFinding] = field(factory=list)
     new: list[SecretFinding] = field(factory=list)
     stale_cleared: list[BaselineEntry] = field(factory=list)
+    stale_unreadable: list[BaselineEntry] = field(factory=list)
     stale_missing: list[BaselineEntry] = field(factory=list)
     unreadable: int = 0
     entry_count: int = 0
 
     @property
     def stale(self) -> list[BaselineEntry]:
-        """Every entry nothing matched, cleared and missing together."""
+        """Every entry nothing matched, whatever the reason."""
         return sorted(
-            self.stale_cleared + self.stale_missing, key=lambda e: (e.path, e.location, e.key)
+            self.stale_cleared + self.stale_unreadable + self.stale_missing,
+            key=lambda e: (e.path, e.location, e.key),
         )
 
     @property
@@ -888,6 +897,13 @@ class BaselineOutcome:
         and that is the audit's request being carried out, so it must stay
         green. The two are only distinguishable because the files are still
         there in one case and not in the other.
+
+        One case this consciously does *not* catch, narrower than the
+        "nothing matched" rule it replaced: a different tree whose cassettes
+        sit at exactly the same relative paths and happen to be clean. That
+        run scanned real files and found nothing in them, so it is not
+        vouching for anything unexamined — and the ``root_name`` warning
+        still fires. Accepted rather than overlooked.
         """
         return bool(self.stale_missing)
 
@@ -1065,16 +1081,21 @@ def apply_baseline(
     """
     outcome = BaselineOutcome(entry_count=len(entries))
     matched: set[BaselineEntry] = set()
-    # Every path this run looked at, whether or not it had findings — an
-    # unreadable cassette counts as *seen* here, since it is a file that
-    # exists and fails the gate on its own account.
+    # Every path this run looked at, whether or not it had findings. An
+    # unreadable cassette counts as *seen*: the file exists, so calling its
+    # entries "not scanned at all" would send somebody hunting for a wrong
+    # scan root when the real problem is a corrupt file. It is tracked
+    # separately below so the report does not then call it re-recorded
+    # either.
     scanned: set[str] = set()
+    unreadable_paths: set[str] = set()
 
     for report in reports:
         relative = _relative_posix(report.path, root)
         scanned.add(relative)
         if report.error is not None:
             outcome.unreadable += 1
+            unreadable_paths.add(relative)
             continue
         for finding in report.findings:
             entry = _entry_for(relative, finding)
@@ -1087,7 +1108,9 @@ def apply_baseline(
                 outcome.new.append(finding)
 
     for entry in sorted(entries - matched, key=lambda e: (e.path, e.location, e.key)):
-        if entry.path in scanned:
+        if entry.path in unreadable_paths:
+            outcome.stale_unreadable.append(entry)
+        elif entry.path in scanned:
             outcome.stale_cleared.append(entry)
         else:
             outcome.stale_missing.append(entry)

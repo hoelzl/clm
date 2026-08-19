@@ -785,6 +785,9 @@ Two things that look like problems and are not:
 - **"N baseline entries are cleared."** Those decks were re-recorded and their
   findings are gone. Never fatal — the gate must not punish the fix it exists
   to ask for. Regenerate the file with `--write-baseline` at your convenience.
+  (An entry in a cassette that could not be *parsed* is reported separately,
+  as "in cassettes that could not be read", and does fail — it matched nothing
+  only because nothing could be read out of it.)
 - **A new finding in a file that is already in the baseline.** Entries match on
   `(path, location, key)`, so a new finding *kind* in a baselined file is
   correctly reported. The flip side is that a second `set-cookie` in that same

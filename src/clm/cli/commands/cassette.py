@@ -67,7 +67,9 @@ def _render_text_report(reports: list[CassetteReport], *, fix: bool) -> None:
     for report in reports:
         if report.error is not None:
             skipped += 1
-            console.print(f"[yellow]! {report.path}[/yellow]: skipped ({report.error})")
+            console.print(
+                f"[yellow]! {escape(str(report.path))}[/yellow]: skipped ({escape(report.error)})"
+            )
             continue
         inspected += 1
         if not report.has_orphans:
@@ -77,16 +79,21 @@ def _render_text_report(reports: list[CassetteReport], *, fix: bool) -> None:
             total_fixed += 1
         status = " [green](repaired)[/green]" if report.fixed else ""
         console.print(
-            f"[bold]{report.path}[/bold]: "
+            f"[bold]{escape(str(report.path))}[/bold]: "
             f"{len(report.orphans)} chain-orphan(s) "
             f"of {report.interaction_count} interaction(s){status}"
         )
         for orphan in report.orphans:
+            # The excerpt is *recorded LLM output*, so it routinely contains
+            # square brackets — `[/INST]` is Mistral's and Llama's instruct
+            # delimiter, and an ordinary markdown link is `[text](url)`.
+            # Unescaped, the first raised ``MarkupError`` as a traceback out
+            # of the CLI and the second silently ate the link text.
             console.print(
-                f"    [{orphan.index}] {orphan.method} {orphan.uri}\n"
-                f"        request-body: {orphan.request_fingerprint}\n"
+                f"    [[{orphan.index}]] {escape(orphan.method)} {escape(orphan.uri)}\n"
+                f"        request-body: {escape(orphan.request_fingerprint)}\n"
                 f"        response ({orphan.text_len} chars): "
-                f"{orphan.text_excerpt!r}"
+                f"{escape(repr(orphan.text_excerpt))}"
             )
 
     console.print()
@@ -179,7 +186,7 @@ def doctor(spec_file: Path | None, fix: bool, min_text_len: int, as_json: bool) 
         return
 
     if not paths:
-        cli_console.print(f"No cassettes found under {root}.")
+        cli_console.print(f"No cassettes found under {escape(str(root))}.")
         return
 
     _render_text_report(reports, fix=fix)
@@ -285,6 +292,17 @@ def _render_secret_report(
                 "— those decks were re-recorded. Regenerate with --write-baseline:"
             )
             for entry in outcome.stale_cleared:
+                console.print(f"    {escape(entry.path)}: {escape(entry.location)}")
+        if outcome.stale_unreadable:
+            # These matched nothing only because nothing could be read out
+            # of the file. Reporting them as "re-recorded" — in the same
+            # report that calls the file unreadable — was the report
+            # contradicting itself.
+            console.print(
+                f"[yellow]{len(outcome.stale_unreadable)} baseline entr(y/ies) are in "
+                f"cassettes that could not be read[/yellow] — not cleanup; fix the file:"
+            )
+            for entry in outcome.stale_unreadable:
                 console.print(f"    {escape(entry.path)}: {escape(entry.location)}")
         if outcome.stale_missing:
             # A different thing entirely, and it used to be reported with
@@ -406,7 +424,7 @@ def scan(
         else:
             cli_console.print(
                 f"Wrote {entry_count} baseline entr(y/ies) for {finding_count} finding(s) "
-                f"to {write_baseline_path}."
+                f"to {escape(str(write_baseline_path))}."
             )
         # An unreadable cassette is not baselineable, so a later
         # ``--baseline`` run would still fail on it. Exiting zero here
@@ -471,14 +489,24 @@ def scan(
             # saw. A CI consumer wanting to be strict about coverage keys on
             # the second.
             payload["stale_cleared_count"] = len(outcome.stale_cleared)
+            payload["stale_unreadable_count"] = len(outcome.stale_unreadable)
             payload["stale_missing_count"] = len(outcome.stale_missing)
             payload["stale_entries"] = [e.to_dict() for e in outcome.stale]
         click.echo(json.dumps(payload, indent=2))
     elif not paths:
-        # No ``return`` here: an empty tree is a legitimate zero-finding
-        # result for a bare scan, but it must still fall through to the
-        # exit-code check rather than short-circuiting past it.
-        cli_console.print(f"No cassettes found under {root}.")
+        # **No ``return`` here, and it is load-bearing**: an empty tree is a
+        # legitimate zero-finding result for a bare scan, but a *baselined*
+        # run over one is the wrong-scan-root case, and returning here would
+        # skip the refusal below and exit 0 — in text mode only, which is
+        # how it hid. Not the exit-code check: that is a no-op for an empty
+        # tree either way.
+        cli_console.print(f"No cassettes found under {escape(str(root))}.")
+        if outcome is not None:
+            # Which entries went missing, not just how many. This is the
+            # run that is about to be refused for a wrong scan root, so the
+            # list of paths it expected is the most useful thing on screen —
+            # and a bare "No cassettes found" used to be all of it.
+            _render_secret_report(reports, outcome)
     else:
         _render_secret_report(reports, outcome)
 
@@ -493,7 +521,13 @@ def scan(
             "Either this is not the tree the baseline was written for — entries are keyed on "
             "paths *relative* to the scan root — or those decks moved or were deleted."
             + (
-                " Note the report above lists new findings too: clear those before regenerating."
+                # Deliberately does not say "regenerating is right", even
+                # though for a renamed deck it usually is: the whole point
+                # of printing the report first is that regenerating accepts
+                # whatever is there, and one of these runs will one day have
+                # a real secret in it.
+                " Read the new findings listed above first — some may be the same decks under "
+                "new paths, but regenerating accepts whatever is there, secrets included."
                 if outcome.new
                 else " Regenerate with --write-baseline once you are sure which."
             )

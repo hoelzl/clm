@@ -3248,7 +3248,8 @@ separately because they mean opposite things:
 
 | Stale kind | Meaning | Effect |
 |---|---|---|
-| **cleared** — the file was scanned, the finding is gone | that deck was re-recorded, i.e. exactly what the audit asks for | never fails; regenerate at your convenience |
+| **cleared** — the file was scanned and parsed, the finding is gone | that deck was re-recorded, i.e. exactly what the audit asks for | never fails; regenerate at your convenience |
+| **unreadable** — the file is there but could not be parsed | it matched nothing only because nothing could be read out of it | fails, by way of the unreadable rule below |
 | **missing** — the file was not scanned at all | a sparse checkout, content that did not materialize, decks that moved or were deleted, or the wrong scan root | **fails the run** |
 
 That split is what lets the gate be strict about coverage without punishing
@@ -3270,12 +3271,15 @@ two options are mutually exclusive. Note the walk does **not** follow symlinked
 directories (issue #886), so cassettes behind one are not scanned.
 
 With `--json`, a baselined run adds `accepted_count`, `new_count`,
-`stale_count`, `stale_cleared_count`, `stale_missing_count` and
-`stale_entries`. `finding_count` keeps meaning *all* findings, so a consumer
-that already reads it is unaffected; the exit code keys on `new_count` and on
-`stale_missing_count`. Every finding carries `accepted` in **all** runs — it is
-simply always `false` without a baseline. `--write-baseline --json` reports
-`entry_count` and the paths instead of a finding report.
+`stale_count`, `stale_cleared_count`, `stale_unreadable_count`,
+`stale_missing_count` and `stale_entries`. `finding_count` keeps meaning *all*
+findings, so a consumer that already reads it is unaffected. The exit code is
+non-zero when **any** of `new_count`, `stale_missing_count` or
+`unreadable_count` is non-zero — all three, since a gate keyed on the first two
+would pass a repo whose cassettes will not parse. Every finding carries
+`accepted` in **all** runs — it is simply always `false` without a baseline.
+`--write-baseline --json` reports `entry_count` and the paths instead of a
+finding report.
 
 Exits non-zero when anything is found **or when a cassette could not be read
 at all** (an unreadable file is not evidence of cleanliness), so it can gate a
