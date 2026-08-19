@@ -395,6 +395,45 @@ formatting and locale-dependent ordering.
 Corollary for the code: guard the parse and the traversal **together**. Splitting
 that guard is what made the behaviour platform-dependent in the first place.
 
+### "Unassertable" usually means "unassertable in-process"
+
+`cli_console` is a Rich `Console(file=sys.stderr)` built at **module import
+time**, so neither `capsys` nor `CliRunner` can see what it writes — both
+replace `sys.stderr` after that binding exists. That is a property of the test
+vehicle, not of the code, and treating it as the latter is expensive.
+
+Two docstrings in `clm cassette scan` concluded from it that the text report
+could not be tested, so it was only ever asserted through `--json`. **Three
+defects lived in that gap** (PR #884): the report contradicting itself on an
+unreadable cassette; a directory named `PythonCourses[old]` printing as
+`PythonCourses`, because Rich ate the brackets; and the previous round's
+Critical being pinned only in JSON mode — that is, not in the mode whose whole
+failure story was *"the operator never saw the secret"*.
+
+Run the CLI as a subprocess and read `stdout + stderr`:
+
+```python
+proc = subprocess.run(
+    [sys.executable, "-m", "clm", "cassette", "scan", *args],
+    cwd=str(root), capture_output=True, text=True,
+    env={**os.environ, "COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"},
+)
+```
+
+`NO_COLOR` / `TERM=dumb` / `COLUMNS` stop Rich colouring or wrapping the strings
+you match on. One such class killed six mutants nothing else caught, including
+output *ordering* (`output.index(finding) < output.index("Error")`).
+
+Better still, extract the decision into a pure helper and test that — see
+`secret_report_summary` and `root_name_warning` in `cli/commands/cassette.py` —
+then keep one subprocess test proving the helper's result reaches the screen.
+Pure helpers are cheap; the subprocess test is what proves it is wired.
+
+Related, for the code rather than the tests: everything interpolated into a Rich
+string needs `rich.markup.escape`. `[/INST]` — Mistral's and Llama's instruct
+delimiter, i.e. ordinary recorded LLM traffic — raised `MarkupError` as a
+traceback out of `clm cassette doctor`.
+
 ## Troubleshooting
 
 ### "I don't see any logs during test execution"
