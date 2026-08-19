@@ -78,6 +78,24 @@ Key options:
 | `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell/notebook error **or a dropped companion voiceover** (a `for_slide` with no matching `slide_id`, since CLM {version}). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
 | `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
 | `--provenance-manifest / --no-provenance-manifest` | Write a `.clm-manifest.json` provenance index into each output root, mapping every output file to its source commit and owning section/topic (issue #208 — needed by the per-topic solution-release workflow). **On by default since CLM {version}**; `clm git` excludes it from every distributed repo. Pass `--no-provenance-manifest` to skip it. Always suppressed under `--snapshot` / `--verify-against` (it embeds a timestamp + commit, so it must not enter a byte-reproducibility baseline). |
+| `--log-level [DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL]` | What gets *captured*, for the host and (via the effective level) the workers. Defaults to `INFO`; overrides `[logging] log_level` / `CLM_LOGGING__LOG_LEVEL`. This is **not** the console threshold — see "Where the log goes" below. |
+| `--verbose-logging` | Echo log messages to the console at `--log-level`. Off by default: the console shows warnings and errors only. |
+
+**Where the log goes (CLM {version}).** The console shows **warnings and
+errors only**; everything at `--log-level` and below goes to a rotating log
+file (`clm.log`, 10 MB × 3 backups) in the platform log directory —
+`%LOCALAPPDATA%\clm\Logs` on Windows, `~/Library/Logs/clm` on macOS,
+`~/.local/state/clm/log` on Linux — or under `CLM_LOG_DIR` when that is set.
+Pass `--verbose-logging` to echo everything to the console as well.
+
+A stricter `--log-level` still applies to the console: `--log-level=ERROR`
+without `--verbose-logging` shows errors only, not warnings. A *more
+permissive* one does not — that is what `--verbose-logging` is for.
+
+Before this, `clm build` printed every third-party `DEBUG` record on every
+run (`docker.utils.config`, `urllib3.connectionpool`), and `--log-level`
+could not suppress them: it sets the level of the `clm` logger, and those
+records are not filtered there.
 
 **Image-override caveats.** Since CLM {version} the build caches key on the
 effective worker image for all three worker types (#744): switching images

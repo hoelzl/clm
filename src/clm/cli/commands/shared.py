@@ -13,6 +13,7 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
+from clm.cli._logging_bootstrap import retire_bootstrap_console_handlers
 from clm.infrastructure.logging.log_paths import get_main_log_path as get_log_file_path
 from clm.infrastructure.logging.resilient_handler import ResilientRotatingFileHandler
 
@@ -67,24 +68,53 @@ def _retire_previously_installed_handlers(root_logger: logging.Logger) -> None:
     _installed_handlers.clear()
 
 
+def _console_handler_level(log_level: int, console_logging: bool) -> int:
+    """Threshold for the console sink.
+
+    ``--verbose-logging`` has always documented itself as "show log messages in
+    console (by default logs go to file only)", and this is the line that makes
+    that true. Without it the console showed everything the *logger* allowed,
+    which after the root logger is opened up to ``DEBUG`` for the file handler
+    means every third-party ``DEBUG`` record — ``docker.utils.config`` and
+    ``urllib3.connectionpool`` on any Docker-mode build.
+
+    A stricter ``--log-level`` still wins: asking for ``ERROR`` should not be
+    overridden into showing warnings. Only the *permissive* direction is
+    clamped, and only when console logging was not asked for.
+    """
+    if console_logging:
+        return log_level
+    return max(log_level, logging.WARNING)
+
+
 def setup_logging(log_level_name: str, console_logging: bool = False):
     """Configure logging for CLM.
 
-    By default, logs go to a file in the system-appropriate log directory.
-    Console logging can be enabled for debugging.
+    By default, logs go to a rotating file in the system-appropriate log
+    directory (``CLM_LOG_DIR`` overrides it) and the console shows warnings and
+    errors only. ``console_logging`` echoes everything at *log_level* to the
+    console as well.
 
-    Only handlers installed by a previous ``setup_logging`` call are retired;
-    handlers owned by an embedding application (or by pytest) are left in place.
+    Only handlers installed by a previous ``setup_logging`` call — and the
+    bootstrap console handler from :mod:`clm.cli._logging_bootstrap`, which
+    this supersedes — are retired; handlers owned by an embedding application
+    (or by pytest) are left in place.
 
     Args:
         log_level_name: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        console_logging: If True, also log to console via Rich
+        console_logging: If True, echo log messages at *log_level* to the console
     """
     log_level = logging.getLevelName(log_level_name.upper())
     log_file = get_log_file_path()
 
     root_logger = logging.getLogger()
     _retire_previously_installed_handlers(root_logger)
+    # This function is the authority on console output from here on, so the
+    # pre-command handler goes. Leaving it attached is what made the console
+    # unquietable: it carries no level of its own, so it printed every record
+    # the root logger passed — and the root logger is opened to DEBUG two
+    # dozen lines below so the *file* can capture everything.
+    retire_bootstrap_console_handlers(root_logger)
 
     # File handler with rotation (10 MB max, keep 3 backups).
     # ResilientRotatingFileHandler tolerates the Windows "file in use"
@@ -105,16 +135,17 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
     root_logger.addHandler(file_handler)
     _installed_handlers.append(file_handler)
 
-    # Console handler (only if requested)
-    if console_logging:
-        console_handler = RichHandler(
-            console=cli_console,
-            rich_tracebacks=True,
-            show_path=False,
-        )
-        console_handler.setLevel(log_level)
-        root_logger.addHandler(console_handler)
-        _installed_handlers.append(console_handler)
+    # Console handler, always installed: without one, a build that hits a
+    # real problem would say nothing at all on screen. What changes with
+    # ``console_logging`` is its *threshold*, not its existence.
+    console_handler = RichHandler(
+        console=cli_console,
+        rich_tracebacks=True,
+        show_path=False,
+    )
+    console_handler.setLevel(_console_handler_level(log_level, console_logging))
+    root_logger.addHandler(console_handler)
+    _installed_handlers.append(console_handler)
 
     # Set levels
     root_logger.setLevel(logging.DEBUG)  # Let handlers filter

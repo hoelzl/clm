@@ -23,19 +23,18 @@ warnings.filterwarnings(
     module="requests",
 )
 
-import logging
 from pathlib import Path
 
 import click
 
 from clm.__version__ import __version__
 from clm.cli._lazy_group import LazyGroup
+from clm.cli._logging_bootstrap import install_bootstrap_console_handler
 
-# Basic logging setup (will be reconfigured by commands as needed)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+# Console logging until a command configures its own (``setup_logging``).
+# Warnings and errors only — see ``_logging_bootstrap`` for why this is not
+# ``logging.basicConfig(level=INFO)`` any more.
+install_bootstrap_console_handler()
 
 _COMMANDS = "clm.cli.commands"
 
