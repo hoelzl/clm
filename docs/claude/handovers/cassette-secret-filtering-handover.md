@@ -1,12 +1,20 @@
 # Cassette secret filtering — handover
 
-**Created**: 2026-08-18 | **Status**: #875, #878, #877 and #874 CLOSED;
-**#883 in flight**, **#881 open** | **Next**: land #883, then #881 is the only
-thing left in this arc
+**Created**: 2026-08-18 | **Updated**: 2026-08-19 | **Status**: #875, #878,
+#877, #874 and #883 all CLOSED; **#881 and #886 open** | **Next**: either of
+those two — they are independent, and nothing else in this arc is outstanding
 
 Companion to `adversarial-review-remediation-handover.md` (Phase 4 item 6,
 which is where this arc started as finding S9). That document is the plan;
 this one is the working state of the cassette follow-ups.
+
+**What is left, in one place:**
+
+| Issue | One line | Where the detail is |
+|---|---|---|
+| **#881** | The recorder does not percent-decode a form parameter *name*, so `api%5Fkey=SECRET` records verbatim. A recorder-side leak, not a parity bug — the audit correctly stays quiet. Fixing it moves the form-encoded replay match key, so it needs a migration note and both sides changed in one PR. | §4, "Three things it left behind" |
+| **#886** | `iter_cassette_paths` does not follow symlinked directories, so cassettes behind one are never scanned. Pre-existing; it matters now because #883 turned this command into a CI gate. Needs a version-aware walk (`recurse_symlinks` is 3.13+, CLM supports 3.12) with loop protection. | §4, end of the #883 block |
+| *(course repo)* | Wire `clm cassette scan --baseline` into PythonCourses' CI. Not a clm change; the last unticked item from #874. | §4, #883 |
 
 ---
 
@@ -246,10 +254,14 @@ The issue's last item — wire the scan into a repo check — was blocked on
 never be green. Split out as **#883** (a baseline of accepted findings) and
 implemented.
 
-### #883 — accepted-findings baseline (**in flight**)
+### #883 — accepted-findings baseline (**CLOSED**, PR #884)
 
 `clm cassette scan --write-baseline PATH` / `--baseline PATH`. Without them
 nothing changes; a bare scan still fails on any finding.
+
+Nothing wires this into PythonCourses' CI yet — that is a course-repo change,
+and it is the one remaining action item from #874's checklist. The recipe is in
+`clm info commands` and `docs/user-guide/troubleshooting.md`.
 
 Dogfooded on PythonCourses: 294 findings → **95 baseline entries** (one per
 file — the key has no index, so a deck's repeated cookie is one entry), gate
@@ -272,15 +284,38 @@ credential. Inherent — the audit only ever sees the header name — and pinned
 decision rather than a surprise. A new finding *kind* in a baselined file is
 still reported.
 
-Other load-bearing choices: stale entries (a deck that *was* re-recorded) are
-reported, never fatal, or the gate would punish the fix; an unreadable cassette
-is not baselineable and still fails, which is why `--write-baseline` exits
-non-zero after writing when it meets one; a malformed baseline raises rather
-than degrading to accept-nothing (unsatisfiable) or accept-everything (a false
-all-clear); keys are stored lowercased and paths POSIX **on both the read and
-the write side**, because the repo holds both `set-cookie` and `Set-Cookie`, a
-Windows-written baseline has to match on Linux CI, and normalising one side
-only makes the round trip asymmetric.
+Other load-bearing choices: a stale entry is classified **three** ways, because
+"matched nothing" has three causes that mean different things — *cleared* (file
+scanned and parsed, finding gone: a re-recorded deck, never fatal, or the gate
+punishes the fix), *unreadable* (file there, will not parse: fatal, and calling
+it "re-recorded" was the report contradicting its own skipped-file line), and
+*missing* (file never scanned: fatal, the wrong-root case). A malformed
+baseline raises rather than degrading to accept-nothing (unsatisfiable) or
+accept-everything (a false all-clear). Keys are stored lowercased and paths
+POSIX **on both the read and the write side**, because the repo holds both
+`set-cookie` and `Set-Cookie`, a Windows-written baseline has to match on Linux
+CI, and normalising one side only makes the round trip asymmetric.
+
+Everything interpolated into the Rich console is `escape()`d — paths, header
+names, URIs and orphan excerpts all come from outside. Not cosmetic: a
+directory named `PythonCourses[old]` printed as `PythonCourses`, i.e. a path
+that does not exist, and a `doctor` excerpt containing `[/INST]` — Mistral's
+and Llama's instruct delimiter, ordinary recorded LLM traffic — raised
+`MarkupError` as a traceback out of the CLI.
+
+**Three review rounds, a Critical in each of the first two, and the second was
+caused by the fix for the first.** Round 3 came back clean of Criticals. If you
+change this code path, that history is the most useful thing on this page: the
+failure mode here is that every wrong version *looked* right and passed its own
+new tests. Two review rounds is not paranoia on this file.
+
+The single most productive fix was a testing one. Three defects existed because
+the text report was asserted only through `--json`, on the reasoning — written
+into two docstrings — that the Rich console is unassertable since it binds to
+the real stderr and `CliRunner` cannot see it. It is unassertable *in-process*.
+`TestTheTextReport` runs the CLI as a **subprocess** and pins it fine, and that
+one class killed six mutants nothing else caught. Do not accept "this output
+cannot be tested" here.
 
 **Two review Criticals, and they are the same shape — read this before
 touching the gate.** Both were the gate going green, or looking green, over
