@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 
@@ -421,6 +422,10 @@ class SecretFinding:
     location: str
     key: str
     uri: str = ""
+    #: Set by :func:`apply_baseline` when a baseline blesses this finding.
+    #: Accepted findings are still *reported* — they are only excused from
+    #: the exit code, so a repo can see what it has accepted.
+    accepted: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -428,6 +433,7 @@ class SecretFinding:
             "location": self.location,
             "key": self.key,
             "uri": self.uri,
+            "accepted": self.accepted,
         }
 
 
@@ -763,3 +769,349 @@ def scan_cassette_secrets(path: Path) -> SecretScanReport:
 def scan_cassettes_for_secrets(paths: Iterable[Path]) -> list[SecretScanReport]:
     """Audit every cassette in ``paths`` (read-only)."""
     return [scan_cassette_secrets(path) for path in paths]
+
+
+# ---------------------------------------------------------------------------
+# Accepted-findings baseline (issue #883)
+# ---------------------------------------------------------------------------
+# The audit exits non-zero on *any* finding, which is right for "should this
+# deck be re-recorded?" and useless as a repo gate: PythonCourses holds 294
+# findings that are all non-credential response cookies and none worth
+# re-recording live teaching material to clear (#874). A check that can never
+# go green gets switched off — the same failure this whole arc is about, one
+# level up. A baseline blesses what is there today so that anything *new*
+# fails.
+
+#: Schema version of the baseline document. Bump on any change to the entry
+#: shape, and make :func:`load_baseline` reject the versions it cannot read
+#: rather than guess at them.
+BASELINE_VERSION = 1
+
+
+class BaselineError(ValueError):
+    """A baseline file is missing, unreadable, or not in a shape we trust.
+
+    Raised rather than degraded, always. Treating a broken baseline as
+    *empty* would fail the gate on everything (unsatisfiable); treating it as
+    *match-all* would vouch for the repo (a false all-clear). Both are worse
+    than stopping.
+    """
+
+
+@define(frozen=True)
+class BaselineEntry:
+    """One accepted finding: a file, a location and a key name.
+
+    The two things deliberately **not** in the key are what make this
+    workable:
+
+    * **No interaction index.** Re-recording a deck shifts every index, so an
+      index-keyed baseline would report all of that deck's accepted findings
+      as new the first time somebody re-records — the gate would punish the
+      fix it exists to ask for.
+    * **No value.** A :class:`SecretFinding` never carries one (the report
+      must not print secrets), and the values this baseline mostly covers —
+      Cloudflare's ``__cf_bm`` — rotate on every recording, so a value-keyed
+      baseline would churn on every re-record.
+
+    The cost, which the docs must state rather than imply away: the key is
+    **name-level**. Accepting ``deck.yaml / response header / set-cookie``
+    accepts *any* ``set-cookie`` in that file, including one that is a real
+    session credential. The audit cannot tell those apart in any case — it
+    only ever sees the header name — so what a baseline buys is narrowing
+    "any cookie anywhere" to "a cookie in this file", not a value-level
+    guarantee.
+    """
+
+    path: str
+    location: str
+    key: str
+
+    def to_dict(self) -> dict:
+        return {"path": self.path, "location": self.location, "key": self.key}
+
+
+@define
+class BaselineOutcome:
+    """How a scan's findings landed against a baseline.
+
+    Attributes:
+        accepted: Findings a baseline entry blessed. Reported, not fatal.
+        new: Everything else. These decide the exit code.
+        stale: Baseline entries nothing matched this run, split three ways
+            below because the reasons mean different things.
+        stale_cleared: Stale entries whose **file was scanned and parsed**
+            and simply no longer has that finding — a deck that was
+            re-recorded, i.e. somebody doing exactly what the audit asks
+            for. Never fatal; failing here would make the gate punish the
+            fix.
+        stale_unreadable: Stale entries whose file is *there* but could not
+            be parsed. It matched nothing only because nothing could be read
+            out of it, so calling it "re-recorded" is a lie the report used
+            to tell — in the same breath as reporting the file unreadable.
+            Already fatal by way of ``unreadable``.
+        stale_missing: Stale entries whose **file was not scanned at all**.
+            A different thing entirely, and the one worth stopping for: a
+            sparse checkout, content that did not materialise, decks that
+            moved, or the wrong scan root. Telling these apart is what lets
+            the gate be strict about coverage without being wrong about
+            remediation.
+        unreadable: Cassettes that could not be parsed. Not baselineable and
+            still fatal: a file the audit cannot read is not one it can
+            vouch for.
+        entry_count: Size of the baseline this ran against, so a caller can
+            tell "nothing matched because the baseline is empty" from
+            "nothing matched because we scanned the wrong tree".
+    """
+
+    accepted: list[SecretFinding] = field(factory=list)
+    new: list[SecretFinding] = field(factory=list)
+    stale_cleared: list[BaselineEntry] = field(factory=list)
+    stale_unreadable: list[BaselineEntry] = field(factory=list)
+    stale_missing: list[BaselineEntry] = field(factory=list)
+    unreadable: int = 0
+    entry_count: int = 0
+
+    @property
+    def stale(self) -> list[BaselineEntry]:
+        """Every entry nothing matched, whatever the reason."""
+        return sorted(
+            self.stale_cleared + self.stale_unreadable + self.stale_missing,
+            key=lambda e: (e.path, e.location, e.key),
+        )
+
+    @property
+    def describes_another_tree(self) -> bool:
+        """True when the baseline names files this scan did not even see.
+
+        The gate's own evidence that it is pointed at the wrong — or an
+        incomplete — tree. A CI job with the wrong working directory, a
+        checkout where the course content did not materialise, a sparse
+        checkout, a renamed content root: each leaves baselined *paths* with
+        no cassette behind them, and without this check each produced a
+        **green** run over a repo nothing looked at. That is the failure this
+        feature exists to prevent, arrived at from the other side.
+
+        Deliberately keyed on **missing files**, not on "nothing matched".
+        A repo that re-recorded every baselined deck also matches nothing —
+        and that is the audit's request being carried out, so it must stay
+        green. The two are only distinguishable because the files are still
+        there in one case and not in the other.
+
+        One case this consciously does *not* catch, narrower than the
+        "nothing matched" rule it replaced: a different tree whose cassettes
+        sit at exactly the same relative paths and happen to be clean. That
+        run scanned real files and found nothing in them, so it is not
+        vouching for anything unexamined — and the ``root_name`` warning
+        still fires. Accepted rather than overlooked.
+        """
+        return bool(self.stale_missing)
+
+
+def _to_posix(text: str) -> str:
+    """Normalise a stored/parsed baseline path to forward slashes.
+
+    Applied on **both** sides. Writing needs it because CLM is developed on
+    Windows and its CI runs on Linux, so a native separator would match
+    locally and miss in the one place the gate is meant to run; reading needs
+    it to accept a hand-edited or older file. Doing it on one side only makes
+    the round trip asymmetric — a POSIX file legitimately named ``a\\b.yaml``
+    would be written verbatim and read back as ``a/b.yaml``, so
+    ``--write-baseline`` followed by ``--baseline`` on an unchanged tree
+    would not be green.
+
+    The cost of normalising both sides is that ``a\\b.yaml`` and ``a/b.yaml``
+    — two distinct files on POSIX, both pathological — collapse to one entry.
+    Consistently, on both sides, which is what keeps the round trip
+    satisfiable.
+    """
+    return text.replace("\\", "/")
+
+
+def _relative_posix(path: Path, root: Path) -> str:
+    """*path* relative to *root*, with forward slashes.
+
+    Raises :class:`BaselineError` when ``os.path.relpath`` cannot express the
+    relation — in practice only across Windows drive letters; a same-drive
+    path outside the root yields ``../…`` and does not raise, and on POSIX
+    the raise is unreachable altogether. Unreachable through the CLI in any
+    case, since paths come from ``root.rglob``.
+
+    It raises rather than falling back to the file's *name* because that
+    fallback would collapse every same-named cassette in the tree into one
+    entry: in a course repo, 95 different ``deck.http-cassette.yaml`` files
+    accepting each other's findings. Dead defensive code should not choose
+    the unsafe degradation.
+    """
+    try:
+        relative = os.path.relpath(path, root)
+    except ValueError as exc:
+        raise BaselineError(f"cassette '{path}' is not under the scan root '{root}'") from exc
+    # ``_to_posix`` does the whole conversion rather than ``Path.as_posix()``
+    # doing most of it: routing through ``Path`` made the normalisation a
+    # no-op on Windows (where a backslash is already a separator), so the
+    # one line that keeps a Windows-written baseline matching on Linux CI
+    # could be deleted with the suite still green.
+    return _to_posix(relative)
+
+
+def _entry_for(report_path: str, finding: SecretFinding) -> BaselineEntry:
+    # The key is lowercased because the audit matches names
+    # case-insensitively and PythonCourses holds both ``set-cookie`` and
+    # ``Set-Cookie``. A case-sensitive baseline would read a casing flip as a
+    # brand-new secret.
+    return BaselineEntry(report_path, finding.location, finding.key.lower())
+
+
+def build_baseline(reports: Iterable[SecretScanReport], root: Path) -> dict:
+    """The baseline document blessing every finding in *reports*.
+
+    Entries are deduplicated (the key has no index, so one cookie on three
+    interactions is one thing to accept) and sorted, so committing the file
+    and regenerating it later produces a readable diff instead of churn.
+
+    An unreadable cassette contributes nothing — you cannot bless what you
+    cannot read — which is why the CLI refuses to exit zero when it writes a
+    baseline for a tree containing one.
+    """
+    entries = {
+        _entry_for(_relative_posix(report.path, root), finding)
+        for report in reports
+        for finding in report.findings
+    }
+    return {
+        "version": BASELINE_VERSION,
+        # A hint, not an identity: entries are keyed on a path *relative* to
+        # the scan root, so applying the file at a different root silently
+        # re-interprets every one of them. Recording the root's name lets a
+        # mismatch be reported instead of guessed at. Only the basename —
+        # an absolute path would differ between a Windows dev box and Linux
+        # CI, which is exactly where this needs to work.
+        "root_name": Path(root).name,
+        "entries": [
+            entry.to_dict() for entry in sorted(entries, key=lambda e: (e.path, e.location, e.key))
+        ],
+    }
+
+
+def baseline_entries_from_document(document: object) -> frozenset[BaselineEntry]:
+    """Validate a parsed baseline document into a set of entries.
+
+    Split from :func:`load_baseline` so an in-memory document (a freshly
+    built one, a test fixture) goes through exactly the same validation as
+    one read from disk.
+    """
+    if not isinstance(document, dict):
+        raise BaselineError("baseline must be a JSON object")
+    version = document.get("version")
+    # ``isinstance(True, int)`` is True and ``1.0 == 1``, so a bare equality
+    # check accepts ``{"version": true}`` and ``{"version": 1.0}``.
+    if isinstance(version, bool) or not isinstance(version, int) or version != BASELINE_VERSION:
+        raise BaselineError(
+            f"unsupported baseline version {version!r} (this clm writes {BASELINE_VERSION}); "
+            "regenerate it with `clm cassette scan --write-baseline`"
+        )
+    raw_entries = document.get("entries")
+    if not isinstance(raw_entries, list):
+        raise BaselineError("baseline 'entries' must be a list")
+
+    entries = set()
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            raise BaselineError(f"baseline entry must be an object, got {type(item).__name__}")
+        try:
+            path, location, key = item["path"], item["location"], item["key"]
+        except KeyError as exc:
+            raise BaselineError(f"baseline entry is missing {exc.args[0]!r}") from exc
+        if not all(isinstance(v, str) for v in (path, location, key)):
+            raise BaselineError("baseline entry fields must be strings")
+        # Normalised the same way the writer normalises, so a hand-edited or
+        # Windows-written file matches and the round trip stays symmetric.
+        entries.add(BaselineEntry(_to_posix(path), location, key.lower()))
+    return frozenset(entries)
+
+
+def baseline_root_name(document: object) -> str | None:
+    """The root name a baseline document was built against, if it records one."""
+    if isinstance(document, dict):
+        name = document.get("root_name")
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def load_baseline_document(path: Path) -> object:
+    """Read and JSON-parse a baseline file. Raises :class:`BaselineError`.
+
+    Bytes go straight to ``json.loads``, which sniffs BOMs and UTF-16/32
+    itself (RFC 8259 §8.1) — the lesson :func:`_json_or_none` learned in
+    #875, where a strict UTF-8 pre-decode threw away every body with a BOM.
+    A baseline written by PowerShell's ``Out-File`` is UTF-16 by default, so
+    this is the ordinary case on the platform CLM is developed on.
+
+    The guard covers ``RecursionError`` for the same reason the recorder's
+    does: a pathologically nested document must produce a legible error, not
+    a traceback out of a CI gate.
+    """
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise BaselineError(f"could not read baseline '{path}': {exc}") from exc
+    try:
+        return json.loads(raw)
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        raise BaselineError(f"baseline '{path}' is not valid JSON: {exc}") from exc
+
+
+def load_baseline(path: Path) -> frozenset[BaselineEntry]:
+    """Read and validate a baseline file. Raises :class:`BaselineError`."""
+    return baseline_entries_from_document(load_baseline_document(path))
+
+
+def apply_baseline(
+    reports: Iterable[SecretScanReport], root: Path, entries: frozenset[BaselineEntry]
+) -> BaselineOutcome:
+    """Split *reports*' findings into accepted and new against *entries*.
+
+    Mutates each :class:`SecretFinding`'s ``accepted`` flag so the rendered
+    and JSON reports can show both, and returns the split plus the baseline
+    entries nothing matched — those separated into "the file was scanned and
+    is clean now" and "the file was not scanned at all", which mean opposite
+    things (see :class:`BaselineOutcome`).
+    """
+    outcome = BaselineOutcome(entry_count=len(entries))
+    matched: set[BaselineEntry] = set()
+    # Every path this run looked at, whether or not it had findings. An
+    # unreadable cassette counts as *seen*: the file exists, so calling its
+    # entries "not scanned at all" would send somebody hunting for a wrong
+    # scan root when the real problem is a corrupt file. It is tracked
+    # separately below so the report does not then call it re-recorded
+    # either.
+    scanned: set[str] = set()
+    unreadable_paths: set[str] = set()
+
+    for report in reports:
+        relative = _relative_posix(report.path, root)
+        scanned.add(relative)
+        if report.error is not None:
+            outcome.unreadable += 1
+            unreadable_paths.add(relative)
+            continue
+        for finding in report.findings:
+            entry = _entry_for(relative, finding)
+            if entry in entries:
+                matched.add(entry)
+                finding.accepted = True
+                outcome.accepted.append(finding)
+            else:
+                finding.accepted = False
+                outcome.new.append(finding)
+
+    for entry in sorted(entries - matched, key=lambda e: (e.path, e.location, e.key)):
+        if entry.path in unreadable_paths:
+            outcome.stale_unreadable.append(entry)
+        elif entry.path in scanned:
+            outcome.stale_cleared.append(entry)
+        else:
+            outcome.stale_missing.append(entry)
+    return outcome

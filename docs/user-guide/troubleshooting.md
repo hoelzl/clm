@@ -769,6 +769,70 @@ The scan also exits non-zero when a cassette could not be **read**, because an
 unreadable file is not evidence of cleanliness. Check the `error` field in
 `--json` output to tell that apart from a real finding.
 
+### I want the scan in CI, but it fails on hundreds of harmless findings
+
+That is the normal state of a course repo — nearly all of them are recorded
+`Set-Cookie` headers, and re-recording an LLM deck to clear one rewrites what
+replays. Record what you already have and gate on new findings:
+
+```bash
+clm cassette scan --write-baseline .clm-cassette-baseline.json   # once, commit it
+clm cassette scan --baseline .clm-cassette-baseline.json         # in CI
+```
+
+Two things that look like problems and are not:
+
+- **"N baseline entries are cleared."** Those decks were re-recorded and their
+  findings are gone. Never fatal — the gate must not punish the fix it exists
+  to ask for. Regenerate the file with `--write-baseline` at your convenience.
+  (An entry in a cassette that could not be *parsed* is reported separately,
+  as "in cassettes that could not be read", and does fail — it matched nothing
+  only because nothing could be read out of it.)
+- **A new finding in a file that is already in the baseline.** Entries match on
+  `(path, location, key)`, so a new finding *kind* in a baselined file is
+  correctly reported. The flip side is that a second `set-cookie` in that same
+  file is accepted — see `clm info commands` for why the key cannot include the
+  value.
+
+An unreadable cassette is never accepted by a baseline, and
+`--write-baseline` exits non-zero if it meets one — otherwise it would promise
+a green gate that the next run cannot deliver.
+
+### `N baseline entries name files that were not scanned at all`
+
+The gate refusing to vouch for a tree it did not scan. This is **not** the
+same as a re-recorded deck: those files are still there and their entries are
+reported as *cleared*, which never fails. These files were not seen at all.
+
+Entries are keyed on paths **relative to the scan root**, and the two
+invocation styles resolve different roots:
+
+| Invocation | Root |
+|---|---|
+| `clm cassette scan` | the current directory |
+| `clm cassette scan course.xml` | the course root the spec resolves to |
+
+Write and read the baseline the same way. Other causes: a sparse checkout,
+content that did not materialize (LFS, submodules), or decks that were moved or
+deleted. The scan also warns when the root's directory name differs from the
+one the baseline was written for — that warning prints *before* this error, so
+check for it.
+
+Without this check the run would have *passed*, green, over a repo nothing
+looked at. If the cause is a genuine move or deletion, regenerate with
+`--write-baseline`.
+
+**Read the report above the error first.** A run can have both missing entries
+and a genuinely new finding; the report is printed before the refusal precisely
+so that regenerating the baseline cannot quietly bless a secret you were never
+shown.
+
+Note the walk does not follow **symlinked directories** ([#886][i886]), so
+cassettes behind one are silently not scanned — and they will show up here as
+missing.
+
+[i886]: https://github.com/hoelzl/clm/issues/886
+
 ### A replayed cell reads a redacted field and raises
 
 Expected, and the shape is worth knowing: when a secret-named key holds an

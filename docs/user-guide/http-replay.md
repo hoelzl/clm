@@ -373,6 +373,21 @@ the response filter existed predate all of the response-side rules.
 Still review the YAML by eye before committing if your topic hits an API
 with a novel auth scheme.
 
+To run it as a **repo check**, record the findings you already have and
+gate on new ones:
+
+```bash
+clm cassette scan --write-baseline .clm-cassette-baseline.json   # once, commit it
+clm cassette scan --baseline .clm-cassette-baseline.json         # in CI
+```
+
+Most course-repo findings are recorded `Set-Cookie` headers with no
+credential in them (Cloudflare's `__cf_bm`, analytics cookies), and
+re-recording an LLM deck to remove one rewrites what replays — so a bare
+scan can never go green and the check would just get turned off. The
+baseline accepts what is there today; anything new fails. See `clm info
+commands` for what an entry matches on, and the limits of that.
+
 ## Telemetry passthrough
 
 Some endpoints — notably LangSmith's `api.smith.langchain.com` upload
