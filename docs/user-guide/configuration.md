@@ -345,9 +345,19 @@ tidy` to move *existing* sidecars between layouts in bulk.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Honored by `clm build` for both host and worker logging; the `--log-level` flag overrides it. Also settable as `[logging] log_level` in `clm.toml`. | `INFO` |
+| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Honored by `clm build` for both host and worker logging; the `--log-level` flag overrides it. Also settable as `[logging] log_level` in `clm.toml`. Controls what is **captured**, not what the console shows — see below. | `INFO` |
 | `CLM_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
 | `CLM_LOG_DIR` | Directory for `clm.log` and `workers/` logs. Overrides the platform default (Windows: `%LOCALAPPDATA%/clm/Logs`; macOS: `~/Library/Logs/clm`; Linux: `~/.local/state/clm/log`). Useful to relocate logs, or to give parallel processes their own log file so they don't race to open/rotate the shared one. | platform default |
+
+**Console vs. log file.** `clm build` prints **warnings and errors** to the
+console; everything else at the configured level goes to the rotating
+`clm.log` (10 MB, 3 backups) in the directory above. `--verbose-logging`
+echoes the full stream to the console too.
+
+A *stricter* level still narrows the console — `--log-level=ERROR` hides
+warnings — but a more permissive one does not widen it; that is what
+`--verbose-logging` is for. Other commands, which do not configure a log
+file, print warnings and errors to the console and nothing else.
 
 ### Git
 
