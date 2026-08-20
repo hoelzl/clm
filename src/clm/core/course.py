@@ -61,6 +61,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Directory name for the build-internal intermediates of implicit cache-producer
+#: executions (issue #890). Dot-prefixed so it is unmistakably build state, and
+#: outside the ``<target>/<Course-xx>`` subtree ``clm zip`` / ``clm git`` publish.
+#: See :attr:`Course.implicit_execution_root`.
+IMPLICIT_EXECUTION_DIR_NAME = ".clm-implicit"
+
 
 def _refuse_whole_volume_workspace(candidate: Path, sorted_roots: list[str]) -> None:
     """Refuse a ``/workspace`` mount that would cover a whole drive.
@@ -493,14 +499,10 @@ class Course(NotebookMixin):
         for stage in execution_stages():
             logger.debug(f"Processing stage {stage}")
 
-            # For HTML_SPEAKER_STAGE, we may need implicit executions
-            # to populate the cache for outputs that REUSE_CACHE
-            implicit_for_stage = self.implicit_executions if stage == HTML_SPEAKER_STAGE else set()
-
             for target in self.output_targets:
                 logger.debug(f"Processing target '{target.name}' at {target.output_root}")
                 num_operations = await self.process_stage_for_target(
-                    stage, backend, target, implicit_for_stage
+                    stage, backend, target, self.implicit_executions_for_stage(stage, target)
                 )
                 logger.debug(
                     f"Processed {num_operations} operations for "
@@ -533,6 +535,105 @@ class Course(NotebookMixin):
             canonical = file.cassette_path or file.expected_cassette_path
             canonical_paths.add(canonical)
         return canonical_paths
+
+    @property
+    def implicit_execution_root(self) -> Path:
+        """Build-internal scratch root for implicit cache-producer output.
+
+        An implicit execution (see
+        :class:`clm.core.execution_dependencies.ExecutionDependencyResolver`)
+        exists only to populate the executed-notebook cache for the
+        ``completed``/``trainer``/``partial`` HTML that *was* requested. Its own
+        HTML has no consumer, so it is written here instead of into an output
+        target — issue #890, where a target restricted to ``completed`` HTML
+        received a full ``<target>/speaker/<Course-xx>/…/Html/Recording/…``
+        tree, speaker notes and voiceover included, in a directory the
+        stray-file sweep never walks. ``clm build`` removes this directory when
+        the build finishes, and again at the start of the next build so a killed
+        one self-heals.
+
+        Placement is boxed in on three sides and cannot satisfy all of them at
+        once, so it resolves in priority order:
+
+        1. **Reachable by the worker.** In Docker mode the notebook worker
+           converts its output path relative to the ``/workspace`` bind-mount
+           (:attr:`workspace_root`, the common parent of the target roots) and
+           fails outright on anything outside it. So the scratch must sit under
+           that common parent.
+        2. **Never the course source tree.** The notebook worker executes
+           course-authored code and gets the source tree read-only on purpose
+           (finding S10, #798). When the target roots' common parent *is* the
+           course root — a spec whose targets sit directly under it, e.g.
+           ``<path>public</path>`` plus ``<path>speaker</path>`` — anchoring
+           here would put build state (and a ``rmtree``) inside the user's
+           slides repo, so we fall back to the first target root instead.
+        3. **Outside every target root.** Achieved whenever the targets share a
+           parent above them. It is *not* achievable for a single-target build
+           (the common parent then simply is that target's root) nor under rule
+           2, and in those cases the directory does live inside a target root
+           for the duration of the build. It stays out of the published
+           ``<target>/<Course-xx>`` subtree that ``clm git`` and ``clm zip``
+           consume, and the build deletes it — see
+           ``clm.build.engine.discard_implicit_execution_scratch``.
+
+        The path is deterministic within a build, which keeps the SQLite job
+        cache (keyed on the output path) coherent; across builds the content
+        comes back from the result-cache blob, so removing the directory costs
+        no kernel runs.
+        """
+        base = self._output_roots_common_base()
+        course_root = self.course_root.resolve()
+        # Rule 2, plus the whole-volume case ``workspace_root`` refuses outright
+        # (``--output-dir D:\``, or a target root that ``default_target`` built
+        # without path validation): never create — and later ``rmtree`` — a
+        # scratch directory at a drive root or inside the source tree.
+        if base == base.parent or base == course_root or course_root.is_relative_to(base):
+            roots = [t.output_root for t in self.output_targets]
+            base = roots[0].resolve() if roots else self.output_root.resolve()
+        return base / IMPLICIT_EXECUTION_DIR_NAME
+
+    def _output_roots_common_base(self) -> Path:
+        """Lowest directory containing every output-target root, unguarded.
+
+        Shared by :attr:`workspace_root` (which adds the whole-volume and
+        unrelated-drives refusals Docker needs) and
+        :attr:`implicit_execution_root` (which applies its own fallbacks), so
+        the two cannot drift apart.
+        """
+        roots = [t.output_root for t in self.output_targets] or [self.output_root]
+        resolved = {r.resolve() for r in roots}
+        if len(resolved) == 1:
+            return next(iter(resolved))
+        try:
+            return Path(os.path.commonpath([str(r) for r in resolved]))
+        except ValueError:
+            # Unrelated drives: no common ancestor. ``workspace_root`` turns
+            # this into an actionable Docker error; the scratch root falls back
+            # to the first target root via the drive-root check in its caller.
+            return Path(next(iter(sorted(str(r) for r in resolved))))
+
+    def implicit_executions_for_stage(
+        self, stage: int, target: OutputTarget
+    ) -> set[tuple[str, str, str]]:
+        """Implicit cache-producer executions to attach to *target* at *stage*.
+
+        Producers only run in :data:`HTML_SPEAKER_STAGE`, and exactly **one**
+        run per ``(language, format, kind)`` serves the whole build: the
+        executed-notebook cache is keyed on the input file, its content hash and
+        the language — never on the target — so any consumer in any target can
+        reuse a single producer's result. Attaching the set to every target
+        therefore submitted one redundant producer job per target (issue #890),
+        which is why it is attached to the first target only.
+
+        Passing the set explicitly to :meth:`process_stage_for_target` still
+        overrides this, so callers that drive a single target directly keep
+        full control.
+        """
+        if stage != HTML_SPEAKER_STAGE or not self.implicit_executions:
+            return set()
+        if not self.output_targets or target is not self.output_targets[0]:
+            return set()
+        return self.implicit_executions
 
     async def process_stage_for_target(
         self,
@@ -587,10 +688,9 @@ class Course(NotebookMixin):
         This method is kept for backward compatibility with existing code.
         """
         total_operations = 0
-        implicit_for_stage = self.implicit_executions if stage == HTML_SPEAKER_STAGE else set()
         for target in self.output_targets:
             total_operations += await self.process_stage_for_target(
-                stage, backend, target, implicit_for_stage
+                stage, backend, target, self.implicit_executions_for_stage(stage, target)
             )
         return total_operations
 
@@ -624,15 +724,15 @@ class Course(NotebookMixin):
                 return 0
 
         total_count = 0
-        implicit_for_stage = self.implicit_executions if stage == HTML_SPEAKER_STAGE else set()
 
         for target in self.output_targets:
+            implicit_for_target = self.implicit_executions_for_stage(stage, target)
             for file in self.files:
                 op = await file.get_processing_operation(
                     target.output_root,
                     stage=stage,
                     target=target,
-                    implicit_executions=implicit_for_stage,
+                    implicit_executions=implicit_for_target,
                 )
                 total_count += count_worker_ops(op)
 

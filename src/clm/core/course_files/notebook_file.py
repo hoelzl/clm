@@ -266,9 +266,10 @@ class NotebookFile(CourseFile):
             target_dir: Root output directory
             stage: Execution stage filter (None = all stages)
             target: OutputTarget for filtering outputs
-            implicit_executions: Additional executions needed for cache population
-                These are executed but outputs are not written to disk unless
-                they are also explicitly requested by the target.
+            implicit_executions: Additional executions needed for cache
+                population. These run for real, but their output is an
+                intermediate written under ``Course.implicit_execution_root``
+                rather than into ``target_dir`` (issue #890).
 
         Returns:
             Operation to execute for this file
@@ -334,9 +335,19 @@ class NotebookFile(CourseFile):
                 if self.output_language_filter is not None and lang != self.output_language_filter:
                     continue
                 if (lang, format_, kind) not in existing_keys:
-                    # We need to generate an output spec for this implicit execution
-                    # but we don't write it to disk (output will be written for
-                    # explicit requests only, but cache will be populated)
+                    # This run exists to populate the executed-notebook cache
+                    # for the HTML that *was* requested; its own output is an
+                    # intermediate, so it goes to the build-internal scratch
+                    # root rather than into ``target_dir`` (issue #890 — a
+                    # target restricted to ``completed`` HTML used to receive a
+                    # full ``speaker/…/Html/Recording/…`` tree, speaker notes
+                    # and voiceover included, that no sweep ever removed).
+                    #
+                    # The path stays deterministic — same course, same
+                    # language/kind, same file every build — because the SQLite
+                    # job cache is keyed on the output path and the result
+                    # cache replays through it; a per-build path would turn
+                    # every rebuild into a fresh kernel run.
                     logger.debug(
                         f"Adding implicit execution for ({lang}, {format_}, {kind}) "
                         f"to populate cache for notebook {self.path}"
@@ -349,7 +360,7 @@ class NotebookFile(CourseFile):
                         language=lang,
                         format=format_,
                         kind=kind,
-                        root_dir=target_dir,
+                        root_dir=self.course.implicit_execution_root,
                     )
                     operations.append(
                         ProcessNotebookOperation(
@@ -368,8 +379,9 @@ class NotebookFile(CourseFile):
                             http_replay_mode=(
                                 self.course.http_replay_mode if self.http_replay else None
                             ),
-                            # Mark as implicit - output may be discarded if not
-                            # also explicitly requested
+                            # Marks the run as a cache producer whose output
+                            # is an intermediate under
+                            # ``Course.implicit_execution_root``.
                             is_implicit_execution=True,
                         )
                     )

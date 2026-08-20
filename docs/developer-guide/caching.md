@@ -229,6 +229,33 @@ which suppresses the `results_cache` probe for exactly those payloads. When you
 touch either the guard or the job-cache probe, keep them in sync: **a decision to
 warm the execution cache must suppress *both* replay layers, not just one.**
 
+### The implicit producer (restricted builds)
+
+When no target asks for Recording HTML but some target asks for a consumer kind
+(`completed`/`trainer`/`partial` HTML), `ExecutionDependencyResolver` adds an
+**implicit** producer run so the execution cache still gets warmed —
+`clm build --targets shared` is the everyday case.
+
+Two properties of that run follow from the key layout above:
+
+- **Once per build, not once per target.** `execution_cache_hash()` excludes
+  `kind`/`format` and never mentions the target, so a single producer run serves
+  every consumer in every target. `Course.implicit_executions_for_stage` attaches
+  the set to one target for that reason (issue #890).
+- **Its output is an intermediate.** Nothing reads the producer's HTML — the
+  consumers read `executed_notebooks`. It is written under
+  `Course.implicit_execution_root` (`.clm-implicit/`, anchored so it is neither
+  the course source tree nor a drive root — see that property) and deleted at
+  both ends of the build. That costs no kernel runs: `processed_files` stores
+  the content as a blob, and whenever `executed_notebooks` *is* cold the warmup
+  guard forces a worker run regardless of what is on disk.
+
+  ⚠️ One consequence: a jobs-DB `results_cache` row for a scratch path can
+  outlive the file. That is the `check_cache` HIT / `output_path.exists()` MISS
+  branch, which logs `Cache indicated file exists but not found` and re-submits
+  the job — correct, but the warning is expected noise for `.clm-implicit`
+  paths rather than a symptom.
+
 ## Retention: newest-N, indefinitely
 
 The retention policy for **every cache that gates a rebuild** is *keep the newest

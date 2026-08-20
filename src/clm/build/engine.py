@@ -138,6 +138,50 @@ def _resolve_worker_workspace_path(course: Course, worker_config: object | None)
     return course.output_root
 
 
+def discard_implicit_execution_scratch(course: Course) -> None:
+    """Remove the intermediates written by implicit cache-producer runs.
+
+    An implicit execution exists only to warm the executed-notebook cache for
+    the HTML a target actually asked for (see
+    ``clm.core.execution_dependencies``); the HTML it emits has no consumer. It
+    is written under ``Course.implicit_execution_root`` during the build and
+    dropped here, so a build restricted to e.g. ``completed`` HTML leaves no
+    recording material behind (issue #890).
+
+    Called at both ends of a build: after it, so nothing survives a normal run,
+    and before it, so a run killed mid-flight self-heals instead of leaving a
+    ``speaker/…/Html/Recording/…`` tree — speaker notes and voiceover included —
+    where a single-target build had to place it, inside that target's root.
+
+    Deleting costs nothing across builds: the result cache stores the content as
+    a blob keyed on ``(input file, content hash, output metadata)``, and
+    whenever ``executed_notebooks`` *is* cold the warmup guard forces a worker
+    run regardless of what is on disk (see ``docs/developer-guide/caching.md``).
+
+    Never raises — it runs from a ``finally`` and must not mask a build error.
+    A removal that fails is a **warning**, not a debug note: the leftover is
+    exactly the material #890 is about, and the user is the only one who can
+    clear it.
+    """
+    try:
+        scratch = course.implicit_execution_root
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(f"Could not resolve the implicit-execution scratch root: {exc}")
+        return
+    if not scratch.exists():
+        return
+    try:
+        shutil.rmtree(scratch)
+        logger.debug(f"Removed implicit-execution scratch directory {scratch}")
+    except OSError as exc:
+        logger.warning(
+            f"Could not remove the build-internal scratch directory {scratch}: {exc}. "
+            "It holds recording-kind intermediates (speaker notes and voiceover) "
+            "from this build's execution-cache warmup — delete it before "
+            "publishing or copying this output directory."
+        )
+
+
 def _mitm_ca_dir() -> Path:
     """Per-user directory holding the mitmproxy CA (key + certificate).
 
@@ -1396,6 +1440,11 @@ async def process_course_with_backend(
             # Rich live progress display, so the "Sweeping stale output
             # files..." notice prints below the summary instead of being
             # pushed above the still-active progress bar.
+            # Before the sweep, not after: the sweep can raise, and a
+            # half-built recording tree is exactly what must not survive
+            # inside a restricted target (#890). Runs on aborted builds too —
+            # the intermediates are worthless either way.
+            discard_implicit_execution_scratch(course)
             _maybe_run_sweep(
                 config=config,
                 root_dirs=root_dirs,
@@ -1728,6 +1777,11 @@ async def run_build(
     # and the worker pools start — so a refusal costs the user a message
     # rather than a spawned-and-torn-down build.
     from clm.build.output_ownership import enforce_owned_roots, snapshot_output_ownership
+
+    # Before the ownership snapshot: a scratch tree left by a killed build is
+    # this build's own leftover, not evidence about who owns the output root
+    # (#890).
+    discard_implicit_execution_scratch(course)
 
     ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
     _record_unowned_roots(config, ownership)

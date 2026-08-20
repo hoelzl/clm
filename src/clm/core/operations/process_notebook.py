@@ -209,9 +209,12 @@ class ProcessNotebookOperation(Operation):
     # worker injects the cassette-routing tag bootstrap when this is
     # non-None (traffic is recorded/replayed by the shared replay proxy).
     http_replay_mode: str | None = None
-    # If True, this operation is for implicit cache population only.
-    # The output is still generated (to populate the cache), but this
-    # flag can be used for logging/debugging purposes.
+    # True when this operation exists only to populate the executed-notebook
+    # cache for HTML that *was* requested (see
+    # ``clm.core.execution_dependencies``). The run is a real one — the
+    # notebook is executed and the result written — but its output is an
+    # intermediate and is routed to ``Course.implicit_execution_root``
+    # instead of an output target (issue #890).
     is_implicit_execution: bool = False
 
     async def execute(self, backend, *args, **kwargs) -> Any:

@@ -20,7 +20,11 @@ from clm.core.output_target import (
     DEFAULT_FORMATS,
     OutputTarget,
 )
+from clm.core.utils.execution_utils import HTML_SPEAKER_STAGE
 from clm.core.utils.text_utils import Text
+
+# Course source tree used by the operation-level tests below.
+DATA_DIR = Path(__file__).parent.parent / "test-data"
 
 
 class TestCourseFromSpecWithTargets:
@@ -907,3 +911,267 @@ class TestCourseWorkspaceRoot:
 
         with pytest.raises(ValueError, match="whole drive|common parent|--targets"):
             _ = course.workspace_root
+
+
+class TestImplicitExecutionIsolation:
+    """Regression tests for #890.
+
+    A build restricted to targets that do not include ``recording`` HTML still
+    has to run the cache-producing ``recording`` execution — but that run is an
+    *intermediate*. Its HTML used to be written into every target's output root
+    (``<target>/speaker/<Course-xx>/…/Html/Recording/…``), which put speaker
+    notes and voiceover material into student-facing tiers, once per target,
+    in a directory no sweep ever walks.
+    """
+
+    SPEC_XML = """
+    <course>
+        <name><de>Kurs</de><en>Course</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de>d</de><en>d</en></description>
+        <certificate><de>c</de><en>c</en></certificate>
+        <output-targets>
+            <output-target name="solutions">
+                <path>output/solutions</path>
+                <kinds><kind>completed</kind></kinds>
+                <formats><format>html</format></formats>
+                <languages><language>en</language></languages>
+            </output-target>
+            <output-target name="students">
+                <path>output/students</path>
+                <kinds><kind>code-along</kind></kinds>
+                <formats><format>code</format></formats>
+                <languages><language>en</language></languages>
+            </output-target>
+        </output-targets>
+        <sections>
+            <section>
+                <name><de>W1</de><en>W1</en></name>
+                <topics><topic>some_topic_from_test_1</topic></topics>
+            </section>
+        </sections>
+    </course>
+    """
+
+    @pytest.fixture
+    def course(self, tmp_path):
+        from clm.core.course import Course
+
+        spec = CourseSpec.from_file(io.StringIO(self.SPEC_XML))
+        return Course.from_spec(spec, DATA_DIR, tmp_path)
+
+    @staticmethod
+    async def _notebook_ops(course, stage):
+        """Every notebook operation the build submits for *stage*.
+
+        Mirrors ``Course.process_stage_for_target``'s iteration exactly, so
+        what this collects is what a real build would submit.
+        """
+        from clm.core.operation import Concurrently, NoOperation
+
+        def flatten(op):
+            if isinstance(op, NoOperation):
+                return []
+            if isinstance(op, Concurrently):
+                return [inner for o in op.operations for inner in flatten(o)]
+            return [op]
+
+        ops = []
+        for target in course.output_targets:
+            implicit = course.implicit_executions_for_stage(stage, target)
+            for file in course.files:
+                op = await file.get_processing_operation(
+                    target.output_root,
+                    stage=stage,
+                    target=target,
+                    implicit_executions=implicit,
+                )
+                ops.extend((target, o) for o in flatten(op))
+        return [(target, o) for target, o in ops if type(o).__name__ == "ProcessNotebookOperation"]
+
+    async def test_cache_producer_still_scheduled(self, course):
+        """The restricted build must still execute the recording notebook."""
+        ops = await self._notebook_ops(course, HTML_SPEAKER_STAGE)
+        implicit = [o for _target, o in ops if o.is_implicit_execution]
+
+        assert [(o.language, o.format, o.kind) for o in implicit] == [("en", "html", "recording")]
+
+    async def test_implicit_output_stays_out_of_every_target_tree(self, course):
+        """The intermediate must not be written into any target's output root."""
+        ops = await self._notebook_ops(course, HTML_SPEAKER_STAGE)
+        implicit = [o for _target, o in ops if o.is_implicit_execution]
+        assert implicit, "expected an implicit cache-producer operation"
+
+        roots = [t.output_root for t in course.output_targets]
+        for op in implicit:
+            out = Path(op.output_file)
+            for root in roots:
+                assert not out.is_relative_to(root), (
+                    f"implicit execution wrote {out} inside output target root {root}"
+                )
+
+    async def test_implicit_output_goes_to_the_build_internal_scratch_dir(self, course):
+        from clm.core.course import IMPLICIT_EXECUTION_DIR_NAME
+
+        ops = await self._notebook_ops(course, HTML_SPEAKER_STAGE)
+        implicit = [o for _target, o in ops if o.is_implicit_execution]
+        assert implicit
+
+        scratch = course.implicit_execution_root
+        assert scratch.name == IMPLICIT_EXECUTION_DIR_NAME
+        for op in implicit:
+            assert Path(op.output_file).is_relative_to(scratch)
+
+    async def test_scratch_root_is_inside_the_docker_workspace_mount(self, course):
+        """Docker converts output paths relative to the /workspace mount.
+
+        A scratch root outside it fails conversion outright, so the two must
+        stay anchored together.
+        """
+        assert course.implicit_execution_root.parent == course.workspace_root
+
+    @staticmethod
+    def _course_rooted(tmp_path, *target_paths):
+        """A course whose targets resolve under the course root itself.
+
+        ``output_root=None`` is the shape a real ``clm build`` uses: target
+        paths come from the spec and are resolved against the course root, so
+        nothing re-roots them into a scratch directory. Passing an
+        ``output_root`` (as the class fixture does) re-roots every target under
+        it and hides where the scratch would really land — the blind spot that
+        let the course-root case through review.
+        """
+        from clm.core.course import Course
+
+        (tmp_path / "slides").mkdir()
+        targets = "".join(
+            f"""
+            <output-target name="t{i}">
+                <path>{path}</path>
+                <kinds><kind>completed</kind></kinds>
+                <formats><format>html</format></formats>
+                <languages><language>en</language></languages>
+            </output-target>"""
+            for i, path in enumerate(target_paths)
+        )
+        xml = f"""
+        <course>
+            <name><de>Kurs</de><en>Course</en></name>
+            <prog-lang>python</prog-lang>
+            <description><de>d</de><en>d</en></description>
+            <certificate><de>c</de><en>c</en></certificate>
+            <output-targets>{targets}</output-targets>
+            <sections/>
+        </course>
+        """
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        return Course.from_spec(spec, tmp_path, output_root=None)
+
+    async def test_scratch_root_is_never_the_course_source_tree(self, tmp_path):
+        """Regression test for #890 review finding 1.
+
+        Targets that sit directly under the course root share exactly one
+        common parent — the course root. Anchoring there would create (and
+        later ``rmtree``) build state inside the user's slides repo, and would
+        force the writable Docker mount to cover ``slides/``, undoing the
+        read-only source mount of finding S10/#798.
+        """
+        course = self._course_rooted(tmp_path, "public", "speaker")
+
+        scratch = course.implicit_execution_root
+        assert scratch.parent != course.course_root.resolve()
+        assert (course.course_root.resolve() / "slides") not in scratch.parents
+
+    async def test_scratch_root_is_never_a_filesystem_root(self, tmp_path):
+        r"""A drive-root anchor would put a ``rmtree`` target at ``D:\``."""
+        from attrs import evolve
+
+        course = self._course_rooted(tmp_path, "public", "speaker")
+        drive_root = Path(tmp_path.anchor or "/")
+        course.output_targets = [
+            evolve(course.output_targets[0], output_root=drive_root / "alpha"),
+            evolve(course.output_targets[1], output_root=drive_root / "beta"),
+        ]
+
+        scratch = course.implicit_execution_root
+        assert scratch.parent != drive_root
+        assert scratch.parent in {drive_root / "alpha", drive_root / "beta"}
+
+    async def test_scratch_root_sits_above_the_targets_when_they_share_a_parent(self, tmp_path):
+        """The good case: no target root contains the scratch directory."""
+        course = self._course_rooted(tmp_path, "out/public", "out/speaker")
+
+        scratch = course.implicit_execution_root
+        for target in course.output_targets:
+            assert not scratch.is_relative_to(target.output_root)
+
+    async def test_scratch_root_stays_out_of_the_published_subtree(self, tmp_path):
+        """Single target: the scratch cannot avoid the target root…
+
+        …because that root *is* the Docker mount. What it must still avoid is
+        the ``<target>/<Course-xx>`` subtree ``clm git`` stages and ``clm zip``
+        archives — and the build then deletes it outright.
+        """
+        course = self._course_rooted(tmp_path, "public")
+        target = course.output_targets[0]
+
+        scratch = course.implicit_execution_root
+        assert scratch.parent == target.output_root.resolve()
+        for lang in ("de", "en"):
+            published = target.output_root.resolve() / course.output_dir_name[lang]
+            assert not scratch.is_relative_to(published)
+
+    async def test_implicit_execution_is_not_replicated_per_target(self, course):
+        """One producer run per (language, format, kind) for the whole build.
+
+        The executed-notebook cache is global, so a second producer job is pure
+        waste — and it used to land a recording HTML tree in a target that
+        asked for no HTML at all.
+        """
+        ops = await self._notebook_ops(course, HTML_SPEAKER_STAGE)
+        implicit = [o for _target, o in ops if o.is_implicit_execution]
+
+        keys = [(o.language, o.format, o.kind, str(o.output_file)) for o in implicit]
+        assert len(keys) == len(set(keys)), f"duplicate implicit executions: {keys}"
+
+        hosts = {target.name for target, o in ops if o.is_implicit_execution}
+        assert len(hosts) == 1, f"implicit executions attached to several targets: {hosts}"
+
+    async def test_html_free_target_gets_no_implicit_execution(self, course):
+        """A target requesting only ``code`` must not host a recording HTML job."""
+        ops = await self._notebook_ops(course, HTML_SPEAKER_STAGE)
+        students = [o for target, o in ops if target.name == "students"]
+
+        assert students == []
+
+    async def test_stage_operation_count_matches_submitted_operations(self, course):
+        """The progress-bar total must stay in step with what is submitted."""
+        ops = await self._notebook_ops(course, HTML_SPEAKER_STAGE)
+        counted = await course.count_stage_operations(HTML_SPEAKER_STAGE)
+
+        assert counted == len(ops)
+
+    async def test_scratch_directory_is_discarded_after_the_build(self, course):
+        """Regression test for #890 — nothing recording-shaped may survive.
+
+        In a single-target build the scratch root necessarily sits inside that
+        target's output root (Docker converts output paths relative to the
+        mount, which *is* the sole target root there), so the build has to drop
+        it rather than merely place it out of the way.
+        """
+        from clm.build.engine import discard_implicit_execution_scratch
+
+        scratch = course.implicit_execution_root
+        stray = scratch / "speaker" / "Course-en" / "Slides" / "Html" / "Recording" / "deck.html"
+        stray.parent.mkdir(parents=True)
+        stray.write_text("<html>notes and voiceover</html>", encoding="utf-8")
+
+        discard_implicit_execution_scratch(course)
+
+        assert not scratch.exists()
+
+    async def test_discarding_a_missing_scratch_directory_is_a_no_op(self, course):
+        from clm.build.engine import discard_implicit_execution_scratch
+
+        assert not course.implicit_execution_root.exists()
+        discard_implicit_execution_scratch(course)  # must not raise
