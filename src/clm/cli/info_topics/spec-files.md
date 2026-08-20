@@ -759,6 +759,29 @@ only. `jupyterlite` is **never** included implicitly — a target must list
 
 Valid values: `de` (German), `en` (English).
 
+#### Restricted builds and the evaluated-HTML cache
+
+`completed`, `trainer` and `partial` HTML are produced by **filtering an
+executed notebook**, not by executing one per kind: the `recording` HTML run
+executes the deck once and caches the result, and the others reuse it. So when
+a build covers none of them — a target that lists only `completed`, or
+`clm build --targets shared` — `clm` still runs that `recording` execution to
+warm the cache.
+
+That run is an intermediate. Since CLM {version} it runs **once per build**
+rather than once per target, and its HTML goes to a build-internal
+`.clm-implicit/` scratch directory that `clm build` deletes when the build ends
+(and again at the start of the next build, so a killed one self-heals). When the
+targets share a parent directory the scratch sits above them; a build with a
+single target has nowhere above that target to put it, so it lives inside that
+target's root for the duration of the build — always outside the
+`<target>/<Course-xx>` subtree that `clm git` publishes and `clm zip` archives.
+
+Earlier versions wrote that run into **every** target as a full
+`<target>/speaker/<Course-xx>/.../Html/Recording/...` tree — speaker notes and
+voiceover included — and never cleaned it up. Delete any such directory left
+over from an older build.
+
 ### Default output structure (CLM {version}+)
 
 If no `<output-targets>` element is present, `clm` builds (and `clm git`/`clm zip`

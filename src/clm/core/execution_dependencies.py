@@ -4,7 +4,9 @@ This module handles the execution dependencies between different output types.
 For example, ``completed`` HTML reuses cached execution results from
 ``recording`` HTML (the cache producer). When a user requests only
 ``completed`` HTML, the system must still run ``recording`` HTML to populate
-the cache.
+the cache. That run is an intermediate: it happens once for the whole build
+and its HTML is written to ``Course.implicit_execution_root``, not into any
+output target (issue #890).
 
 The abstraction makes these dependencies explicit and extensible. ``speaker``
 is the deprecated alias for ``recording`` and is normalized away during spec
@@ -119,8 +121,10 @@ class ExecutionDependencyResolver:
 
         When a user requests outputs that REUSE_CACHE but doesn't request
         the corresponding POPULATES_CACHE outputs, this method identifies
-        which additional outputs must be executed (but not written to disk)
-        to populate the cache.
+        which additional outputs must be executed to populate the cache.
+        Those runs write their result to the build-internal
+        ``Course.implicit_execution_root``, never into an output target
+        (issue #890).
 
         Args:
             requested_outputs: Set of (language, format, kind) tuples
@@ -128,8 +132,11 @@ class ExecutionDependencyResolver:
 
         Returns:
             Set of additional (language, format, kind) tuples that must
-            be executed to populate the cache, but whose outputs should
-            not be written to disk unless also explicitly requested.
+            be executed to populate the cache. One run per tuple serves
+            the whole build — the executed-notebook cache is keyed on the
+            input file, its content hash and the language, never on the
+            target — so ``Course.implicit_executions_for_stage`` attaches
+            them to a single target rather than to each one.
         """
         implicit_executions: set[tuple[str, str, str]] = set()
 
@@ -185,9 +192,10 @@ class ExecutionDependencyResolver:
 
         Returns:
             Tuple of (explicit_outputs, implicit_executions) where:
-            - explicit_outputs: What the user requested (write to disk)
+            - explicit_outputs: What the user requested (written into the
+              output targets)
             - implicit_executions: Additional executions needed for cache
-              (execute but don't write unless also explicit)
+              population (written to the build-internal scratch root)
         """
         explicit = self.collect_requested_outputs(targets)
         implicit = self.resolve_implicit_executions(explicit)
