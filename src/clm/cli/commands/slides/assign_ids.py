@@ -309,7 +309,10 @@ def _print_human(result: AssignResult, *, report_only: bool) -> None:
     for r in soft:
         proposal = f' proposed="{r.proposed_slug}"' if r.proposed_slug else ""
         title = f' title="{r.proposed_title}"' if r.proposed_title else ""
-        click.echo(f"refuse-soft {r.file}:{r.line} — {r.reason}{title}{proposal}")
+        # The remedy is this surface's to name: the flag lives on THIS command
+        # (via `normalize` the same refusal must name the full command, #892).
+        remedy = f"; pass {r.accept_flag} to accept" if r.accept_flag else ""
+        click.echo(f"refuse-soft {r.file}:{r.line} — {r.reason}{remedy}{title}{proposal}")
 
     for r in hard:
         click.echo(f"refuse-hard {r.file}:{r.line} — {r.reason}")
@@ -345,6 +348,7 @@ def _to_dict(result: AssignResult) -> dict:
                 "reason": r.reason,
                 "proposed_slug": r.proposed_slug,
                 "proposed_title": r.proposed_title,
+                "accept_flag": r.accept_flag,
             }
             for r in result.refusals
         ],

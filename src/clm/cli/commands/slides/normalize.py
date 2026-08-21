@@ -318,11 +318,17 @@ def _run_stamp_ids(
             }.items()
             if v is not None
         }
+        # Stamp mode enables both accept options, so accept-flag refusals do
+        # not normally reach this adapter — but if one does, name the command
+        # that owns the flag (`normalize` has no such option, #892).
+        suggestion = r.reason
+        if r.accept_flag:
+            suggestion += f"; run `clm slides assign-ids {r.accept_flag}` to accept"
         result.review_items.append(
             ReviewItem(
                 file=r.file,
                 issue=f"stamp_id_{r.severity}_refusal",
-                suggestion=r.reason,
+                suggestion=suggestion,
                 details=details,
             )
         )
