@@ -428,10 +428,15 @@ def _report_id_errors(bundle: LoadedBundle, document: doc_apply.DecisionDocument
     tightening); the message still names the field and where to copy it from.
     """
     if document.report_id is None:
+        # No literal braces here: drivers brace-locate the JSON envelope in
+        # mixed output, and a JSON-shaped hint in the message would steal
+        # that match.
         message = (
-            "decision document carries no `report_id` — copy it from the report "
-            "envelope so apply can refuse a document answering a report that no "
-            "longer describes this deck"
+            "decision document carries no top-level `report_id` — copy the "
+            "`report_id` value from the `report --json` envelope into the "
+            "document as a top-level key beside `decisions`, so apply can "
+            "refuse a document answering a report that no longer describes "
+            "this deck (shape: `clm info sync-agents`)"
         )
         if REQUIRE_REPORT_ID:
             return [message]
