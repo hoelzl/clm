@@ -314,11 +314,16 @@ pending slot's landed twin, the frame says so — resolve that slot first.
 ### Parse refusals: read the code, not the header
 
 A refusal blocks the **whole deck** and frames zero items, so its code is the
-only routing information you get. Only the id-less codes (`idless_anchor`,
-`idless_localized`, `idless_narrative`) are repaired by
-`clm slides normalize --stamp-ids` — and the refusal header names that command
-only when at least one such reason is present. The others carry their own
-`hint:` line:
+only routing information you get. One report enumerates **every** offending
+cell across all refusal classes at once (since CLM {version}, #892 — the
+id-less anchor and id-less localized classes used to surface one class per
+repair round), with a single exception: a `duplicate_id` poisons the pairing
+itself, so while one is present the id-less classes cannot be judged and are
+not listed — fix the duplicates first, then the next report enumerates the
+rest. Only the id-less codes (`idless_anchor`, `idless_localized`,
+`idless_narrative`) are repaired by `clm slides normalize --stamp-ids` — and
+the refusal header names that command only when at least one such reason is
+present. The others carry their own `hint:` line:
 
 | Code | What it means | Fix |
 |---|---|---|
