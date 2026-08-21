@@ -69,7 +69,12 @@ from clm.slides.doc_ledger import (
     snapshot_deck,
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
-from clm.slides.doc_write import DeckEmitter, DeckWriteError, write_changed_files
+from clm.slides.doc_write import (
+    AnchorAdjacencyError,
+    DeckEmitter,
+    DeckWriteError,
+    write_changed_files,
+)
 from clm.slides.sync_diff import (
     FRAMED_ACTIONS,
     MECHANICAL_ACTIONS,
@@ -589,6 +594,15 @@ class ApplyOutcome:
                     "skipped",
                 )
             },
+            # #885: `wrote: true` + exit 1 was the ONLY signal that answered
+            # work did not land, and the causes hid in per-item statuses (or
+            # on stderr). One top-level list names every surprising leftover
+            # — the rows that took an answer or claimed mechanical execution
+            # and did not land. `pending` is the loop's normal state (framed,
+            # unanswered) and stays out.
+            "left_undone": [
+                r.payload() for r in self.results if r.status in ("rejected", "deferred", "failed")
+            ],
             "items": [r.payload() for r in self.results],
         }
 
@@ -2123,6 +2137,17 @@ def apply_deck(
     ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
     unresolved_items: list[DiffItem] = []  # pending / rejected / failed
+    # #885 "one order authority per pass": while an `order_decision` is
+    # framed — answered or not — no mechanical `mirror_order` may co-execute.
+    # The field failure: an answered scope decision ("adopt DE's order")
+    # executed alongside member-keyed mirrors derived from the contested
+    # pre-answer bracketing, so one pass wrote two contradictory order
+    # authorities — the mirrors moved a slide-start cell across its own body
+    # cells on the side the answer designated as the one to PRESERVE. The
+    # mirrors defer per item (the #824 keep-defer shape, P7-clean) and
+    # re-derive from the post-answer state on the next report; a genuinely
+    # trust-backed mirror in an uncontested pass is untouched.
+    open_order_handles = [i.key for i in diff.items if i.action == "order_decision"]
     seen_decisions: set[str] = set()
     for _, item in ordered:
         if only_members is not None and item.key not in only_members:
@@ -2168,6 +2193,20 @@ def apply_deck(
                 landed.append((item, "apply"))
                 outcome.results.append(ItemResult(item.key, item.action, "recorded", item.detail))
             elif item.action in MECHANICAL_ACTIONS:
+                if item.action == "mirror_order" and open_order_handles:
+                    unresolved_items.append(item)
+                    outcome.results.append(
+                        ItemResult(
+                            item.key,
+                            item.action,
+                            "deferred",
+                            f"an order question is framed this pass "
+                            f"({open_order_handles[0]}) — one order authority "
+                            f"per pass: answer it, re-report, and this mirror "
+                            f"re-derives from the settled order",
+                        )
+                    )
+                    continue
                 _execute_mechanical(ex, item)
                 landed.append((item, "apply"))
                 outcome.results.append(ItemResult(item.key, item.action, "applied", item.detail))
@@ -2218,6 +2257,25 @@ def apply_deck(
                     )
                 )
         except DeckWriteError as exc:
+            if isinstance(exc, AnchorAdjacencyError) and open_order_handles:
+                # #885 symptom 1: the #720 guard refuses the anchor mint for
+                # as long as the order divergence stands, the differ re-frames
+                # the identical row with no memory, and nothing named the
+                # blocker — an advertised answer apply refused forever. While
+                # the SAME pass frames the order question, the refusal is a
+                # sequencing state, not a dead end: say what unblocks it.
+                unresolved_items.append(item)
+                outcome.results.append(
+                    ItemResult(
+                        item.key,
+                        item.action,
+                        "deferred",
+                        f"{exc} — the pair's order is contested and framed as "
+                        f"{open_order_handles[0]} this pass: answer that order "
+                        f"question first, re-report, then re-answer this row",
+                    )
+                )
+                continue
             status = "rejected" if decision is not None else "failed"
             unresolved_items.append(item)
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))

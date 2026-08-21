@@ -451,6 +451,22 @@ not order-blind:
   after your first fully-clean apply, later one-sided moves frame as
   directed mechanical mirrors instead of decisions. (A full `sync record`
   seeds order trust wholesale, as before.)
+- **One order authority per pass** (CLM {version}, #885): while an
+  `order_decision` is framed in a pass — answered or not — the pass's
+  mechanical `mirror_order` rows **defer** (status `deferred`, reason
+  naming the framed handle) instead of co-executing: the mirrors were
+  derived from the contested pre-answer bracketing, and running them
+  beside an order answer once rewrote the very side the answer said to
+  preserve. Deferred mirrors re-derive from the settled order on the next
+  report — answer the order question, re-report, and they execute or
+  vanish. The same rule turns a `translate_new` anchor mint that the
+  order-parity write guard refuses into a **deferral naming the open
+  order question** (its `body` answer is consumed; re-answer it after
+  the order settles — the deferral's reason says so). Check the apply
+  envelope's top-level **`left_undone`** list (rejected / deferred /
+  failed rows) whenever `wrote` is true and the exit code is 1: it names
+  exactly the answered or mechanical work that did not land, so partial
+  passes are never silent.
 
 ## The decision document
 
