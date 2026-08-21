@@ -445,6 +445,142 @@ class TestTransitions:
         assert item.key == "id:s0-renamed"
 
 
+class TestShiftedPoolSuspension:
+    """#826: a class transition that shifts a pool's per-side accounting
+    suspends the pool's cross-side trust for the pass (ledger mode).
+
+    The lens marries id-less cells by cursor with no content check, so a
+    mid-pool fork/unify/stamp re-pairs every later sibling with the wrong
+    twin — and the mechanical pool rows then execute against that guess
+    (the filed shape: a decision-free apply overwrote a sibling's tags; the
+    sibling probes destroyed bodies via ``propagate_shared_edit``). In a
+    shifted pool, every slot not provably at base on BOTH sides frames one
+    answerless ``pool_pairing_shifted`` row instead.
+    """
+
+    # Two id-less shared cells with IDENTICAL bodies and different tags —
+    # the filed repro (identical bodies defeat every fingerprint rescue).
+    DE_POOL = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% tags=["a"]\nbody = 1\n\n',
+        '# %% tags=["b"]\nbody = 1\n\n',
+    )
+    EN_POOL = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% tags=["a"]\nbody = 1\n\n',
+        '# %% tags=["b"]\nbody = 1\n\n',
+    )
+
+    @staticmethod
+    def _ledger_base(de: str, en: str) -> DeckBaseline:
+        base = _snapshot(de, en)
+        base.complete = False
+        return base
+
+    def test_fork_of_first_pool_cell_suspends_the_pool(self):
+        """The filed #826 shape: fork A (identical bodies) — the sibling slot
+        must frame, never take the mechanical ``mirror_tags`` that overwrote
+        B.de's tags before the fix."""
+        base = self._ledger_base(self.DE_POOL, self.EN_POOL)
+        de = self.DE_POOL.replace(
+            '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
+        )
+        diff = _diff(base, de, self.EN_POOL)
+        by_action = {(i.action, i.key) for i in diff.items}
+        assert ("fork_pending_twin", "id:a-cell") in by_action
+        assert ("pool_pairing_shifted", "pos:s0/code/1") in by_action
+        assert not any(
+            i.action in MECHANICAL_ACTIONS and i.key.startswith("pos:") for i in diff.items
+        ), [(i.action, i.key) for i in diff.items]
+
+    def test_fork_with_distinct_bodies_never_propagates(self):
+        """Sibling variant V1: distinct bodies — before the fix the sibling
+        slot took a mechanical ``propagate_shared_edit`` that replaced B.de's
+        entire cell with A's EN bytes."""
+        de0 = self.DE_POOL.replace("body = 1\n\n# %%", "a_body = 1\n\n# %%")
+        en0 = self.EN_POOL.replace("body = 1\n\n# %%", "a_body = 1\n\n# %%")
+        base = self._ledger_base(de0, en0)
+        de = de0.replace(
+            '# %% tags=["a"]\na_body = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\na_body = 1'
+        )
+        diff = _diff(base, de, en0)
+        actions = {i.action for i in diff.items}
+        assert "propagate_shared_edit" not in actions
+        assert "pool_pairing_shifted" in actions
+
+    def test_unify_start_never_propagates_into_the_pool(self):
+        """Sibling variant V3: stripping a localized cell's lang+id inserts
+        it into the shared pool — before the fix the mis-married sibling took
+        a mechanical ``propagate_shared_edit`` that overwrote B.en with the
+        DE cell's German text."""
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% [markdown] lang="de" slide_id="l-cell"\n# L Text DE\n\n',
+            "# %% [markdown]\n# Shared note\n\n",
+        )
+        en0 = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en" slide_id="l-cell"\n# L text EN\n\n',
+            "# %% [markdown]\n# Shared note\n\n",
+        )
+        base = self._ledger_base(de0, en0)
+        de = de0.replace(
+            '# %% [markdown] lang="de" slide_id="l-cell"\n# L Text DE',
+            "# %% [markdown]\n# L Text DE",
+        )
+        diff = _diff(base, de, en0)
+        actions = {i.action for i in diff.items}
+        assert "propagate_shared_edit" not in actions
+        assert "pool_pairing_shifted" in actions
+        assert "remove_localized_side" in actions
+
+    def test_fork_of_last_pool_cell_does_not_suspend(self):
+        """With distinct bodies the migration matches the true entry and the
+        absorb claims the true twin — every remaining slot sits at base on
+        both sides, and per-side fingerprint identity needs no cross-side
+        guess, so the suspension stays out of the way. (With identical
+        bodies even this shape suspends: which cell forked is itself a
+        body-match guess.)"""
+        de0 = self.DE_POOL.replace('# %% tags=["b"]\nbody = 1', '# %% tags=["b"]\nother = 2')
+        en0 = self.EN_POOL.replace('# %% tags=["b"]\nbody = 1', '# %% tags=["b"]\nother = 2')
+        base = self._ledger_base(de0, en0)
+        de = de0.replace(
+            '# %% tags=["b"]\nother = 2', '# %% lang="de" tags=["b"] slide_id="b-cell"\nother = 2'
+        )
+        diff = _diff(base, de, en0)
+        assert [i.action for i in diff.items] == ["fork_pending_twin"]
+
+    def test_fork_plus_added_cell_defeats_the_deficit_gate_but_still_suspends(self):
+        """A fork whose side ALSO gained a new pool cell backfills the
+        per-side count, so the #644 deficit gate blocks the key migration
+        (correctly — migrating would be entry theft on a guess). The body
+        match must still suspend the pool: before the fix the backfilled
+        slot took a mechanical ``propagate_shared_edit`` that overwrote the
+        fork's true twin with the new cell's bytes."""
+        base = self._ledger_base(self.DE_POOL, self.EN_POOL)
+        de = self.DE_POOL.replace(
+            '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
+        ).replace('# %% tags=["b"]\nbody = 1', '# %% tags=["b"]\nbody = 1\n\n# %%\nnew = 3')
+        diff = _diff(base, de, self.EN_POOL)
+        actions = {i.action for i in diff.items}
+        assert "propagate_shared_edit" not in actions
+        assert "pool_pairing_shifted" in actions
+
+    def test_snapshot_mode_keeps_the_raw_reading(self):
+        """`--since` is a forensic view — nothing executes there, so the
+        suspension deliberately stays out of snapshot-mode diffs."""
+        base = _snapshot(self.DE_POOL, self.EN_POOL)  # complete=True
+        de = self.DE_POOL.replace(
+            '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
+        )
+        diff = _diff(base, de, self.EN_POOL)
+        assert not any(i.action == "pool_pairing_shifted" for i in diff.items)
+
+
 class TestCompanions:
     DE_C = _build(_companion_cell("s0-vo", "de", "s0", "DE Notiz"))
     EN_C = _build(_companion_cell("s0-vo", "en", "s0", "EN note"))
@@ -2450,3 +2586,30 @@ class TestLoneCandidateAffinity:
         assert "stays suppressed until the pool's membership changes" in slot.detail
         assert "claim binds" not in slot.detail
         assert "re-frames once the rename is recorded" not in slot.detail
+
+
+class TestShiftCauseStampSuspicion:
+    """Review F3: a plain one-half id stamp whose pool count is backfilled
+    by another new cell closes the #644 deficit gate — the migration
+    correctly refuses, but the member itself must then frame `stamp_vs_new`
+    instead of taking the mechanical `copy_new_shared` that duplicates the
+    stamped cell's bytes into the twin file."""
+
+    def test_stamp_with_backfilling_add_frames_stamp_vs_new(self):
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["a"]\na_val = 1\n\n',
+            '# %% tags=["b"]\nother = 2\n\n',
+        )
+        en0 = de0.replace(HEADER_DE, HEADER_EN).replace('lang="de"', 'lang="en"')
+        base = _snapshot(de0, en0)
+        base.complete = False
+        de = de0.replace(
+            '# %% tags=["b"]\nother = 2',
+            '# %% tags=["b"] slide_id="b-cell"\nother = 2\n\n# %%\nnewcell = 3',
+        )
+        diff = _diff(base, de, en0)
+        rows = {(i.action, i.key) for i in diff.items}
+        assert ("copy_new_shared", "id:b-cell") not in rows, rows
+        assert ("stamp_vs_new", "id:b-cell") in rows, rows
