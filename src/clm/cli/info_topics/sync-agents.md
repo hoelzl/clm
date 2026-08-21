@@ -442,10 +442,14 @@ not order-blind:
 
 ## The decision document
 
-One JSON document answers any subset of framed items:
+One JSON document answers any subset of framed items. The top level always
+carries the `report_id` copied from the report envelope — a document without
+it is refused (exit 2, nothing written):
 
 ```json
 {
+  "schema": 5,
+  "report_id": "<the report envelope's report_id, verbatim>",
   "decisions": [
     {"key": "id:intro-motivation", "body": "# The translated EN body…"},
     {"key": "id:setup-venv", "choice": "confirm"},
@@ -774,7 +778,11 @@ rejected decisions; the sessions that improvised did not):
           continue
       # your judgment per item: a translated body, confirm, keep_twin, de/en …
       decisions.append({"key": it["key"], "choice": "confirm"})
-  print(json.dumps({"decisions": decisions}))
+  print(json.dumps({
+      "schema": rep["schema"],
+      "report_id": rep["report_id"],   # required — apply refuses without it
+      "decisions": decisions,
+  }))
   ```
 
 - **Feed decisions via stdin** (`apply DECK --decisions - --json`) — it
