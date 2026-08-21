@@ -893,11 +893,17 @@ def apply_slide_ids(
             details["proposed_slug"] = r.proposed_slug
         if r.proposed_title:
             details["proposed_title"] = r.proposed_title
+        # `normalize` has no accept flags of its own, so the remedy must name
+        # the command that does — quoting the bare flag here sent users to
+        # `normalize --accept-content-derived`, which does not exist (#892).
+        suggestion = r.reason
+        if r.accept_flag:
+            suggestion += f"; run `clm slides assign-ids {r.accept_flag}` to accept"
         review_items.append(
             ReviewItem(
                 file=r.file,
                 issue=f"slide_id_{r.severity}_refusal",
-                suggestion=r.reason,
+                suggestion=suggestion,
                 details=details,
             )
         )

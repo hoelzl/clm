@@ -139,6 +139,13 @@ class Refusal:
     reason: str
     proposed_slug: str | None = None
     proposed_title: str | None = None
+    #: The ``clm slides assign-ids`` option that would turn this refusal into
+    #: an assignment (e.g. ``--accept-content-derived``), or ``None`` when no
+    #: option would. The *reason* states only the fact; each surface renders
+    #: its own remedy from this field — ``normalize`` has no such option, so a
+    #: reason baking the flag in sent its users to a flag that does not exist
+    #: there (issue #892).
+    accept_flag: str | None = None
 
 
 @dataclass
@@ -362,6 +369,7 @@ def _stamp_refuse(
     severity: str = "soft",
     proposed_slug: str | None = None,
     proposed_title: str | None = None,
+    accept_flag: str | None = None,
 ) -> None:
     result.refusals.append(
         Refusal(
@@ -371,6 +379,7 @@ def _stamp_refuse(
             reason=reason,
             proposed_slug=proposed_slug,
             proposed_title=proposed_title,
+            accept_flag=accept_flag,
         )
     )
 
@@ -577,9 +586,10 @@ def _handle_stamp(
             result,
             file_str,
             cell.line_number,
-            f"headingless cell; pass {accept_flag} to accept",
+            "headingless cell",
             proposed_slug=proposed or None,
             proposed_title=extraction.text,
+            accept_flag=accept_flag,
         )
         stamp_slug[group_key] = None
         return
@@ -1097,9 +1107,10 @@ def _handle_slide(
                 file=file_str,
                 line=cell.line_number,
                 severity="soft",
-                reason=f"headingless slide; pass {accept_flag} to accept",
+                reason="headingless slide",
                 proposed_slug=proposed_slug,
                 proposed_title=proposed_title,
+                accept_flag=accept_flag,
             )
         )
         # Don't claim the slug — another extractable cell might want it.
@@ -1692,9 +1703,10 @@ def stamp_ids_in_companion_pair(
                     result,
                     str(en_comp),
                     en_cell.line_number,
-                    "headingless cell; pass --accept-content-derived to accept",
+                    "headingless cell",
                     proposed_slug=_proposed_slug_from_extraction(extraction, used_ids) or None,
                     proposed_title=extraction.text,
+                    accept_flag="--accept-content-derived",
                 )
                 continue
             target = _proposed_slug_from_extraction(extraction, used_ids)

@@ -1126,6 +1126,19 @@ class TestSlideIds:
         # File is untouched when nothing else writes.
         assert path.read_text(encoding="utf-8") == text
 
+    def test_soft_refusal_remedy_names_the_command_that_has_the_flag(self, tmp_path):
+        """The refusal surfaced through `normalize` must not quote a bare
+        `--accept-content-derived` — that flag lives on `clm slides
+        assign-ids`, and `normalize` rejects it with "No such option"
+        (issue #892). The remedy names the full command instead."""
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# Just some text without a heading\n'
+        path = _write_slide(tmp_path / "slides_misc.py", text)
+        result = normalize_file(path, operations=["slide_ids"])
+
+        [item] = result.review_items
+        assert "clm slides assign-ids --accept-content-derived" in item.suggestion
+        assert "pass --accept" not in item.suggestion
+
     def test_paired_de_en_use_en_heading(self, tmp_path):
         """Paired DE/EN slide cells share the EN-derived slug."""
         text = (
