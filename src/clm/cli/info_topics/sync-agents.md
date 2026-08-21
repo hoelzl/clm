@@ -281,6 +281,13 @@ still exists, #650), `ambiguous_alignment` (genuinely ambiguous residue
 pending-twin pool slot whose lone new cell on the pending side is not a
 claimable landed twin (Y8 — see "Pending-twin pool claims" below); carries
 **no** answers: reconcile by editing, minting ids, then re-report),
+`pool_pairing_shifted` (an in-flight class transition — a fork, unify, or
+id-stamp — took a cell out of this positional pool, so the remaining
+slots' cross-side pairings are order guesses; every pool row that is not
+provably at base on both sides is suspended for the pass. Carries **no**
+answers: resolve the transition the detail names (answer its framed row,
+or complete/revert it in the files), then re-report — untouched slots
+re-derive mechanically and nothing is banked meanwhile, #826),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
 engine writes the twin's attribute; see "Forking a shared cell" below), and

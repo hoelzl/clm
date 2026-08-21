@@ -3825,3 +3825,84 @@ class TestBrokenOwnerRemove:
         assert 'for_slide="s1x"' in vo_de and 'for_slide="s1x"' in vo_en
         assert "Zwei VO" in vo_de and "Two VO" in vo_en  # narration survived
         deck.assert_converged()
+
+
+class TestShiftedPoolApply:
+    """#826 end-to-end: a decision-free apply on a mid-transition pool must
+    write nothing into the pool and keep every pool ledger entry — before
+    the fix it overwrote the mis-married sibling (tags in the filed shape,
+    whole bodies in the probe variants) and the next pass duplicated it."""
+
+    DE_FORK = (
+        HEADER_DE,
+        _slide("s0", "de", "Titel"),
+        '# %% tags=["a"]\nbody = 1\n\n',
+        '# %% tags=["b"]\nbody = 1\n\n',
+    )
+    EN_FORK = (
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        '# %% tags=["a"]\nbody = 1\n\n',
+        '# %% tags=["b"]\nbody = 1\n\n',
+    )
+
+    def _forked_deck(self, tmp_path: Path) -> _Deck:
+        deck = _Deck(tmp_path, _build(*self.DE_FORK), _build(*self.EN_FORK))
+        deck.record()
+        deck.edit_de(
+            '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
+        )
+        return deck
+
+    def test_decision_free_apply_writes_nothing_into_the_pool(self, tmp_path: Path):
+        deck = self._forked_deck(tmp_path)
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        en_before = deck.en_path.read_text(encoding="utf-8")
+
+        outcome = deck.apply()
+
+        assert outcome.error is None, outcome.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        statuses = _statuses(outcome)
+        assert statuses.get("pos:s0/code/1") == "pending"
+        # The pool's ledger entries survive the pass untouched (the freeze):
+        # losing them would erode the base evidence to cold.
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        entries = ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        assert "pos:s0/code/0" in entries and "pos:s0/code/1" in entries
+
+    def test_completing_the_fork_by_hand_converges(self, tmp_path: Path):
+        deck = self._forked_deck(tmp_path)
+        deck.apply()  # the suspended pass — nothing lands in the pool
+
+        # The author completes the fork on the true twin (A.en).
+        deck.edit_en(
+            '# %% tags=["a"]\nbody = 1', '# %% lang="en" tags=["a"] slide_id="a-cell"\nbody = 1'
+        )
+        _, diff = deck.diff()
+        assert not any(i.action == "pool_pairing_shifted" for i in diff.items), [
+            (i.action, i.key, i.detail) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        # The migrated slot's stale pos entry clears as a mechanical
+        # record_remove on the following pass (the standing fork shape —
+        # "converges in two passes", not a suspension residue).
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} <= {"record_remove"}, [
+            (i.action, i.key, i.detail) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        deck.assert_converged()
+        # The untouched sibling kept its own bytes throughout.
+        assert '# %% tags=["b"]\nbody = 1' in deck.de_path.read_text(encoding="utf-8")
+        assert '# %% tags=["b"]\nbody = 1' in deck.en_path.read_text(encoding="utf-8")
+
+    def test_suspension_rows_are_answerless(self, tmp_path: Path):
+        deck = self._forked_deck(tmp_path)
+        _, diff = deck.diff()
+        [row] = [i for i in diff.items if i.action == "pool_pairing_shifted"]
+        assert doc_apply.item_answers(row) == ()
+        assert doc_apply.item_resolution(row) == "manual"

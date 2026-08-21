@@ -1239,7 +1239,15 @@ def _earlier_pool_removal(items: list[DiffItem], item: DiffItem) -> DiffItem | N
 #: dedicated action (#630 F2) — keying it on ``ambiguous_alignment``, as
 #: #625 briefly did, changed the recording behavior of every unrelated
 #: pre-existing emitter of that action.
-_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit", "remove_vs_split"})
+#: ``pool_pairing_shifted`` joined for #826: the differ suspended the pool's
+#: cross-side trust (a class transition shifted its accounting), so a
+#: wholesale re-record from the current snapshot would bank exactly the
+#: order-guess marriages the suspension exists to keep out of the ledger —
+#: and :func:`_drop_unresolved_from_pools` would then erase even the slots'
+#: old baselines. The dedicated action keeps the #630 gating rule intact.
+_POOL_FREEZING_ACTIONS = frozenset(
+    {"stamp_vs_new", "remove_vs_edit", "remove_vs_split", "pool_pairing_shifted"}
+)
 
 
 def _frozen_pools(unresolved_items: list[DiffItem]) -> set[tuple[str, str]]:

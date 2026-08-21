@@ -2179,7 +2179,11 @@ twins' tag sets diverged with no attributable direction — answer `de`/`en` to
 mirror **only that side's tag set** onto the twin, bodies untouched; while it
 is framed it suppresses the member's other rows — body, layout, and owner —
 which re-frame on the next report once the tags are reconciled),
-`ambiguous_alignment`, `verify_cold`, and friends. Every JSON item carries an
+`ambiguous_alignment`, `verify_cold`, `pool_pairing_shifted` (a class
+transition — fork/unify/id-stamp — shifted a positional pool's per-side
+accounting, so its slots' cross-side pairings are order guesses; the pool's
+rows are suspended for the pass, answerless — resolve the transition and
+re-report, #826), and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
 (`de` / `en`) so an agent can answer without re-reading files. A report whose
