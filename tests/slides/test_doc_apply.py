@@ -3906,3 +3906,76 @@ class TestShiftedPoolApply:
         [row] = [i for i in diff.items if i.action == "pool_pairing_shifted"]
         assert doc_apply.item_answers(row) == ()
         assert doc_apply.item_resolution(row) == "manual"
+
+
+class TestSilentShiftedPoolFreeze:
+    """Review F1/F6: a marked pool can be SILENT — the fork hits the pool's
+    last cell, migration and absorb claim their true targets, every slot
+    reads same/same, so no suspension row exists — yet its fresh snapshot
+    still contains the absorbed estranged twin. A landed answerable sibling
+    must not re-record it."""
+
+    def _deck(self, tmp_path: Path) -> _Deck:
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["a"]\na_de = 1\n\n',  # divergent bodies at base
+            '# %% tags=["b"]\nother = 2\n\n',
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% tags=["a"]\na_en = 1\n\n',
+            '# %% tags=["b"]\nother = 2\n\n',
+        )
+        deck = _Deck(tmp_path, de, en)
+        deck.record()
+        # Fork the LAST pool cell on DE — the silent marked shape.
+        deck.edit_de(
+            '# %% tags=["b"]\nother = 2',
+            '# %% lang="de" tags=["b"] slide_id="b-cell"\nother = 2',
+        )
+        return deck
+
+    def test_landed_sibling_answer_does_not_rerecord_the_pool(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        _, diff = deck.diff()
+        # The shape's premise: marked but silent.
+        assert not any(i.action == "pool_pairing_shifted" for i in diff.items)
+        assert ("s0", "code") in diff.shifted_pools
+        assert any(
+            i.action == "pending_divergence" and i.key == "pos:s0/code/0" for i in diff.items
+        )
+
+        outcome = deck.apply(
+            {"pos:s0/code/0": doc_apply.Decision(key="pos:s0/code/0", choice="de")}
+        )
+        assert outcome.error is None, outcome.to_payload()
+        # The migrated slot's two-sided baseline survives (before the fix the
+        # wholesale re-record replaced it with the absorbed twin's one-sided
+        # entry, and _drop_unresolved_from_pools then erased even that).
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        entries = ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        b_entry = entries["pos:s0/code/1"].entry
+        assert b_entry.de_fp is not None and b_entry.en_fp is not None
+        # F6: the landed answer's recording deferral is said, not silent.
+        [res] = [r for r in outcome.results if r.key == "pos:s0/code/0"]
+        assert "freeze" in res.reason, res
+
+        # The next decision-free pass must not duplicate the absorbed twin.
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        outcome2 = deck.apply()
+        assert outcome2.error is None, outcome2.to_payload()
+        de_after = deck.de_path.read_text(encoding="utf-8")
+        assert de_after.count("other = 2") == 1, de_after
+        assert de_after == de_before
+
+    def test_one_sided_fork_frame_advertises_no_mark_twin(self, tmp_path: Path):
+        """Review F4: `mark_twin` writes the lang attr onto an EXISTING twin
+        cell; a one-sided fork frame has none and the executor refuses it —
+        never advertise it (the M6 doctrine)."""
+        deck = self._deck(tmp_path)
+        _, diff = deck.diff()
+        [fork] = [i for i in diff.items if i.action == "fork_pending_twin"]
+        assert doc_apply.item_answers(fork) == ()
+        assert doc_apply.item_resolution(fork) == "manual"

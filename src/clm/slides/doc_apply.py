@@ -200,6 +200,18 @@ def item_answers(item: DiffItem) -> tuple[str, ...]:
       ``slide_id``, and re-report) otherwise.
     """
     answers = decision_vocabulary(item.action)
+    if item.action == "fork_pending_twin":
+        member = item.member
+        if member is not None and member.is_one_sided:
+            # `mark_twin` writes the lang attribute onto an EXISTING twin
+            # cell; a one-sided fork frame has none — the executor refuses
+            # with "supply the twin first" (review F4, the M6 doctrine).
+            # The absorbed pool candidate is deliberately NOT offered as
+            # the twin: in the mispaired #826 shape it is the wrong cell.
+            # The frame stays `resolution: manual`; its detail names the
+            # hand repair (mark the true twin's lang + id in the files).
+            return tuple(a for a in answers if a != "mark_twin")
+        return answers
     if item.action not in ("verify_cold", "verify_translation"):
         return answers
     member = item.member
@@ -2259,7 +2271,12 @@ def apply_deck(
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
     target = ledger.decks.setdefault(deck_key, DeckLedger())
     priority = {"record_group_rename": 0, "record_key_migration": 1}
-    frozen_pools = _frozen_pools(unresolved_items)
+    # The freeze unions the differ's own shifted-pool knowledge (#826, review
+    # F1): a marked pool can be SILENT — migration and absorb both hit their
+    # true targets, so no `pool_pairing_shifted` row exists to key the freeze
+    # on — yet its fresh snapshot still contains the absorbed estranged twin,
+    # and a landed answerable sibling would re-record exactly that.
+    frozen_pools = _frozen_pools(unresolved_items) | set(diff.shifted_pools)
     rerecorded_pools: set[tuple[str, str]] = set()
     #: `record_neutral` keys to re-stamp once every record has landed (#764).
     structural_keys: set[str] = set()
@@ -2286,29 +2303,42 @@ def apply_deck(
     unresolved_keys |= {
         item.key for item, _ in landed if item.action == "conflict_tags" or item.defer_recording
     }
+
+    def _relabel_unrecorded(item: DiffItem, deferral: str) -> None:
+        # ItemResult is frozen — replace by index; (key, action) matching
+        # because keys repeat across a member's rows. A record-only row that
+        # landed nothing at all must not read "recorded" — downstream agents
+        # key on the status (design F2.1: honest status, not just an amended
+        # reason).
+        for i, result in enumerate(outcome.results):
+            if (
+                result.key == item.key
+                and result.action == item.action
+                and result.status in ("applied", "recorded")
+                and not result.reason.endswith(deferral)
+            ):
+                status = "deferred" if result.status == "recorded" else result.status
+                outcome.results[i] = ItemResult(
+                    result.key, result.action, status, result.reason + deferral
+                )
+                break
+
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
         if item.key in unresolved_keys:
             if item.action == "conflict_tags" or item.defer_recording:
                 continue  # records nothing BY DESIGN — no deferral suffix
-            deferral = " (recording deferred: unresolved sibling item on this member)"
-            for i, result in enumerate(outcome.results):
-                if (
-                    result.key == item.key
-                    and result.action == item.action
-                    and result.status in ("applied", "recorded")
-                    and not result.reason.endswith(deferral)
-                ):
-                    # ItemResult is frozen — replace by index; (key, action)
-                    # matching because keys repeat across a member's rows.
-                    # A record-only row that landed nothing at all must not
-                    # read "recorded" — downstream agents key on the status
-                    # (design F2.1: honest status, not just an amended
-                    # reason).
-                    status = "deferred" if result.status == "recorded" else result.status
-                    outcome.results[i] = ItemResult(
-                        result.key, result.action, status, result.reason + deferral
-                    )
-                    break
+            _relabel_unrecorded(
+                item, " (recording deferred: unresolved sibling item on this member)"
+            )
+            continue
+        scope = _pool_scope(item)
+        if scope is not None and scope in frozen_pools:
+            # The freeze inside _record_item would silently skip the bank
+            # while the ItemResult read "recorded" (review F6) — say so.
+            _relabel_unrecorded(
+                item,
+                " (recording deferred: the pool's pending conflicts freeze it this pass)",
+            )
             continue
         rerecorded_pools |= _record_item(
             target, fresh, item, provenance=provenance, frozen_pools=frozen_pools

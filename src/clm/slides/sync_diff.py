@@ -443,6 +443,16 @@ class DeckDiff:
     in_sync_count: int = 0
     observations: list[Observation] = field(factory=list)
     refusal: NormalizeRefusal | None = None
+    #: (group, kind) pools whose per-side accounting the differ shifted this
+    #: pass (#826). Apply unions these into its pool freeze: a marked pool
+    #: can be SILENT — migration and absorb both hit their true targets, so
+    #: every slot reads same/same and no ``pool_pairing_shifted`` row exists
+    #: to freeze it — yet a landed answerable sibling (a ``pending_divergence``
+    #: answer, say) would wholesale-re-record it from a snapshot that still
+    #: contains the absorbed estranged twin, destroying the migrated slot's
+    #: baseline and duplicating the cell mechanically on the next pass
+    #: (adversarial review F1). Ledger mode only; empty in snapshot mode.
+    shifted_pools: frozenset[tuple[str, str]] = frozenset()
 
     @property
     def is_clean(self) -> bool:
@@ -646,6 +656,12 @@ class _Differ:
         #: their own recorded base are exempt — per-side fingerprint
         #: identity needs no cross-side guess.
         self._shifted_pools: dict[tuple[str, str], str] = {}
+        #: handles whose body/content match against an unconsumed pool entry
+        #: was REFUSED by the #644 deficit gate (a backfilling add masks the
+        #: gap) — the member itself must frame `stamp_vs_new`, never take
+        #: the mechanical copy (#826, review F3). A set, not the dict's
+        #: value: `setdefault` keeps only the first cause per pool.
+        self._shift_causes: set[str] = set()
         #: handles whose placement was framed with NO base evidence (a cold
         #: or order-blind member under different brackets per side) — their
         #: same-key verify_cold row is suppressed for the pass (#654; the
@@ -801,6 +817,7 @@ class _Differ:
 
     def _finish(self) -> DeckDiff:
         split_observations = self._reframe_group_split_removals()
+        ledger_mode = self.base is not None and not self.base.complete
         return DeckDiff(
             items=self.items,
             in_sync_count=self.in_sync,
@@ -809,6 +826,7 @@ class _Differ:
                 + split_observations
                 + self._uniform_drift_observation()
             ),
+            shifted_pools=frozenset(self._shifted_pools) if ledger_mode else frozenset(),
         )
 
     def _uniform_drift_observation(self) -> list[Observation]:
@@ -1158,14 +1176,23 @@ class _Differ:
             if not gate_open:
                 # #644 forbids the migration (a byte-identical NEW id'd cell
                 # must not steal a still-present pool cell's entry) — but the
-                # body match is still evidence that this member may have LEFT
-                # the pool (e.g. a fork whose side also gained a new cell,
-                # which backfills the count and closes the deficit gate). The
-                # entry stays; the pool's cross-side trust is suspended for
-                # the pass (#826) — marking only demotes mechanicals to
-                # frames, so the #644 concern (entry theft) does not apply.
-                self._shifted_pools.setdefault((group, member.kind), new_handle)
-                return None
+                # match can still be evidence that this member LEFT the pool
+                # (a fork/stamp whose side also gained a new cell, which
+                # backfills the count and closes the deficit gate). The two
+                # shapes separate by ACCOUNTING, not by the match alone: a
+                # clone's bytes are still fully present in the pool (as many
+                # matching cells as unclaimed entries — the pinned #644
+                # regression shape), a departure's are not. Only the
+                # under-accounted shape marks; the entry stays either way,
+                # and marking only demotes mechanicals to frames, so the
+                # #644 concern (entry theft) does not apply.
+                if self._pool_bytes_unaccounted(
+                    group, member.kind, member, use_body=not content_match
+                ):
+                    self._shifted_pools.setdefault((group, member.kind), new_handle)
+                    self._shift_causes.add(new_handle)
+                    return None
+                continue
             self.key_migrations[entry.key] = new_handle
             for fp in (entry.de_fp, entry.en_fp):
                 if fp is not None:
@@ -1176,6 +1203,54 @@ class _Differ:
             self._shifted_pools.setdefault((group, member.kind), new_handle)
             return entry
         return None
+
+    def _pool_bytes_unaccounted(
+        self, group: str, kind: str, member: Member, *, use_body: bool
+    ) -> bool:
+        """True when, on a side the member populates, the pool currently
+        holds FEWER cells with the member's bytes than unclaimed base
+        entries record them — the id'd member is then plausibly a departed
+        pool cell (stamp/fork masked by a backfilling add, #826 review F3),
+        not a new clone of boilerplate still in place (the #644 shape, which
+        must stay a plain mechanical copy). ``use_body`` compares body
+        fingerprints (the fork evidence channel); otherwise full content
+        fingerprints (modulo ``slide_id``, so the stamp itself is invisible).
+        """
+        assert self.base is not None
+        base_group = self._base_group_for(group)
+        for side in _SIDES:
+            cell = member.side(side)
+            if cell is None:
+                continue
+            want = _body_fp(cell) if use_body else content_fingerprint(cell)
+            base_count = 0
+            for entry in self.base.members.values():
+                if entry.key in self.matched_base_keys or not entry.key.startswith("pos:"):
+                    continue
+                token, ekind, _ = entry.key.split(":", 1)[1].rsplit("/", 2)
+                if token != base_group or ekind != kind:
+                    continue
+                if use_body:
+                    efp = entry.de_body_fp if side == "de" else entry.en_body_fp
+                else:
+                    efp = entry.side_fp(side)
+                if efp == want:
+                    base_count += 1
+            cur_count = 0
+            for candidate, owner_group in self._pos_members:
+                if id(candidate) in self.absorbed_pos or candidate.kind != kind:
+                    continue
+                if _member_group_token(candidate, owner_group) != group:
+                    continue
+                ccell = candidate.side(side)
+                if ccell is None:
+                    continue
+                cfp = _body_fp(ccell) if use_body else content_fingerprint(ccell)
+                if cfp == want:
+                    cur_count += 1
+            if cur_count < base_count:
+                return True
+        return False
 
     def _stamped_candidate_exists(self, group: str, kind: str, side: Lang) -> bool:
         """An unmatched one-sided id'd current member on ``side`` in this
@@ -1430,6 +1505,32 @@ class _Differ:
             return
         if member.is_one_sided:
             side = "de" if member.de is not None else "en"
+            if handle in self._shift_causes:
+                # This member IS the marked cause of a shifted pool: the
+                # gate-closed body match (#644 refused the migration) says
+                # its bytes sit in an unconsumed pool entry, and the deficit
+                # scan below is blind to it — a backfilling add masks the
+                # gap (adversarial review F3). The mechanical copy would
+                # duplicate the cell while its true twin still sits in the
+                # pool — frame instead (P8), same vocabulary as the deficit
+                # shape.
+                self.emit(
+                    handle,
+                    "conflict",
+                    "stamp_vs_new",
+                    "both",
+                    f"new id'd cell on the {side} side whose bytes match an "
+                    f"unconsumed cell of this pool while the pool's pairing "
+                    f"is shifted — possibly that cell stamped (the pool "
+                    f"count is backfilled by another new cell, so the gap "
+                    f"is masked); answer treat_as_new if it is a genuinely "
+                    f"new cell (copies it to the twin), or reconcile the "
+                    f"stamp manually",
+                    group=group,
+                    side=side,
+                    member=member,
+                )
+                return
             gap_scope = self._id_half_gap(group, member.kind, side)
             if self._pool_side_deficit(group, member.kind, side) or gap_scope is not None:
                 # A base cell of this pool is unaccounted for on this side —
@@ -2978,7 +3079,8 @@ class _Differ:
             f"transition on {cause} took a cell out of the shared pool, so this "
             f"slot's pairing is an order guess (per-side states: de {de_state}, "
             f"en {en_state}) and its row is suspended — complete or revert that "
-            f"transition (answer its framed row), then re-report; slots whose "
+            f"transition (answer its framed row where one is advertised, or "
+            f"complete/revert it in the files), then re-report; slots whose "
             f"sides sit at base re-derive mechanically",
             group=group,
             member=de_member or en_member,

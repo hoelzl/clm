@@ -2586,3 +2586,30 @@ class TestLoneCandidateAffinity:
         assert "stays suppressed until the pool's membership changes" in slot.detail
         assert "claim binds" not in slot.detail
         assert "re-frames once the rename is recorded" not in slot.detail
+
+
+class TestShiftCauseStampSuspicion:
+    """Review F3: a plain one-half id stamp whose pool count is backfilled
+    by another new cell closes the #644 deficit gate — the migration
+    correctly refuses, but the member itself must then frame `stamp_vs_new`
+    instead of taking the mechanical `copy_new_shared` that duplicates the
+    stamped cell's bytes into the twin file."""
+
+    def test_stamp_with_backfilling_add_frames_stamp_vs_new(self):
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["a"]\na_val = 1\n\n',
+            '# %% tags=["b"]\nother = 2\n\n',
+        )
+        en0 = de0.replace(HEADER_DE, HEADER_EN).replace('lang="de"', 'lang="en"')
+        base = _snapshot(de0, en0)
+        base.complete = False
+        de = de0.replace(
+            '# %% tags=["b"]\nother = 2',
+            '# %% tags=["b"] slide_id="b-cell"\nother = 2\n\n# %%\nnewcell = 3',
+        )
+        diff = _diff(base, de, en0)
+        rows = {(i.action, i.key) for i in diff.items}
+        assert ("copy_new_shared", "id:b-cell") not in rows, rows
+        assert ("stamp_vs_new", "id:b-cell") in rows, rows
