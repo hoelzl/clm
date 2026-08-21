@@ -407,11 +407,13 @@ class _Parser:
         inherited-id narrative (``slide_id`` equal to the owning slide's) is
         exactly such a duplicate — a normalize-first refusal, per §12.1.
 
-        Keying refusals return *before* pairing, so the §3.4 conditions that
-        need pairing to judge (id-less localized/narrative vs the #443
-        transition) are not enumerated alongside them — rule-2 resolution is
-        meaningless without unique keys. That costs no extra author round
-        trip: ``normalize --stamp-ids`` repairs both classes in one pass.
+        Only *duplicate ids* return before pairing (rule-2 resolution is
+        meaningless without unique keys). Id-less anchors are recorded here
+        but do not stop the parse: segmentation falls back to a synthetic
+        group token, so the §3.4 conditions that need pairing to judge
+        (id-less localized/narrative vs the #443 transition) are enumerated
+        into the same refusal — one repair round, never a class per report
+        (#892).
         """
         for lang in LANGS:
             counts: Counter[str] = Counter()
@@ -817,7 +819,17 @@ class _Parser:
 
     def run(self) -> ParseOutcome:
         self.check_keying()
-        if self.refusals:
+        if any(r.code == "duplicate_id" for r in self.refusals):
+            # Only duplicate ids poison pairing (one key resolving to two
+            # members makes rule-2 resolution meaningless) — that class must
+            # return before phase 2. An id-less ANCHOR does not: segmentation
+            # falls back to a synthetic `~idless@<line>` group token, so
+            # phases 2-3 can run and `check_normalized` enumerates the
+            # §3.4 conditions (idless_localized / idless_narrative) into the
+            # SAME refusal. Refusal classes surfacing one per repair round
+            # turned a single fix into N report cycles with no way to know N
+            # in advance (#892); the deck still never escapes this method
+            # while any refusal stands.
             return ParseOutcome(refusal=NormalizeRefusal(reasons=self.refusals))
 
         # Slide-hood is a pair property: a boundary only one half draws opens

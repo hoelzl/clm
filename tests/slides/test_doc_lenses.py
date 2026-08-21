@@ -489,6 +489,43 @@ class TestRefusals:
         assert outcome.refusal is not None
         assert {r.code for r in outcome.refusal.reasons} == {"idless_narrative"}
 
+    def test_all_refusal_classes_enumerate_in_one_pass(self):
+        """#892: an id-less anchor and an id-less localized cell that are
+        both present from the first parse must land in ONE refusal — before
+        the fix the anchor class returned early and the localized class only
+        surfaced after the anchors were repaired, one repair round per
+        class with no way to know how many rounds remain."""
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("a", "de", "A")
+            + '# %% [markdown] lang="de"\n# ohne Id\n\n'
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neu\n\n'
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A"))
+        outcome = parse_bundle(de, en)
+        assert not outcome.ok
+        assert outcome.refusal is not None
+        codes = {r.code for r in outcome.refusal.reasons}
+        assert codes == {"idless_anchor", "idless_localized"}
+
+    def test_duplicate_id_still_returns_before_pairing(self):
+        """A duplicate id poisons pairing (one key, two members), so it must
+        keep the early return — the §3.4 classes are NOT enumerated beside
+        it (they need the pairing that cannot run)."""
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("a", "de", "A")
+            + _slide("a", "de", "A again")
+            + '# %% [markdown] lang="de"\n# ohne Id\n\n'
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A"))
+        outcome = parse_bundle(de, en)
+        assert not outcome.ok
+        assert outcome.refusal is not None
+        codes = {r.code for r in outcome.refusal.reasons}
+        assert "duplicate_id" in codes
+        assert "idless_localized" not in codes
+
     def test_refusal_never_raises(self):
         # Degenerate input: not a deck at all — still a typed outcome.
         outcome = parse_bundle("just some text\n", "other text\n")
