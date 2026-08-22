@@ -330,7 +330,11 @@ not listed — fix the duplicates first, then the next report enumerates the
 rest. Only the id-less codes (`idless_anchor`, `idless_localized`,
 `idless_narrative`) are repaired by `clm slides normalize --stamp-ids` — and
 the refusal header names that command only when at least one such reason is
-present. The others carry their own `hint:` line:
+present. That command now works on exactly these decks: when the pair is not
+text-unifiable (the historical dead end — the new one-sided cells that need
+stamping were what broke the unify walk, so report and stamp-ids pointed at
+each other, #892), stamping runs from the doc-lens pairing instead since
+CLM {version}. The others carry their own `hint:` line:
 
 | Code | What it means | Fix |
 |---|---|---|
@@ -695,9 +699,11 @@ This works because the `slide_id` lets `apply` place the twin unambiguously. A
 new **un-id'd positional** cell (a `# %%` code cell with no `slide_id`) inserted
 among existing cells is instead reported `verify_cold`: its ordinal aliases a
 *different* cell on the other half, so the engine cannot mirror it mechanically.
-**Mint a `slide_id`** on the new cell (e.g. `clm slides assign-ids`, or add one
-by hand) and re-`report` — it then frames `translate_new` / `copy_new_shared`
-and the twin is created for you.
+Run **`clm slides normalize --stamp-ids`** — since CLM {version} (#892) it
+stamps one-sided cells like this from the doc-lens pairing, so a
+non-unifiable pair no longer soft-refuses back at you — or add a `slide_id`
+by hand, then re-`report`: the cell then frames `translate_new` /
+`copy_new_shared` and the twin is created for you.
 
 ## Replacing a positional cell with id-keyed cells — `stamp_vs_new`
 
