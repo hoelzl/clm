@@ -58,12 +58,12 @@ destruction + decision-free duplication), the masked-stamp mechanical copy
 (F3), the dead `mark_twin` advertisement on one-sided fork frames (F4),
 plus honesty/wording items (F5–F7).
 
-**Residue (tracked on the issue)**: the transition frame itself may still
+**Residue (tracked as #900)**: the transition frame itself may still
 absorb the *wrong* twin — framed, with both cells visible, never silent.
 Rescuing the true twin from a mispaired two-sided member needs
 (id, side)-keyed absorption; deliberate follow-up, not blocking.
 
-## #885 — apply corrupts the adopted side + silent translate_new drop (engine bugs, CRITICAL) — fix designed, next PR
+## #885 — apply corrupts the adopted side + silent translate_new drop (engine bugs, CRITICAL) — FIXED, PR #898
 
 Both symptoms reproduced from reconstructed field state
 (`slides_020_visualization_comparisons`, PythonCourses `87539410`).
@@ -85,14 +85,17 @@ rows wrote), and the differ re-frames the identical row with no memory —
 an advertised answer apply must refuse, with nothing naming the blocking
 order question.
 
-**Fix direction (one doctrine, "one order authority per pass")**: while an
-`order_decision` is present in the pass — answered or not — other
-order-family mechanics (`mirror_order`, member-keyed cross-group mirrors)
-**defer** per-item (the #824 keep-defer precedent; P7-compatible, no
-differ rewrite, no P6 tension) and re-derive from the post-answer state;
-the #720 guard's rejection becomes a self-explaining *deferral* naming the
-open order handle; the apply envelope gains a top-level `left_undone`
-summary so `wrote:true` + exit 1 is never the only signal.
+**Fix (PR #898, "one order authority per pass")**: while an
+`order_decision` is framed — answered or not — mechanical `mirror_order`
+rows defer per item (the #824 keep-defer precedent; P7-compatible) and
+re-derive from the settled order; the #720 guard's rejection becomes a
+self-explaining deferral naming the open order handle; the apply envelope
+gains a top-level `left_undone` summary. Its adversarial review's critical
+(C1: the order answer's own cluster emitter re-manufactured the displaced
+anchor, so pass 2's uncontested mirrors rewrote the preserved side and
+pass 3 read clean) is closed by anchor-first cluster emission, with the
+flagship test walking the loop to convergence; deferred pool-handle
+mirrors additionally join the recording freeze (I1).
 
 ## #892 — report ↔ normalize --stamp-ids deadlock (workflow defect, HIGH) — partially fixed, remainder designed
 
@@ -111,21 +114,23 @@ have — the remedy is now structured, each surface renders its own);
 **PR #895** (all refusal classes enumerate in ONE parse — only
 `duplicate_id`, which genuinely poisons pairing, still returns early).
 
-Remaining (designed, next PRs): the deadlock dissolution itself. The
-doc-lens parser is the only component that can safely decide
-one-sidedness (the unify layer cannot represent a one-sided shared cell at
-all), so per design §3.4 the fix is **not** a stamp-ids carve-out and
-**not** re-entering cold-pairing heuristics into the engine:
-
-- **B2**: one-sided positional `verify_cold` rows gain a mint answer
-  (slug) — everything the executor needs is already on the item; no twin
-  exists, so slug divergence is impossible by construction.
-- **B1**: `NORMALIZE_FIXABLE` parse refusals become framed `mint_id`
-  decision rows (proposed slug from the assign-ids extractors, answerable
-  with an operator slug; pair-atomic at member level — strictly stronger
-  than the file-level unify gate). The differ still never diffs an id-less
-  localized member; the refusal-to-frame conversion is P8(c)'s sanctioned
-  route.
+The dissolution itself landed as **PR #899**: not a stamp-ids carve-out
+and not mint_id rows in `sync report` (that alternative is recorded as
+rejected in the §13 row — it re-enters normalization into the loop §3.4
+keeps out and needs apply-on-refused-deck + freshness-token carve-outs).
+Instead, when the text-level unify gate fails, `--stamp-ids` stamps from
+`parse_bundle` — the engine's one pairing authority — via
+`ParseOutcome.provisional_deck` (strict never-diff contract): localized/
+narrative twins share one EN-authority slug; one-sided cells (id-less
+anchors; shared cells inside two-sided groups, whose `verify_cold` was an
+answerless dead end) stamp solo; adjacent one-sided id-less anchor twins
+pair by cursor per lens pool class. Its adversarial review found two NEW
+circles of the same species (a second run's false "not unifiable"
+refusal; the `verify_cold` remedy naming the stamper where it skips
+one-sided groups) plus a false "tokens never merge" premise, a
+kind-blind twin zip, and a silent empty-slug skip — all fixed pre-merge.
+Deliberate residue, documented: a twin the lens cannot see mints a
+wrong-but-FRAMED identity, repaired by `rename-id`.
 
 ## #787 — ceremony backlog (enhancements; not part of this arc's bug scope)
 
@@ -141,8 +146,8 @@ the refusal names the exact key path).
 | Issue | Verdict | Status |
 |---|---|---|
 | #826 | engine bug (silent data loss + trust corruption + livelock) | fixed — PR #896 |
-| #885 | engine bugs (proof laundering + dead advertised answer + envelope gap) | fix designed; next PR |
-| #892 | workflow defect (gate circularity) + two papercuts | papercuts fixed (#894, #895); mint path designed |
+| #885 | engine bugs (proof laundering + dead advertised answer + envelope gap) | fixed — PR #898 |
+| #892 | workflow defect (gate circularity) + two papercuts | fixed — PRs #894, #895, #899 |
 | #787 | enhancement backlog + one doc bug | doc bug fixed (#893); backlog stays open |
 | — | agent misunderstandings | **none found** |
 
