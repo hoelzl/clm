@@ -40,6 +40,7 @@ from clm.slides.doc_identity import content_fingerprint
 from clm.slides.doc_lenses import LoadedBundle
 
 __all__ = [
+    "AnchorAdjacencyError",
     "DeckEmitter",
     "DeckWriteError",
     "new_companion_path",
@@ -51,6 +52,18 @@ _SIDES: tuple[Lang, Lang] = ("de", "en")
 
 class DeckWriteError(Exception):
     """A deck mutation/emission failure the caller must handle per item."""
+
+
+class AnchorAdjacencyError(DeckWriteError):
+    """The #720 refusal: an anchor mint would land away from its group.
+
+    Typed so apply can distinguish "the pair's order is contested" from
+    other write failures: while an order question is framed in the same
+    pass, this refusal is a *sequencing* state (answer the order row, then
+    the mint lands), not a dead end — reported as a deferral naming the
+    blocker instead of a bare rejection the differ re-frames identically
+    forever (#885 symptom 1).
+    """
 
 
 def _other(lang: Lang) -> Lang:
@@ -239,7 +252,7 @@ class DeckEmitter:
             return
         first = min(member_slots)
         if insert_at != first:
-            raise DeckWriteError(
+            raise AnchorAdjacencyError(
                 f"cannot mint the {target} twin of {member.key.render()} at the "
                 f"mirrored-predecessor slot: it would separate the slide from its "
                 f"group's existing {target} cells — the halves' group order "

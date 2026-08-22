@@ -3979,3 +3979,253 @@ class TestSilentShiftedPoolFreeze:
         [fork] = [i for i in diff.items if i.action == "fork_pending_twin"]
         assert doc_apply.item_answers(fork) == ()
         assert doc_apply.item_resolution(fork) == "manual"
+
+
+class TestOneOrderAuthorityPerPass:
+    """#885: while an `order_decision` is framed, no mechanical `mirror_order`
+    may co-execute (symptom 2 — an answered scope decision "adopt DE" ran
+    beside member-keyed mirrors derived from the contested pre-answer
+    bracketing and rewrote the side the answer designated to preserve), and
+    the #720 anchor-mint refusal becomes a deferral naming the open order
+    question (symptom 1 — the bare rejection re-framed identically forever)."""
+
+    def _order_contested_deck(self, tmp_path: Path) -> _Deck:
+        de = _build(
+            HEADER_DE,
+            _slide("g1", "de", "Eins"),
+            _localized("g1-a", "de", "A DE"),
+            _slide("g2", "de", "Zwei"),
+            _localized("g2-n", "de", "N DE"),
+            _localized("g2-d", "de", "D DE"),
+            _slide("g3", "de", "Drei"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("g1", "en", "One"),
+            _localized("g1-a", "en", "A EN"),
+            _slide("g2", "en", "Two"),
+            _localized("g2-n", "en", "N EN"),
+            _localized("g2-d", "en", "D EN"),
+            _slide("g3", "en", "Three"),
+        )
+        deck = _Deck(tmp_path, de, en)
+        deck.record()
+        # Strip ~groups order coverage (the confirm-seeded / order-blind
+        # ledger era): a group-order divergence then FRAMES order_decision
+        # instead of directing, while member-level placement trust stays.
+        ledger_path = doc_ledger.ledger_path_for(deck.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        dl = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        dl.group_order = []
+        dl.group_order_by_side = {}
+        doc_ledger.save(ledger, ledger_path)
+        return deck
+
+    def test_answered_order_decision_defers_coemitted_mirrors(self, tmp_path: Path):
+        deck = self._order_contested_deck(tmp_path)
+        # EN corruption (however it arose): g2's anchor displaced AFTER its
+        # own two member cells — the members physically bracket under g1.
+        en = deck.en_path.read_text(encoding="utf-8")
+        block_anchor = _slide("g2", "en", "Two")
+        block_members = _localized("g2-n", "en", "N EN") + _localized("g2-d", "en", "D EN")
+        assert block_anchor + block_members in en
+        # ... and the anchor sequence itself diverges (g2 moved to file end,
+        # after g3), so the pair's order is visibly contested and frames
+        # `order_decision` on the uncovered ~groups scope — the field state.
+        scrambled = en.replace(block_anchor + block_members, block_members)
+        scrambled = scrambled.rstrip("\n") + "\n\n" + block_anchor.rstrip("\n") + "\n"
+        deck.en_path.write_text(scrambled, encoding="utf-8")
+
+        _, diff = deck.diff()
+        actions = {(i.action, i.outcome, i.key) for i in diff.items}
+        order_rows = [i for i in diff.items if i.action == "order_decision"]
+        mirror_rows = [i for i in diff.items if i.action == "mirror_order"]
+        assert order_rows, actions
+        assert mirror_rows, actions
+
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        rows = [
+            doc_apply.Decision(key=i.key, action="order_decision", choice="de") for i in order_rows
+        ]
+        outcome = deck.apply(decision_rows=rows)
+        assert outcome.error is None, outcome.to_payload()
+        # The side the answer designated to preserve is byte-untouched.
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        # The co-emitted mechanical mirrors deferred, saying why.
+        for r in outcome.results:
+            if r.action == "mirror_order" and r.key in {i.key for i in mirror_rows}:
+                assert r.status == "deferred", (r.status, r.reason)
+                assert "order" in r.reason
+        # And the envelope names the leftovers at the top level.
+        payload = outcome.to_payload()
+        assert any(row["action"] == "mirror_order" for row in payload["left_undone"])
+
+        # Review C1: the loop must CONVERGE with the preserved side
+        # byte-identical throughout. The answer's own executor once
+        # re-emitted the g2 cluster in stream-encounter order — recreating
+        # the anchor-after-members corruption on EN, so pass 2's re-derived,
+        # now-uncontested mirrors rewrote DE decision-free and pass 3 read
+        # clean over the banked loss. Anchor-first cluster emission restores
+        # EN to base placement in pass 1, so pass 2 frames nothing for the
+        # moved members.
+        outcome2 = deck.apply()
+        assert outcome2.error is None, outcome2.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        en_after = deck.en_path.read_text(encoding="utf-8")
+        anchor = en_after.index('slide_id="g2"')
+        assert anchor < en_after.index('slide_id="g2-n"') < en_after.index('slide_id="g2-d"')
+        deck.assert_converged()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+
+    def test_deferred_pool_mirror_freezes_its_pool(self, tmp_path: Path):
+        """Review I1: a deferred POOL-handle mirror contributes nothing to
+        the freeze machinery (no member, `_pool_scope` skips `pool.`
+        markers) — a landed same-pool sibling then re-recorded the
+        cursor-married snapshot the deferral existed to keep out. The
+        deferred pool's scope now joins the recording freeze."""
+        de = _build(
+            HEADER_DE,
+            _slide("g1", "de", "Eins"),
+            _localized("g1-a", "de", "A DE"),
+            _localized("g1-b", "de", "B DE"),
+            _slide("g2", "de", "Zwei"),
+            _shared_code("x"),
+            _shared_code("y", 2),
+            _shared_code("z", 3),
+        )
+        en = (
+            de.replace(HEADER_DE, HEADER_EN)
+            .replace('lang="de"', 'lang="en"')
+            .replace("A DE", "A EN")
+            .replace("B DE", "B EN")
+            .replace("Eins", "One")
+            .replace("Zwei", "Two")
+        )
+        deck = _Deck(tmp_path, de, en)
+        deck.record()
+        ledger_path = doc_ledger.ledger_path_for(deck.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        dl = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        base_pool = {
+            k: (lm.entry.de_fp, lm.entry.en_fp)
+            for k, lm in dl.members.items()
+            if k.startswith("pos:g2/")
+        }
+        # Divergent g1-member order on both halves frames an (unrelated)
+        # order question; DE swaps y/z in g2's pool (a pool mirror_order
+        # that must defer) and edits x's tags (a mirror_tags that lands).
+        deck.edit_de(
+            _localized("g1-a", "de", "A DE") + _localized("g1-b", "de", "B DE"),
+            _localized("g1-b", "de", "B DE") + _localized("g1-a", "de", "A DE"),
+        )
+        dl.member_order = {
+            k: v for k, v in dl.member_order.items() if not (k[1] == "g1" and k[2] == "deck")
+        }
+        doc_ledger.save(ledger, ledger_path)
+        deck.edit_de(
+            '# %% tags=["keep"]\ny = 2\n\n# %% tags=["keep"]\nz = 3',
+            '# %% tags=["keep"]\nz = 3\n\n# %% tags=["keep"]\ny = 2',
+        )
+        deck.edit_de('# %% tags=["keep"]\nx = 1', '# %% tags=["alt"]\nx = 1')
+
+        _, diff = deck.diff()
+        assert any(i.action == "order_decision" for i in diff.items), [
+            (i.action, i.key) for i in diff.items
+        ]
+        assert any(i.action == "mirror_order" and "/pool." in i.key for i in diff.items), [
+            (i.action, i.key) for i in diff.items
+        ]
+
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        # The pool mirror deferred, and the landed sibling recorded nothing
+        # into the frozen pool — the base entries survive verbatim.
+        ledger = doc_ledger.load(ledger_path)
+        dl = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        after_pool = {
+            k: (lm.entry.de_fp, lm.entry.en_fp)
+            for k, lm in dl.members.items()
+            if k.startswith("pos:g2/")
+        }
+        assert after_pool == base_pool
+        [tags_row] = [r for r in outcome.results if r.action == "mirror_tags"]
+        assert "recording deferred" in tags_row.reason, tags_row
+
+    def test_mirror_order_without_open_order_question_still_executes(self, tmp_path: Path):
+        deck = self._order_contested_deck(tmp_path)
+        # keep order trust intact this time: re-record wholesale.
+        deck.record()
+        # A clean one-sided reorder inside g2 on DE only: swap n and d.
+        de = deck.de_path.read_text(encoding="utf-8")
+        n, d = _localized("g2-n", "de", "N DE"), _localized("g2-d", "de", "D DE")
+        deck.de_path.write_text(de.replace(n + d, d + n), encoding="utf-8")
+        _, diff = deck.diff()
+        assert not any(i.action == "order_decision" for i in diff.items), [
+            (i.action, i.key, i.detail) for i in diff.items
+        ]
+        assert any(i.action == "mirror_order" for i in diff.items)
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        [mirror] = [r for r in outcome.results if r.action == "mirror_order"]
+        assert mirror.status == "applied", (mirror.status, mirror.reason)
+        deck.assert_converged()
+
+    def test_blocked_anchor_mint_defers_naming_the_order_question(self, tmp_path: Path):
+        """#885 symptom 1: the #720 guard refused the translate_new anchor
+        mint for as long as the order divergence stood, the differ re-framed
+        the identical row with no memory, and nothing named the blocker.
+        While the same pass frames the order question, the refusal is now a
+        deferral naming it — and the envelope's `left_undone` carries it."""
+        de = _build(
+            HEADER_DE,
+            _slide("g1", "de", "Eins"),
+            _localized("g1-a", "de", "A DE"),
+            _slide("nb", "de", "Neu"),
+            _localized("nb-1", "de", "NB1 DE"),
+            _slide("g2", "de", "Zwei"),
+            _slide("g3", "de", "Drei"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("g1", "en", "One"),
+            _localized("g1-a", "en", "A EN"),
+            _slide("g2", "en", "Two"),
+            _slide("g3", "en", "Three"),
+            _localized("nb-1", "en", "NB1 EN"),
+        )
+        deck = _Deck(tmp_path, de, en)
+        deck.record()
+        # Order-blind ~groups coverage + a diverging EN anchor sequence, so
+        # the order question frames instead of directing.
+        ledger_path = doc_ledger.ledger_path_for(deck.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        dl = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        dl.group_order = []
+        dl.group_order_by_side = {}
+        doc_ledger.save(ledger, ledger_path)
+        # Remove nb from EN wholesale (its member's twin stays, misplaced at
+        # file end) and swap g2/g3 there: the mint's mirrored-predecessor
+        # slot now separates nb from its group's existing EN cell.
+        en_text = deck.en_path.read_text(encoding="utf-8")
+        g2, g3 = _slide("g2", "en", "Two"), _slide("g3", "en", "Three")
+        assert g2 + g3 in en_text
+        deck.en_path.write_text(en_text.replace(g2 + g3, g3 + g2), encoding="utf-8")
+        deck.edit_de(_slide("nb", "de", "Neu"), _slide("nb", "de", "Neu"))  # no-op sanity
+
+        _, diff = deck.diff()
+        order_rows = [i for i in diff.items if i.action == "order_decision"]
+        mint_rows = [i for i in diff.items if i.action == "translate_new" and i.key == "id:nb"]
+        assert order_rows, [(i.action, i.key) for i in diff.items]
+        assert mint_rows, [(i.action, i.key) for i in diff.items]
+
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:nb", action="translate_new", body="#\n# # New (EN)")
+            ]
+        )
+        assert outcome.error is None, outcome.to_payload()
+        [mint] = [r for r in outcome.results if r.key == "id:nb"]
+        assert mint.status == "deferred", (mint.status, mint.reason)
+        assert order_rows[0].key in mint.reason
+        payload = outcome.to_payload()
+        assert any(row["key"] == "id:nb" for row in payload["left_undone"])

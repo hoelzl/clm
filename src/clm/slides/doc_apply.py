@@ -69,7 +69,12 @@ from clm.slides.doc_ledger import (
     snapshot_deck,
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
-from clm.slides.doc_write import DeckEmitter, DeckWriteError, write_changed_files
+from clm.slides.doc_write import (
+    AnchorAdjacencyError,
+    DeckEmitter,
+    DeckWriteError,
+    write_changed_files,
+)
 from clm.slides.sync_diff import (
     FRAMED_ACTIONS,
     MECHANICAL_ACTIONS,
@@ -589,6 +594,15 @@ class ApplyOutcome:
                     "skipped",
                 )
             },
+            # #885: `wrote: true` + exit 1 was the ONLY signal that answered
+            # work did not land, and the causes hid in per-item statuses (or
+            # on stderr). One top-level list names every surprising leftover
+            # — the rows that took an answer or claimed mechanical execution
+            # and did not land. `pending` is the loop's normal state (framed,
+            # unanswered) and stays out.
+            "left_undone": [
+                r.payload() for r in self.results if r.status in ("rejected", "deferred", "failed")
+            ],
             "items": [r.payload() for r in self.results],
         }
 
@@ -1141,9 +1155,12 @@ class _Executor(DeckEmitter):
         target = _other(source)
         stream = self.streams.get((target, part), [])
         member_group: dict[int, str] = {}
+        anchor_ids: dict[str, int] = {}
         for group in self.deck.groups:
             for member in group.all_members():
                 member_group[id(member)] = group.anchor_id
+            if group.anchor is not None:
+                anchor_ids[group.anchor_id] = id(group.anchor)
         prefix: list[Member] = []
         clusters: dict[str, list[Member]] = {}
         cluster_order: list[str] = []
@@ -1167,7 +1184,26 @@ class _Executor(DeckEmitter):
         source_order = [gid for _, gid in sorted(anchored)]
         desired = [gid for gid in source_order if gid in clusters]
         desired += [gid for gid in cluster_order if gid not in desired]
-        new_stream = prefix + [m for gid in desired for m in clusters[gid]] + suffix
+
+        def cluster_cells(gid: str) -> list[Member]:
+            # Anchor FIRST, members in stream order. The cluster was
+            # collected in target-stream encounter order, so a displaced
+            # anchor — the very corruption an order answer repairs — would
+            # be re-emitted displaced: the answered pass then manufactures
+            # anchor-after-members on the adopted-into side, and one pass
+            # later the re-derived, now-uncontested member mirrors copy that
+            # corruption onto the side the answer designated to PRESERVE,
+            # after which the diff reads clean (#885 review C1). Anchors
+            # bracket their group by construction, so anchor-first IS the
+            # base placement; a subslide is its own group, so every cluster
+            # holds at most its own anchor.
+            cells = clusters[gid]
+            aid = anchor_ids.get(gid)
+            if aid is None:
+                return cells
+            return [m for m in cells if id(m) == aid] + [m for m in cells if id(m) != aid]
+
+        new_stream = prefix + [m for gid in desired for m in cluster_cells(gid)] + suffix
         if len(new_stream) != len(stream):  # pragma: no cover - pure regrouping
             raise _ItemError("group reorder would lose cells — reorder manually")
         self.streams[(target, part)] = new_stream
@@ -2123,6 +2159,21 @@ def apply_deck(
     ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
     unresolved_items: list[DiffItem] = []  # pending / rejected / failed
+    # #885 "one order authority per pass": while an `order_decision` is
+    # framed — answered or not — no mechanical `mirror_order` may co-execute.
+    # The field failure: an answered scope decision ("adopt DE's order")
+    # executed alongside member-keyed mirrors derived from the contested
+    # pre-answer bracketing, so one pass wrote two contradictory order
+    # authorities — the mirrors moved a slide-start cell across its own body
+    # cells on the side the answer designated as the one to PRESERVE. The
+    # mirrors defer per item (the #824 keep-defer shape, P7-clean) and
+    # re-derive from the post-answer state on the next report; a genuinely
+    # trust-backed mirror in an uncontested pass is untouched.
+    open_order_handles = [i.key for i in diff.items if i.action == "order_decision"]
+    #: (group, kind) pools whose mirror_order deferred — they must join the
+    #: recording freeze (the pool-handle key contributes nothing to
+    #: _frozen_pools and the row carries no member, #885 review I1).
+    deferred_pool_scopes: set[tuple[str, str]] = set()
     seen_decisions: set[str] = set()
     for _, item in ordered:
         if only_members is not None and item.key not in only_members:
@@ -2168,6 +2219,32 @@ def apply_deck(
                 landed.append((item, "apply"))
                 outcome.results.append(ItemResult(item.key, item.action, "recorded", item.detail))
             elif item.action in MECHANICAL_ACTIONS:
+                if item.action == "mirror_order" and open_order_handles:
+                    unresolved_items.append(item)
+                    if "/pool." in item.key:
+                        # A deferred POOL mirror must freeze its pool: the
+                        # pool-handle key contributes nothing to
+                        # _frozen_pools (`_pool_scope` skips pool. markers)
+                        # and the row carries no member, so a landed
+                        # same-pool sibling would otherwise re-record the
+                        # cursor-married snapshot the deferral exists to
+                        # keep out of the ledger (#885 review I1).
+                        body = item.key.split(":", 1)[1]
+                        group, tail, _ = body.rsplit("/", 2)
+                        deferred_pool_scopes.add((group, tail[len("pool.") :]))
+                    named_order_handles = ", ".join(open_order_handles[:3])
+                    outcome.results.append(
+                        ItemResult(
+                            item.key,
+                            item.action,
+                            "deferred",
+                            f"an order question is framed this pass "
+                            f"({named_order_handles}) — one order authority "
+                            f"per pass: answer it, re-report, and this mirror "
+                            f"re-derives from the settled order",
+                        )
+                    )
+                    continue
                 _execute_mechanical(ex, item)
                 landed.append((item, "apply"))
                 outcome.results.append(ItemResult(item.key, item.action, "applied", item.detail))
@@ -2218,6 +2295,34 @@ def apply_deck(
                     )
                 )
         except DeckWriteError as exc:
+            if isinstance(exc, AnchorAdjacencyError) and open_order_handles:
+                # #885 symptom 1: the #720 guard refuses the anchor mint for
+                # as long as the order divergence stands, the differ re-frames
+                # the identical row with no memory, and nothing named the
+                # blocker — an advertised answer apply refused forever. While
+                # the SAME pass frames the order question, the refusal is a
+                # sequencing state, not a dead end: say what unblocks it. The
+                # remedy differs by row kind (review M1): an answered row is
+                # re-answered after the order settles; a mechanical row
+                # simply re-derives.
+                remedy = (
+                    "answer that order question (if this document already "
+                    "does, its answer lands this pass), re-report, then "
+                    "re-answer this row"
+                    if decision is not None
+                    else "answer that order question, re-report, and this row re-derives"
+                )
+                unresolved_items.append(item)
+                outcome.results.append(
+                    ItemResult(
+                        item.key,
+                        item.action,
+                        "deferred",
+                        f"{exc} — the pair's order is contested and framed as "
+                        f"{open_order_handles[0]} this pass: {remedy}",
+                    )
+                )
+                continue
             status = "rejected" if decision is not None else "failed"
             unresolved_items.append(item)
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
@@ -2276,7 +2381,7 @@ def apply_deck(
     # true targets, so no `pool_pairing_shifted` row exists to key the freeze
     # on — yet its fresh snapshot still contains the absorbed estranged twin,
     # and a landed answerable sibling would re-record exactly that.
-    frozen_pools = _frozen_pools(unresolved_items) | set(diff.shifted_pools)
+    frozen_pools = _frozen_pools(unresolved_items) | set(diff.shifted_pools) | deferred_pool_scopes
     rerecorded_pools: set[tuple[str, str]] = set()
     #: `record_neutral` keys to re-stamp once every record has landed (#764).
     structural_keys: set[str] = set()
