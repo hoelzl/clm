@@ -703,7 +703,10 @@ Run **`clm slides normalize --stamp-ids`** — since CLM {version} (#892) it
 stamps one-sided cells like this from the doc-lens pairing, so a
 non-unifiable pair no longer soft-refuses back at you — or add a `slide_id`
 by hand, then re-`report`: the cell then frames `translate_new` /
-`copy_new_shared` and the twin is created for you.
+`copy_new_shared` and the twin is created for you. (The stamper only mints
+a one-sided shared cell whose **group anchor exists on both halves** — in a
+one-sided group there is no aliasing and no id is needed; the item's
+`detail` names the remedy that actually applies.)
 
 ## Replacing a positional cell with id-keyed cells — `stamp_vs_new`
 

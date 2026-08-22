@@ -2029,3 +2029,100 @@ class TestStampViaLens:
         assert result.assignments  # planned
         assert de_path.read_text(encoding="utf-8") == de
         assert en_path.read_text(encoding="utf-8") == en
+
+    def test_second_run_on_a_lens_stamped_deck_is_a_clean_noop(self, tmp_path):
+        """Review I1: after the lens stamp the pair STAYS non-unifiable (the
+        one-sided cells stay one-sided) but parses clean — a second run must
+        be a no-op, never the false 'not unifiable' refusal that made
+        normalize exit 2 on a fully-normalized deck."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de"\n# Hinweis.\n'
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        first = self._stamp(de_path, en_path)
+        assert first.assignments and not first.refusals
+        de_after = de_path.read_text(encoding="utf-8")
+
+        second = self._stamp(de_path, en_path)
+        assert not second.refusals, [(r.severity, r.reason) for r in second.refusals]
+        assert not second.assignments
+        assert de_path.read_text(encoding="utf-8") == de_after
+
+    def test_merged_idless_anchor_group_stamps_once(self, tmp_path):
+        """Review I3: the synthetic ~idless@<line> tokens are line-number
+        derived, so an id-less anchor added to BOTH halves at the SAME line
+        merges into one two-sided group — it is its own twin: one slug, one
+        assignment pair, and it must not enter (or misalign) the cursor
+        runs."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Gleiche Zeile\n'
+        )
+        # Pad EN so its id-less anchor header lands on the SAME line number.
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # Same Line\n'
+        )
+        # (the EN copy of nur_de makes the anchor line numbers equal AND
+        # keeps the pool balanced — the anchors merge into one group)
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path)
+        anchor_rows = [a for a in result.assignments if a.slide_id == "same-line"]
+        assert len(anchor_rows) == 2, [(a.file, a.line, a.slide_id) for a in anchor_rows]
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        assert de_after.count('slide_id="same-line"') == 1
+        assert en_after.count('slide_id="same-line"') == 1
+        assert "same-line-2" not in de_after + en_after
+
+    def test_twin_group_localized_zip_pools_by_kind(self, tmp_path):
+        """Review I4: inside cursor-married twin groups the localized
+        members pair per (kind, narrative-hood) bucket — a markdown note
+        must never take a slug minted from the twin group's CODE cell just
+        because the kinds interleave differently."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n\n'
+            + '# %% [markdown] lang="de"\n# Deutscher Hinweis.\n\n'
+            + '# %% lang="de"\nprint("de")\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # New Slide\n\n'
+            + '# %% lang="en"\nprint("en")\n\n'
+            + '# %% [markdown] lang="en"\n# English note.\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        self._stamp(de_path, en_path)
+        de_after = de_path.read_text(encoding="utf-8")
+        # The DE markdown note pairs with the EN markdown note (one slug),
+        # never with the EN code cell.
+        assert 'lang="de" slide_id="english-note"\n# Deutscher Hinweis.' in de_after
+
+    def test_unusable_heading_records_a_refusal_not_a_silent_skip(self, tmp_path):
+        """Review I5: a punctuation-only heading must leave a refusal row
+        naming the cell — a silent skip resurrects the deadlock with zero
+        diagnostics."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # ???\n'
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path)
+        assert any("usable slug" in r.reason for r in result.refusals), [
+            (r.severity, r.reason) for r in result.refusals
+        ]

@@ -1505,13 +1505,25 @@ def _stamp_via_lens(
       pool is empty, positional identity is sound there — §3.4's
       no-id-churn stance);
     * **adjacent id-less anchor twins** — a DE-only and an EN-only id-less
-      group in the same gap between id'd groups pair up and share one slug
-      (the synthetic ``~idless@<line>`` tokens can never merge in the
-      lens, so twins surface as two one-sided groups).
+      group in the same gap between id'd groups pair up and share one slug.
+      The synthetic ``~idless@<line>`` tokens are line-number-derived, so
+      twins usually surface as two one-sided groups — but at equal line
+      numbers they DO merge into one two-sided group, which is then its own
+      twin: stamped directly, once, its members lens-paired (review I3).
+
+    The cursor marriage stamps what the lens can see: a twin the lens
+    cannot pair (an id-less copy of an already-id'd slide; a slide-hood
+    divergence on an id-less pair; genuinely different slides added into
+    one gap) mints a wrong-but-FRAMED identity — the stamp report shows
+    it, the next sync report frames it, and ``clm slides rename-id``
+    repairs it. That residue is the price of dissolving the deadlock; the
+    old behavior was refusing everything.
 
     Returns ``None`` when the lens cannot own the shape (a non-id-less
-    refusal such as ``duplicate_id``, or nothing to stamp) — the caller
-    keeps its pair-level refusal.
+    refusal such as ``duplicate_id``, or a refusal-backed parse with
+    nothing stamped and nothing refused) — the caller keeps its pair-level
+    refusal. A CLEAN parse returns a (possibly empty) result: sync accepts
+    the deck, so there is nothing left for normalize to refuse over.
     """
     from clm.slides.bilingual_doc import NORMALIZE_FIXABLE, BilingualDeck, Member, SideCell
     from clm.slides.doc_lenses import parse_bundle
@@ -1575,6 +1587,16 @@ def _stamp_via_lens(
             return None
         slug = _proposed_slug_from_extraction(extraction, used_ids)
         if not slug:
+            # Parity with _handle_stamp: a punctuation-only heading must
+            # leave a refusal row naming the cell — silently skipping it
+            # resurrects the deadlock with zero diagnostics (review I5).
+            _stamp_refuse(
+                result,
+                str(paths["en" if member.en is not None else "de"]),
+                cell.line_number,
+                "could not derive a usable slug from content",
+                proposed_title=extraction.text,
+            )
             return None
         used_ids.add(slug)
         return slug, label
@@ -1601,22 +1623,48 @@ def _stamp_via_lens(
             and member.langness == "localized"
         )
 
-    # -- anchors: one-sided id-less groups, adjacent twins paired ------------
-    # The synthetic `~idless@<line>` tokens can never merge in the lens, so
-    # an id-less anchor added to BOTH halves surfaces as two one-sided
-    # groups. Adjacent runs pair by cursor; a paired twin-group's id-less
-    # localized members pair positionally with it (one slug per pair) —
-    # once the anchors carry ids the next parse merges the groups properly.
+    # -- anchors: id-less groups, adjacent one-sided twins paired ------------
+    # The synthetic `~idless@<line>` group tokens are line-number-derived, so
+    # an id-less anchor added to BOTH halves usually surfaces as two
+    # one-sided groups — but at coincidentally EQUAL line numbers the tokens
+    # DO merge into one two-sided group (review I3). A merged group is its
+    # own twin: stamp its anchor directly, once, and let its (genuinely
+    # lens-paired) members flow through the member loop. Only ONE-sided
+    # id-less groups enter the cursor runs; a run breaks at any two-sided
+    # group, which is a sync point. A paired twin-group's id-less localized
+    # members pair per (kind, narrative-hood) bucket — the lens's own pool
+    # classes — never by blind position across kinds (review I4).
     idless_anchor_runs: list[list] = []
     run: list = []
     for group in deck.groups:
-        if group.anchor is not None and group.anchor_id.startswith("~idless@"):
-            run.append(group)
-        elif run:
-            idless_anchor_runs.append(run)
-            run = []
+        if group.anchor is None or not group.anchor_id.startswith("~idless@"):
+            if run:
+                idless_anchor_runs.append(run)
+                run = []
+            continue
+        if not group.anchor.is_one_sided:
+            minted = slug_for(group.anchor)
+            if minted is not None:
+                stamp_member(group.anchor, *minted)
+            handled.add(id(group.anchor))
+            if run:
+                idless_anchor_runs.append(run)
+                run = []
+            continue
+        run.append(group)
     if run:
         idless_anchor_runs.append(run)
+
+    def loc_buckets(members: list[Member]) -> dict[tuple[str, bool], list[Member]]:
+        buckets: dict[tuple[str, bool], list[Member]] = {}
+        for m in members:
+            if not is_stampable_localized(m):
+                continue
+            cell = m.de or m.en
+            assert cell is not None
+            buckets.setdefault((cell.cell_type, m.role in ("voiceover", "notes")), []).append(m)
+        return buckets
+
     for groups in idless_anchor_runs:
         de_side = [g for g in groups if g.anchor.de is not None]
         en_side = [g for g in groups if g.anchor.en is not None]
@@ -1627,15 +1675,16 @@ def _stamp_via_lens(
                 stamp_member(en_group.anchor, *minted)
             handled.add(id(de_group.anchor))
             handled.add(id(en_group.anchor))
-            de_locs = [m for m in de_group.members if is_stampable_localized(m)]
-            en_locs = [m for m in en_group.members if is_stampable_localized(m)]
-            for de_loc, en_loc in zip(de_locs, en_locs, strict=False):
-                minted = slug_for(en_loc)
-                if minted is not None:
-                    stamp_member(de_loc, *minted)
-                    stamp_member(en_loc, *minted)
-                handled.add(id(de_loc))
-                handled.add(id(en_loc))
+            de_buckets = loc_buckets(de_group.members)
+            en_buckets = loc_buckets(en_group.members)
+            for bucket, de_locs in de_buckets.items():
+                for de_loc, en_loc in zip(de_locs, en_buckets.get(bucket, []), strict=False):
+                    minted = slug_for(en_loc)
+                    if minted is not None:
+                        stamp_member(de_loc, *minted)
+                        stamp_member(en_loc, *minted)
+                    handled.add(id(de_loc))
+                    handled.add(id(en_loc))
         for solo_group in de_side[len(en_side) :] + en_side[len(de_side) :]:
             minted = slug_for(solo_group.anchor)
             if minted is not None:
@@ -1661,7 +1710,14 @@ def _stamp_via_lens(
                 if minted is not None:
                     stamp_member(member, *minted)
 
-    if not result.assignments and not result.refusals:
+    if not result.assignments and not result.refusals and outcome.deck is None:
+        # Refusal-backed parse and nothing actionable — the loud pair-level
+        # refusal is honest. A CLEAN parse with nothing to stamp returns the
+        # empty result instead: the lens owns the shape and sync accepts it,
+        # so a "not unifiable — fix the alignment" refusal would be false —
+        # notably on the SECOND run over a lens-stamped deck, which stays
+        # non-unifiable forever while being fully normalized (review I1).
+        # The empty-result return also lets the companion stamping run.
         return None
 
     if not options.report_only:

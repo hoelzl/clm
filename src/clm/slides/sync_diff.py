@@ -107,7 +107,7 @@ _NEUTRAL_DETAIL = (
 )
 
 
-def _cold_detail(member: Member, base_text: str) -> str:
+def _cold_detail(member: Member, base_text: str, *, stampable: bool = False) -> str:
     """The ``verify_cold`` detail, spelling out the unanswerable shapes.
 
     A cold member present on ONE half only carries no answer at all (finding
@@ -148,13 +148,23 @@ def _cold_detail(member: Member, base_text: str) -> str:
         return base_text
     side = "de" if member.de is not None else "en"
     if member.key.scheme == "pos":
+        # The stamper only mints one-sided shared cells inside a TWO-sided
+        # group (a one-sided group's twin pool is empty — no aliasing, no id
+        # needed); naming the command where it will refuse would open a new
+        # report↔normalize circle of exactly the #892 species (review I2).
+        remedy = (
+            "Run `clm slides normalize --stamp-ids` to mint it a slide_id so "
+            "the twin can be framed (or write one by hand, or delete the "
+            "cell), then re-report"
+            if stampable
+            else "Give it a slide_id by hand so the twin can be framed (or "
+            "delete it), then re-report"
+        )
         return (
             f"{base_text}, and this positional cell exists on the {side} half "
             "ONLY — it cannot be confirmed (confirm asserts both halves agree) "
             "and cannot be mirrored mechanically (its ordinal aliases a "
-            "different twin slot). Run `clm slides normalize --stamp-ids` to "
-            "mint it a slide_id so the twin can be framed (or write one by "
-            "hand, or delete the cell), then re-report. The other cold members "
+            f"different twin slot). {remedy}. The other cold members "
             "of its (group, kind) pool cannot be confirmed until then — "
             "positional members record per pool"
         )
@@ -728,7 +738,11 @@ class _Differ:
                     "unverified",
                     "verify_cold",
                     "none",
-                    _cold_detail(member, "no baseline entry — cold member, needs verification"),
+                    _cold_detail(
+                        member,
+                        "no baseline entry — cold member, needs verification",
+                        stampable=self._group_is_two_sided(group),
+                    ),
                     group=group,
                     member=member,
                 )
@@ -1391,6 +1405,21 @@ class _Differ:
             content_fingerprint(member.en) if member.en else None,
         )
 
+    def _group_is_two_sided(self, token: str) -> bool:
+        """Whether the group's anchor exists on BOTH halves — the condition
+        under which `normalize --stamp-ids` will mint a one-sided shared
+        cell of that group (#892 review I2)."""
+        cached: dict[str, bool] | None = getattr(self, "_two_sided_groups", None)
+        if cached is None:
+            cached = {
+                g.anchor_id: (
+                    g.anchor is not None and g.anchor.de is not None and g.anchor.en is not None
+                )
+                for g in self.current.groups
+            }
+            self._two_sided_groups = cached
+        return cached.get(token, False)
+
     def _absorb_pos_twin(
         self,
         group: str,
@@ -1456,7 +1485,11 @@ class _Differ:
                 "unverified",
                 "verify_cold",
                 "none",
-                _cold_detail(member, "no ledger entry — cold member, needs verification"),
+                _cold_detail(
+                    member,
+                    "no ledger entry — cold member, needs verification",
+                    stampable=self._group_is_two_sided(group),
+                ),
                 group=group,
                 member=member,
             )
@@ -3957,7 +3990,11 @@ class _Differ:
                     "unverified",
                     "verify_cold",
                     "none",
-                    _cold_detail(member, "no ledger entry — cold member, needs verification"),
+                    _cold_detail(
+                        member,
+                        "no ledger entry — cold member, needs verification",
+                        stampable=self._group_is_two_sided(group),
+                    ),
                     group=group,
                     member=member,
                 )
