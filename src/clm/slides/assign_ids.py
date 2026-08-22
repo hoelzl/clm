@@ -1450,6 +1450,234 @@ def assign_ids_in_split_pair(
     return result
 
 
+_RAW_ID_RE = re.compile(r'slide_id="!?([^"]+)"')
+
+
+def _extract_from_side_cell(cell, comment_token: str, accept_code_derived: bool):
+    """:func:`_extract_from_cell` for a doc-lens ``SideCell`` (#892).
+
+    Same pipeline, different cell model: markdown signals first via
+    :func:`classify`, then the code AST / first-code-line extractors for
+    code cells. ``SideCell.body`` carries the raw lines exactly as the
+    ``_Cell`` body does, so the extractors see identical text.
+    """
+    extraction = classify(cell.body)
+    if extraction.category == Category.NON_EXTRACTABLE and cell.cell_type == "code":
+        code_extraction = extract_from_code(
+            cell.body,
+            comment_token,
+            accept_code_derived=accept_code_derived,
+            display_exprs=True,
+        )
+        if code_extraction is not None:
+            return code_extraction
+    return extraction
+
+
+def _stamp_via_lens(
+    de_path: Path,
+    en_path: Path,
+    options: AssignOptions,
+    *,
+    reserved_ids: set[str] | None = None,
+) -> AssignResult | None:
+    """Stamp a NON-unifiable split pair from the doc-lens pairing (#892).
+
+    ``unify_texts`` is a greedy text-level cursor walk: a one-sided new cell
+    is unrepresentable in its output, so the very cells that make a deck
+    need ``--stamp-ids`` are what made the unified path refuse — the
+    report ↔ stamp-ids deadlock. The doc lens is the engine's ONE pairing
+    authority (P4: pairing happens on the parsed model, never as text
+    transforms), and it pairs these decks fine — ``parse_bundle`` either
+    succeeds outright or refuses with the paired document riding on
+    ``provisional_deck`` when every reason is an id-less shape.
+
+    What gets stamped, from the lens's own twin/no-twin facts:
+
+    * id-less **localized / narrative** members — pair-atomically: every
+      present side takes the SAME slug (EN-authority extraction), which is
+      strictly stronger than the file-level unify gate (an unrelated
+      one-sided cell elsewhere no longer blocks it);
+    * **one-sided** members — an id-less anchor, or a shared cell inside a
+      two-sided group (the ordinal-aliasing shape sync's ``verify_cold``
+      dead-ends on) — solo: no twin exists, so no slug can diverge. Shared
+      cells of a ONE-sided group are deliberately left alone (their twin
+      pool is empty, positional identity is sound there — §3.4's
+      no-id-churn stance);
+    * **adjacent id-less anchor twins** — a DE-only and an EN-only id-less
+      group in the same gap between id'd groups pair up and share one slug
+      (the synthetic ``~idless@<line>`` tokens can never merge in the
+      lens, so twins surface as two one-sided groups).
+
+    Returns ``None`` when the lens cannot own the shape (a non-id-less
+    refusal such as ``duplicate_id``, or nothing to stamp) — the caller
+    keeps its pair-level refusal.
+    """
+    from clm.slides.bilingual_doc import NORMALIZE_FIXABLE, BilingualDeck, Member, SideCell
+    from clm.slides.doc_lenses import parse_bundle
+
+    comment_token = comment_token_for_path(en_path)
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    outcome = parse_bundle(de_text, en_text, comment_token=comment_token)
+    deck: BilingualDeck | None = outcome.deck
+    if deck is None:
+        refusal = outcome.refusal
+        if refusal is None or any(r.code not in NORMALIZE_FIXABLE for r in refusal.reasons):
+            return None
+        deck = outcome.provisional_deck
+        if deck is None:  # the duplicate_id early return — unreachable here
+            return None
+
+    result = AssignResult()
+    result.files_visited = 2
+    used_ids: set[str] = set(reserved_ids or set())
+    used_ids.update(_RAW_ID_RE.findall(de_text))
+    used_ids.update(_RAW_ID_RE.findall(en_text))
+
+    paths = {"de": de_path, "en": en_path}
+    #: per language: header line number -> minted slug
+    edits: dict[str, dict[int, str]] = {"de": {}, "en": {}}
+
+    def slug_for(member: Member) -> tuple[str, str] | None:
+        """(slug, source label) — EN-authority; ``None`` records a refusal."""
+        cell: SideCell | None = member.en or member.de
+        assert cell is not None
+        extraction = _extract_from_side_cell(cell, comment_token, options.accept_code_derived)
+        if extraction.category == Category.NON_EXTRACTABLE:
+            _stamp_refuse(
+                result,
+                str(paths["en" if member.en is not None else "de"]),
+                cell.line_number,
+                "cell has no heading and no extractable content",
+                severity="hard",
+            )
+            return None
+        is_code_line = extraction.source in _CODE_LINE_SOURCES
+        if extraction.category == Category.HEADED:
+            write, label = True, extraction.source
+        elif is_code_line:
+            write, label = options.accept_code_derived, extraction.source
+        else:
+            write, label = options.accept_content_derived, f"content:{extraction.source}"
+        if not write:
+            _stamp_refuse(
+                result,
+                str(paths["en" if member.en is not None else "de"]),
+                cell.line_number,
+                "headingless cell",
+                proposed_slug=_proposed_slug_from_extraction(extraction, used_ids) or None,
+                proposed_title=extraction.text,
+                accept_flag=(
+                    "--accept-code-derived" if is_code_line else "--accept-content-derived"
+                ),
+            )
+            return None
+        slug = _proposed_slug_from_extraction(extraction, used_ids)
+        if not slug:
+            return None
+        used_ids.add(slug)
+        return slug, label
+
+    def stamp_member(member: Member, slug: str, label: str) -> None:
+        for lang in ("de", "en"):
+            cell = member.side(lang)
+            if cell is None:
+                continue
+            edits[lang][cell.line_number] = slug
+            result.assignments.append(
+                AssignedId(
+                    file=str(paths[lang]), line=cell.line_number, slide_id=slug, source=label
+                )
+            )
+
+    handled: set[int] = set()
+
+    def is_stampable_localized(member: Member) -> bool:
+        return (
+            member.key.scheme != "id"
+            and member.kind != "j2"
+            and member.role != "header"
+            and member.langness == "localized"
+        )
+
+    # -- anchors: one-sided id-less groups, adjacent twins paired ------------
+    # The synthetic `~idless@<line>` tokens can never merge in the lens, so
+    # an id-less anchor added to BOTH halves surfaces as two one-sided
+    # groups. Adjacent runs pair by cursor; a paired twin-group's id-less
+    # localized members pair positionally with it (one slug per pair) —
+    # once the anchors carry ids the next parse merges the groups properly.
+    idless_anchor_runs: list[list] = []
+    run: list = []
+    for group in deck.groups:
+        if group.anchor is not None and group.anchor_id.startswith("~idless@"):
+            run.append(group)
+        elif run:
+            idless_anchor_runs.append(run)
+            run = []
+    if run:
+        idless_anchor_runs.append(run)
+    for groups in idless_anchor_runs:
+        de_side = [g for g in groups if g.anchor.de is not None]
+        en_side = [g for g in groups if g.anchor.en is not None]
+        for de_group, en_group in zip(de_side, en_side, strict=False):
+            minted = slug_for(en_group.anchor)
+            if minted is not None:
+                stamp_member(de_group.anchor, *minted)
+                stamp_member(en_group.anchor, *minted)
+            handled.add(id(de_group.anchor))
+            handled.add(id(en_group.anchor))
+            de_locs = [m for m in de_group.members if is_stampable_localized(m)]
+            en_locs = [m for m in en_group.members if is_stampable_localized(m)]
+            for de_loc, en_loc in zip(de_locs, en_locs, strict=False):
+                minted = slug_for(en_loc)
+                if minted is not None:
+                    stamp_member(de_loc, *minted)
+                    stamp_member(en_loc, *minted)
+                handled.add(id(de_loc))
+                handled.add(id(en_loc))
+        for solo_group in de_side[len(en_side) :] + en_side[len(de_side) :]:
+            minted = slug_for(solo_group.anchor)
+            if minted is not None:
+                stamp_member(solo_group.anchor, *minted)
+            handled.add(id(solo_group.anchor))
+
+    # -- members -------------------------------------------------------------
+    for group in deck.groups:
+        group_two_sided = (
+            group.anchor is not None and group.anchor.de is not None and group.anchor.en is not None
+        )
+        for member in group.members:
+            if id(member) in handled:
+                continue
+            if member.key.scheme == "id" or member.kind == "j2" or member.role == "header":
+                continue
+            if member.langness == "localized":
+                minted = slug_for(member)
+                if minted is not None:
+                    stamp_member(member, *minted)
+            elif member.is_one_sided and group_two_sided:
+                minted = slug_for(member)
+                if minted is not None:
+                    stamp_member(member, *minted)
+
+    if not result.assignments and not result.refusals:
+        return None
+
+    if not options.report_only:
+        for lang, per_line in edits.items():
+            if not per_line:
+                continue
+            text = de_text if lang == "de" else en_text
+            lines = text.split("\n")
+            for line_number, slug in per_line.items():
+                stripped = _strip_existing_slide_id(lines[line_number - 1]).rstrip()
+                lines[line_number - 1] = f'{stripped} slide_id="{slug}"'
+            paths[lang].write_text("\n".join(lines), encoding="utf-8", newline="\n")
+            result.files_modified += 1
+    return result
+
+
 def _reattribute_pair_records(
     result: AssignResult,
     unified: str,
@@ -1873,22 +2101,32 @@ def assign_ids_in_files(files: list[Path], options: AssignOptions) -> AssignResu
                 if options.stamp_ids:
                     _stamp_companions_for_pair(de_path, en_path, options, pair_result, combined)
             elif options.stamp_ids:
-                # Not unifiable — stamp mode refuses the WHOLE deck, writes
-                # nothing (pair-atomicity, #162): one loud refusal instead of
-                # a per-cell flood or a half-processed deck.
-                combined.files_visited += 2
-                combined.refusals.append(
-                    Refusal(
-                        file=str(de_path),
-                        line=1,
-                        severity="soft",
-                        reason=(
-                            "split pair is not unifiable; --stamp-ids skipped this "
-                            "deck — fix the DE/EN alignment first (e.g. `clm slides "
-                            "normalize --operations interleaving` or `clm slides sync`)"
-                        ),
+                # Not unifiable — the very cells that need stamping are what
+                # break the text-level unify walk (#892), so try the doc
+                # lens: the engine's one pairing authority stamps pairs
+                # member-atomically and one-sided cells solo. Only when the
+                # lens cannot own the shape either (a duplicate_id, or
+                # nothing to stamp — a genuine alignment problem) does
+                # stamp mode refuse the WHOLE deck and write nothing
+                # (pair-atomicity, #162).
+                lens_result = _stamp_via_lens(de_path, en_path, options, reserved_ids=reserved)
+                if lens_result is not None:
+                    _merge_result(combined, lens_result)
+                    _stamp_companions_for_pair(de_path, en_path, options, lens_result, combined)
+                else:
+                    combined.files_visited += 2
+                    combined.refusals.append(
+                        Refusal(
+                            file=str(de_path),
+                            line=1,
+                            severity="soft",
+                            reason=(
+                                "split pair is not unifiable; --stamp-ids skipped this "
+                                "deck — fix the DE/EN alignment first (e.g. `clm slides "
+                                "normalize --operations interleaving` or `clm slides sync`)"
+                            ),
+                        )
                     )
-                )
             else:
                 # Not unifiable — fall back to the per-file defensive on each.
                 _merge_result(combined, assign_ids_in_file(de_path, options))

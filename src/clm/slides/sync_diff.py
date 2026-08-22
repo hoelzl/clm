@@ -152,9 +152,10 @@ def _cold_detail(member: Member, base_text: str) -> str:
             f"{base_text}, and this positional cell exists on the {side} half "
             "ONLY — it cannot be confirmed (confirm asserts both halves agree) "
             "and cannot be mirrored mechanically (its ordinal aliases a "
-            "different twin slot). Give it a slide_id so the twin can be "
-            "framed, or delete it, then re-report. The other cold members of "
-            "its (group, kind) pool cannot be confirmed until then — "
+            "different twin slot). Run `clm slides normalize --stamp-ids` to "
+            "mint it a slide_id so the twin can be framed (or write one by "
+            "hand, or delete the cell), then re-report. The other cold members "
+            "of its (group, kind) pool cannot be confirmed until then — "
             "positional members record per pool"
         )
     return (

@@ -1892,3 +1892,140 @@ class TestStampIds:
         # narrative header is line 4 in both 5-line files).
         assert set(by_file) == {"slides_attr.de.py", "slides_attr.en.py"}
         assert all(a.line == 4 for a in result.assignments)
+
+
+class TestStampViaLens:
+    """#892: a split pair the text-level unify walk cannot represent (its
+    NEW one-sided cells are the breakage) stamps via the doc-lens pairing
+    instead of dead-ending in the report <-> stamp-ids refusal cycle."""
+
+    HEADER_DE = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Titel DE\") }}\n\n"
+    HEADER_EN = "# j2 from 'macros.j2' import header_en\n# {{ header_en(\"Title EN\") }}\n\n"
+
+    def _pair(self, tmp_path, de: str, en: str):
+        de_path = tmp_path / "slides_t.de.py"
+        en_path = tmp_path / "slides_t.en.py"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+        return de_path, en_path
+
+    def _stamp(self, de_path, en_path, **overrides):
+        from clm.slides.assign_ids import assign_ids_in_files
+
+        options = AssignOptions(
+            stamp_ids=True,
+            accept_content_derived=True,
+            accept_code_derived=True,
+            **overrides,
+        )
+        return assign_ids_in_files([de_path, en_path], options)
+
+    def test_field_shape_stamps_every_idless_class_in_one_pass(self, tmp_path):
+        """The #892 field deck: a one-sided id-less anchor, a one-sided
+        id-less localized aux cell, and a one-sided shared cell inside a
+        two-sided group — previously 3 report rounds + hand-written ids;
+        now one stamp pass, and the pair parses clean after it."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Histogramme\n\n'
+            + '# %% tags=["keep"]\nimport numpy as np\n\n'
+            + "# %%\nfig, axes = np.zeros(2), None\n\n"
+            + '# %% [markdown] lang="de" tags=["subslide"]\n# ## Kleine Vielfache\n\n'
+            + '# %% [markdown] lang="de"\n# Hinweis: getrennte Skalen beachten.\n\n'
+            + '# %% [markdown] lang="de" slide_id="s0-m"\n# DE Text\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Histograms\n\n'
+            + '# %% tags=["keep"]\nimport numpy as np\n\n'
+            + '# %% [markdown] lang="en" slide_id="s0-m"\n# EN text\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path)
+        assert not result.refusals, [(r.severity, r.reason) for r in result.refusals]
+        stamped = {a.slide_id for a in result.assignments}
+        assert "kleine-vielfache" in stamped  # the anchor, heading-derived
+        de_after = de_path.read_text(encoding="utf-8")
+        assert 'tags=["subslide"] slide_id="kleine-vielfache"' in de_after
+        assert 'lang="de" slide_id="hinweis' in de_after  # the localized aux
+        assert '# %% slide_id="fig-axes"' in de_after  # the one-sided shared
+        from clm.slides.doc_lenses import parse_bundle
+
+        outcome = parse_bundle(de_after, en_path.read_text(encoding="utf-8"))
+        assert outcome.deck is not None, outcome.refusal.render() if outcome.refusal else "no deck"
+
+    def test_idless_twins_added_to_both_halves_share_one_slug(self, tmp_path):
+        """An id-less anchor (and its localized member) added to BOTH halves
+        surfaces as two one-sided groups (the synthetic group tokens never
+        merge) — the twins must share ONE EN-authority slug, or the stamp
+        would mint the divergent ids the unify gate existed to prevent."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n\n'
+            + '# %% [markdown] lang="de"\n# Deutscher Hinweis.\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # New Slide\n\n'
+            + '# %% [markdown] lang="en"\n# English note.\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        self._stamp(de_path, en_path)
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        # EN-authority slugs, identical on both halves.
+        assert de_after.count('slide_id="new-slide"') == 1
+        assert en_after.count('slide_id="new-slide"') == 1
+        assert de_after.count('slide_id="english-note"') == 1
+        assert en_after.count('slide_id="english-note"') == 1
+
+    def test_members_of_a_one_sided_group_stay_unstamped(self, tmp_path):
+        """A brand-new one-sided group's shared member cells need no ids
+        (their twin pool is empty — no ordinal aliasing), so stamping them
+        would be pure id churn (§3.4). Only the anchor is minted."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n\n'
+            + "# %%\nshared_step = 1\n\n"
+            + "# %%\nshared_step_two = 2\n"
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        self._stamp(de_path, en_path)
+        de_after = de_path.read_text(encoding="utf-8")
+        assert 'tags=["slide"] slide_id="neue-folie"' in de_after
+        assert "# %%\nshared_step = 1" in de_after  # untouched
+        assert "# %%\nshared_step_two = 2" in de_after
+
+    def test_duplicate_id_keeps_the_pair_refusal(self, tmp_path):
+        """The lens cannot own a duplicate_id shape (pairing is poisoned) —
+        stamp mode keeps its loud whole-deck refusal."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # A\n\n'
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # B\n\n'
+            + "# %%\nnur_de = 1\n"
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # A\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path)
+        assert any("not unifiable" in r.reason for r in result.refusals)
+        assert not result.assignments
+
+    def test_report_only_stamps_nothing_on_disk(self, tmp_path):
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de"\n# Hinweis.\n'
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, report_only=True)
+        assert result.assignments  # planned
+        assert de_path.read_text(encoding="utf-8") == de
+        assert en_path.read_text(encoding="utf-8") == en

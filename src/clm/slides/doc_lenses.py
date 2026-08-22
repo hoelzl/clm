@@ -885,7 +885,12 @@ class _Parser:
             self.check_normalized(member)
         self._check_key_uniqueness(deck)
         if self.refusals:
-            return ParseOutcome(refusal=NormalizeRefusal(reasons=self.refusals))
+            # The paired document rides along for `normalize --stamp-ids`'s
+            # lens-based minting (#892) — see ParseOutcome.provisional_deck
+            # for the strict never-diff contract.
+            return ParseOutcome(
+                refusal=NormalizeRefusal(reasons=self.refusals), provisional_deck=deck
+            )
         return ParseOutcome(deck=deck)
 
     # -- groups ------------------------------------------------------------------------
