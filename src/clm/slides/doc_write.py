@@ -40,6 +40,7 @@ from clm.slides.doc_identity import content_fingerprint
 from clm.slides.doc_lenses import LoadedBundle
 
 __all__ = [
+    "AnchorAdjacencyError",
     "DeckEmitter",
     "DeckWriteError",
     "new_companion_path",

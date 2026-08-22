@@ -465,8 +465,9 @@ not order-blind:
   the order settles — the deferral's reason says so). Check the apply
   envelope's top-level **`left_undone`** list (rejected / deferred /
   failed rows) whenever `wrote` is true and the exit code is 1: it names
-  exactly the answered or mechanical work that did not land, so partial
-  passes are never silent.
+  the answered or mechanical work that did not land, so partial passes
+  are never silent. (Rows a `--member` filter skipped report as
+  `skipped` in `items[]` instead.)
 
 ## The decision document
 

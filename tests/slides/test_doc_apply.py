@@ -4060,6 +4060,97 @@ class TestOneOrderAuthorityPerPass:
         payload = outcome.to_payload()
         assert any(row["action"] == "mirror_order" for row in payload["left_undone"])
 
+        # Review C1: the loop must CONVERGE with the preserved side
+        # byte-identical throughout. The answer's own executor once
+        # re-emitted the g2 cluster in stream-encounter order — recreating
+        # the anchor-after-members corruption on EN, so pass 2's re-derived,
+        # now-uncontested mirrors rewrote DE decision-free and pass 3 read
+        # clean over the banked loss. Anchor-first cluster emission restores
+        # EN to base placement in pass 1, so pass 2 frames nothing for the
+        # moved members.
+        outcome2 = deck.apply()
+        assert outcome2.error is None, outcome2.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        en_after = deck.en_path.read_text(encoding="utf-8")
+        anchor = en_after.index('slide_id="g2"')
+        assert anchor < en_after.index('slide_id="g2-n"') < en_after.index('slide_id="g2-d"')
+        deck.assert_converged()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+
+    def test_deferred_pool_mirror_freezes_its_pool(self, tmp_path: Path):
+        """Review I1: a deferred POOL-handle mirror contributes nothing to
+        the freeze machinery (no member, `_pool_scope` skips `pool.`
+        markers) — a landed same-pool sibling then re-recorded the
+        cursor-married snapshot the deferral existed to keep out. The
+        deferred pool's scope now joins the recording freeze."""
+        de = _build(
+            HEADER_DE,
+            _slide("g1", "de", "Eins"),
+            _localized("g1-a", "de", "A DE"),
+            _localized("g1-b", "de", "B DE"),
+            _slide("g2", "de", "Zwei"),
+            _shared_code("x"),
+            _shared_code("y", 2),
+            _shared_code("z", 3),
+        )
+        en = (
+            de.replace(HEADER_DE, HEADER_EN)
+            .replace('lang="de"', 'lang="en"')
+            .replace("A DE", "A EN")
+            .replace("B DE", "B EN")
+            .replace("Eins", "One")
+            .replace("Zwei", "Two")
+        )
+        deck = _Deck(tmp_path, de, en)
+        deck.record()
+        ledger_path = doc_ledger.ledger_path_for(deck.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        dl = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        base_pool = {
+            k: (lm.entry.de_fp, lm.entry.en_fp)
+            for k, lm in dl.members.items()
+            if k.startswith("pos:g2/")
+        }
+        # Divergent g1-member order on both halves frames an (unrelated)
+        # order question; DE swaps y/z in g2's pool (a pool mirror_order
+        # that must defer) and edits x's tags (a mirror_tags that lands).
+        deck.edit_de(
+            _localized("g1-a", "de", "A DE") + _localized("g1-b", "de", "B DE"),
+            _localized("g1-b", "de", "B DE") + _localized("g1-a", "de", "A DE"),
+        )
+        dl.member_order = {
+            k: v for k, v in dl.member_order.items() if not (k[1] == "g1" and k[2] == "deck")
+        }
+        doc_ledger.save(ledger, ledger_path)
+        deck.edit_de(
+            '# %% tags=["keep"]\ny = 2\n\n# %% tags=["keep"]\nz = 3',
+            '# %% tags=["keep"]\nz = 3\n\n# %% tags=["keep"]\ny = 2',
+        )
+        deck.edit_de('# %% tags=["keep"]\nx = 1', '# %% tags=["alt"]\nx = 1')
+
+        _, diff = deck.diff()
+        assert any(i.action == "order_decision" for i in diff.items), [
+            (i.action, i.key) for i in diff.items
+        ]
+        assert any(i.action == "mirror_order" and "/pool." in i.key for i in diff.items), [
+            (i.action, i.key) for i in diff.items
+        ]
+
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        # The pool mirror deferred, and the landed sibling recorded nothing
+        # into the frozen pool — the base entries survive verbatim.
+        ledger = doc_ledger.load(ledger_path)
+        dl = ledger.decks[doc_ledger.deck_key_for(deck.de_path)]
+        after_pool = {
+            k: (lm.entry.de_fp, lm.entry.en_fp)
+            for k, lm in dl.members.items()
+            if k.startswith("pos:g2/")
+        }
+        assert after_pool == base_pool
+        [tags_row] = [r for r in outcome.results if r.action == "mirror_tags"]
+        assert "recording deferred" in tags_row.reason, tags_row
+
     def test_mirror_order_without_open_order_question_still_executes(self, tmp_path: Path):
         deck = self._order_contested_deck(tmp_path)
         # keep order trust intact this time: re-record wholesale.

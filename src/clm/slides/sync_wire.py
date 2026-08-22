@@ -29,6 +29,12 @@ emits a ``verify_translation_batch`` observation. The fields are optional
 (recovery degrades to absence); the decision-document shape is unchanged, so
 schema-4 documents remain first-class input, not a compatibility case.
 
+The **apply** envelope additionally carries a top-level ``left_undone`` list
+(#885) — the rejected / deferred / failed rows, so ``wrote: true`` + exit 1
+is never the only signal that answered work did not land. Additive on the
+apply side only (the Q5 precedent: envelope additions need no schema bump);
+the decision-document shape is untouched.
+
 Rollout, completed: schema 4 shipped in 1.24.0 with a one-release grace — a
 decision document with no ``report_id`` was accepted with a warning naming the
 field, so drivers kept working mid-upgrade. Per the maintainer's decision
