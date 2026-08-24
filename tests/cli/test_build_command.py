@@ -2214,6 +2214,13 @@ class TestMitmproxyTransportBindHost:
         self._run(monkeypatch, tmp_path, None)
         assert _FakeMitmManager.last_trace_dir is None
 
+    def test_disables_pip_version_check_in_worker_env(self, monkeypatch, tmp_path) -> None:
+        # Notebooks can run pip (jupytext's comment_magics reactivates
+        # `# !pip install` cells); without this the weekly pip self-check
+        # reaches the replay proxy as an untagged pypi.org flow.
+        _, env = self._run(monkeypatch, tmp_path, None)
+        assert env["PIP_DISABLE_PIP_VERSION_CHECK"] == "1"
+
 
 class TestWorkerImageFlagWiring:
     """#690 review F2: the three image flags reach ``main_build`` in the
