@@ -2138,6 +2138,13 @@ class TestMitmproxyTransportBindHost:
         monkeypatch.setattr(
             "clm.infrastructure.http_replay_mitm.MitmproxyManager", _FakeMitmManager
         )
+        # #902: the fake's start() writes a dummy cert to ca_cert_path, so the
+        # confdir must be a tmp dir — with the real per-user CA dir
+        # (engine._mitm_ca_dir) the test clobbered the machine-wide mitmproxy
+        # CA, and every later replay-enabled build failed with
+        # "SSLError: [X509] PEM lib" when splicing the corrupt cert into the
+        # worker CA bundle.
+        monkeypatch.setattr(engine_module, "_mitm_ca_dir", lambda: tmp_path / "mitm-ca")
         _FakeMitmManager.last_listen_host = None
         saved = dict(os.environ)
         try:
