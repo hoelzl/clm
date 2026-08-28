@@ -311,6 +311,11 @@ def _maybe_start_mitmproxy_transport(
             "SSL_CERT_FILE": str(bundle),
             "REQUESTS_CA_BUNDLE": str(bundle),
             "CURL_CA_BUNDLE": str(bundle),
+            # Notebooks can run pip (e.g. jupytext reactivates `# !pip
+            # install` cells via comment_magics). Any pip inheriting this env
+            # would otherwise send its weekly self-version-check to
+            # pypi.org through the replay proxy as an untagged flow.
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         }
     )
     logger.info(

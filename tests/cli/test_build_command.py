@@ -2138,6 +2138,13 @@ class TestMitmproxyTransportBindHost:
         monkeypatch.setattr(
             "clm.infrastructure.http_replay_mitm.MitmproxyManager", _FakeMitmManager
         )
+        # #902: the fake's start() writes a dummy cert to ca_cert_path, so the
+        # confdir must be a tmp dir — with the real per-user CA dir
+        # (engine._mitm_ca_dir) the test clobbered the machine-wide mitmproxy
+        # CA, and every later replay-enabled build failed with
+        # "SSLError: [X509] PEM lib" when splicing the corrupt cert into the
+        # worker CA bundle.
+        monkeypatch.setattr(engine_module, "_mitm_ca_dir", lambda: tmp_path / "mitm-ca")
         _FakeMitmManager.last_listen_host = None
         saved = dict(os.environ)
         try:
@@ -2206,6 +2213,13 @@ class TestMitmproxyTransportBindHost:
         monkeypatch.delenv("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", raising=False)
         self._run(monkeypatch, tmp_path, None)
         assert _FakeMitmManager.last_trace_dir is None
+
+    def test_disables_pip_version_check_in_worker_env(self, monkeypatch, tmp_path) -> None:
+        # Notebooks can run pip (jupytext's comment_magics reactivates
+        # `# !pip install` cells); without this the weekly pip self-check
+        # reaches the replay proxy as an untagged pypi.org flow.
+        _, env = self._run(monkeypatch, tmp_path, None)
+        assert env["PIP_DISABLE_PIP_VERSION_CHECK"] == "1"
 
 
 class TestWorkerImageFlagWiring:

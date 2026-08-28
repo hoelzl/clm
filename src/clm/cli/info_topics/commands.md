@@ -2238,10 +2238,16 @@ voiceover companions like `record`'s does, and takes the same
 `--allow-diverged-companion` override (see `record`). Needs no API key; single deck only
 (run `report` over a directory to find work). The `--json` result carries
 `counts` (`applied` / `recorded` / `deferred` / `pending` / `rejected` /
-`failed` / `skipped`), per-item `items[].status` + `reason`,
+`failed` / `skipped`), per-item `items[].status` + `reason`, a top-level
+**`left_undone`** list (the rejected / deferred / failed rows — the answered
+or mechanical work that did not land, so `wrote: true` + exit 1 is never the
+only signal; `pending` rows are the loop's normal state and stay out, #885),
 `ledger_recorded`, and
 `verify_violations`; rejected decisions are additionally echoed to stderr in
-both output modes. Full envelope example: `clm info sync-agents`.
+both output modes. While an `order_decision` is framed in a pass, mechanical
+`mirror_order` rows defer instead of co-executing ("one order authority per
+pass", #885) and re-derive on the next report. Full envelope example:
+`clm info sync-agents`.
 
 #### `clm slides sync verify`
 

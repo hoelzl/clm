@@ -829,6 +829,8 @@ class TestMitmproxyDockerEnv:
         assert env["https_proxy"] == "http://host.docker.internal:63564"
         # The kernel must skip the vcrpy bootstrap and inject the tag bootstrap.
         assert env["CLM_HTTP_REPLAY_TRANSPORT"] == "mitmproxy"
+        # pip self-version-checks must not leak through the replay proxy.
+        assert env["PIP_DISABLE_PIP_VERSION_CHECK"] == "1"
         assert mount is None
 
     def test_no_proxy_excludes_the_api_host(self) -> None:

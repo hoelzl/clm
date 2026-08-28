@@ -156,6 +156,9 @@ def _mitmproxy_docker_env(
         "NO_PROXY": _DOCKER_HOST_ALIAS,
         "no_proxy": _DOCKER_HOST_ALIAS,
         "CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy",
+        # See engine._maybe_start_mitmproxy_transport: keep pip's weekly
+        # self-version-check from leaking through the replay proxy.
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
     }
 
     mount: tuple[str, str] | None = None
