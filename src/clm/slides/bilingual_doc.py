@@ -348,6 +348,15 @@ class ParseOutcome:
 
     deck: BilingualDeck | None = None
     refusal: NormalizeRefusal | None = None
+    #: The fully-paired document BEHIND a refusal, when phases 2-3 ran (the
+    #: early ``duplicate_id`` return carries none). This exists for exactly
+    #: one consumer: ``normalize --stamp-ids``'s lens-based minting (#892) —
+    #: the lens is the single pairing authority, so the stamper reads the
+    #: twin/no-twin facts from here instead of re-deriving them from text
+    #: transforms. Its positional keys can carry synthetic ``~idless@<line>``
+    #: group tokens, so it must never be diffed, projected, or otherwise
+    #: treated as a parsed deck — the refusal stands.
+    provisional_deck: BilingualDeck | None = None
 
     @property
     def ok(self) -> bool:

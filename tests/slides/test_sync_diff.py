@@ -2613,3 +2613,52 @@ class TestShiftCauseStampSuspicion:
         rows = {(i.action, i.key) for i in diff.items}
         assert ("copy_new_shared", "id:b-cell") not in rows, rows
         assert ("stamp_vs_new", "id:b-cell") in rows, rows
+
+
+class TestColdDetailStampRemedy:
+    """#892 review I2: the one-sided positional verify_cold detail names
+    `normalize --stamp-ids` only where the stamper will act — a one-sided
+    member of a ONE-sided group keeps the hand-repair wording, or the
+    remedy is a new report↔normalize circle."""
+
+    def _cold_diff(self, de: str, en: str) -> DeckDiff:
+        base = _snapshot(de, en)
+        base.complete = False
+        base.members = {}  # a cold ledger: no entries at all
+        return _diff(base, de, en)
+
+    def test_two_sided_group_names_the_stamper(self):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _shared_code("x"),
+            "# %%\nnur_de = 1\n\n",
+        )
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("x"))
+        diff = self._cold_diff(de, en)
+        [row] = [
+            i
+            for i in diff.items
+            if i.action == "verify_cold" and i.member is not None and i.member.is_one_sided
+        ]
+        assert "normalize --stamp-ids" in row.detail
+
+    def test_one_sided_group_keeps_the_hand_remedy(self):
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _slide("s1", "de", "Nur DE"),
+            "# %%\nnur_de = 1\n\n",
+        )
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"))
+        diff = self._cold_diff(de, en)
+        [row] = [
+            i
+            for i in diff.items
+            if i.action == "verify_cold"
+            and i.key.startswith("pos:s1/")
+            and i.member is not None
+            and i.member.is_one_sided
+        ]
+        assert "normalize --stamp-ids" not in row.detail
+        assert "by hand" in row.detail
