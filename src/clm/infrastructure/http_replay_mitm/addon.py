@@ -430,7 +430,7 @@ class ClmReplayAddon:
             # Strict replay (``replay``, or ``once`` with an existing cassette):
             # a miss must fail loudly, never escaping to the real network.
             flow.response = self._replay_miss_response(flow, target)
-            self._trace_request(flow, tag, "miss")
+            self._trace_request(flow, tag, "miss", filtered=filtered, target=target)
             return
 
         # Recording modes (new-episodes / refresh / once-when-absent) on a
@@ -496,7 +496,15 @@ class ClmReplayAddon:
 
     # -- tracing ---------------------------------------------------------
 
-    def _trace_request(self, flow: http.HTTPFlow, tag: str | None, action: str) -> None:
+    def _trace_request(
+        self,
+        flow: http.HTTPFlow,
+        tag: str | None,
+        action: str,
+        *,
+        filtered=None,
+        target: _Target | None = None,
+    ) -> None:
         """Emit one ``proxy.request`` forensic event for this flow.
 
         ``action`` is the addon's decision for the request: ``served`` (cassette
@@ -504,18 +512,33 @@ class ClmReplayAddon:
         not recorded), ``forward`` (recording mode, will hit upstream) or
         ``passthrough`` (untagged, no catch-all). The analyzer uses these as the
         interception-evidence stream that replaces the (now-dark) ``vcr`` stream.
+
+        A ``miss`` additionally carries the full request path, the target
+        cassette, the *filtered* request body (what matching actually saw,
+        truncated), and the recorded-episode count — without these a strict
+        replay miss is undebuggable (the 404 reply the kernel sees names the
+        URL but not why nothing matched; issue #909).
         """
-        self._trace.emit(
-            "proxy.request",
-            {
-                "method": flow.request.method,
-                "scheme": flow.request.scheme,
-                "host": flow.request.host,
-                "port": flow.request.port,
-                "has_tag": tag is not None,
-                "action": action,
-            },
-        )
+        data: dict[str, Any] = {
+            "method": flow.request.method,
+            "scheme": flow.request.scheme,
+            "host": flow.request.host,
+            "port": flow.request.port,
+            "has_tag": tag is not None,
+            "action": action,
+        }
+        if action == "miss":
+            data["path"] = flow.request.path
+            if target is not None:
+                data["cassette"] = str(target.canonical)
+                data["recorded_requests"] = len(target.recorded)
+            if filtered is not None:
+                body = getattr(filtered, "body", None)
+                if isinstance(body, bytes):
+                    body = body.decode("utf-8", errors="replace")
+                if isinstance(body, str):
+                    data["filtered_body"] = body[:20000]
+        self._trace.emit("proxy.request", data)
 
     # -- routing ---------------------------------------------------------
 
@@ -676,8 +699,14 @@ class ClmReplayAddon:
         # LLM SDKs expect, so the kernel surfaces a clean
         # ``NotFoundError: clm_replay_miss: …`` instead of a confusing pydantic
         # "invalid error body" complaint — a loud, *clear* failure (the gate-7
-        # goal). The top-level ``clm_replay_miss`` flag is the marker
-        # ``_is_replay_miss_marker`` keys on (status-independent).
+        # goal). ``code`` MUST be an integer: openai/anthropic build their
+        # status errors loosely and only display ``message``, but the
+        # Speakeasy-generated openrouter SDK unmarshals the 404 envelope
+        # strictly with ``error.code: int`` — a string code crashes its
+        # Unmarshaller with a pydantic int_parsing error that buries the miss
+        # message entirely (issue #909). The top-level ``clm_replay_miss``
+        # flag is the marker ``_is_replay_miss_marker`` keys on
+        # (status-independent).
         method = flow.request.method
         url = flow.request.pretty_url
         message = f"clm_replay_miss: no recorded interaction for {method} {url} in cassette {target.canonical}"
@@ -688,7 +717,7 @@ class ClmReplayAddon:
                     "error": {
                         "message": message,
                         "type": "clm_replay_miss",
-                        "code": "clm_replay_miss",
+                        "code": _REPLAY_MISS_STATUS,
                     },
                     "clm_replay_miss": True,
                     "method": method,
@@ -711,7 +740,19 @@ class ClmReplayAddon:
             for k, v in header_pairs
             if k.lower() not in _SERVE_DROP_HEADERS
         ]
-        return http.Response.make(status_code, content, headers)
+        reply = http.Response.make(status_code, content, headers)
+        # Preserve the RECORDED reason phrase. ``Response.make`` synthesizes
+        # the RFC-standard phrase for the status code, but servers use their
+        # own spellings (Nominatim 429: "Too many requests" vs the standard
+        # "Too Many Requests"). Clients surface the phrase — ``requests``
+        # embeds it in ``raise_for_status`` messages — so a deck that stores
+        # such an error string in an LLM conversation diverges from the
+        # recording on replay, turning one cosmetic difference into a strict
+        # replay miss several requests later (issue #909).
+        message = (response.get("status") or {}).get("message")
+        if isinstance(message, str) and message:
+            reply.reason = message
+        return reply
 
     @staticmethod
     def _select_serve_index(recorded: list, filtered, served: set) -> int | None:
