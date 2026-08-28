@@ -93,6 +93,17 @@ class _CountingHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 — required by BaseHTTPRequestHandler
         type(self).upstream_hits += 1
         type(self).last_seen = {"method": "GET", "path": self.path, "headers": dict(self.headers)}
+        if self.path.startswith("/nonstandard-reason"):
+            # A server using its own reason-phrase spelling (Nominatim answers
+            # 429 with "Too many requests", not the RFC "Too Many Requests").
+            # Replay must serve the phrase back verbatim (issue #909).
+            body = json.dumps({"limited": True}).encode()
+            self.send_response(429, "Too many requests")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/oauth"):
             # An OAuth token response next to LLM-shaped usage counters:
             # the tokens must be redacted, the counters must survive.
@@ -235,6 +246,37 @@ def test_replay_serves_from_cassette_without_upstream_hit(
     assert replayed.status_code == 200
     assert replayed.json() == first.json()
     assert _CountingHandler.upstream_hits == 1, "replay-mode request should not reach upstream"
+
+
+def test_replay_preserves_recorded_reason_phrase(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """The recorded reason phrase is served back verbatim on replay.
+
+    ``Response.make`` synthesizes the RFC-standard phrase for the status code;
+    a server's own spelling ("Too many requests" vs "Too Many Requests") must
+    survive the round-trip. Clients surface the phrase (``requests`` embeds it
+    in ``raise_for_status`` messages), so a deck that stores such an error
+    string in an LLM conversation otherwise diverges from its recording and
+    turns one cosmetic difference into a strict-replay miss several requests
+    later (issue #909).
+    """
+    confdir = tmp_path / "mitm-confdir"
+    target = f"{upstream_server}/nonstandard-reason"
+
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        recorded = _get_via_proxy(target, proxy.proxy_url)
+    assert recorded.status_code == 429
+    assert recorded.reason == "Too many requests"
+
+    with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
+        replayed = _get_via_proxy(target, proxy.proxy_url)
+    assert replayed.status_code == 429
+    assert replayed.reason == "Too many requests", (
+        "replay must serve the RECORDED reason phrase, not the RFC-standard one"
+    )
 
 
 def test_replay_serves_repeated_identical_requests_non_depleting(
