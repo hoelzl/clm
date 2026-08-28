@@ -1909,16 +1909,40 @@ class TestStampViaLens:
         en_path.write_text(en, encoding="utf-8")
         return de_path, en_path
 
-    def _stamp(self, de_path, en_path, **overrides):
+    @pytest.fixture(autouse=True)
+    def _lens_spy(self, monkeypatch):
+        """Count `_stamp_via_lens` entries so a test cannot silently drift
+        onto the unify path and stop pinning what its name claims."""
+        from clm.slides import assign_ids as assign_ids_module
+
+        real = assign_ids_module._stamp_via_lens
+        self._lens_calls = 0
+
+        def counting(*args, **kwargs):
+            self._lens_calls += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(assign_ids_module, "_stamp_via_lens", counting)
+
+    def _stamp(self, de_path, en_path, *, expect_lens=True, **overrides):
         from clm.slides.assign_ids import assign_ids_in_files
 
         options = AssignOptions(
-            stamp_ids=True,
-            accept_content_derived=True,
-            accept_code_derived=True,
-            **overrides,
+            **{
+                "stamp_ids": True,
+                "accept_content_derived": True,
+                "accept_code_derived": True,
+                **overrides,
+            }
         )
-        return assign_ids_in_files([de_path, en_path], options)
+        before = self._lens_calls
+        result = assign_ids_in_files([de_path, en_path], options)
+        if expect_lens:
+            assert self._lens_calls > before, (
+                "the pair unified, so the lens fallback never ran — this deck "
+                "no longer exercises the #892 path"
+            )
+        return result
 
     def test_field_shape_stamps_every_idless_class_in_one_pass(self, tmp_path):
         """The #892 field deck: a one-sided id-less anchor, a one-sided
@@ -2058,22 +2082,34 @@ class TestStampViaLens:
         merges into one two-sided group — it is its own twin: one slug, one
         assignment pair, and it must not enter (or misalign) the cursor
         runs."""
+        # The halves must NOT unify (or the lens fallback never runs and this
+        # pins nothing): DE gains a one-sided localized cell, EN a one-sided
+        # shared cell of the same height — which also keeps the two id-less
+        # anchor headers on the SAME line number, so their tokens merge.
         de = (
             self.HEADER_DE
             + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
-            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de"\n# Nur DE Hinweis.\n\n'
             + '# %% [markdown] lang="de" tags=["slide"]\n# # Gleiche Zeile\n'
         )
-        # Pad EN so its id-less anchor header lands on the SAME line number.
         en = (
             self.HEADER_EN
             + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
-            + "# %%\nnur_de = 1\n\n"
+            + "# %%\nfiller = 1\n\n"
             + '# %% [markdown] lang="en" tags=["slide"]\n# # Same Line\n'
         )
-        # (the EN copy of nur_de makes the anchor line numbers equal AND
-        # keeps the pool balanced — the anchors merge into one group)
         de_path, en_path = self._pair(tmp_path, de, en)
+
+        # Pin the premise itself: one MERGED two-sided id-less group, not the
+        # two one-sided groups the cursor runs handle.
+        from clm.slides.doc_lenses import parse_bundle
+
+        before = parse_bundle(de, en)
+        assert before.deck is None and before.provisional_deck is not None
+        idless = [g for g in before.provisional_deck.groups if g.anchor_id.startswith("~idless@")]
+        assert len(idless) == 1, [g.anchor_id for g in idless]
+        assert not idless[0].anchor.is_one_sided
+
         result = self._stamp(de_path, en_path)
         anchor_rows = [a for a in result.assignments if a.slide_id == "same-line"]
         assert len(anchor_rows) == 2, [(a.file, a.line, a.slide_id) for a in anchor_rows]
@@ -2082,6 +2118,66 @@ class TestStampViaLens:
         assert de_after.count('slide_id="same-line"') == 1
         assert en_after.count('slide_id="same-line"') == 1
         assert "same-line-2" not in de_after + en_after
+
+    def test_cursor_runs_break_at_an_idd_sync_point(self, tmp_path):
+        """A run of one-sided id-less groups ends at any two-sided group —
+        an id'd slide is a sync point. A DE-only slide BEFORE it and an
+        EN-only slide AFTER it are in different gaps, so they must not be
+        cursor-married into one slug: that would hand the DE slide the EN
+        slide's identity."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Nur Deutsch\n\n'
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\n#\n# # Anker\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\n#\n# # Anchor\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # English Only\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        self._stamp(de_path, en_path)
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        assert 'tags=["slide"] slide_id="nur-deutsch"\n# # Nur Deutsch' in de_after
+        assert 'tags=["slide"] slide_id="english-only"\n# # English Only' in en_after
+        # …and neither slug leaked across the sync point.
+        assert "english-only" not in de_after
+        assert "nur-deutsch" not in en_after
+
+    def test_already_idd_members_do_not_consume_a_twin_bucket_slot(self, tmp_path):
+        """`loc_buckets` collects only STAMPABLE localized members. An
+        already-id'd cell that slipped into the bucket would shift the zip
+        by one and marry the id-less DE note to the wrong EN cell."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n\n'
+            + '# %% [markdown] lang="de" slide_id="gemerkt"\n# Schon gestempelt.\n\n'
+            + '# %% [markdown] lang="de"\n# Deutscher Hinweis.\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # New Slide\n\n'
+            + '# %% [markdown] lang="en" slide_id="gemerkt"\n# Already stamped.\n\n'
+            + '# %% [markdown] lang="en"\n# English note.\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        self._stamp(de_path, en_path)
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        # the id'd member keeps its id, on both halves, exactly once
+        assert de_after.count('slide_id="gemerkt"') == 1
+        assert en_after.count('slide_id="gemerkt"') == 1
+        assert 'slide_id="gemerkt"\n# Schon gestempelt.' in de_after
+        # the id-less notes still pair with each other
+        assert 'slide_id="english-note"\n# Deutscher Hinweis.' in de_after
+        assert 'slide_id="english-note"\n# English note.' in en_after
 
     def test_twin_group_localized_zip_pools_by_kind(self, tmp_path):
         """Review I4: inside cursor-married twin groups the localized
@@ -2109,6 +2205,53 @@ class TestStampViaLens:
         # The DE markdown note pairs with the EN markdown note (one slug),
         # never with the EN code cell.
         assert 'lang="de" slide_id="english-note"\n# Deutscher Hinweis.' in de_after
+
+    def test_headingless_cell_refuses_with_the_flag_that_would_stamp_it(self, tmp_path):
+        """The lens path must record the same soft refusal the unify path
+        does: `reason` states only the fact and `accept_flag` names the
+        option that would turn it into an assignment (never baked into the
+        reason — `normalize` has no such flag, #892)."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de"\n# Nur Fliesstext, keine Ueberschrift.\n'
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(
+            de_path, en_path, accept_content_derived=False, accept_code_derived=False
+        )
+        assert not result.assignments
+        soft = [r for r in result.refusals if r.reason == "headingless cell"]
+        assert soft, [(r.severity, r.reason) for r in result.refusals]
+        assert all(r.severity == "soft" for r in soft)
+        assert {r.accept_flag for r in soft} == {"--accept-content-derived"}
+        assert not any("--accept" in r.reason for r in soft)
+        # A refusal leaves the halves untouched.
+        assert de_path.read_text(encoding="utf-8") == de
+        assert en_path.read_text(encoding="utf-8") == en
+
+    def test_empty_cell_hard_refuses_and_the_rest_still_stamps(self, tmp_path):
+        """A cell with nothing to extract is a HARD refusal on the lens path
+        too — and, per the member-level atomicity the file-level gate gave
+        up, it does not block the cells around it."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de"\n#\n'
+        )
+        en = self.HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n'
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path)
+        hard = [r for r in result.refusals if r.severity == "hard"]
+        assert len(hard) == 1, [(r.severity, r.reason) for r in result.refusals]
+        assert "no extractable content" in hard[0].reason
+        assert hard[0].file == str(de_path)
+        # the sibling one-sided shared cell was still stamped
+        assert [a.slide_id for a in result.assignments] == ["nur-de"]
+        assert '# %% slide_id="nur-de"' in de_path.read_text(encoding="utf-8")
 
     def test_unusable_heading_records_a_refusal_not_a_silent_skip(self, tmp_path):
         """Review I5: a punctuation-only heading must leave a refusal row
