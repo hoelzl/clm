@@ -288,6 +288,14 @@ provably at base on both sides is suspended for the pass. Carries **no**
 answers: resolve the transition the detail names (answer its framed row,
 or complete/revert it in the files), then re-report — untouched slots
 re-derive mechanically and nothing is banked meanwhile, #826),
+`pool_placement_divergence` (the halves place a positional cell on
+different sides of an id-keyed sibling. An id-keyed member present on both
+halves is a *sync point*: positional cells pair and align only inside the
+spans between sync points, so a pairing that straddles one — a cell moved
+across an id'd sibling on one half only, say — is never executed against.
+Carries **no** answers: the detail names both placements; move the cell (or
+the sibling) on the half that is out of order, or mint a `slide_id` on the
+cell, then re-report. The pool's ledger entries are frozen meanwhile, #906),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
 engine writes the twin's attribute; see "Forking a shared cell" below), and
@@ -354,11 +362,18 @@ A shared cell becomes a localized pair in **two** steps, and doing both in one
 edit silently drops the member's ledger history (the fork identity-carry needs
 one side still at its recorded baseline):
 
-1. Add `lang="<your side>"` to the cell on the half you are editing. Report
-   frames `fork_pending_twin`; answer **`mark_twin`**. The engine writes the
-   twin's `lang=` attribute — that attribute only. (Marking the twin by hand is
-   what "never hand-edit the other language" forbids, and it used to be the
-   only route.)
+1. Add `lang="<your side>"` (and, for an id-less shared cell, a `slide_id`)
+   to the cell on the half you are editing. Report frames
+   `fork_pending_twin` with the twin attached — the twin is found at its
+   positional slot by byte-equal body, so a fork of one cell among
+   byte-identical boilerplate siblings still finds the right one (since CLM
+   {version}, #900). Answer **`mark_twin`**. The engine writes the twin's
+   `lang=` attribute and, when the twin is still id-less, the id you minted —
+   nothing else. (Marking the twin by hand is what "never hand-edit the other
+   language" forbids, and it used to be the only route.) If you edited the
+   twin's body in the same pass, no byte proof pairs the two cells: the frame
+   comes one-sided and answerless — revert the twin edit or complete the fork
+   by hand, then re-report.
 2. Re-report. The pair is now localized and its bodies are identical, so the
    member frames `translate_edit`; answer it with the adapted body.
 

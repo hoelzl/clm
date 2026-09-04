@@ -1293,8 +1293,17 @@ def _earlier_pool_removal(items: list[DiffItem], item: DiffItem) -> DiffItem | N
 #: order-guess marriages the suspension exists to keep out of the ledger —
 #: and :func:`_drop_unresolved_from_pools` would then erase even the slots'
 #: old baselines. The dedicated action keeps the #630 gating rule intact.
+#: ``pool_placement_divergence`` joined for #906: the slot's halves straddle
+#: an id-keyed sibling, so the fresh snapshot pairs them by a cursor guess
+#: the frame exists to keep out of the ledger.
 _POOL_FREEZING_ACTIONS = frozenset(
-    {"stamp_vs_new", "remove_vs_edit", "remove_vs_split", "pool_pairing_shifted"}
+    {
+        "stamp_vs_new",
+        "remove_vs_edit",
+        "remove_vs_split",
+        "pool_pairing_shifted",
+        "pool_placement_divergence",
+    }
 )
 
 
@@ -1793,7 +1802,24 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         if cell.lang_attr is not None:  # pragma: no cover - differ frames only unmarked twins
             raise _ItemError(f"the {target} side already carries a lang attribute")
         header = swap_lang(cell.lines[0], target)
-        ex.set_side(holder, target, evolve(cell, lines=(header, *cell.lines[1:])))
+        slide_id = cell.slide_id
+        if slide_id is None:
+            # The twin is still the id-less shared cell the lens adopted
+            # (#900): the fork mints the id at fork time (§7.3), so the
+            # mark carries the marked half's id across — the differ folds
+            # the pending stamp into this frame instead of emitting a
+            # mechanical `stamp_twin_id` beside it.
+            marked_holder = ex._holder(item, marked)
+            marked_cell = marked_holder.side(marked) if marked_holder is not None else None
+            if marked_cell is None or marked_cell.slide_id is None:
+                raise _ItemError(f"the marked {marked} side of {item.key} carries no id")
+            slide_id = marked_cell.slide_id
+            header = header.rstrip() + f' slide_id="{slide_id}"'
+        ex.set_side(
+            holder,
+            target,
+            evolve(cell, lines=(header, *cell.lines[1:]), lang_attr=target, slide_id=slide_id),
+        )
         return
     if choice == "confirm":
         de_holder = ex._holder(item, "de")

@@ -3846,16 +3846,49 @@ class TestShiftedPoolApply:
         '# %% tags=["b"]\nbody = 1\n\n',
     )
 
-    def _forked_deck(self, tmp_path: Path) -> _Deck:
+    def _forked_deck(self, tmp_path: Path, *, edited_twin: bool = False) -> _Deck:
+        """Fork A on DE. With ``edited_twin`` the EN twin is edited too (the
+        V4 shape): no byte proof pairs it, so the fork frame stays one-sided
+        and the pool's cursor pairing shifts (#826)."""
         deck = _Deck(tmp_path, _build(*self.DE_FORK), _build(*self.EN_FORK))
         deck.record()
         deck.edit_de(
             '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
         )
+        if edited_twin:
+            deck.edit_en('# %% tags=["a"]\nbody = 1', '# %% tags=["a"]\nbody = 1  # edited')
         return deck
 
     def test_decision_free_apply_writes_nothing_into_the_pool(self, tmp_path: Path):
+        """The filed #826 shape. Since #900 the lens pairs the forking half
+        with its byte-equal twin, so the pool is not shifted at all: the
+        only row is the two-sided fork frame, and a decision-free apply
+        touches nothing."""
         deck = self._forked_deck(tmp_path)
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        en_before = deck.en_path.read_text(encoding="utf-8")
+
+        _, diff = deck.diff()
+        assert [(i.action, i.key) for i in diff.items] == [("fork_pending_twin", "id:a-cell")]
+        [fork] = diff.items
+        assert fork.member is not None and fork.member.en is not None
+        assert fork.member.en.header == '# %% tags=["a"]'  # the TRUE twin
+        outcome = deck.apply()
+
+        assert outcome.error is None, outcome.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        assert _statuses(outcome) == {"id:a-cell": "pending"}
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        entries = ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        assert "pos:s0/code/0" in entries and "pos:s0/code/1" in entries
+
+    def test_edited_twin_fork_still_suspends_the_pool(self, tmp_path: Path):
+        """V4: the twin was edited too — no fingerprint can prove the
+        pairing, so the frame is one-sided and the shifted pool stays
+        suspended: a decision-free apply writes nothing and keeps every
+        pool entry (the #826 guarantee, unchanged for the unprovable shape)."""
+        deck = self._forked_deck(tmp_path, edited_twin=True)
         de_before = deck.de_path.read_text(encoding="utf-8")
         en_before = deck.en_path.read_text(encoding="utf-8")
 
@@ -3871,6 +3904,28 @@ class TestShiftedPoolApply:
         ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
         entries = ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members
         assert "pos:s0/code/0" in entries and "pos:s0/code/1" in entries
+
+    def test_answering_mark_twin_stamps_lang_and_id_and_converges(self, tmp_path: Path):
+        """#900 end-to-end: the fork frame carries the true twin, `mark_twin`
+        writes its lang attribute AND the id the fork minted (§7.3 — one
+        row per member, no mechanical stamp beside the frame), and the pair
+        converges without a hand edit. The sibling keeps its bytes."""
+        deck = self._forked_deck(tmp_path)
+        outcome = deck.apply({"id:a-cell": doc_apply.Decision(key="id:a-cell", choice="mark_twin")})
+        assert outcome.error is None, outcome.to_payload()
+        assert _statuses(outcome) == {"id:a-cell": "applied"}
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert '# %% lang="en" tags=["a"] slide_id="a-cell"\nbody = 1' in en
+        assert '# %% tags=["b"]\nbody = 1' in en
+        for _ in range(2):  # the migrated slot's stale pos entry clears mechanically
+            _, diff = deck.diff()
+            assert {i.action for i in diff.items} <= {"record_remove"}, [
+                (i.action, i.key, i.detail) for i in diff.items
+            ]
+            outcome = deck.apply()
+            assert outcome.error is None, outcome.to_payload()
+        deck.assert_converged()
+        assert '# %% tags=["b"]\nbody = 1' in deck.de_path.read_text(encoding="utf-8")
 
     def test_completing_the_fork_by_hand_converges(self, tmp_path: Path):
         deck = self._forked_deck(tmp_path)
@@ -3901,7 +3956,7 @@ class TestShiftedPoolApply:
         assert '# %% tags=["b"]\nbody = 1' in deck.en_path.read_text(encoding="utf-8")
 
     def test_suspension_rows_are_answerless(self, tmp_path: Path):
-        deck = self._forked_deck(tmp_path)
+        deck = self._forked_deck(tmp_path, edited_twin=True)
         _, diff = deck.diff()
         [row] = [i for i in diff.items if i.action == "pool_pairing_shifted"]
         assert doc_apply.item_answers(row) == ()
@@ -3973,12 +4028,144 @@ class TestSilentShiftedPoolFreeze:
     def test_one_sided_fork_frame_advertises_no_mark_twin(self, tmp_path: Path):
         """Review F4: `mark_twin` writes the lang attr onto an EXISTING twin
         cell; a one-sided fork frame has none and the executor refuses it —
-        never advertise it (the M6 doctrine)."""
+        never advertise it (the M6 doctrine). Since #900 the byte-equal twin
+        is adopted and the frame is two-sided (mark_twin advertised); an
+        EDITED twin still leaves the frame one-sided."""
         deck = self._deck(tmp_path)
         _, diff = deck.diff()
         [fork] = [i for i in diff.items if i.action == "fork_pending_twin"]
+        assert fork.member is not None and fork.member.en is not None
+        assert doc_apply.item_answers(fork) == ("mark_twin",)
+        assert doc_apply.item_resolution(fork) == "decision"
+
+        deck.edit_en('# %% tags=["b"]\nother = 2', '# %% tags=["b"]\nother = 3')
+        _, diff = deck.diff()
+        [fork] = [i for i in diff.items if i.action == "fork_pending_twin"]
+        assert fork.member is not None and fork.member.en is None
         assert doc_apply.item_answers(fork) == ()
         assert doc_apply.item_resolution(fork) == "manual"
+
+
+def _code(body: str) -> str:
+    return f"# %%\n{body}\n\n"
+
+
+def _idd_code(slug: str, body: str) -> str:
+    return f'# %% slide_id="{slug}"\n{body}\n\n'
+
+
+class TestSyncPointsApply:
+    """#906 end-to-end: the pool's mechanical rows land each edit in the
+    twin's own span, so the DE half keeps the order EN authored — the
+    ``create_rag_system`` call stays BEHIND the id'd ``docs_content`` cell
+    it depends on (the filed apply wrote it in front, and the DE notebook
+    failed with ``NameError`` while ``sync verify`` passed)."""
+
+    @staticmethod
+    def _parts(lang: str, title: str) -> tuple[str, ...]:
+        return (
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("s0", lang, title),
+            _code("import a"),
+            _code("from rag_utils import x"),
+            _code("chat_prompt = 1"),
+            _idd_code("demo-corpus", "docs_content = [1]"),
+            _code("retriever = create_rag_system(docs_content)"),
+            _code("def build_rag(): pass"),
+        )
+
+    def _deck(self, tmp_path: Path) -> _Deck:
+        deck = _Deck(
+            tmp_path, _build(*self._parts("de", "Titel")), _build(*self._parts("en", "Title"))
+        )
+        deck.record()
+        return deck
+
+    def test_filed_shape_lands_in_the_right_spans_and_converges(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _code("import a  # edited"),
+            _code("from rag_utils import x, y"),
+            _idd_code("demo-corpus", "docs_content = [1]"),
+            _code("retriever = create_rag_system(docs_content, k=3)"),
+        )
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        assert outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "chat_prompt" not in de and "build_rag" not in de
+        assert de.index("import a  # edited") < de.index("from rag_utils import x, y")
+        assert de.index('slide_id="demo-corpus"') < de.index("create_rag_system(docs_content, k=3)")
+        # Both halves now carry the same cell sequence.
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert de.split("# %%")[2:] == en.split("# %%")[2:]
+        deck.assert_converged()
+
+    def test_markdown_sync_point_keeps_its_explanation_before_the_code(self, tmp_path: Path):
+        """The report's cosmetic variant: an id'd MARKDOWN cell introducing
+        the code below it kept its slot while the positional pool compacted
+        around it, so the explanation rendered after the code it introduces."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _code("setup_a()"),
+                _code("setup_b()"),
+                _localized("setup-shared-module", "de", "Das gemeinsame Modul:"),
+                _code("import shared_module"),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _code("setup_a()"),
+                _code("setup_b()"),
+                _localized("setup-shared-module", "en", "The shared module:"),
+                _code("import shared_module"),
+            ),
+        )
+        deck.record()
+        # EN drops setup_b and edits the import behind the explanation.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _code("setup_a()"),
+            _localized("setup-shared-module", "en", "The shared module:"),
+            _code("import shared_module as sm"),
+        )
+        outcome = deck.apply()
+        assert outcome.error is None and outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "setup_b" not in de
+        assert de.index("Das gemeinsame Modul") < de.index("import shared_module as sm")
+        deck.assert_converged()
+
+    def test_placement_divergence_freezes_the_pool_and_lands_nothing(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _code("import a"),
+            _code("from rag_utils import x"),
+            _idd_code("demo-corpus", "docs_content = [1]"),
+            _code("chat_prompt = 1"),  # moved behind the sync point on DE only
+            _code("retriever = create_rag_system(docs_content)"),
+            _code("def build_rag(): pass"),
+        )
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        assert _statuses(outcome) == {"pos:s0/code/2": "pending"}
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        entries = ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        assert {k for k in entries if k.startswith("pos:s0/code/")} == {
+            f"pos:s0/code/{i}" for i in range(5)
+        }
 
 
 class TestOneOrderAuthorityPerPass:
