@@ -4142,7 +4142,7 @@ class TestSyncPointsApply:
         assert de.index("Das gemeinsame Modul") < de.index("import shared_module as sm")
         deck.assert_converged()
 
-    def test_placement_divergence_freezes_the_pool_and_lands_nothing(self, tmp_path: Path):
+    def _moved_chat_prompt_deck(self, tmp_path: Path) -> _Deck:
         deck = self._deck(tmp_path)
         deck.write_de(
             HEADER_DE,
@@ -4154,6 +4154,10 @@ class TestSyncPointsApply:
             _code("retriever = create_rag_system(docs_content)"),
             _code("def build_rag(): pass"),
         )
+        return deck
+
+    def test_placement_divergence_freezes_the_pool_and_lands_nothing(self, tmp_path: Path):
+        deck = self._moved_chat_prompt_deck(tmp_path)
         de_before = deck.de_path.read_text(encoding="utf-8")
         en_before = deck.en_path.read_text(encoding="utf-8")
         outcome = deck.apply()
@@ -4166,6 +4170,77 @@ class TestSyncPointsApply:
         assert {k for k in entries if k.startswith("pos:s0/code/")} == {
             f"pos:s0/code/{i}" for i in range(5)
         }
+
+    @pytest.mark.parametrize("adopt", ["de", "en"])
+    def test_placement_answer_re_homes_the_other_half_and_converges(
+        self, tmp_path: Path, adopt: str
+    ):
+        """Answer `en`: EN's placement wins, DE's `chat_prompt` moves back in
+        front of the sync point (DE returns to its recorded bytes). Answer
+        `de`: DE's placement wins, EN's `chat_prompt` moves behind the sync
+        point. Either way the adopted half is byte-identical before and
+        after, nothing else moves, and the pair converges — the landed row
+        banks nothing itself (the slot re-derives at base next pass)."""
+        deck = self._moved_chat_prompt_deck(tmp_path)
+        kept_path = deck.de_path if adopt == "de" else deck.en_path
+        moved_path = deck.en_path if adopt == "de" else deck.de_path
+        kept_before = kept_path.read_text(encoding="utf-8")
+        outcome = deck.apply(
+            {"pos:s0/code/2": doc_apply.Decision(key="pos:s0/code/2", choice=adopt)}
+        )
+        assert outcome.error is None, outcome.to_payload()
+        assert _statuses(outcome) == {"pos:s0/code/2": "applied"}
+        assert kept_path.read_text(encoding="utf-8") == kept_before
+        moved = moved_path.read_text(encoding="utf-8")
+        cells = moved.split("# %%")[1:]
+        bodies = [c.strip().splitlines()[-1] if c.strip() else "" for c in cells]
+        idx_chat = next(i for i, c in enumerate(cells) if "chat_prompt" in c)
+        idx_id = next(i for i, c in enumerate(cells) if 'slide_id="demo-corpus"' in c)
+        if adopt == "de":
+            assert idx_id < idx_chat
+        else:
+            assert idx_chat < idx_id
+        assert moved.count("chat_prompt = 1") == 1
+        assert len(bodies) == 7  # slide + 6 cells: nothing duplicated or lost
+        # Both halves now carry the same cell sequence.
+        de = deck.de_path.read_text(encoding="utf-8")
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert de.split("# %%")[2:] == en.split("# %%")[2:]
+        deck.assert_converged()
+        # The slot's recorded entry survived the pass untouched.
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        entries = ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members
+        assert "pos:s0/code/2" in entries
+
+    def test_placement_answer_defers_a_pool_order_mirror(self, tmp_path: Path):
+        """One order authority per pass (#885): while the placement question
+        is framed, a mechanical pool `mirror_order` in the same pass defers."""
+        deck = self._moved_chat_prompt_deck(tmp_path)
+        # Additionally swap the two cells in the first span on EN only: a
+        # pool reorder the differ would mirror mechanically.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _code("from rag_utils import x"),
+            _code("import a"),
+            _code("chat_prompt = 1"),
+            _idd_code("demo-corpus", "docs_content = [1]"),
+            _code("retriever = create_rag_system(docs_content)"),
+            _code("def build_rag(): pass"),
+        )
+        _, diff = deck.diff()
+        actions = {i.action for i in diff.items}
+        assert {"pool_placement_divergence", "mirror_order"} <= actions, [
+            (i.action, i.key) for i in diff.items
+        ]
+        outcome = deck.apply()
+        assert outcome.error is None, outcome.to_payload()
+        statuses = _statuses(outcome)
+        assert statuses["pos:s0/code/2"] == "pending"
+        [(order_key, order_status)] = [
+            (r.key, r.status) for r in outcome.results if r.action == "mirror_order"
+        ]
+        assert order_status == "deferred", outcome.to_payload()
 
 
 class TestOneOrderAuthorityPerPass:

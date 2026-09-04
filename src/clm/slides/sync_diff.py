@@ -3469,7 +3469,12 @@ class _Differ:
             # residue guess that crossed one. No mechanical row and no
             # answer may execute against a pairing that straddles a sync
             # point — the write would land the twin in the wrong span, the
-            # #906 corruption in a different coat. Frame, never guess (P8).
+            # #906 corruption in a different coat. Frame, never guess (P8):
+            # the de/en answer adopts that half's placement (the executor
+            # re-homes the other half's cell), and — the cross-bracket
+            # placement precedent (#654) — landing it banks nothing: the
+            # pairing was a guess, so the slot re-derives from the settled
+            # placement on the next pass instead of recording it.
             de_after, en_after = (s or "the group start" for s in spans)
             self.emit(
                 handle,
@@ -3479,12 +3484,14 @@ class _Differ:
                 f"the halves place this positional member on different sides of "
                 f"an id-keyed sibling — after {de_after} on the de half, after "
                 f"{en_after} on the en half — so its cross-side pairing cannot "
-                f"be trusted; move the cell (or the sibling) on the half that "
-                f"is out of order, or mint a slide_id on it, then re-report",
+                f"be trusted; answer de/en to adopt that half's placement (the "
+                f"other half's cell moves next to it), or mint a slide_id on "
+                f"the cell, then re-report",
                 group=group,
                 member=member,
                 base=entry,
                 twin=pair_twin,
+                defer_recording=True,
             )
             return
 

@@ -2186,8 +2186,9 @@ rows are suspended for the pass, answerless — resolve the transition and
 re-report, #826), `pool_placement_divergence` (the two halves place a
 positional cell on different sides of an id-keyed sibling — an id-keyed
 member present on both halves is a sync point no positional pairing may
-cross; answerless — move the cell on the half that is out of order, or mint
-a `slide_id` on it, then re-report, #906), and friends. Every JSON item carries an
+cross; answer `de`/`en` to adopt that half's placement — the other half's
+cell moves next to it — or mint a `slide_id` on the cell and re-report,
+#906), and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
 (`de` / `en`) so an agent can answer without re-reading files. A report whose

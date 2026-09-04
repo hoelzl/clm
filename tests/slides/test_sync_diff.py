@@ -701,7 +701,7 @@ class TestSyncPoints:
         """A pure move of a positional cell across an id'd sibling on one
         half: fingerprint identity on both halves, spans disagree. Silent
         before #906 (a lone id'd cell among positional siblings is
-        order-untrackable, §9); now an answerless frame naming both
+        order-untrackable, §9); now a framed placement decision naming both
         placements — never a mechanical row against the straddling pair."""
         base = self._ledger_base()
         de = self._deck("de", "Titel").replace(
@@ -717,7 +717,7 @@ class TestSyncPoints:
         assert "after id:demo-corpus on the de half, after id:s0 on the en half" in row.detail
         assert not diff.is_clean
 
-    def test_placement_divergence_is_answerless(self):
+    def test_placement_divergence_advertises_de_en(self):
         base = self._ledger_base()
         en = self._deck("en", "Title").replace(
             _code("chat_prompt = 1") + _idd_code("demo-corpus", "docs_content = [1]"),
@@ -725,8 +725,9 @@ class TestSyncPoints:
         )
         [row] = _diff(base, self._deck("de", "Titel"), en).items
         assert row.action == "pool_placement_divergence"
-        assert doc_apply.item_answers(row) == ()
-        assert doc_apply.item_resolution(row) == "manual"
+        assert doc_apply.item_answers(row) == ("de", "en")
+        assert doc_apply.item_resolution(row) == "decision"
+        assert row.defer_recording  # the #654 placement precedent: lands, banks nothing
 
     def test_duplicate_cells_around_a_sync_point_remove_the_right_copy(self):
         """Byte-identical boilerplate on both sides of an id'd cell; EN

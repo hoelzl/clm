@@ -293,9 +293,13 @@ different sides of an id-keyed sibling. An id-keyed member present on both
 halves is a *sync point*: positional cells pair and align only inside the
 spans between sync points, so a pairing that straddles one — a cell moved
 across an id'd sibling on one half only, say — is never executed against.
-Carries **no** answers: the detail names both placements; move the cell (or
-the sibling) on the half that is out of order, or mint a `slide_id` on the
-cell, then re-report. The pool's ledger entries are frozen meanwhile, #906),
+The detail names both placements; answer **`de`** or **`en`** to adopt that
+half's placement — the engine moves the *other* half's cell next to it,
+bytes untouched — or mint a `slide_id` on the cell and re-report. Like the
+cross-group placement answer, landing it banks nothing: the slot re-derives
+from the settled placement on the next report. While it is framed, the
+pool's ledger entries are frozen and any mechanical pool `mirror_order` in
+the same pass defers (one order authority per pass), #906),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
 engine writes the twin's attribute; see "Forking a shared cell" below), and
