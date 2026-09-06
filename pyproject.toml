@@ -171,7 +171,12 @@ replay = [
 ]
 # MCP server for AI-assisted slide authoring
 mcp = [
-    "mcp>=1.0.0",
+    # Cap at <2: the server imports `mcp.server.fastmcp`, which mcp 2.x
+    # renamed to `mcp.server.mcpserver.MCPServer`. An unbounded `>=1.0.0`
+    # resolves to 2.x and every `clm mcp` / MCP-touching command then fails
+    # at import with "No module named 'mcp.server.fastmcp'" -- including
+    # `clm export agent-guide`, which enumerates the MCP tool surface.
+    "mcp>=1.0.0,<2",
     "coding-academy-lecture-manager[slides]",
 ]
 # Development and testing
