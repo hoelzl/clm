@@ -781,7 +781,7 @@ requires-dist = [
     { name = "jupytext", marker = "extra == 'notebook'", specifier = ">=1.16.4" },
     { name = "langfuse", marker = "extra == 'voiceover'", specifier = ">=3.0.0" },
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0.0,<2" },
     { name = "mitmproxy", marker = "extra == 'replay'", specifier = ">=12,<13" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "nbconvert", marker = "extra == 'notebook'", specifier = "~=7.16.4" },
