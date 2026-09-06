@@ -30,7 +30,8 @@ Parsing runs in strict phases so a cell can never land in two members:
 
 1. read + segment each file (header zone / title group / anchored groups),
 2. pair — globally by bare id, then positionally (rule 2) within each
-   paired region, per kind-class,
+   paired region, per kind-class, inside the spans the region's id pairs
+   delimit (an id-paired cell is a sync point no positional pair crosses),
 3. emit — walk each region in merged order; an EN cell that is some DE
    cell's partner is always emitted by that pair, never solo.
 
@@ -260,18 +261,34 @@ def _segment_deck(source: _Source, demoted: frozenset[str] = frozenset()) -> _De
 # ---------------------------------------------------------------------------
 
 
-def _pair_class(cell: SideCell) -> tuple[str, bool, str]:
+@define(frozen=True)
+class _PairClass:
     """The kind-class used for positional (rule 2) pairing of id-less cells.
 
-    ``(cell_type, has-lang-attr, narrative-role)`` — finer than the key's
-    kind so a shared cell never pairs with a localized one, while the
-    rendered pos-key still uses the plain cell kind (design §3.3).
+    ``(cell_type, narrative-role, has-lang-attr[, owner])`` — finer than
+    the key's kind so a shared cell never pairs with a localized one, while
+    the rendered pos-key still uses the plain cell kind (design §3.3).
+    ``owner`` is the bare ``for_slide`` of companion cells (see
+    :func:`_companion_pool_key`).
     """
+
+    kind: str
+    role: str
+    localized: bool
+    owner: str | None = None
+
+    @property
+    def lang_less(self) -> _PairClass:
+        """The sibling class a forking/unifying cell's twin still sits in."""
+        return _PairClass(self.kind, self.role, False, self.owner)
+
+
+def _pair_class(cell: SideCell) -> _PairClass:
     role = "voiceover" if "voiceover" in cell.tags else "notes" if "notes" in cell.tags else ""
-    return (cell.cell_type, cell.lang_attr is not None, role)
+    return _PairClass(cell.cell_type, role, cell.lang_attr is not None)
 
 
-def _companion_pool_key(cell: SideCell) -> tuple[str | None, str, bool, str]:
+def _companion_pool_key(cell: SideCell) -> _PairClass:
     """Positional pool key for companion cells: adds the bare ``for_slide``.
 
     Mirrors the shape rule of ``assign_ids.stamp_ids_in_companion_pair`` but
@@ -279,8 +296,27 @@ def _companion_pool_key(cell: SideCell) -> tuple[str | None, str, bool, str]:
     anchor is member state to report, not a reason to split the member),
     stamping wanted precision.
     """
-    kind, localized, role = _pair_class(cell)
-    return (_bare(cell.for_slide), kind, localized, role)
+    base = _pair_class(cell)
+    return _PairClass(base.kind, base.role, base.localized, _bare(cell.for_slide))
+
+
+def _uncrossed_pairs(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The id pairs no other pair crosses — the ones both halves place alike
+    relative to every other id-paired cell.
+
+    Id-paired cells the halves order *differently* bracket nothing: their
+    brackets would cross, and which of two crossing pairs is "in place" is
+    exactly the order divergence the differ frames (an `order_decision`
+    on the id-keyed scope, a placement frame on any positional cell caught
+    between them). Choosing one of them here would turn that framed
+    question into a silent pool split.
+    """
+    return [
+        (de_i, en_i)
+        for de_i, en_i in pairs
+        if all((other_de < de_i) == (other_en < en_i) for other_de, other_en in pairs)
+        or len(pairs) == 1
+    ]
 
 
 def _merged_order(
@@ -560,7 +596,10 @@ class _Parser:
         - exactly one side id'd: the #443 id-stamp-pending shape — adopted
           when the id-less twin is localized (lang-tagged, where cross-side
           bodies differ by nature) or, for shared cells, when the bodies are
-          byte-equal (an id stamped onto one half of an unchanged cell). A
+          byte-equal (an id stamped onto one half of an unchanged cell; or
+          a fork/unify in flight, whose marked half :meth:`pair_region`
+          offers to the lang-less pool — the ``lang=`` attribute lives in
+          the header, so the body-equality proof is the same). A
           shared-class id'd cell with a *different* body is a genuinely new
           one-sided member: only its own side's cursor advances, so the
           remaining id-less cells still align.
@@ -628,22 +667,85 @@ class _Parser:
             else:
                 j += 1
 
+    def _sync_spans(
+        self, de_idxs: list[int], en_idxs: list[int], part: Part
+    ) -> list[tuple[list[int], list[int]]]:
+        """Split one region into the spans its id-paired cells delimit.
+
+        A cell paired **by id** on both halves of the region is a sync
+        point: one logical cell at one position in the document, so a
+        positional twin cannot sit before it on one half and after it on
+        the other. Pairing id-less cells across such a point marries cells
+        from different spans (issue #906: a one-sided removal before the
+        point shifted the cursor onto a cell behind it, and the mechanical
+        rows then wrote the twin into the wrong span — a structurally valid
+        deck whose code ran before its own definition). Only the sync
+        points both halves order alike bracket spans
+        (:func:`_uncrossed_pairs`); the rest are order divergence for the
+        differ to report, never a pairing constraint.
+        """
+        pair_map = self._region_pair_map(de_idxs, en_idxs, part)
+        chain = _uncrossed_pairs(sorted(pair_map.items()))
+        spans: list[tuple[list[int], list[int]]] = []
+        de_cursor = en_cursor = 0
+        for de_i, en_i in chain:
+            de_stop = de_idxs.index(de_i)
+            en_stop = en_idxs.index(en_i)
+            spans.append((de_idxs[de_cursor:de_stop], en_idxs[en_cursor:en_stop]))
+            de_cursor, en_cursor = de_stop + 1, en_stop + 1
+        spans.append((de_idxs[de_cursor:], en_idxs[en_cursor:]))
+        return spans
+
     def pair_region(
         self,
         de_idxs: list[int],
         en_idxs: list[int],
         part: Part,
-        pool_of: Callable[[SideCell], object] | None = None,
+        pool_of: Callable[[SideCell], _PairClass] | None = None,
     ) -> None:
-        """Bucket one region's cells by kind-class, then pair each bucket."""
+        """Bucket one region's cells by kind-class, then pair each bucket —
+        within the spans the region's id-paired cells delimit
+        (:meth:`_sync_spans`).
+
+        A **class transition in flight** (design §7.3) puts the two halves of
+        one member into different classes: the marked half carries
+        ``lang=`` (and an id, since localized cells are id'd), the twin is
+        still an id-less shared cell. Langness is member *state*, not
+        identity (P2), so an id'd lang-tagged cell left unpaired by its own
+        class pool is offered to the lang-less pool of its kind as a slot
+        occupant, where :meth:`pair_positionally`'s adoption rule marries it
+        to a byte-equal twin at its cursor slot — the same proof the #443
+        stamp adoption uses. Without this a fork of a mid-pool cell shifted
+        the shared pool's cursor and married every later sibling to the
+        wrong twin (issue #900); an edited twin (bodies differ) is still not
+        adopted and stays a framed one-sided transition.
+        """
         classify = pool_of or _pair_class
-        pools: dict[object, tuple[list[int], list[int]]] = {}
-        for i in de_idxs:
-            pools.setdefault(classify(self._cell("de", (part, i))), ([], []))[0].append(i)
-        for i in en_idxs:
-            pools.setdefault(classify(self._cell("en", (part, i))), ([], []))[1].append(i)
-        for de_pool, en_pool in pools.values():
-            self.pair_positionally(de_pool, en_pool, part)
+        for de_span, en_span in self._sync_spans(de_idxs, en_idxs, part):
+            pools: dict[_PairClass, tuple[list[int], list[int]]] = {}
+            for i in de_span:
+                pools.setdefault(classify(self._cell("de", (part, i))), ([], []))[0].append(i)
+            for i in en_span:
+                pools.setdefault(classify(self._cell("en", (part, i))), ([], []))[1].append(i)
+            # Localized classes first, so a transitioning cell is offered
+            # to its own class before it occupies a lang-less slot.
+            order = sorted(pools, key=lambda c: (c.kind, c.role, c.owner or ""))
+            for cls in [c for c in order if c.localized]:
+                de_pool, en_pool = pools[cls]
+                self.pair_positionally(de_pool, en_pool, part)
+                sides: tuple[tuple[Lang, list[int]], ...] = (("de", de_pool), ("en", en_pool))
+                for lang, pool in sides:
+                    for i in self._unpaired(lang, part, pool):
+                        if _bare(self._cell(lang, (part, i)).slide_id) is None:
+                            continue
+                        sibling = pools.setdefault(cls.lang_less, ([], []))
+                        target = sibling[0] if lang == "de" else sibling[1]
+                        target.append(i)
+                        target.sort()
+            order = sorted(pools, key=lambda c: (c.kind, c.role, c.owner or ""))
+            for cls in [c for c in order if not c.localized]:
+                de_pool, en_pool = pools[cls]
+                self.pair_positionally(de_pool, en_pool, part)
 
     def _region_pair_map(
         self, de_idxs: list[int], en_idxs: list[int], part: Part

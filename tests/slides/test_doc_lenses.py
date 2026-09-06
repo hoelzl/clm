@@ -730,6 +730,128 @@ class TestPairingAlignment:
         assert len(obs) == 1 and obs[0].member == MemberKey.for_id("x-cell")
 
 
+class TestSyncPointSpans:
+    """#906 / #900: id-paired cells are sync points that scope positional
+    pairing, and a forking half is offered to the shared pool for adoption."""
+
+    @staticmethod
+    def _cells(*parts: str) -> str:
+        return "".join(parts)
+
+    def test_positional_pairing_never_crosses_an_id_paired_cell(self):
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + "# %%\nimports()\n\n"
+            + "# %%\nchat_prompt = 1\n\n"
+            + '# %% slide_id="corpus"\ndocs = [1]\n\n'
+            + "# %%\nrag = build(docs)\n\n"
+        )
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + "# %%\nimports()  # edited\n\n"
+            + '# %% slide_id="corpus"\ndocs = [1]\n\n'
+            + "# %%\nrag = build(docs, k=3)\n\n"
+        )
+        deck = _assert_round_trip(de, en).deck
+        assert deck is not None
+        pos = {m.key.render(): m for m in deck.members() if m.key.render().startswith("pos:g/")}
+        assert set(pos) == {"pos:g/code/0", "pos:g/code/1", "pos:g/code/2"}
+        assert pos["pos:g/code/0"].de is not None and pos["pos:g/code/0"].en is not None
+        # chat_prompt is one-sided: EN's rag cell sits BEHIND the sync point.
+        chat = pos["pos:g/code/1"]
+        assert chat.de is not None and "chat_prompt" in chat.de.body and chat.en is None
+        rag = pos["pos:g/code/2"]
+        assert rag.de is not None and rag.en is not None
+        assert "build(docs)" in rag.de.body and "k=3" in rag.en.body
+
+    def test_id_pairs_the_halves_order_differently_do_not_bracket(self):
+        # Two id'd cells swapped on EN: their brackets would cross, so
+        # neither is a sync point and the positional cell still pairs by
+        # cursor — the crossing itself is the differ's order question.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + _localized("p", "de", "P")
+            + "# %%\nx = 1\n\n"
+            + _localized("q", "de", "Q")
+        )
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + _localized("q", "en", "Q")
+            + "# %%\nx = 1\n\n"
+            + _localized("p", "en", "P")
+        )
+        deck = _assert_round_trip(de, en).deck
+        assert deck is not None
+        [pos] = [m for m in deck.members() if m.key.render().startswith("pos:g/")]
+        assert pos.de is not None and pos.en is not None
+
+    def test_forking_half_adopts_its_byte_equal_shared_twin(self):
+        # #900: fork A on DE (lang + id); the EN twin is still the id-less
+        # shared cell. Identical bodies on the sibling B defeat every
+        # body-based rescue — the cursor adoption pairs A' with A.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1\n\n'
+            + '# %% tags=["b"]\nbody = 1\n\n'
+        )
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + '# %% tags=["a"]\nbody = 1\n\n'
+            + '# %% tags=["b"]\nbody = 1\n\n'
+        )
+        deck = _assert_round_trip(de, en).deck
+        assert deck is not None
+        fork = deck.member_by_key(MemberKey.for_id("a-cell"))
+        assert fork is not None and fork.de is not None and fork.en is not None
+        assert fork.en.tags == ("a",)
+        assert fork.langness == "localized"
+        [b] = [m for m in deck.members() if m.key.render().startswith("pos:g/")]
+        assert b.de is not None and b.en is not None and b.de.tags == ("b",)
+        kinds = sorted(o.kind for o in deck.observations)
+        assert kinds == ["id_stamp_pending_twin", "lang_attr_mismatch"]
+
+    def test_forking_half_with_an_edited_twin_stays_one_sided(self):
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1\n\n'
+            + '# %% tags=["b"]\nother = 2\n\n'
+        )
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + '# %% tags=["a"]\nbody = 1  # v2\n\n'
+            + '# %% tags=["b"]\nother = 2\n\n'
+        )
+        deck = _assert_round_trip(de, en).deck
+        assert deck is not None
+        fork = deck.member_by_key(MemberKey.for_id("a-cell"))
+        assert fork is not None and fork.en is None
+
+    def test_new_localized_cell_with_a_surplus_is_not_offered_a_shared_twin(self):
+        # A genuinely new lang'd id'd code cell leaves its half with a
+        # surplus — the #716 residue rule keeps it out of the shared pool.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + '# %% lang="de" slide_id="new-de"\nbody = 1\n\n'
+            + "# %%\nbody = 1\n\n"
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("g", "en", "G") + "# %%\nbody = 1\n\n")
+        deck = _assert_round_trip(de, en).deck
+        assert deck is not None
+        new = deck.member_by_key(MemberKey.for_id("new-de"))
+        assert new is not None and new.en is None
+        [pos] = [m for m in deck.members() if m.key.render().startswith("pos:g/")]
+        assert pos.de is not None and pos.en is not None
+
+
 class TestObservationKeys:
     """Observations must carry the member's FINAL key (P1: identity computed
     once and carried unchanged) — never the pre-ordinal sentinel."""

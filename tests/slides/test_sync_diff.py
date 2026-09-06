@@ -15,7 +15,8 @@ from __future__ import annotations
 import attrs
 import pytest
 
-from clm.slides.bilingual_doc import BilingualDeck
+from clm.slides import doc_apply
+from clm.slides.bilingual_doc import BilingualDeck, MemberKey
 from clm.slides.doc_lenses import parse_bundle
 from clm.slides.sync_diff import (
     MECHANICAL_ACTIONS,
@@ -479,15 +480,35 @@ class TestShiftedPoolSuspension:
         base.complete = False
         return base
 
-    def test_fork_of_first_pool_cell_suspends_the_pool(self):
-        """The filed #826 shape: fork A (identical bodies) — the sibling slot
-        must frame, never take the mechanical ``mirror_tags`` that overwrote
-        B.de's tags before the fix."""
+    def test_fork_of_first_pool_cell_pairs_the_true_twin(self):
+        """The filed #826 shape: fork A (identical bodies). Before #826 the
+        sibling slot took a mechanical ``mirror_tags`` that overwrote B.de's
+        tags; #826 suspended the pool; since #900 the lens offers the
+        forking half to the shared pool, where the #443 adoption marries it
+        to its byte-equal twin at the cursor — the pool never shifts, B
+        stays at base on both halves, and the one row is the two-sided fork
+        frame carrying the TRUE twin (tags ``a``, not the mis-married B)."""
         base = self._ledger_base(self.DE_POOL, self.EN_POOL)
         de = self.DE_POOL.replace(
             '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
         )
         diff = _diff(base, de, self.EN_POOL)
+        assert [(i.action, i.key) for i in diff.items] == [("fork_pending_twin", "id:a-cell")]
+        [fork] = diff.items
+        assert fork.member is not None and fork.member.en is not None
+        assert fork.member.en.tags == ("a",)
+        assert "lang + id" in fork.detail
+
+    def test_fork_with_edited_twin_still_suspends_the_pool(self):
+        """V4 (#900's deliberate residue): the twin was edited too, so no
+        fingerprint proves the pairing — the frame stays one-sided and the
+        shifted sibling slot frames, never a mechanical row."""
+        base = self._ledger_base(self.DE_POOL, self.EN_POOL)
+        de = self.DE_POOL.replace(
+            '# %% tags=["a"]\nbody = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\nbody = 1'
+        )
+        en = self.EN_POOL.replace('# %% tags=["a"]\nbody = 1', '# %% tags=["a"]\nbody = 1  # v2')
+        diff = _diff(base, de, en)
         by_action = {(i.action, i.key) for i in diff.items}
         assert ("fork_pending_twin", "id:a-cell") in by_action
         assert ("pool_pairing_shifted", "pos:s0/code/1") in by_action
@@ -496,9 +517,10 @@ class TestShiftedPoolSuspension:
         ), [(i.action, i.key) for i in diff.items]
 
     def test_fork_with_distinct_bodies_never_propagates(self):
-        """Sibling variant V1: distinct bodies — before the fix the sibling
+        """Sibling variant V1: distinct bodies — before #826 the sibling
         slot took a mechanical ``propagate_shared_edit`` that replaced B.de's
-        entire cell with A's EN bytes."""
+        entire cell with A's EN bytes. With the true twin adopted (#900)
+        the sibling is not even a row."""
         de0 = self.DE_POOL.replace("body = 1\n\n# %%", "a_body = 1\n\n# %%")
         en0 = self.EN_POOL.replace("body = 1\n\n# %%", "a_body = 1\n\n# %%")
         base = self._ledger_base(de0, en0)
@@ -506,9 +528,34 @@ class TestShiftedPoolSuspension:
             '# %% tags=["a"]\na_body = 1', '# %% lang="de" tags=["a"] slide_id="a-cell"\na_body = 1'
         )
         diff = _diff(base, de, en0)
-        actions = {i.action for i in diff.items}
-        assert "propagate_shared_edit" not in actions
-        assert "pool_pairing_shifted" in actions
+        assert [i.action for i in diff.items] == ["fork_pending_twin"]
+
+    def test_mid_pool_fork_among_identical_siblings_migrates_the_exact_entry(self):
+        """#900's filed variant: a fork of a MID-pool cell whose siblings are
+        byte-identical in body. The body-only fork channel matches every
+        sibling's entry; the exact content fingerprint of the adopted twin
+        singles out the right one, so the frame is two-sided and no sibling
+        slot is disturbed."""
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            '# %% tags=["a"]\nbody = 1\n\n',
+            '# %% tags=["b"]\nbody = 1\n\n',
+            '# %% tags=["c"]\nbody = 1\n\n',
+        )
+        en0 = de0.replace(HEADER_DE, HEADER_EN).replace(
+            _slide("s0", "de", "Titel"), _slide("s0", "en", "Title")
+        )
+        base = self._ledger_base(de0, en0)
+        de = de0.replace(
+            '# %% tags=["b"]\nbody = 1', '# %% lang="de" tags=["b"] slide_id="b-cell"\nbody = 1'
+        )
+        diff = _diff(base, de, en0)
+        assert [(i.action, i.key) for i in diff.items] == [("fork_pending_twin", "id:b-cell")]
+        [fork] = diff.items
+        assert fork.base is not None and fork.base.key == "pos:s0/code/1"
+        assert fork.member is not None and fork.member.en is not None
+        assert fork.member.en.tags == ("b",)
 
     def test_unify_start_never_propagates_into_the_pool(self):
         """Sibling variant V3: stripping a localized cell's lang+id inserts
@@ -540,11 +587,11 @@ class TestShiftedPoolSuspension:
 
     def test_fork_of_last_pool_cell_does_not_suspend(self):
         """With distinct bodies the migration matches the true entry and the
-        absorb claims the true twin — every remaining slot sits at base on
+        lens adopts the true twin — every remaining slot sits at base on
         both sides, and per-side fingerprint identity needs no cross-side
-        guess, so the suspension stays out of the way. (With identical
-        bodies even this shape suspends: which cell forked is itself a
-        body-match guess.)"""
+        guess, so the suspension stays out of the way. (Identical bodies no
+        longer suspend either since #900: the adopted twin's exact content
+        fingerprint singles out the forked entry.)"""
         de0 = self.DE_POOL.replace('# %% tags=["b"]\nbody = 1', '# %% tags=["b"]\nother = 2')
         en0 = self.EN_POOL.replace('# %% tags=["b"]\nbody = 1', '# %% tags=["b"]\nother = 2')
         base = self._ledger_base(de0, en0)
@@ -579,6 +626,165 @@ class TestShiftedPoolSuspension:
         )
         diff = _diff(base, de, self.EN_POOL)
         assert not any(i.action == "pool_pairing_shifted" for i in diff.items)
+
+
+def _code(body: str) -> str:
+    return f"# %%\n{body}\n\n"
+
+
+def _idd_code(slug: str, body: str) -> str:
+    return f'# %% slide_id="{slug}"\n{body}\n\n'
+
+
+class TestSyncPoints:
+    """#906: an id-keyed member present on both halves is a **sync point**.
+    Positional pairing (the lens) and the pool's per-side alignment (the
+    differ) hold inside the spans sync points delimit; a cross-side pairing
+    that straddles one is never executed against.
+
+    The filed shape: a setup pool with an id'd cell mid-pool, one EN editing
+    pass that deleted two cells and edited the remaining three. Aligned over
+    the whole pool, EN's surviving ``create_rag_system`` (now ordinal 2) was
+    written into the DE slot of the deleted ``chat_prompt`` — BEFORE the
+    id'd ``docs_content`` cell it depends on — and DE's own copy behind the
+    id'd cell was removed as surplus: a structurally valid deck whose DE
+    notebook failed with ``NameError``.
+    """
+
+    @staticmethod
+    def _deck(lang: str, title: str) -> str:
+        return _build(
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("s0", lang, title),
+            _code("import a"),
+            _code("from rag_utils import x"),
+            _code("chat_prompt = 1"),
+            _idd_code("demo-corpus", "docs_content = [1]"),
+            _code("retriever = create_rag_system(docs_content)"),
+            _code("def build_rag(): pass"),
+        )
+
+    EN_EDITED = _build(
+        HEADER_EN,
+        _slide("s0", "en", "Title"),
+        _code("import a  # edited"),
+        _code("from rag_utils import x, y"),
+        _idd_code("demo-corpus", "docs_content = [1]"),
+        _code("retriever = create_rag_system(docs_content, k=3)"),
+    )
+
+    def _ledger_base(self) -> DeckBaseline:
+        base = _snapshot(self._deck("de", "Titel"), self._deck("en", "Title"))
+        base.complete = False
+        return base
+
+    def test_filed_shape_aligns_each_span_on_its_own(self):
+        diff = _diff(self._ledger_base(), self._deck("de", "Titel"), self.EN_EDITED)
+        rows = {i.key: i for i in diff.items}
+        assert {k: i.action for k, i in rows.items()} == {
+            "pos:s0/code/0": "propagate_shared_edit",
+            "pos:s0/code/1": "propagate_shared_edit",
+            "pos:s0/code/2": "mirror_remove",  # chat_prompt: gone from EN's first span
+            "pos:s0/code/3": "propagate_shared_edit",  # create_rag_system, behind the id'd cell
+            "pos:s0/code/4": "mirror_remove",  # build_rag
+        }
+        assert all(i.direction == "en_to_de" for i in diff.items)
+        # The edited create_rag_system pairs with DE's copy behind the id'd
+        # cell, never with the chat_prompt slot in front of it.
+        row = rows["pos:s0/code/3"]
+        assert row.member is not None and row.member.de is not None
+        assert "create_rag_system" in row.member.de.body
+        assert row.twin is None  # the lens paired them directly (same span)
+        assert row.member.en is not None and "k=3" in row.member.en.body
+
+    def test_one_sided_move_across_a_sync_point_frames_a_placement_divergence(self):
+        """A pure move of a positional cell across an id'd sibling on one
+        half: fingerprint identity on both halves, spans disagree. Silent
+        before #906 (a lone id'd cell among positional siblings is
+        order-untrackable, §9); now a framed placement decision naming both
+        placements — never a mechanical row against the straddling pair."""
+        base = self._ledger_base()
+        de = self._deck("de", "Titel").replace(
+            _code("chat_prompt = 1") + _idd_code("demo-corpus", "docs_content = [1]"),
+            _idd_code("demo-corpus", "docs_content = [1]") + _code("chat_prompt = 1"),
+        )
+        diff = _diff(base, de, self._deck("en", "Title"))
+        assert [(i.action, i.key) for i in diff.items] == [
+            ("pool_placement_divergence", "pos:s0/code/2")
+        ]
+        [row] = diff.items
+        assert row.outcome == "order"
+        assert "after id:demo-corpus on the de half, after id:s0 on the en half" in row.detail
+        assert not diff.is_clean
+
+    def test_placement_divergence_advertises_de_en(self):
+        base = self._ledger_base()
+        en = self._deck("en", "Title").replace(
+            _code("chat_prompt = 1") + _idd_code("demo-corpus", "docs_content = [1]"),
+            _idd_code("demo-corpus", "docs_content = [1]") + _code("chat_prompt = 1"),
+        )
+        [row] = _diff(base, self._deck("de", "Titel"), en).items
+        assert row.action == "pool_placement_divergence"
+        assert doc_apply.item_answers(row) == ("de", "en")
+        assert doc_apply.item_resolution(row) == "decision"
+        assert row.defer_recording  # the #654 placement precedent: lands, banks nothing
+
+    def test_duplicate_cells_around_a_sync_point_remove_the_right_copy(self):
+        """Byte-identical boilerplate on both sides of an id'd cell; EN
+        deletes the copy in FRONT of it. The whole-pool alignment paired the
+        surviving EN copy (behind) with DE's front copy and removed DE's
+        back copy — the same corruption with duplicates. Spans learned from
+        the untouched half localize the removal to the front copy."""
+        de0 = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _code("boilerplate()"),
+            _idd_code("mid", "mid = 1"),
+            _code("boilerplate()"),
+        )
+        en0 = de0.replace(HEADER_DE, HEADER_EN).replace(
+            _slide("s0", "de", "Titel"), _slide("s0", "en", "Title")
+        )
+        base = _snapshot(de0, en0)
+        base.complete = False
+        en = en0.replace(
+            _code("boilerplate()") + _idd_code("mid", "mid = 1"), _idd_code("mid", "mid = 1")
+        )
+        diff = _diff(base, de0, en)
+        assert [(i.action, i.key, i.direction) for i in diff.items] == [
+            ("mirror_remove", "pos:s0/code/0", "en_to_de")
+        ]
+        [row] = diff.items
+        assert row.member is not None and row.member.de is not None
+        # The DE cell to remove is the FRONT copy: it precedes the id'd cell.
+        mid = _parse(de0, en).member_by_key(MemberKey.for_id("mid"))
+        assert mid is not None and mid.de is not None
+        assert row.member.de.index < mid.de.index
+
+    def test_a_two_sided_insert_above_the_edit_does_not_churn(self):
+        """Spans are read from the CURRENT parse, never recorded: a new id'd
+        cell inserted on both halves above an edited positional cell changes
+        the cell's span identically on both sides, so the edit still
+        propagates — no spurious remove+add (the change-point churn the
+        withdrawn id-delimited-scope rule would have charged)."""
+        base = self._ledger_base()
+        insert = _localized("note", "de", "Neu")
+        de = self._deck("de", "Titel").replace(
+            _code("retriever = create_rag_system(docs_content)"),
+            insert + _code("retriever = create_rag_system(docs_content)"),
+        )
+        en = self._deck("en", "Title").replace(
+            _code("retriever = create_rag_system(docs_content)"),
+            _localized("note", "en", "New")
+            + _code("retriever = create_rag_system(docs_content, k=3)"),
+        )
+        diff = _diff(base, de, en)
+        # The inserted localized member is cold (a two-sided un-ledgered
+        # member, §5); the positional pool itself sees exactly the edit.
+        assert sorted((i.action, i.key) for i in diff.items) == [
+            ("propagate_shared_edit", "pos:s0/code/3"),
+            ("verify_cold", "id:note"),
+        ]
 
 
 class TestCompanions:
@@ -1975,10 +2181,15 @@ class TestStampTwinIdTrustGate:
         framed = {i.key: i.action for i in diff.items}
         assert framed == {"id:aa": "verify_translation", "id:bb": "verify_translation"}
 
-    def test_unverified_pairing_never_leaks_an_order_mirror(self):
-        """PR #825 review round 3 (Important): the adopted twin's position is
-        part of the guess — ``_diff_order`` must not mirror it mechanically
-        while the pairing frame is pending."""
+    def test_moved_stripped_twin_is_not_adopted_across_a_sync_point(self):
+        """PR #825 review round 3 (Important) pinned that the adopted twin's
+        position is part of the guess, so no order mirror may leak while the
+        pairing frame is pending. Since #906 the lens never makes that guess:
+        ``xx`` is id-paired on both halves — a sync point — and the stripped
+        cell sits below it on EN only, so it is not ``aa``'s positional twin
+        at all. The id-less localized cell takes the normalize-first path
+        (``--stamp-ids`` mints it solo; the next report frames the pair),
+        and nothing executes or mirrors meanwhile."""
         de0 = _build(
             HEADER_DE,
             _slide("s0", "de", "Titel"),
@@ -2001,11 +2212,23 @@ class TestStampTwinIdTrustGate:
             _localized("xx", "en", "Pear"),
             '# %% [markdown] lang="en"\n# Apple v2\n\n',
         )
-        diff = _diff(base, de0, en1)
-        assert not any(i.action == "mirror_order" for i in diff.items), [
-            (i.key, i.action, i.detail) for i in diff.items
-        ]
-        assert not any(i.action == "stamp_twin_id" for i in diff.items)
+        outcome = parse_bundle(de0, en1)
+        assert outcome.refusal is not None
+        assert {r.code for r in outcome.refusal.reasons} == {"idless_localized"}
+        diff = diff_outcome(outcome, base)
+        assert diff.refusal is not None
+        assert diff.items == []
+        # The same twin at its own slot (above xx) is still adopted and
+        # framed for verification — the #443 courtesy is span-scoped, not
+        # gone.
+        en2 = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            '# %% [markdown] lang="en"\n# Apple v2\n\n',
+            _localized("xx", "en", "Pear"),
+        )
+        diff = _diff(base, de0, en2)
+        assert not any(i.action in ("mirror_order", "stamp_twin_id") for i in diff.items)
         assert {i.action for i in diff.items if i.key == "id:aa"} == {"verify_translation"}
 
     def test_unverified_pairing_with_divergent_tags_co_frames_the_tags_row(self):

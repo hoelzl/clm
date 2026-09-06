@@ -154,6 +154,11 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "conflict_tags": ("de", "en"),
     "conflict_preamble": ("de", "en"),
     "order_decision": ("de", "en"),
+    #: #906: the slot's halves straddle an id-keyed sibling — adopt that
+    #: half's placement; the executor re-homes the OTHER half's cell next to
+    #: the chosen half's mirrored predecessor (the same move the member-keyed
+    #: cross-bracket `order_decision` performs, holder-rule aware).
+    "pool_placement_divergence": ("de", "en"),
     "stamp_vs_new": ("treat_as_new",),
     "remove_vs_split": ("remove",),
     #: #650: prune the orphaned narration whose owning slide was removed or
@@ -706,6 +711,7 @@ _PHASES: dict[str, int] = {
     "mirror_layout": 3,
     "mirror_order": 4,
     "order_decision": 4,
+    "pool_placement_divergence": 4,
     "propagate_preamble": 5,
     "conflict_preamble": 5,
 }
@@ -1224,6 +1230,30 @@ class _Executor(DeckEmitter):
         self.stream_remove(target, cell.part, member)
         self.insert_mirrored(member, source, target, cell.part, cell)
 
+    def mirror_pool_placement(self, item: DiffItem, source: Lang) -> None:
+        """#906 ``de``/``en``: re-home a pool slot's twin cell to the chosen
+        half's side of the id-keyed sibling it straddles.
+
+        The holder-rule-aware sibling of :meth:`_mirror_member_move`: under
+        the ``twin`` convention the slot's two cells live on different
+        parsed members (the lens could not pair them — they sit in
+        different spans), so each side is resolved through
+        :meth:`_holder`. The target cell keeps its bytes and its member; only
+        its position in the target stream changes — right after the
+        mirrored predecessor of the source cell, which is the sync point
+        itself or a later cell of the same span.
+        """
+        target = _other(source)
+        src_holder, src_cell = self._moved_cell(item, source)
+        tgt_holder, tgt_cell = self._moved_cell(item, target)
+        # Validate before mutating: a failed item must be a strict no-op.
+        if not any(m is src_holder for m in self.streams.get((source, src_cell.part), [])):
+            raise _ItemError(f"the {source} cell of {item.key} is unlocatable")
+        if not any(m is tgt_holder for m in self.streams.get((target, tgt_cell.part), [])):
+            raise _ItemError(f"the {target} cell of {item.key} is unlocatable")
+        self.stream_remove(target, tgt_cell.part, tgt_holder)
+        self.insert_mirrored(src_holder, source, target, tgt_cell.part, tgt_cell, into=tgt_holder)
+
 
 # ---------------------------------------------------------------------------
 # Ledger updates for landed items
@@ -1293,8 +1323,17 @@ def _earlier_pool_removal(items: list[DiffItem], item: DiffItem) -> DiffItem | N
 #: order-guess marriages the suspension exists to keep out of the ledger —
 #: and :func:`_drop_unresolved_from_pools` would then erase even the slots'
 #: old baselines. The dedicated action keeps the #630 gating rule intact.
+#: ``pool_placement_divergence`` joined for #906: the slot's halves straddle
+#: an id-keyed sibling, so the fresh snapshot pairs them by a cursor guess
+#: the frame exists to keep out of the ledger.
 _POOL_FREEZING_ACTIONS = frozenset(
-    {"stamp_vs_new", "remove_vs_edit", "remove_vs_split", "pool_pairing_shifted"}
+    {
+        "stamp_vs_new",
+        "remove_vs_edit",
+        "remove_vs_split",
+        "pool_pairing_shifted",
+        "pool_placement_divergence",
+    }
 )
 
 
@@ -1793,7 +1832,24 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         if cell.lang_attr is not None:  # pragma: no cover - differ frames only unmarked twins
             raise _ItemError(f"the {target} side already carries a lang attribute")
         header = swap_lang(cell.lines[0], target)
-        ex.set_side(holder, target, evolve(cell, lines=(header, *cell.lines[1:])))
+        slide_id = cell.slide_id
+        if slide_id is None:
+            # The twin is still the id-less shared cell the lens adopted
+            # (#900): the fork mints the id at fork time (§7.3), so the
+            # mark carries the marked half's id across — the differ folds
+            # the pending stamp into this frame instead of emitting a
+            # mechanical `stamp_twin_id` beside it.
+            marked_holder = ex._holder(item, marked)
+            marked_cell = marked_holder.side(marked) if marked_holder is not None else None
+            if marked_cell is None or marked_cell.slide_id is None:
+                raise _ItemError(f"the marked {marked} side of {item.key} carries no id")
+            slide_id = marked_cell.slide_id
+            header = header.rstrip() + f' slide_id="{slide_id}"'
+        ex.set_side(
+            holder,
+            target,
+            evolve(cell, lines=(header, *cell.lines[1:]), lang_attr=target, slide_id=slide_id),
+        )
         return
     if choice == "confirm":
         de_holder = ex._holder(item, "de")
@@ -1860,6 +1916,9 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             return
         if action == "order_decision":
             ex.mirror_order(item, side)
+            return
+        if action == "pool_placement_divergence":
+            ex.mirror_pool_placement(item, side)
             return
         raise _ItemError(f"'{action}' does not accept a side choice")
     if choice == "remove":
@@ -2169,7 +2228,13 @@ def apply_deck(
     # mirrors defer per item (the #824 keep-defer shape, P7-clean) and
     # re-derive from the post-answer state on the next report; a genuinely
     # trust-backed mirror in an uncontested pass is untouched.
-    open_order_handles = [i.key for i in diff.items if i.action == "order_decision"]
+    # A framed pool placement (#906) is an order authority of the same
+    # kind: its answer moves a cell across a sibling, and a co-executing
+    # pool `mirror_order` would permute the same pool's occupants from the
+    # pre-answer marriages.
+    open_order_handles = [
+        i.key for i in diff.items if i.action in ("order_decision", "pool_placement_divergence")
+    ]
     #: (group, kind) pools whose mirror_order deferred — they must join the
     #: recording freeze (the pool-handle key contributes nothing to
     #: _frozen_pools and the row carries no member, #885 review I1).

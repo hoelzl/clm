@@ -260,6 +260,7 @@ FRAMED_ACTIONS = frozenset(
         "stamp_vs_new",  # suspected stamp: new id'd cell vs unaccounted pool cell (#600)
         "remove_vs_split",  # removal vs suspected group split (#610/#630)
         "pool_pairing_shifted",  # pool trust suspended: a class transition shifted the pool (#826)
+        "pool_placement_divergence",  # a pool slot's halves straddle an id-keyed sibling (#906)
         "conflict_preamble",  # preambles moved differently on both sides
         "verify_cold",  # no baseline entry (ledger mode)
     }
@@ -355,6 +356,17 @@ def _split_observations(
         )
         for (old, new, side), count in sorted(counts.items())
     ]
+
+
+@frozen
+class _PoolCell:
+    """One half's cell in a positional pool, as the alignment sees it:
+    its content fingerprint, the parsed member carrying it, and the sync
+    point it sits under on that half (:meth:`_Differ._build_span_index`)."""
+
+    fp: str
+    member: Member
+    span: str
 
 
 def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | None:
@@ -681,6 +693,9 @@ class _Differ:
         self._placement_framed: set[str] = set()
         #: content fps of migrated base entries → the winning id handle
         self.migrated_fps: dict[str, str] = {}
+        #: (lang, part, cell index) → the handle of the nearest preceding
+        #: sync point on that half (see :meth:`_build_span_index`, #906)
+        self._spans: dict[tuple[Lang, str, int], str] = {}
 
     # -- plumbing ---------------------------------------------------------
 
@@ -755,6 +770,7 @@ class _Differ:
         pos_members = [(m, g) for m, g in members if m.key.scheme == "pos"]
         self._pos_members = pos_members
         self._id_members = id_members
+        self._spans = self._build_span_index()
 
         self._detect_group_renames()
         for obs in self.current.observations:
@@ -818,6 +834,13 @@ class _Differ:
             return
         if not self._stamp_pairing_ledger_known(entry, member, side):
             self._unverified_stamp_pairings.add(handle)
+            return
+        if entry.langness == "shared" and self._observed_langness(member) == "mixed":
+            # A fork in flight owns the stamp: §7.3 mints the id at fork
+            # time through the symmetric twin chokepoint, so the fork
+            # frame's `mark_twin` writes lang AND id onto the twin — one
+            # framed row per member, never a mechanical stamp beside it
+            # (the lens pairs a forking half with its byte-equal twin, #900).
             return
         self.emit(
             handle,
@@ -1167,6 +1190,7 @@ class _Differ:
         fps = self._member_fps(member)
         body_fps = {_body_fp(cell) for cell in (member.de, member.en) if cell is not None}
         forking = self._observed_langness(member) != "shared"
+        matches: list[tuple[MemberBaseline, bool]] = []  # (entry, exact content match)
         for entry in self.base.members.values():
             if entry.key in self.matched_base_keys or not entry.key.startswith("pos:"):
                 continue
@@ -1185,39 +1209,46 @@ class _Differ:
                 and entry.de_body_fp is not None
                 and entry.de_body_fp in body_fps
             )
-            if not (content_match or fork_match):
-                continue
-            new_handle = member.key.render()
-            if not gate_open:
-                # #644 forbids the migration (a byte-identical NEW id'd cell
-                # must not steal a still-present pool cell's entry) — but the
-                # match can still be evidence that this member LEFT the pool
-                # (a fork/stamp whose side also gained a new cell, which
-                # backfills the count and closes the deficit gate). The two
-                # shapes separate by ACCOUNTING, not by the match alone: a
-                # clone's bytes are still fully present in the pool (as many
-                # matching cells as unclaimed entries — the pinned #644
-                # regression shape), a departure's are not. Only the
-                # under-accounted shape marks; the entry stays either way,
-                # and marking only demotes mechanicals to frames, so the
-                # #644 concern (entry theft) does not apply.
-                if self._pool_bytes_unaccounted(
-                    group, member.kind, member, use_body=not content_match
-                ):
-                    self._shifted_pools.setdefault((group, member.kind), new_handle)
-                    self._shift_causes.add(new_handle)
-                    return None
-                continue
-            self.key_migrations[entry.key] = new_handle
-            for fp in (entry.de_fp, entry.en_fp):
-                if fp is not None:
-                    self.migrated_fps[fp] = new_handle
-            # The migration consumes a pos: entry, shrinking the pool's
-            # base side — the remaining slots re-align, so their
-            # cross-side pairings are suspect for the pass (#826).
-            self._shifted_pools.setdefault((group, member.kind), new_handle)
-            return entry
-        return None
+            if content_match or fork_match:
+                matches.append((entry, content_match))
+        if not matches:
+            return None
+        new_handle = member.key.render()
+        if not gate_open:
+            # #644 forbids the migration (a byte-identical NEW id'd cell
+            # must not steal a still-present pool cell's entry) — but the
+            # match can still be evidence that this member LEFT the pool
+            # (a fork/stamp whose side also gained a new cell, which
+            # backfills the count and closes the deficit gate). The two
+            # shapes separate by ACCOUNTING, not by the match alone: a
+            # clone's bytes are still fully present in the pool (as many
+            # matching cells as unclaimed entries — the pinned #644
+            # regression shape), a departure's are not. Only the
+            # under-accounted shape marks; the entry stays either way,
+            # and marking only demotes mechanicals to frames, so the
+            # #644 concern (entry theft) does not apply.
+            if any(
+                self._pool_bytes_unaccounted(group, member.kind, member, use_body=not exact)
+                for _, exact in matches
+            ):
+                self._shifted_pools.setdefault((group, member.kind), new_handle)
+                self._shift_causes.add(new_handle)
+            return None
+        # Exact content identity outranks the body-only fork channel: pool
+        # siblings with byte-identical bodies (boilerplate) all match the
+        # fork channel, and a body match taken ahead of an exact one
+        # migrated the wrong sibling's entry — the true twin's exact
+        # fingerprint sat one entry further on (#900).
+        entry = next((e for e, exact in matches if exact), matches[0][0])
+        self.key_migrations[entry.key] = new_handle
+        for fp in (entry.de_fp, entry.en_fp):
+            if fp is not None:
+                self.migrated_fps[fp] = new_handle
+        # The migration consumes a pos: entry, shrinking the pool's
+        # base side — the remaining slots re-align, so their
+        # cross-side pairings are suspect for the pass (#826).
+        self._shifted_pools.setdefault((group, member.kind), new_handle)
+        return entry
 
     def _pool_bytes_unaccounted(
         self, group: str, kind: str, member: Member, *, use_body: bool
@@ -2708,13 +2739,17 @@ class _Differ:
         observed = self._observed_langness(member)
         if observed == "mixed":
             marked: Lang = "de" if (member.de and member.de.lang_attr) else "en"
+            twin_cell = member.side("en" if marked == "de" else "de")
+            unstamped = twin_cell is not None and twin_cell.slide_id is None
             self.emit(
                 handle,
                 "transition",
                 "fork_pending_twin",
                 "de_to_en" if marked == "de" else "en_to_de",
-                f"fork in progress: the {marked} side carries a lang attribute, "
-                f"the twin does not — mark the twin (and adapt its body) or revert",
+                f"fork in progress: the {marked} side carries a lang attribute"
+                f"{' and an id' if unstamped else ''}, the twin does not — mark "
+                f"the twin ({'lang + id' if unstamped else 'lang'}; answer "
+                f"mark_twin) and adapt its body, or revert",
                 group=group,
                 side=marked,
                 member=member,
@@ -2928,29 +2963,19 @@ class _Differ:
         localized_pool = any(m.langness == "localized" for m in members) or any(
             e.langness == "localized" for e in base_entries
         )
-        per_side: dict[Lang, list[tuple[str, Member]]] = {"de": [], "en": []}
+        per_side: dict[Lang, list[_PoolCell]] = {"de": [], "en": []}
         for member in members:
             for lang in _SIDES:
                 cell = member.side(lang)
                 if cell is not None:
-                    per_side[lang].append((content_fingerprint(cell), member))
+                    per_side[lang].append(
+                        _PoolCell(content_fingerprint(cell), member, self._span_of(lang, cell))
+                    )
 
         # ``absent`` marks a base slot whose side never existed — it takes
         # no part in that side's alignment (a phantom slot could steal a
         # byte-identical real cell, the review's critical finding).
-        status: dict[Lang, list[tuple[str, Member | None]]] = {}
-        news: dict[Lang, list[Member]] = {}
-        moved_sides: dict[Lang, bool] = {"de": False, "en": False}
-        for lang in _SIDES:
-            slot_map = [i for i, e in enumerate(base_entries) if e.side_fp(lang) is not None]
-            base_fps = [base_entries[i].side_fp(lang) or "" for i in slot_map]
-            aligned, side_new, moved = self._align_side(base_fps, per_side[lang])
-            side_status: list[tuple[str, Member | None]] = [("absent", None) for _ in base_entries]
-            for pos, verdict in zip(slot_map, aligned, strict=True):
-                side_status[pos] = verdict
-            status[lang] = side_status
-            news[lang] = side_new
-            moved_sides[lang] = moved
+        status, news, moved_sides = self._align_pool_sides(base_entries, per_side)
 
         # A pending twin that LANDED shows up as a "new" cell on the side
         # its base entry never had: claim it for the entry before the news
@@ -3081,7 +3106,14 @@ class _Differ:
             en_state, en_member = status["en"][idx]
             self.matched_base_keys.add(entry.key)
             self._classify_pool_slot(
-                group, entry, de_state, en_state, de_member, en_member, shift_cause=shift_cause
+                group,
+                entry,
+                de_state,
+                en_state,
+                de_member,
+                en_member,
+                shift_cause=shift_cause,
+                spans=self._slot_spans(de_member, en_member),
             )
 
         self._classify_pool_news(group, news["de"], news["en"], localized_pool)
@@ -3127,7 +3159,7 @@ class _Differ:
         group: str,
         kind: str,
         moved_sides: dict[Lang, bool],
-        per_side: dict[Lang, list[tuple[str, Member]]],
+        per_side: dict[Lang, list[_PoolCell]],
         *,
         shift_cause: str | None = None,
     ) -> None:
@@ -3152,8 +3184,8 @@ class _Differ:
             )
             return
         if moved_sides["de"] and moved_sides["en"]:
-            de_fps = [fp for fp, _ in per_side["de"]]
-            en_fps = [fp for fp, _ in per_side["en"]]
+            de_fps = [c.fp for c in per_side["de"]]
+            en_fps = [c.fp for c in per_side["en"]]
             if de_fps == en_fps:
                 self.emit(
                     handle,
@@ -3186,64 +3218,213 @@ class _Differ:
             side=moved,
         )
 
-    @staticmethod
-    def _align_side(
-        base_fps: list[str], current: list[tuple[str, Member]]
-    ) -> tuple[list[tuple[str, Member | None]], list[Member], bool]:
-        """Align one side's cell sequence to the base pool by fingerprint.
+    def _align_pool_sides(
+        self, base_entries: list[MemberBaseline], per_side: dict[Lang, list[_PoolCell]]
+    ) -> tuple[
+        dict[Lang, list[tuple[str, Member | None]]],
+        dict[Lang, list[Member]],
+        dict[Lang, bool],
+    ]:
+        """Align each side's cell sequence to the base pool by fingerprint,
+        inside the spans the pool's sync points delimit.
 
-        Two passes (§3.3's discipline): fingerprints that occur exactly once
-        on each side match directly — wherever they sit, so a non-adjacent
-        reorder is a *move*, never an edit+remove+add cascade — and the
-        residue aligns positionally via ``SequenceMatcher`` (equal blocks =
-        untouched duplicates, replace = edits, delete = removals, insert =
-        additions). Returns per-base-slot ``(state, member)`` (state ∈
-        ``same`` / ``changed`` / ``missing``), the genuinely new members,
-        and whether the matched pairs are out of order (a reorder).
+        A **sync point** is an id-keyed member present on both halves (see
+        :meth:`_build_span_index`); a positional cell's *span* is the
+        nearest sync point above it on its own half. One logical cell sits
+        in one span, so a base slot's cells must sit in the same span on
+        both halves — the cross-side evidence the per-side alignment used
+        to lack: aligned over the whole pool, a one-sided removal before a
+        sync point paired the slot behind it with a cell in front of it, and
+        the mechanical rows wrote the twin into the wrong span (#906).
+
+        The base records no spans (positional ordinals are the only
+        identity, §3.3), so a slot's span is *learned* from the half whose
+        cell is provably the slot's — fingerprint identity — and then
+        constrains the other half. Stages, per §3.3's discipline:
+
+        1. fingerprints unique on both sides match directly on each half —
+           wherever they sit, so a non-adjacent reorder is a *move*, never
+           an edit+remove+add cascade — and teach the slot's span (halves
+           that disagree teach nothing: the slot frames as a placement
+           divergence downstream);
+        2. slots with a known span align positionally (``SequenceMatcher``:
+           equal blocks = untouched duplicates, replace = edits, delete =
+           removals) against that span's residue only, on both halves;
+        3. the residue with no span evidence aligns positionally over the
+           whole pool — the half with more fingerprint matches (the better
+           witness of the base layout; ``de`` on a tie) goes first and its
+           equal-block matches teach spans, which the other half honours
+           in a stage-2 pass before its own stage-3 residue.
+
+        A ``changed`` verdict is a positional guess, not identity evidence:
+        it never teaches a span and never counts as a reorder. Returns
+        per-side, per-base-slot ``(state, member)`` (state ∈ ``absent`` /
+        ``same`` / ``changed`` / ``missing``), the genuinely new members per
+        side, and whether each side's matched pairs are out of order.
         """
-        cur_fps = [fp for fp, _ in current]
-        base_count = Counter(base_fps)
-        cur_count = Counter(cur_fps)
-        status: list[tuple[str, Member | None]] = [("missing", None)] * len(base_fps)
-        pairs: list[tuple[int, int]] = []
-        used: set[int] = set()
-        for i, fp in enumerate(base_fps):
-            if fp and base_count[fp] == 1 and cur_count.get(fp) == 1:
-                j = cur_fps.index(fp)
-                status[i] = ("same", current[j][1])
-                used.add(j)
-                pairs.append((i, j))
-        residue_base = [i for i in range(len(base_fps)) if status[i][0] == "missing"]
-        residue_cur = [j for j in range(len(cur_fps)) if j not in used]
-        matcher = SequenceMatcher(
-            a=[base_fps[i] for i in residue_base],
-            b=[cur_fps[j] for j in residue_cur],
-            autojunk=False,
-        )
-        new: list[Member] = []
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == "equal":
-                for offset in range(i2 - i1):
-                    bi, cj = residue_base[i1 + offset], residue_cur[j1 + offset]
-                    status[bi] = ("same", current[cj][1])
-                    pairs.append((bi, cj))
-            elif tag == "replace":
-                span = min(i2 - i1, j2 - j1)
-                for offset in range(span):
-                    bi, cj = residue_base[i1 + offset], residue_cur[j1 + offset]
-                    status[bi] = ("changed", current[cj][1])
-                    # deliberately NOT a `pairs` entry: a changed slot is a
-                    # positional guess, not fingerprint-identity evidence,
-                    # and must never count as a reorder.
-                for j in range(j1 + span, j2):
-                    new.append(current[residue_cur[j]][1])
-            elif tag == "insert":
-                for j in range(j1, j2):
-                    new.append(current[residue_cur[j]][1])
-            # "delete": base slots stay "missing"
-        pairs.sort()
-        moved = any(c2 < c1 for (_, c1), (_, c2) in zip(pairs, pairs[1:], strict=False))
-        return status, new, moved
+        n = len(base_entries)
+        side_slots = {
+            lang: [i for i in range(n) if base_entries[i].side_fp(lang) is not None]
+            for lang in _SIDES
+        }
+        status: dict[Lang, list[tuple[str, Member | None]]] = {
+            lang: [
+                ("missing", None) if base_entries[i].side_fp(lang) is not None else ("absent", None)
+                for i in range(n)
+            ]
+            for lang in _SIDES
+        }
+        used: dict[Lang, set[int]] = {lang: set() for lang in _SIDES}
+        pairs: dict[Lang, list[tuple[int, int]]] = {lang: [] for lang in _SIDES}
+        settled: dict[Lang, set[int]] = {lang: set() for lang in _SIDES}
+        slot_span: dict[int, str] = {}
+        evidence: dict[int, dict[Lang, str]] = {}
+
+        def slot_fp(lang: Lang, i: int) -> str:
+            return base_entries[i].side_fp(lang) or ""
+
+        # Stage 1: unique fingerprints, anywhere in the pool.
+        for lang in _SIDES:
+            cells = per_side[lang]
+            base_count = Counter(slot_fp(lang, i) for i in side_slots[lang])
+            cur_count = Counter(c.fp for c in cells)
+            for i in side_slots[lang]:
+                fp = slot_fp(lang, i)
+                if fp and base_count[fp] == 1 and cur_count.get(fp) == 1:
+                    j = next(j for j, c in enumerate(cells) if c.fp == fp)
+                    status[lang][i] = ("same", cells[j].member)
+                    used[lang].add(j)
+                    settled[lang].add(i)
+                    pairs[lang].append((i, j))
+                    evidence.setdefault(i, {})[lang] = cells[j].span
+        for i, seen in evidence.items():
+            if len(set(seen.values())) == 1:
+                slot_span[i] = next(iter(seen.values()))
+
+        def residue(lang: Lang, span: str | None) -> list[int]:
+            return [
+                j
+                for j, c in enumerate(per_side[lang])
+                if j not in used[lang] and (span is None or c.span == span)
+            ]
+
+        def match(lang: Lang, slots: list[int], cur_idxs: list[int], *, learn: bool) -> None:
+            cells = per_side[lang]
+            matcher = SequenceMatcher(
+                a=[slot_fp(lang, i) for i in slots],
+                b=[cells[j].fp for j in cur_idxs],
+                autojunk=False,
+            )
+            settled[lang].update(slots)
+            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                if tag == "equal":
+                    for offset in range(i2 - i1):
+                        bi, cj = slots[i1 + offset], cur_idxs[j1 + offset]
+                        status[lang][bi] = ("same", cells[cj].member)
+                        used[lang].add(cj)
+                        pairs[lang].append((bi, cj))
+                        if learn:
+                            slot_span.setdefault(bi, cells[cj].span)
+                elif tag == "replace":
+                    for offset in range(min(i2 - i1, j2 - j1)):
+                        bi, cj = slots[i1 + offset], cur_idxs[j1 + offset]
+                        status[lang][bi] = ("changed", cells[cj].member)
+                        used[lang].add(cj)
+                # "delete": base slots stay "missing"; "insert" and the
+                # surplus of a "replace" stay unused — the side's news.
+
+        def by_span(lang: Lang) -> dict[str, list[int]]:
+            grouped: dict[str, list[int]] = {}
+            for i in side_slots[lang]:
+                if i not in settled[lang] and i in slot_span:
+                    grouped.setdefault(slot_span[i], []).append(i)
+            return grouped
+
+        # Stage 2: known spans, both halves.
+        for lang in _SIDES:
+            for span, slots in by_span(lang).items():
+                match(lang, slots, residue(lang, span), learn=False)
+
+        # Stage 3: the span-less residue, witness first.
+        first: Lang = max(_SIDES, key=lambda lang: (len(pairs[lang]), lang == "de"))
+        second: Lang = "en" if first == "de" else "de"
+        unknown = [i for i in side_slots[first] if i not in settled[first]]
+        match(first, unknown, residue(first, None), learn=True)
+        for span, slots in by_span(second).items():
+            match(second, slots, residue(second, span), learn=False)
+        unknown = [i for i in side_slots[second] if i not in settled[second]]
+        match(second, unknown, residue(second, None), learn=False)
+
+        news = {
+            lang: [c.member for j, c in enumerate(per_side[lang]) if j not in used[lang]]
+            for lang in _SIDES
+        }
+        moved: dict[Lang, bool] = {}
+        for lang in _SIDES:
+            ordered = sorted(pairs[lang])
+            moved[lang] = any(
+                c2 < c1 for (_, c1), (_, c2) in zip(ordered, ordered[1:], strict=False)
+            )
+        return status, news, moved
+
+    # -- sync points ---------------------------------------------------------------
+
+    def _build_span_index(self) -> dict[tuple[Lang, str, int], str]:
+        """Per ``(lang, part, cell index)``: the handle of the nearest
+        preceding **sync point** on that half, ``""`` before the first.
+
+        A sync point is an id-keyed member present on both halves in the
+        same place — the same group bracket (deck part) or the same owner
+        (companion part): one logical cell at one position in the document.
+        Group anchors are sync points too, so every group's positional
+        cells start a fresh span. Positional pairing (the lens) and the
+        pool alignment (this differ) both hold inside a span, because a
+        positional twin cannot sit before a sync point on one half and
+        after it on the other; whichever cross-side pairing does is a
+        placement divergence to frame, never to execute against (#906).
+        """
+        anchor_index, _ = self._anchor_brackets()
+        streams: dict[tuple[Lang, str], list[tuple[int, Member]]] = {}
+        for member in self.current.members():
+            for lang in _SIDES:
+                cell = member.side(lang)
+                if cell is not None:
+                    streams.setdefault((lang, cell.part), []).append((cell.index, member))
+        spans: dict[tuple[Lang, str, int], str] = {}
+        for (lang, part), entries in streams.items():
+            current = ""
+            for index, member in sorted(entries, key=lambda e: e[0]):
+                if self._is_sync_point(member, part, anchor_index):
+                    current = member.key.render()
+                    continue
+                spans[(lang, part, index)] = current
+        return spans
+
+    def _is_sync_point(
+        self, member: Member, part: str, anchor_index: dict[Lang, list[tuple[int, str]]]
+    ) -> bool:
+        de, en = member.de, member.en
+        if member.key.scheme != "id" or de is None or en is None:
+            return False
+        if de.part != part or en.part != part:
+            return False
+        if part == "companion":
+            return de.for_slide == en.for_slide
+        return self._bracket_of(anchor_index, "de", de) == self._bracket_of(anchor_index, "en", en)
+
+    def _span_of(self, lang: Lang, cell: SideCell) -> str:
+        return self._spans.get((lang, cell.part, cell.index), "")
+
+    def _slot_spans(
+        self, de_member: Member | None, en_member: Member | None
+    ) -> tuple[str, str] | None:
+        """The slot's per-half spans when they differ, else ``None``."""
+        de_cell = de_member.de if de_member is not None else None
+        en_cell = en_member.en if en_member is not None else None
+        if de_cell is None or en_cell is None:
+            return None
+        de_span, en_span = self._span_of("de", de_cell), self._span_of("en", en_cell)
+        return None if de_span == en_span else (de_span, en_span)
 
     def _classify_pool_slot(
         self,
@@ -3255,13 +3436,15 @@ class _Differ:
         en_member: Member | None,
         *,
         shift_cause: str | None = None,
+        spans: tuple[str, str] | None = None,
     ) -> None:
         """Classify one base slot from its per-side alignment states.
 
         ``de_member`` / ``en_member`` may be *different* members: a
         one-sided insert shifts the cross-side parse pairing, but each side
         still aligns to base — the slot's DE cell lives on ``de_member.de``
-        and its EN cell on ``en_member.en``.
+        and its EN cell on ``en_member.en``. ``spans`` names the halves'
+        spans when they differ (:meth:`_slot_spans`).
         """
         if shift_cause is not None and not (de_state == "same" and en_state == "same"):
             # #826: in a shifted pool, only a slot whose sides BOTH sit at
@@ -3279,6 +3462,38 @@ class _Differ:
         # The DiffItem side convention: `member` carries the slot's DE cell,
         # `twin` its EN cell when the two live on different parsed members.
         pair_twin = _pair_twin(de_member, en_member)
+        if spans is not None:
+            # The slot's two cells sit under different sync points: either
+            # a one-sided move across an id-keyed sibling (fingerprint
+            # identity on both halves, spans disagree) or a span-less
+            # residue guess that crossed one. No mechanical row and no
+            # answer may execute against a pairing that straddles a sync
+            # point — the write would land the twin in the wrong span, the
+            # #906 corruption in a different coat. Frame, never guess (P8):
+            # the de/en answer adopts that half's placement (the executor
+            # re-homes the other half's cell), and — the cross-bracket
+            # placement precedent (#654) — landing it banks nothing: the
+            # pairing was a guess, so the slot re-derives from the settled
+            # placement on the next pass instead of recording it.
+            de_after, en_after = (s or "the group start" for s in spans)
+            self.emit(
+                handle,
+                "order",
+                "pool_placement_divergence",
+                "none",
+                f"the halves place this positional member on different sides of "
+                f"an id-keyed sibling — after {de_after} on the de half, after "
+                f"{en_after} on the en half — so its cross-side pairing cannot "
+                f"be trusted; answer de/en to adopt that half's placement (the "
+                f"other half's cell moves next to it), or mint a slide_id on "
+                f"the cell, then re-report",
+                group=group,
+                member=member,
+                base=entry,
+                twin=pair_twin,
+                defer_recording=True,
+            )
+            return
 
         if entry.one_sided:
             self._classify_pool_slot_base_one_sided(
