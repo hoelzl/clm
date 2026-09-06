@@ -62,7 +62,8 @@ formats using a worker-based architecture orchestrated by an SQLite job queue.
 │                  clm.infrastructure (Engines)                       │
 │                                                                    │
 │  backends/  — SqliteBackend, LocalOpsBackend                       │
-│  database/  — schema + migrations, JobQueue, caches, heartbeats    │
+│  database/  — schema + migrations, JobQueue, caches, heartbeats,   │
+│               worker liveness rule, busy-retry (see design note)   │
 │  workers/   — pool manager, worker base/executor, lifecycle,       │
 │               image-identity fingerprinting                        │
 │  api/       — worker API server/client (Docker mode)               │

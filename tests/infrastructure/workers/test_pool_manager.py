@@ -1,6 +1,7 @@
 """Tests for pool_manager module."""
 
 import logging
+import sqlite3
 import tempfile
 import threading
 import time
@@ -1684,3 +1685,83 @@ class TestWorkerPreRegistration:
             assert result is False
 
             manager.close()
+
+
+def _seed_idle_worker(db_path, session_id, container_id, heartbeat_age_seconds):
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, session_id,
+                                 last_heartbeat, started_at)
+            VALUES ('notebook', ?, 'idle', ?, datetime('now', ?), datetime('now', '-1 hour'))
+            """,
+            (container_id, session_id, f"-{heartbeat_age_seconds} seconds"),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def test_monitor_health_marks_idle_worker_silent_past_grace_as_hung(
+    db_path, workspace_path, worker_configs
+):
+    """Issue #917: owned workers count as available on status alone, so the
+    monitor must be the one to notice an alive-but-wedged process. An IDLE
+    worker heartbeats every ~2 s; one silent on both channels for the whole
+    grace period is promoted to 'hung'."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-A",
+        )
+    live_executor = MagicMock()
+    live_executor.is_worker_running.return_value = True
+    manager.executors["direct"] = live_executor
+
+    wedged = _seed_idle_worker(
+        db_path,
+        "session-A",
+        "direct-wedged",
+        manager.STALE_WORKER_HEARTBEAT_GRACE_SECONDS + 60,
+    )
+    fresh = _seed_idle_worker(db_path, "session-A", "direct-fresh", 0)
+
+    _run_monitor_until(manager, lambda: _worker_status(db_path, wedged) == "hung")
+
+    assert _worker_status(db_path, wedged) == "hung"
+    assert _worker_status(db_path, fresh) == "idle"
+
+
+def test_monitor_health_keeps_idle_worker_with_stale_row_but_fresh_cell_beacon(
+    db_path, workspace_path, worker_configs
+):
+    """Either heartbeat channel proves liveness."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-A",
+        )
+    live_executor = MagicMock()
+    live_executor.is_worker_running.return_value = True
+    manager.executors["direct"] = live_executor
+
+    worker = _seed_idle_worker(db_path, "session-A", "direct-beacon", 600)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO worker_heartbeats (worker_id, heartbeat_at) VALUES (?, CURRENT_TIMESTAMP)",
+            (worker,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _run_monitor_until(manager, lambda: _worker_status(db_path, worker) != "idle", timeout=0.5)
+
+    assert _worker_status(db_path, worker) == "idle"

@@ -1,6 +1,8 @@
 import logging
 import pickle
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +20,9 @@ class DatabaseManager:
         self.db_path = Path(db_path)
         self.conn: sqlite3.Connection | None = None
         self.force_init = force_init
+        # >0 while inside :meth:`batch`; per-method commits are deferred to
+        # the batch's single COMMIT.
+        self._batch_depth = 0
 
     def __enter__(self):
         self.conn = sqlite3.connect(str(self.db_path))
@@ -37,6 +42,59 @@ class DatabaseManager:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
             self.conn.close()
+
+    def _commit(self) -> None:
+        """Commit unless a :meth:`batch` is open, which commits once at exit."""
+        assert self.conn is not None, "Database connection not initialized"
+        if self._batch_depth == 0:
+            self.conn.commit()
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        """Group several writes into one ``BEGIN IMMEDIATE`` … ``COMMIT``.
+
+        Every public write method commits on its own, which is right for a
+        caller doing one write. The build's background cache writer often has
+        many queued (issue #917): committing each separately acquires the
+        cache-DB write lock once per row, and on a loaded host with a dozen
+        workers writing to the same file that churn is what starves writers
+        past their busy timeout. Inside this context the per-method commits
+        are no-ops and the whole group lands under one lock acquisition.
+
+        ``BEGIN IMMEDIATE`` takes the write lock up front, so lock contention
+        surfaces here — before any statement ran — and the caller can retry
+        the group as a unit. Any exception rolls the whole group back;
+        nesting is flattened into the outermost batch.
+        """
+        assert self.conn is not None, "Database connection not initialized"
+        if self._batch_depth:
+            yield
+            return
+        if self.conn.in_transaction:
+            # A previous statement failed mid-transaction on this connection
+            # (e.g. a COMMIT that raised); clear it or BEGIN below fails with
+            # "cannot start a transaction within a transaction" forever.
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        self._batch_depth += 1
+        try:
+            yield
+        except BaseException:
+            self._batch_depth -= 1
+            self.conn.rollback()
+            raise
+        else:
+            self._batch_depth -= 1
+            try:
+                self.conn.commit()
+            except BaseException:
+                # COMMIT itself can raise (lock still held past busy_timeout,
+                # disk full, I/O error). SQLite keeps the transaction open in
+                # that case; roll it back so the connection is reusable and
+                # the caller's retry starts from a clean state.
+                if self.conn.in_transaction:
+                    self.conn.rollback()
+                raise
 
     def init_db(self, force: bool = False) -> None:
         assert self.conn is not None, "Database connection not initialized"
@@ -85,7 +143,7 @@ class DatabaseManager:
             ON processing_issues (file_path, content_hash, output_metadata)
             """)
 
-        self.conn.commit()
+        self._commit()
 
     def store_result(
         self, file_path: str, content_hash: str, correlation_id: str, result: Result
@@ -106,7 +164,7 @@ class DatabaseManager:
                 result.output_metadata(),
             ),
         )
-        self.conn.commit()
+        self._commit()
 
     def store_latest_result(
         self,
@@ -156,7 +214,7 @@ class DatabaseManager:
                 ),
             )
 
-        self.conn.commit()
+        self._commit()
 
     def get_result(self, file_path: str, content_hash: str, output_metadata: str) -> Result | None:
         assert self.conn is not None, "Database connection not initialized"
@@ -232,7 +290,7 @@ class DatabaseManager:
             """,
             (str(file_path), str(file_path)),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_newest_entry(self, file_path: str, output_metadata: str) -> Result | None:
         assert self.conn is not None, "Database connection not initialized"
@@ -286,7 +344,7 @@ class DatabaseManager:
             """,
             (str(file_path), content_hash, output_metadata, error.to_json()),
         )
-        self.conn.commit()
+        self._commit()
         logger.debug(f"Stored error for {file_path} with output_metadata={output_metadata}")
 
     def store_warning(
@@ -314,7 +372,7 @@ class DatabaseManager:
             """,
             (str(file_path), content_hash, output_metadata, warning.to_json()),
         )
-        self.conn.commit()
+        self._commit()
         logger.debug(f"Stored warning for {file_path} with output_metadata={output_metadata}")
 
     def get_issues(
@@ -383,7 +441,7 @@ class DatabaseManager:
             """,
             (str(file_path), content_hash, output_metadata),
         )
-        self.conn.commit()
+        self._commit()
 
     def prune_old_versions(self, retain_count: int = 1) -> int:
         """Remove old versions of processed files, keeping only the most recent.
@@ -418,7 +476,7 @@ class DatabaseManager:
             (retain_count,),
         )
         deleted = cursor.rowcount
-        self.conn.commit()
+        self._commit()
 
         if deleted > 0:
             logger.info(f"Pruned {deleted} old processed file versions (keeping {retain_count})")
@@ -444,7 +502,7 @@ class DatabaseManager:
             (days,),
         )
         deleted = cursor.rowcount
-        self.conn.commit()
+        self._commit()
 
         if deleted > 0:
             logger.info(f"Pruned {deleted} old processing issues (older than {days} days)")
@@ -486,7 +544,7 @@ class DatabaseManager:
                     missing_paths,
                 )
                 result["processed_files"] = cursor.rowcount
-                self.conn.commit()
+                self._commit()
                 if result["processed_files"] > 0:
                     logger.info(
                         f"Deleted {result['processed_files']} processed_files entries "
@@ -512,7 +570,7 @@ class DatabaseManager:
                     missing_issue_paths,
                 )
                 result["processing_issues"] = cursor.rowcount
-                self.conn.commit()
+                self._commit()
                 if result["processing_issues"] > 0:
                     logger.info(
                         f"Deleted {result['processing_issues']} processing_issues entries "

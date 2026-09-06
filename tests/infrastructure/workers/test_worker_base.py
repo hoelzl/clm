@@ -1027,3 +1027,112 @@ class TestDeregisteredSelfShutdown:
         finally:
             worker.stop()
             thread.join(timeout=5)
+
+
+class TestTerminalStatusWriteRetry:
+    """Issue #917 (symptom 3): a job's terminal status write must survive
+    transient lock contention.
+
+    Before the fix, ``database is locked`` on the ``completed`` UPDATE was
+    caught by the processing-failure handler, which tried to mark the job
+    ``failed`` (another write on the same contended lock) and, when that
+    failed too, fell through to the main-loop handler — leaving the job in
+    ``processing`` forever with a live worker. The build then waited on it
+    until the stall detector fired.
+    """
+
+    def test_completed_status_write_is_retried_on_locked_db(self, worker_id, db_path, monkeypatch):
+        import sqlite3
+
+        from clm.infrastructure.database import busy_retry
+
+        monkeypatch.setattr(busy_retry, "DEFAULT_BUSY_RETRY_DELAYS", (0.01, 0.01, 0.01))
+        queue = JobQueue(db_path)
+        job_id = queue.add_job(
+            job_type="test",
+            input_file="input.txt",
+            output_file="output.txt",
+            content_hash="hash123",
+            payload={"data": "test"},
+        )
+        queue.close()
+
+        real_update = JobQueue.update_job_status
+        failures_left = [2]
+
+        def flaky_update(self, job_id_, status, error=None, result=None):
+            if status == "completed" and failures_left[0] > 0:
+                failures_left[0] -= 1
+                raise sqlite3.OperationalError("database is locked")
+            return real_update(self, job_id_, status, error=error, result=result)
+
+        worker = MockWorker(worker_id, db_path)
+        thread = threading.Thread(target=worker.run)
+        with patch.object(JobQueue, "update_job_status", flaky_update):
+            thread.start()
+            _wait_until(lambda: job_id in worker.processed_jobs)
+            _wait_until(lambda: failures_left[0] == 0)
+            queue = JobQueue(db_path)
+            try:
+                _wait_until(lambda: queue.get_job(job_id).status != "processing")
+                job = queue.get_job(job_id)
+            finally:
+                queue.close()
+            worker.stop()
+            thread.join(timeout=5)
+
+        assert job.status == "completed", job.status
+        assert failures_left[0] == 0
+
+    def test_exhausted_completed_write_is_not_reported_as_a_failed_job(
+        self, worker_id, db_path, monkeypatch
+    ):
+        """When the 'completed' write still fails after every retry, the job
+        must NOT be flipped to 'failed' with the lock error as its message:
+        that would persist a bogus user error for a successfully built file
+        (adversarial review of the #917 fix). It stays 'processing' for the
+        host's stall handling instead."""
+        import sqlite3
+
+        from clm.infrastructure.database import busy_retry
+
+        monkeypatch.setattr(busy_retry, "DEFAULT_BUSY_RETRY_DELAYS", (0.0,))
+        queue = JobQueue(db_path)
+        job_id = queue.add_job(
+            job_type="test",
+            input_file="input.txt",
+            output_file="output.txt",
+            content_hash="hash123",
+            payload={"data": "test"},
+        )
+        queue.close()
+
+        real_update = JobQueue.update_job_status
+        completed_attempts = [0]
+        failed_attempts = [0]
+
+        def locked_update(self, job_id_, status, error=None, result=None):
+            if status == "completed":
+                completed_attempts[0] += 1
+                raise sqlite3.OperationalError("database is locked")
+            if status == "failed":
+                failed_attempts[0] += 1
+            return real_update(self, job_id_, status, error=error, result=result)
+
+        worker = MockWorker(worker_id, db_path)
+        thread = threading.Thread(target=worker.run)
+        with patch.object(JobQueue, "update_job_status", locked_update):
+            thread.start()
+            _wait_until(lambda: job_id in worker.processed_jobs)
+            _wait_until(lambda: completed_attempts[0] >= 2)
+            time.sleep(0.2)  # let the main-loop handler run
+            worker.stop()
+            thread.join(timeout=5)
+
+        queue = JobQueue(db_path)
+        try:
+            job = queue.get_job(job_id)
+        finally:
+            queue.close()
+        assert failed_attempts[0] == 0
+        assert job.status == "processing"
