@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.worker_liveness import WORKER_HEARTBEAT_GRACE_SECONDS
 from clm.infrastructure.workers.discovery import (
     MANAGED_BY_BUILD,
     MANAGED_BY_PERSISTENT,
@@ -984,6 +985,33 @@ class WorkerPoolManager:
                                 f"stale heartbeat (last: {last_heartbeat})"
                             )
 
+                        # An IDLE worker heartbeats every ~2 s while polling,
+                        # so an idle row with no heartbeat on either channel
+                        # for the whole grace period belongs to a process
+                        # that is alive but wedged (e.g. stuck behind a held
+                        # jobs-DB lock). Status is the liveness authority the
+                        # submission gate consults for owned workers (issue
+                        # #917), so promote it to 'hung' here — otherwise it
+                        # would count as available forever. A BUSY row is
+                        # left alone: mid-job staleness is normal.
+                        if (
+                            status == "idle"
+                            and heartbeat_stale
+                            and not self._worker_recently_heartbeat(conn, worker_id, last_heartbeat)
+                        ):
+                            logger.error(
+                                f"Worker {worker_id} ({worker_type}) is idle but has "
+                                f"not heartbeat for over "
+                                f"{self.STALE_WORKER_HEARTBEAT_GRACE_SECONDS}s; the "
+                                f"process is alive but unresponsive, marking as hung"
+                            )
+                            conn.execute(
+                                "UPDATE workers SET status = 'hung' WHERE id = ?",
+                                (worker_id,),
+                            )
+                            conn.commit()
+                            continue
+
                         # Hung detection (Docker only): a busy container with a
                         # stale heartbeat AND ~zero CPU is likely wedged. Stats
                         # are throttled to every 5th check to reduce Docker API
@@ -1035,7 +1063,9 @@ class WorkerPoolManager:
     # stretches (idle workers heartbeat every ~2s; busy notebook workers
     # write per-cell heartbeats to worker_heartbeats), small enough that rows
     # left behind by crashed builds are still reaped on the next build.
-    STALE_WORKER_HEARTBEAT_GRACE_SECONDS = 120
+    # Shared with the submission gate's liveness rule (issue #917) so "alive"
+    # means the same thing to the cleaner and to the build's availability check.
+    STALE_WORKER_HEARTBEAT_GRACE_SECONDS = WORKER_HEARTBEAT_GRACE_SECONDS
 
     def _worker_recently_heartbeat(self, conn, worker_id: int, last_heartbeat) -> bool:
         """Whether a worker row shows a heartbeat fresher than the grace period.

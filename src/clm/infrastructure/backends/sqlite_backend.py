@@ -8,8 +8,10 @@ import asyncio
 import json
 import logging
 import queue
+import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -26,14 +28,22 @@ from clm.core.output_write_registry import (
     is_image_path,
 )
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clm.infrastructure.database.busy_retry import is_transient_lock_error, retry_on_busy
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.database.worker_liveness import (
+    WORKER_HEARTBEAT_GRACE_SECONDS,
+    count_available_workers,
+    count_other_session_workers,
+    count_workers_awaiting_activation,
+)
 from clm.infrastructure.utils.path_utils import atomic_write_bytes
 from clm.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
 if TYPE_CHECKING:
-    from clm.core.build_data_classes import BuildReporterProtocol, BuildWarning
+    from clm.core.build_data_classes import BuildError, BuildReporterProtocol, BuildWarning
+    from clm.core.messaging.base_classes import Result
     from clm.core.utils.copy_dir_group_data import CopyDirGroupData
     from clm.core.utils.copy_file_data import CopyFileData
     from clm.infrastructure.database.execution_telemetry import ExecutionTelemetryStore
@@ -45,6 +55,113 @@ logger = logging.getLogger(__name__)
 # Small on purpose: the submit thread is single, and a tighter cap keeps any
 # on-loop cache-hit-replay burst short so the progress bar stays responsive.
 SUBMISSION_CONCURRENCY = 8
+
+# How often the completion loop sweeps for jobs stranded on dead workers.
+DEAD_WORKER_SWEEP_INTERVAL_SECONDS = 5.0
+
+# How long a submission waits for pre-registered ('created') workers to
+# activate before declaring them startup casualties (issue #348).
+WORKER_ACTIVATION_TIMEOUT_SECONDS = 30.0
+
+# Upper bound on how many queued cache-DB writes the background writer commits
+# under one lock acquisition (see ``_result_cache_writer_loop``).
+RESULT_CACHE_BATCH_SIZE = 32
+
+# A queued cache-DB write: a short label for log lines plus the write itself,
+# run on the writer thread against the writer's own DatabaseManager.
+CacheWrite = tuple[str, Callable[[DatabaseManager], None]]
+
+
+@define(frozen=True)
+class _StoreWarning:
+    """Queued cache write: persist one warning for a completed job."""
+
+    file_path: str
+    content_hash: str
+    output_metadata: str
+    warning: "BuildWarning"
+
+    def __call__(self, db: DatabaseManager) -> None:
+        db.store_warning(
+            file_path=self.file_path,
+            content_hash=self.content_hash,
+            output_metadata=self.output_metadata,
+            warning=self.warning,
+        )
+
+
+@define(frozen=True)
+class _StoreError:
+    """Queued cache write: persist the categorized error of a failed job."""
+
+    file_path: str
+    content_hash: str
+    output_metadata: str
+    error: "BuildError"
+
+    def __call__(self, db: DatabaseManager) -> None:
+        db.store_error(
+            file_path=self.file_path,
+            content_hash=self.content_hash,
+            output_metadata=self.output_metadata,
+            error=self.error,
+        )
+
+
+class _ResultCacheWrite:
+    """Queued cache write for a completed job's result blob — in two phases.
+
+    ``prepare`` does the slow, lock-free part on the writer thread: read the
+    job's payload from the jobs DB, read the output file back, build the
+    ``Result`` object. ``__call__`` only performs the cache-DB INSERT. The
+    writer runs ``prepare`` for every item BEFORE opening the batch
+    transaction, so neither file I/O nor a jobs-DB hiccup ever happens while
+    the cache-DB write lock is held, and a failure to prepare drops only
+    this item instead of rolling back its batch-mates.
+    """
+
+    def __init__(self, backend: "SqliteBackend", job_id: int, job_info: dict, output_path: Path):
+        self._backend = backend
+        self.job_id = job_id
+        self.job_info = job_info
+        self.output_path = output_path
+        self._prepared: tuple[Result, str, str] | None = None
+        self._failed = False
+
+    def prepare(self) -> bool:
+        """Build the Result to store. Returns False (and logs) on failure."""
+        if self._prepared is not None:
+            return True
+        if self._failed:
+            return False
+        try:
+            self._prepared = self._backend._prepare_result_for_cache(
+                self.job_id, self.job_info, self.output_path
+            )
+        except Exception as e:
+            logger.warning(f"Could not cache result for job {self.job_id}: {e}", exc_info=True)
+            self._failed = True
+            return False
+        if self._prepared is None:
+            self._failed = True
+            return False
+        return True
+
+    def __call__(self, db: DatabaseManager) -> None:
+        if not self.prepare():
+            return
+        assert self._prepared is not None
+        result_obj, content_hash, correlation_id = self._prepared
+        from clm.infrastructure.config import get_config
+
+        db.store_latest_result(
+            file_path=self.job_info["input_file"],
+            content_hash=content_hash,
+            correlation_id=correlation_id,
+            result=result_obj,
+            retain_count=get_config().retention.cache_versions_to_keep,
+        )
+        logger.debug(f"Stored result for {self.job_info['input_file']} in database cache")
 
 
 @define
@@ -118,6 +235,13 @@ class SqliteBackend(LocalOpsBackend):
     # populated when it returns) and the thread is stopped in shutdown.
     _result_cache_queue: Any = field(init=False, default=None)
     _result_cache_thread: Any = field(init=False, default=None)
+
+    # Single-thread executor for periodic jobs-DB maintenance the poll loop
+    # triggers (the dead-worker sweep). Separate from the submit executor on
+    # purpose: that thread can be busy for many seconds (activation waits,
+    # a burst of queued submissions), and a sweep parked behind it would
+    # stall the awaiting poll loop — and with it the progress bar.
+    _maintenance_executor: "ThreadPoolExecutor | None" = field(init=False, default=None)
 
     # Bounded thread pool for the synchronous job-submission tail (job-cache
     # probe, worker-availability wait, payload JSON serialization, jobs-DB
@@ -386,20 +510,15 @@ class SqliteBackend(LocalOpsBackend):
                 job_type,
                 force_execution,
             )
-            # Register the job in active_jobs INSIDE this shielded coroutine, so
-            # a cancellation of the caller (e.g. a sibling submission op raising
+            # Register the job INSIDE this shielded coroutine, so a
+            # cancellation of the caller (e.g. a sibling submission op raising
             # and tearing down the stage TaskGroup) can never leave the
             # just-INSERTed, worker-claimable 'pending' row untracked. An
             # untracked row is never waited on, lingers in 'processing', and is
             # stamped "worker died mid-job (orphaned at pool shutdown)" by the
             # teardown sweep (issue #617). A jobcache_hit has no DB row to track.
             if outcome_ == "submitted" and job_id_ is not None:
-                self.active_jobs[job_id_] = {
-                    "job_type": job_type,
-                    "input_file": str(payload.input_file),
-                    "output_file": str(payload.output_file),
-                    "correlation_id": getattr(payload, "correlation_id", None),
-                }
+                self._register_submitted_job(job_id_, job_type, payload)
             return outcome_, job_id_
 
         # shield() lets the submit+register run to completion even if the caller
@@ -474,19 +593,9 @@ class SqliteBackend(LocalOpsBackend):
             return True
 
         # outcome == "submitted": the job is in the jobs DB and already
-        # registered in active_jobs by the shielded submit above. Report it —
-        # all loop-confined state.
+        # registered (tracker + active_jobs) by the shielded submit above.
+        # Only cosmetic reporting is left — loop-confined state.
         assert job_id is not None
-        correlation_id = getattr(payload, "correlation_id", None)
-
-        # Track in progress tracker
-        if self.progress_tracker:
-            self.progress_tracker.job_submitted(
-                job_id=job_id,
-                job_type=job_type,
-                input_file=str(payload.input_file),
-                correlation_id=correlation_id,
-            )
 
         # Report file started to build reporter (for verbose mode output)
         if self.build_reporter:
@@ -496,6 +605,41 @@ class SqliteBackend(LocalOpsBackend):
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
         )
         return False
+
+    def _register_submitted_job(self, job_id: int, job_type: str, payload: Payload) -> None:
+        """Make a freshly INSERTed job known to every consumer, in one step.
+
+        Two consumers track submitted jobs: the completion poll loop (via
+        ``active_jobs``) and the :class:`ProgressTracker` (which drives the
+        progress bar and the final counts). They must learn about a job in
+        the SAME event-loop turn, tracker first. Issue #917 (symptom 1):
+        ``active_jobs`` used to be filled inside the shielded submit task and
+        the tracker only after the caller's ``await shield(...)`` resumed —
+        two loop turns later. A job that a fast worker had already completed
+        in that window was retired by the poll loop and reported to a
+        tracker that had never seen it: one "completed but not found in
+        tracked jobs" warning per job, and a progress count that stayed
+        short for the rest of the stage.
+
+        Invariant pinned by ``test_job_is_tracked_before_it_becomes_visible_
+        to_the_poll_loop``: at the instant a job appears in ``active_jobs``,
+        the tracker already knows it. No ``await`` may ever sit between the
+        two registrations.
+        """
+        correlation_id = getattr(payload, "correlation_id", None)
+        if self.progress_tracker:
+            self.progress_tracker.job_submitted(
+                job_id=job_id,
+                job_type=job_type,
+                input_file=str(payload.input_file),
+                correlation_id=correlation_id,
+            )
+        self.active_jobs[job_id] = {
+            "job_type": job_type,
+            "input_file": str(payload.input_file),
+            "output_file": str(payload.output_file),
+            "correlation_id": correlation_id,
+        }
 
     def _submit_job_blocking(
         self, payload: Payload, job_type: str, force_execution: bool = False
@@ -542,11 +686,7 @@ class SqliteBackend(LocalOpsBackend):
         if not self.skip_worker_check:
             available_workers = self._get_available_workers(job_type)
             if available_workers == 0:
-                raise RuntimeError(
-                    f"No workers available to process '{job_type}' jobs. "
-                    f"Please start {job_type} workers before submitting jobs. "
-                    f"Workers should register in the database within 10 seconds of starting."
-                )
+                raise RuntimeError(self._describe_no_workers(job_type))
             logger.debug(f"Found {available_workers} available worker(s) for job type '{job_type}'")
 
         # Prepare payload dict (model_dump mode='json' base64-encodes bytes) and
@@ -587,6 +727,14 @@ class SqliteBackend(LocalOpsBackend):
         if executor is None:
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clm-submit")
             self._submit_executor = executor
+        return executor
+
+    def _ensure_maintenance_executor(self) -> ThreadPoolExecutor:
+        """Lazily create the single-thread jobs-DB maintenance executor."""
+        executor = self._maintenance_executor
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clm-jobs-maint")
+            self._maintenance_executor = executor
         return executor
 
     def _can_replay_from_cache(self, payload: Payload) -> bool:
@@ -805,10 +953,18 @@ class SqliteBackend(LocalOpsBackend):
                 # Jobs are still being submitted; wait before checking again
                 await asyncio.sleep(self.poll_interval)
                 continue
-            # Periodically check for and clean up jobs from dead workers
+            # Periodically check for and clean up jobs from dead workers. The
+            # sweep is a ``BEGIN IMMEDIATE`` on the jobs DB — it takes the write
+            # lock, and under contention that can wait for the full busy
+            # timeout — so it runs on its own maintenance thread, never on the
+            # loop (issue #917: no blocking DB write may freeze the poll loop,
+            # because the progress bar only advances from here) and never
+            # queued behind the submit thread's backlog.
             current_time = asyncio.get_event_loop().time()
-            if current_time - last_cleanup_time >= 5.0:  # Check every 5 seconds
-                reset_count = self._cleanup_dead_worker_jobs()
+            if current_time - last_cleanup_time >= DEAD_WORKER_SWEEP_INTERVAL_SECONDS:
+                reset_count = await asyncio.get_running_loop().run_in_executor(
+                    self._ensure_maintenance_executor(), self._cleanup_dead_worker_jobs
+                )
                 if reset_count > 0:
                     logger.info(f"Reset {reset_count} job(s) from dead workers")
                 last_cleanup_time = current_time
@@ -945,20 +1101,19 @@ class SqliteBackend(LocalOpsBackend):
                     # Configuration errors (missing tools, bad env vars) should be retried
                     # since we can't know if the user fixed the configuration
                     if self.db_manager and categorized_error.error_type == "user":
-                        try:
-                            # Reconstruct output_metadata from payload
-                            output_metadata = self._get_output_metadata(
-                                job_info["job_type"], payload_dict
-                            )
-                            self.db_manager.store_error(
+                        # Reconstruct output_metadata from payload
+                        output_metadata = self._get_output_metadata(
+                            job_info["job_type"], payload_dict
+                        )
+                        self._enqueue_cache_write(
+                            f"store error for job {job_id}",
+                            _StoreError(
                                 file_path=job_info["input_file"],
                                 content_hash=content_hash,
                                 output_metadata=output_metadata,
                                 error=categorized_error,
-                            )
-                            logger.debug(f"Stored error for {job_info['input_file']} in database")
-                        except Exception as e:
-                            logger.warning(f"Could not store error for job {job_id}: {e}")
+                            ),
+                        )
                     elif categorized_error.error_type == "configuration":
                         logger.debug(
                             f"Not caching configuration error for {job_info['input_file']} "
@@ -1176,6 +1331,9 @@ class SqliteBackend(LocalOpsBackend):
         if self._submit_executor is not None:
             self._submit_executor.shutdown(wait=True)
             self._submit_executor = None
+        if self._maintenance_executor is not None:
+            self._maintenance_executor.shutdown(wait=True)
+            self._maintenance_executor = None
 
         # Perform build-end cleanup if configured
         self._perform_build_end_cleanup()
@@ -1329,18 +1487,26 @@ class SqliteBackend(LocalOpsBackend):
         return len(cancelled_ids)
 
     def _get_available_workers(self, job_type: str, wait_for_activation: bool = True) -> int:
-        """Query database for available workers of a specific type.
+        """Count the workers that can claim this build's *job_type* jobs.
 
-        A worker is considered available if:
-        - It matches the requested job_type
-        - It matches this build's execution mode for the job type (when the
-          backend knows one) — a Direct worker cannot service jobs tagged
-          for Docker, so it must not count as available for them
-        - Its status is 'idle' or 'busy' (not 'hung' or 'dead')
-        - It has sent a heartbeat within the last 30 seconds
+        The liveness rule is the shared one in
+        :mod:`clm.infrastructure.database.worker_liveness`: a worker owned by
+        this build session counts while its status is ``idle``/``busy`` (the
+        pool's health monitor — running in this process — is what turns a
+        dead process into a ``dead`` row); an unowned worker counts only with
+        a heartbeat inside the grace period on either channel; another
+        session's worker never counts. Execution mode is matched as well.
 
-        If workers are pre-registered (status='created') but not yet activated,
-        this method will wait for them to activate (up to 30 seconds).
+        Issue #917 (symptom 2): this gate used to demand a
+        ``workers.last_heartbeat`` under 30 s old, but busy workers do not
+        refresh that column mid-job, so the moment every worker was mid-job
+        for longer than that the gate saw zero, skipped the activation wait,
+        and the submission aborted a healthy build.
+
+        If no worker is live but some are pre-registered (``created``), waits
+        up to ``WORKER_ACTIVATION_TIMEOUT_SECONDS`` for them to activate.
+        Workers still ``created`` after that are marked dead as startup
+        casualties (issue #348) so later submissions fail fast.
 
         Args:
             job_type: Type of job (e.g., 'notebook', 'plantuml', 'drawio')
@@ -1353,11 +1519,64 @@ class SqliteBackend(LocalOpsBackend):
             return 0
 
         conn = self.job_queue._get_conn()
-
-        # Same direct/docker discriminator WorkerDiscovery uses: Direct
-        # executor IDs are 'direct-<type>-<uuid>'; anything else (Docker
-        # container IDs, 'docker-<type>-<uuid>' pre-registrations) is Docker.
         required_mode = self.worker_execution_modes.get(job_type)
+
+        def live_count() -> int:
+            return count_available_workers(
+                conn,
+                job_type,
+                execution_mode=required_mode,
+                session_id=self.worker_session_id,
+            )
+
+        available = live_count()
+        if available > 0 or not wait_for_activation:
+            return available
+
+        created_count = count_workers_awaiting_activation(
+            conn, job_type, execution_mode=required_mode, session_id=self.worker_session_id
+        )
+        if created_count == 0:
+            return 0
+
+        logger.info(
+            f"Found {created_count} pre-registered {job_type} worker(s), waiting for activation..."
+        )
+        timeout = WORKER_ACTIVATION_TIMEOUT_SECONDS
+        poll_interval = 0.5
+        start_time = time.time()
+        while (time.time() - start_time) < timeout:
+            available = live_count()
+            if available > 0:
+                elapsed = time.time() - start_time
+                logger.info(f"{available} {job_type} worker(s) activated after {elapsed:.1f}s")
+                return available
+            time.sleep(poll_interval)
+
+        # Timeout waiting for activation. A pre-registered worker activates
+        # within seconds of its subprocess starting; one still 'created'
+        # after this wait (on top of its own age) is a startup casualty —
+        # typically an import crash in the worker subprocess (missing extras,
+        # broken env), visible only in the worker's own log file (issue
+        # #348). Mark these workers dead so every *subsequent* submission
+        # fails fast instead of repeating this full wait per job, which is
+        # what stalled builds for many minutes.
+        logger.warning(f"Timeout waiting for {job_type} workers to activate after {timeout}s")
+        self._mark_stuck_created_workers_dead(conn, job_type, required_mode)
+        return 0
+
+    def _mark_stuck_created_workers_dead(
+        self, conn: sqlite3.Connection, job_type: str, required_mode: str | None
+    ) -> None:
+        """Declare this session's never-activated pre-registrations dead.
+
+        Scoped like the availability queries (issue #597): without the mode
+        filter, a Direct-mode build timing out on its own workers condemned a
+        concurrent Docker-mode build's still-starting pre-registrations (>30s
+        old is plausible for a cold Docker image pull). Ownership narrows it
+        further — only this session's workers (or unowned legacy rows) are
+        ours to declare startup casualties.
+        """
         if required_mode is None:
             mode_clause = ""
             mode_params: tuple[str, ...] = ()
@@ -1366,121 +1585,80 @@ class SqliteBackend(LocalOpsBackend):
                 "AND (CASE WHEN container_id LIKE 'direct-%' THEN 'direct' ELSE 'docker' END) = ?"
             )
             mode_params = (required_mode,)
-
-        # First check for activated workers (idle or busy with recent heartbeat)
+        if self.worker_session_id is None:
+            ownership_clause = ""
+            ownership_params: tuple[str, ...] = ()
+        else:
+            ownership_clause = "AND (session_id = ? OR session_id IS NULL)"
+            ownership_params = (self.worker_session_id,)
         cursor = conn.execute(
             f"""
-            SELECT COUNT(*) FROM workers
+            UPDATE workers SET status = 'dead'
             WHERE worker_type = ?
-            AND status IN ('idle', 'busy')
-            AND last_heartbeat > datetime('now', '-30 seconds')
+            AND status = 'created'
+            AND started_at < datetime('now', '-30 seconds')
             {mode_clause}
+            {ownership_clause}
             """,
-            (job_type, *mode_params),
+            (job_type, *mode_params, *ownership_params),
         )
-        row = cursor.fetchone()
-        activated_count = row[0] if row else 0
+        if cursor.rowcount:
+            conn.commit()
+            from clm.infrastructure.logging.log_paths import get_worker_log_path
 
-        if activated_count > 0:
-            return activated_count
-
-        # Check if there are pre-registered workers waiting to activate
-        if wait_for_activation:
-            cursor = conn.execute(
-                f"""
-                SELECT COUNT(*) FROM workers
-                WHERE worker_type = ?
-                AND status = 'created'
-                {mode_clause}
-                """,
-                (job_type, *mode_params),
+            log_dir = get_worker_log_path(job_type, 0).parent
+            logger.error(
+                f"Marked {cursor.rowcount} pre-registered {job_type} worker(s) "
+                f"as dead: the worker process(es) never activated and likely "
+                f"crashed at startup (e.g. missing worker dependencies — "
+                f"install clm[all-workers]). Check the worker logs in "
+                f"{log_dir} for the crash traceback."
             )
-            row = cursor.fetchone()
-            created_count = row[0] if row else 0
 
-            if created_count > 0:
-                logger.info(
-                    f"Found {created_count} pre-registered {job_type} worker(s), "
-                    f"waiting for activation..."
+    def _describe_no_workers(self, job_type: str) -> str:
+        """Explain a zero from :meth:`_get_available_workers` in the user's terms."""
+        mode = self.worker_execution_modes.get(job_type)
+        mode_text = f"{mode} " if mode else ""
+        grace = WORKER_HEARTBEAT_GRACE_SECONDS
+        if self.worker_session_id is not None:
+            scope = (
+                f"{mode_text}{job_type} workers owned by build session "
+                f"{self.worker_session_id!r} (idle or busy) or unowned ones with a "
+                f"heartbeat in the last {grace}s"
+            )
+        else:
+            scope = f"{mode_text}{job_type} workers with a heartbeat in the last {grace}s"
+        foreign = 0
+        if self.worker_session_id is not None and self.job_queue is not None:
+            try:
+                foreign = count_other_session_workers(
+                    self.job_queue._get_conn(),
+                    job_type,
+                    execution_mode=mode,
+                    session_id=self.worker_session_id,
                 )
-                # Wait for workers to activate (up to 30 seconds)
-                timeout = 30.0
-                poll_interval = 0.5
-                start_time = time.time()
-
-                while (time.time() - start_time) < timeout:
-                    cursor = conn.execute(
-                        f"""
-                        SELECT COUNT(*) FROM workers
-                        WHERE worker_type = ?
-                        AND status IN ('idle', 'busy')
-                        AND last_heartbeat > datetime('now', '-30 seconds')
-                        {mode_clause}
-                        """,
-                        (job_type, *mode_params),
-                    )
-                    row = cursor.fetchone()
-                    activated_count = row[0] if row else 0
-
-                    if activated_count > 0:
-                        elapsed = time.time() - start_time
-                        logger.info(
-                            f"{activated_count} {job_type} worker(s) activated after {elapsed:.1f}s"
-                        )
-                        return activated_count
-
-                    time.sleep(poll_interval)
-
-                # Timeout waiting for activation. A pre-registered worker
-                # activates within seconds of its subprocess starting; one
-                # still 'created' after this wait (on top of its own age)
-                # is a startup casualty — typically an import crash in the
-                # worker subprocess (missing extras, broken env), visible
-                # only in the worker's own log file (issue #348). Mark these
-                # workers dead so every *subsequent* submission fails fast
-                # instead of repeating this full wait per job, which is what
-                # stalled builds for many minutes.
-                logger.warning(
-                    f"Timeout waiting for {job_type} workers to activate after {timeout}s"
-                )
-                # Scope the dead-marking like the availability queries above
-                # (issue #597): without the mode filter, a Direct-mode build
-                # timing out on its own workers condemned a concurrent
-                # Docker-mode build's still-starting pre-registrations (>30s
-                # old is plausible for a cold Docker image pull). Ownership
-                # narrows it further — only this session's workers (or
-                # unowned legacy rows) are ours to declare startup casualties.
-                if self.worker_session_id is None:
-                    ownership_clause = ""
-                    ownership_params: tuple[str, ...] = ()
-                else:
-                    ownership_clause = "AND (session_id = ? OR session_id IS NULL)"
-                    ownership_params = (self.worker_session_id,)
-                cursor = conn.execute(
-                    f"""
-                    UPDATE workers SET status = 'dead'
-                    WHERE worker_type = ?
-                    AND status = 'created'
-                    AND started_at < datetime('now', '-30 seconds')
-                    {mode_clause}
-                    {ownership_clause}
-                    """,
-                    (job_type, *mode_params, *ownership_params),
-                )
-                if cursor.rowcount:
-                    conn.commit()
-                    from clm.infrastructure.logging.log_paths import get_worker_log_path
-
-                    log_dir = get_worker_log_path(job_type, 0).parent
-                    logger.error(
-                        f"Marked {cursor.rowcount} pre-registered {job_type} worker(s) "
-                        f"as dead: the worker process(es) never activated and likely "
-                        f"crashed at startup (e.g. missing worker dependencies — "
-                        f"install clm[all-workers]). Check the worker logs in "
-                        f"{log_dir} for the crash traceback."
-                    )
-
-        return 0
+            except Exception:  # pragma: no cover - diagnostics must not mask the error
+                logger.debug("Could not count other sessions' workers", exc_info=True)
+        if foreign:
+            # Typically persistent workers left running by an earlier build
+            # (worker reuse): they are alive, but stamped with that build's
+            # session and so will never claim jobs stamped with ours.
+            cause = (
+                f"{foreign} live {job_type} worker(s) exist but belong to other build "
+                f"sessions and cannot claim this build's jobs (e.g. persistent workers "
+                f"left running by an earlier build). Reap them (clm workers reap) or "
+                f"let this build start its own pool."
+            )
+        else:
+            cause = (
+                f"Either the {job_type} worker pool never started or every worker has "
+                f"been marked dead/hung — check the worker logs for a startup crash "
+                f"(e.g. missing worker dependencies: install clm[all-workers])."
+            )
+        return (
+            f"No live {job_type} workers can claim this build's jobs. Looked for {scope}; "
+            f"found none, and none pre-registered and still starting. {cause}"
+        )
 
     def _get_output_metadata(self, job_type: str, payload_dict: dict) -> str:
         """Reconstruct output_metadata string from job payload.
@@ -1523,7 +1701,7 @@ class SqliteBackend(LocalOpsBackend):
             return ""
 
     def _ensure_result_cache_writer(self) -> None:
-        """Lazily start the background result-cache writer thread + queue."""
+        """Lazily start the background cache-DB writer thread + queue."""
         if self._result_cache_thread is not None:
             return
         self._result_cache_queue = queue.Queue()
@@ -1534,32 +1712,61 @@ class SqliteBackend(LocalOpsBackend):
         )
         self._result_cache_thread.start()
 
-    def _enqueue_result_cache(self, job_id: int, job_info: dict, output_path: Path) -> None:
-        """Queue a completed job's result for background caching.
+    def _enqueue_cache_write(self, label: str, write: Callable[[DatabaseManager], None]) -> None:
+        """Queue one cache-DB write for the background writer thread.
+
+        Every cache-DB write the completion loop triggers goes through here:
+        clearing superseded issues, storing fresh warnings and errors, and
+        storing the result blob. Issue #917: these used to run inline on the
+        event loop, where each could block for the full SQLite busy timeout
+        under contention — and the progress bar only advances from that
+        loop. The writer runs them in FIFO order on a single thread, so the
+        per-job sequence "clear, then store" is preserved, and it batches
+        and retries them (see ``_result_cache_writer_loop``).
 
         Falls back to an inline write if the writer cannot be started, so a
-        result is never silently dropped from the cache.
+        write is never silently dropped.
         """
         if self.db_manager is None:
             return
         try:
             self._ensure_result_cache_writer()
             assert self._result_cache_queue is not None
-            self._result_cache_queue.put((job_id, job_info, output_path))
+            self._result_cache_queue.put((label, write))
         except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"Could not enqueue result cache for job {job_id}; writing inline: {e}")
-            self._persist_result_to_cache(job_id, job_info, output_path, self.db_manager)
+            logger.warning(f"Could not queue cache write '{label}'; writing inline: {e}")
+            try:
+                write(self.db_manager)
+            except Exception as inline_exc:
+                logger.warning(f"Cache write '{label}' failed: {inline_exc}", exc_info=True)
+
+    def _enqueue_result_cache(self, job_id: int, job_info: dict, output_path: Path) -> None:
+        """Queue a completed job's result for background caching."""
+        self._enqueue_cache_write(
+            f"cache result for job {job_id}",
+            _ResultCacheWrite(self, job_id, job_info, output_path),
+        )
 
     def _result_cache_writer_loop(self) -> None:
-        """Drain the result-cache queue on a dedicated DB connection.
+        """Drain the cache-write queue on a dedicated DB connection.
 
-        A SQLite connection is bound to the thread that opened it, so this
-        thread uses its own DatabaseManager rather than ``self.db_manager``
-        (which the main thread keeps using concurrently). Both are WAL
-        connections to the same cache DB, so concurrent access is safe.
+        The thread owns its own ``DatabaseManager`` (``self.db_manager`` stays
+        with the event-loop thread for its reads); both are WAL connections to
+        the same cache DB.
+
+        Writes are taken in batches of up to ``RESULT_CACHE_BATCH_SIZE`` —
+        whatever is already queued when the writer wakes — and committed
+        under ONE lock acquisition (:meth:`DatabaseManager.batch`). A batch
+        that hits transient lock contention is rolled back and retried with
+        backoff (:func:`retry_on_busy`) instead of being dropped. Issue #917:
+        on a loaded host with 16 workers writing to the same cache DB, the
+        old one-commit-per-row writer was starved past its busy timeout and
+        gave up, silently losing the cache entry — which re-executed that
+        notebook on the next build.
         """
         assert self.db_manager is not None
-        assert self._result_cache_queue is not None
+        q = self._result_cache_queue
+        assert q is not None
 
         # Open the writer's own connection. If this fails we still drain the
         # queue (calling task_done for every item) so a join() in
@@ -1577,27 +1784,103 @@ class SqliteBackend(LocalOpsBackend):
 
         try:
             while True:
-                item = self._result_cache_queue.get()
+                item = q.get()
+                if item is None:  # shutdown sentinel
+                    q.task_done()
+                    return
+                batch: list[CacheWrite] = [item]
+                stop_after_batch = False
+                # Take whatever else is already queued so a backlog lands in
+                # one transaction. The sentinel is only put after a join(),
+                # i.e. after every item below was task_done'd, so it cannot
+                # actually appear here; handled anyway for robustness.
+                while len(batch) < RESULT_CACHE_BATCH_SIZE:
+                    try:
+                        nxt = q.get_nowait()
+                    except queue.Empty:
+                        break
+                    if nxt is None:
+                        stop_after_batch = True
+                        break
+                    batch.append(nxt)
                 try:
-                    if item is None:  # shutdown sentinel
-                        return
                     if writer_db is not None:
-                        job_id, job_info, output_path = item
-                        self._persist_result_to_cache(job_id, job_info, output_path, writer_db)
-                except Exception as e:
-                    logger.warning(
-                        f"Background result-cache write failed for job "
-                        f"{item[0] if item else '?'}: {e}",
-                        exc_info=True,
-                    )
+                        self._run_cache_write_batch(writer_db, batch)
                 finally:
-                    self._result_cache_queue.task_done()
+                    for _ in batch:
+                        q.task_done()
+                    if stop_after_batch:
+                        q.task_done()
+                if stop_after_batch:
+                    return
         finally:
             if writer_db is not None:
                 try:
                     writer_db.__exit__(None, None, None)
                 except Exception:  # pragma: no cover - best-effort close
                     logger.debug("Error closing result-cache writer DB", exc_info=True)
+
+    @staticmethod
+    def _run_cache_write_batch(writer_db: DatabaseManager, batch: list[CacheWrite]) -> None:
+        """Commit *batch* as one transaction, retrying lock contention.
+
+        Phase 1 (no lock held): items that expose ``prepare()`` do their
+        slow, lock-free work — file reads, jobs-DB lookups — and any that
+        fail are dropped individually. Phase 2: the remaining writes run
+        inside one ``DatabaseManager.batch``. A non-lock failure of one
+        write is logged and skipped so it cannot poison its neighbours; a
+        transient lock error rolls the whole batch back and the batch is
+        retried as a unit. Only after the retry schedule is exhausted are
+        the writes dropped — loudly.
+
+        Nothing may escape this method: the writer loop has no other
+        handler, and a dead writer thread turns every later queue join into
+        a hang.
+        """
+        ready: list[CacheWrite] = []
+        for label, write in batch:
+            prepare = getattr(write, "prepare", None)
+            if prepare is not None:
+                try:
+                    if not prepare():
+                        continue
+                except Exception as e:  # pragma: no cover - prepare() logs itself
+                    logger.warning(f"Cache write '{label}' could not be prepared: {e}")
+                    continue
+            ready.append((label, write))
+        if not ready:
+            return
+
+        def attempt() -> None:
+            with writer_db.batch():
+                for label, write in ready:
+                    try:
+                        write(writer_db)
+                    except Exception as e:
+                        if is_transient_lock_error(e):
+                            raise
+                        logger.warning(f"Cache write '{label}' failed: {e}", exc_info=True)
+
+        try:
+            retry_on_busy(attempt, label=f"{len(ready)} queued cache write(s)")
+        except sqlite3.OperationalError as e:
+            labels = ", ".join(label for label, _ in ready[:3])
+            more = f", … (+{len(ready) - 3})" if len(ready) > 3 else ""
+            logger.warning(
+                f"Dropping {len(ready)} cache write(s) after repeated lock contention "
+                f"({labels}{more}): {e}. The affected results will be rebuilt next time."
+            )
+        except Exception as e:
+            # BEGIN/COMMIT/ROLLBACK themselves can raise non-lock database
+            # errors (a corrupt WAL on a share, a closed connection). Log and
+            # drop the batch; the writer thread must survive.
+            labels = ", ".join(label for label, _ in ready[:3])
+            more = f", … (+{len(ready) - 3})" if len(ready) > 3 else ""
+            logger.warning(
+                f"Dropping {len(ready)} cache write(s) after an unexpected database "
+                f"error ({labels}{more}): {e}",
+                exc_info=True,
+            )
 
     async def _drain_result_cache_writes(self) -> None:
         """Wait until every queued result-cache write has been committed.
@@ -1643,84 +1926,82 @@ class SqliteBackend(LocalOpsBackend):
         self._result_cache_thread = None
         self._result_cache_queue = None
 
+    def _prepare_result_for_cache(
+        self, job_id: int, job_info: dict, output_path: Path
+    ) -> "tuple[Result, str, str] | None":
+        """Build the ``Result`` to cache for a completed job (no cache-DB I/O).
+
+        Reads the job payload via the job queue's thread-local connection and
+        the output file from disk; returns ``(result, content_hash,
+        correlation_id)`` or ``None`` when there is nothing to store. Called by
+        ``_ResultCacheWrite.prepare`` on the writer thread, outside the batch
+        transaction, so this work never holds the cache-DB write lock.
+        """
+        if self.job_queue is None:
+            return None
+        conn = self.job_queue._get_conn()
+        cursor = conn.execute("SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        from clm.core.messaging.base_classes import ImageResult, Result
+        from clm.core.messaging.notebook_classes import (
+            NotebookResult,
+            notebook_metadata_tags_from_payload,
+        )
+
+        payload_dict = json.loads(row[0])
+        content_hash = row[1]
+        correlation_id = job_info.get("correlation_id", "") or ""
+        job_type = job_info["job_type"]
+        result_obj: Result | None = None
+
+        if job_type == "notebook":
+            result_text = output_path.read_text(encoding="utf-8")
+            result_obj = NotebookResult(
+                correlation_id=correlation_id,
+                output_file=str(job_info["output_file"]),
+                input_file=str(job_info["input_file"]),
+                content_hash=content_hash,
+                result=result_text,
+                output_metadata_tags=notebook_metadata_tags_from_payload(payload_dict),
+            )
+        elif job_type in ("plantuml", "drawio"):
+            result_bytes = output_path.read_bytes()
+            image_format = payload_dict.get("output_format", "png")
+            result_obj = ImageResult(
+                correlation_id=correlation_id,
+                output_file=str(job_info["output_file"]),
+                input_file=str(job_info["input_file"]),
+                content_hash=content_hash,
+                result=result_bytes,
+                image_format=image_format,
+            )
+        elif job_type == "jupyterlite":
+            # JupyterLite "output" is a directory tree; the worker already
+            # wrote a queue cache entry, so we skip the single-blob layer.
+            logger.debug(
+                "JupyterLite job %s: skipping DB result cache (queue cache is authoritative)",
+                job_id,
+            )
+        else:
+            logger.warning(f"Unknown job type {job_type}, skipping cache storage")
+
+        if result_obj is None:
+            return None
+        return result_obj, content_hash, correlation_id
+
     def _persist_result_to_cache(
         self, job_id: int, job_info: dict, output_path: Path, db_manager: DatabaseManager
     ) -> None:
-        """Reconstruct a completed job's Result and store it in the cache DB.
+        """Prepare and store a completed job's result in one call.
 
-        Runs on the background writer thread (and inline as a fallback). Reads
-        the job payload via the job queue's thread-local connection and writes
-        through the supplied ``db_manager`` (the caller's connection).
+        Convenience for callers outside the batched writer (tests, tooling).
+        The writer itself uses ``_ResultCacheWrite`` so the prepare phase
+        runs before the batch transaction opens.
         """
-        if self.job_queue is None:
-            return
-        try:
-            # job_queue uses a thread-local connection, so this is safe to call
-            # from the writer thread.
-            conn = self.job_queue._get_conn()
-            cursor = conn.execute("SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,))
-            row = cursor.fetchone()
-            if not row:
-                return
-
-            from clm.core.messaging.base_classes import ImageResult, Result
-            from clm.core.messaging.notebook_classes import (
-                NotebookResult,
-                notebook_metadata_tags_from_payload,
-            )
-
-            payload_dict = json.loads(row[0])
-            content_hash = row[1]
-            correlation_id = job_info.get("correlation_id", "")
-
-            job_type = job_info["job_type"]
-            result_obj: Result | None = None
-
-            if job_type == "notebook":
-                result_text = output_path.read_text(encoding="utf-8")
-                result_obj = NotebookResult(
-                    correlation_id=correlation_id,
-                    output_file=str(job_info["output_file"]),
-                    input_file=str(job_info["input_file"]),
-                    content_hash=content_hash,
-                    result=result_text,
-                    output_metadata_tags=notebook_metadata_tags_from_payload(payload_dict),
-                )
-            elif job_type in ("plantuml", "drawio"):
-                result_bytes = output_path.read_bytes()
-                image_format = payload_dict.get("output_format", "png")
-                result_obj = ImageResult(
-                    correlation_id=correlation_id,
-                    output_file=str(job_info["output_file"]),
-                    input_file=str(job_info["input_file"]),
-                    content_hash=content_hash,
-                    result=result_bytes,
-                    image_format=image_format,
-                )
-            elif job_type == "jupyterlite":
-                # JupyterLite "output" is a directory tree; the worker already
-                # wrote a queue cache entry, so we skip the single-blob layer.
-                logger.debug(
-                    "JupyterLite job %s: skipping DB result cache (queue cache is authoritative)",
-                    job_id,
-                )
-            else:
-                logger.warning(f"Unknown job type {job_type}, skipping cache storage")
-
-            if result_obj is not None:
-                from clm.infrastructure.config import get_config
-
-                retain_count = get_config().retention.cache_versions_to_keep
-                db_manager.store_latest_result(
-                    file_path=job_info["input_file"],
-                    content_hash=content_hash,
-                    correlation_id=correlation_id,
-                    result=result_obj,
-                    retain_count=retain_count,
-                )
-                logger.debug(f"Stored result for {job_info['input_file']} in database cache")
-        except Exception as e:
-            logger.warning(f"Could not cache result for job {job_id}: {e}", exc_info=True)
+        _ResultCacheWrite(self, job_id, job_info, output_path)(db_manager)
 
     def _clear_stored_issues_for_job(self, job_id: int, job_info: dict) -> None:
         """Drop stored errors/warnings superseded by a successful run.
@@ -1744,13 +2025,21 @@ class SqliteBackend(LocalOpsBackend):
             payload_dict = json.loads(row[0]) if row[0] else {}
             content_hash = row[1]
             output_metadata = self._get_output_metadata(job_info["job_type"], payload_dict)
-            self.db_manager.clear_issues(
-                file_path=job_info["input_file"],
-                content_hash=content_hash,
-                output_metadata=output_metadata,
-            )
         except Exception as e:
             logger.warning(f"Could not clear stored issues for job {job_id}: {e}")
+            return
+
+        input_file = job_info["input_file"]
+
+        def _clear(db: DatabaseManager) -> None:
+            db.clear_issues(
+                file_path=input_file, content_hash=content_hash, output_metadata=output_metadata
+            )
+
+        # Queued, not inline: the DELETE takes the cache-DB write lock, and the
+        # writer's FIFO order guarantees it lands before the fresh warnings
+        # and result queued right after it (issue #917).
+        self._enqueue_cache_write(f"clear stored issues for job {job_id}", _clear)
 
     def _persist_execution_telemetry(
         self,
@@ -1867,17 +2156,18 @@ class SqliteBackend(LocalOpsBackend):
                 if self.build_reporter:
                     self.build_reporter.report_warning(warning)
 
-                # Store warning in database for future cache hits
+                # Store warning in database for future cache hits — on the
+                # writer thread, after the clear queued for this job.
                 if self.db_manager:
-                    try:
-                        self.db_manager.store_warning(
+                    self._enqueue_cache_write(
+                        f"store warning for job {job_id}",
+                        _StoreWarning(
                             file_path=job_info["input_file"],
                             content_hash=content_hash,
                             output_metadata=output_metadata,
                             warning=warning,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not store warning for job {job_id}: {e}")
+                        ),
+                    )
 
         except Exception as e:
             logger.warning(f"Error extracting warnings for job {job_id}: {e}")

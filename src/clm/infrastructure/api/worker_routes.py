@@ -34,6 +34,7 @@ from clm.infrastructure.api.models import (
     WorkerUnregisterRequest,
     WorkerUnregisterResponse,
 )
+from clm.infrastructure.database.busy_retry import retry_on_busy
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.notebook_serialization import (
@@ -160,11 +161,17 @@ async def update_job_status(request: Request, job_id: int, body: JobStatusUpdate
         result_json = json.dumps(body.result) if body.result else None
         error_json = json.dumps(body.error) if body.error else None
 
-        job_queue.update_job_status(
-            job_id=job_id,
-            status=body.status,
-            error=error_json,
-            result=result_json,
+        # This is where a Docker/API-mode worker's terminal status write meets
+        # SQLite, so the lock-contention retry lives here (issue #917); the
+        # worker only sees an HTTP 500 and cannot tell a lock from a crash.
+        retry_on_busy(
+            lambda: job_queue.update_job_status(
+                job_id=job_id,
+                status=body.status,
+                error=error_json,
+                result=result_json,
+            ),
+            label=f"API: job {job_id} -> {body.status}",
         )
 
         logger.debug(f"REST API: Worker {body.worker_id} updated job {job_id} to {body.status}")

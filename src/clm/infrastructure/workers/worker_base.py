@@ -27,6 +27,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from clm.core.messaging.base_classes import ProcessingWarning
+from clm.infrastructure.database.busy_retry import retry_on_busy
 from clm.infrastructure.database.job_queue import Job, JobQueue
 
 if TYPE_CHECKING:
@@ -469,6 +470,37 @@ class Worker(ABC):
 
         return False
 
+    def _write_terminal_status(
+        self,
+        job_id: int,
+        status: str,
+        *,
+        error: str | None = None,
+        result: str | None = None,
+    ) -> None:
+        """Write a job's terminal status, riding out transient lock contention.
+
+        A job's ``completed``/``failed`` UPDATE is the single write the build
+        cannot afford to lose: from the parent's point of view a job whose
+        terminal write never landed is still ``processing`` on a live worker,
+        so ``wait_for_completion`` waits on it until the stall detector
+        fires (issue #917, symptom 3). Under heavy contention on the jobs DB
+        (16 workers, a loaded host) even the 30 s ``busy_timeout`` is not
+        enough — SQLite's busy handler is not fair — so the write is retried
+        with backoff before it is allowed to fail. Other errors propagate
+        unchanged.
+        """
+        retry_on_busy(
+            lambda: self.job_queue.update_job_status(job_id, status, error=error, result=result),
+            label=f"worker {self.worker_id}: job {job_id} -> {status}",
+            # Refresh the liveness heartbeat between attempts so a worker
+            # stuck in this retry never looks dead to another build's
+            # stale-row cleanup (its per-cell beacon was cleared when the
+            # job finished, and the next regular heartbeat only comes after
+            # this write lands).
+            on_retry=self._update_heartbeat,
+        )
+
     def _update_status(self, status: str):
         """Update worker status in database.
 
@@ -798,23 +830,13 @@ class Worker(ABC):
                             f"(actual: {processing_time:.2f}s)"
                         )
 
-                    # Mark job as completed (with warnings if any)
+                    # Result JSON (with warnings if any); the terminal
+                    # 'completed' write itself happens in the ``else`` branch
+                    # below, OUTSIDE this try: a bookkeeping write that fails
+                    # after retries is not a processing failure, and must
+                    # never turn a successfully produced output into a
+                    # persisted "failed" record (issue #917 review).
                     result_json = self._get_job_result_json()
-                    self.job_queue.update_job_status(job.id, "completed", result=result_json)
-
-                    if self._current_job_warnings:
-                        logger.debug(
-                            f"Worker {self.worker_id} job {job.id} completed "
-                            f"with {len(self._current_job_warnings)} warning(s)"
-                        )
-
-                    logger.debug(
-                        f"Worker {self.worker_id} finished processing job {job.id} "
-                        f"for {job.input_file} in {processing_time:.2f}s"
-                    )
-
-                    # Update worker stats
-                    self._update_stats(success=True, processing_time=processing_time)
 
                 except Exception as e:
                     processing_time = time.time() - start_time
@@ -888,10 +910,32 @@ class Worker(ABC):
                         logger.debug(f"Failed to categorize error: {cat_error}")
 
                     error_msg = json.dumps(error_info)
-                    self.job_queue.update_job_status(job.id, "failed", error_msg)
+                    self._write_terminal_status(job.id, "failed", error=error_msg)
 
                     # Update worker stats
                     self._update_stats(success=False, processing_time=processing_time)
+
+                else:
+                    # Mark job as completed. If this write still fails after
+                    # the lock-contention retries, the error propagates to the
+                    # main-loop handler (logged, backed off) and the job stays
+                    # 'processing' for the host's stall handling — it is NOT
+                    # reported as a failed build of the file.
+                    self._write_terminal_status(job.id, "completed", result=result_json)
+
+                    if self._current_job_warnings:
+                        logger.debug(
+                            f"Worker {self.worker_id} job {job.id} completed "
+                            f"with {len(self._current_job_warnings)} warning(s)"
+                        )
+
+                    logger.debug(
+                        f"Worker {self.worker_id} finished processing job {job.id} "
+                        f"for {job.input_file} in {processing_time:.2f}s"
+                    )
+
+                    # Update worker stats
+                    self._update_stats(success=True, processing_time=processing_time)
 
                 finally:
                     # Always return to idle and update heartbeat

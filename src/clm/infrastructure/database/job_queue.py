@@ -14,6 +14,7 @@ from pathlib import Path
 from sqlite3 import Connection
 from typing import Any, cast
 
+from clm.infrastructure.database.busy_retry import retry_on_busy
 from clm.infrastructure.database.journal_mode import configure_connection
 
 logger = logging.getLogger(__name__)
@@ -148,26 +149,34 @@ class JobQueue:
             Job ID
         """
         conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            INSERT INTO jobs (
-                job_type, status, input_file, output_file,
-                content_hash, payload, priority, correlation_id, execution_mode,
-                session_id
-            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job_type,
-                input_file,
-                output_file,
-                content_hash,
-                json.dumps(payload),
-                priority,
-                correlation_id,
-                execution_mode,
-                session_id,
-            ),
-        )
+        payload_json = json.dumps(payload)
+
+        def _insert() -> sqlite3.Cursor:
+            return conn.execute(
+                """
+                INSERT INTO jobs (
+                    job_type, status, input_file, output_file,
+                    content_hash, payload, priority, correlation_id, execution_mode,
+                    session_id
+                ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_type,
+                    input_file,
+                    output_file,
+                    content_hash,
+                    payload_json,
+                    priority,
+                    correlation_id,
+                    execution_mode,
+                    session_id,
+                ),
+            )
+
+        # A single autocommit INSERT is safe to repeat, so ride out transient
+        # lock contention here rather than let one starved write tear down
+        # the whole build's submission TaskGroup (issue #917).
+        cursor = retry_on_busy(_insert, label=f"add_job({job_type}: {input_file})")
         # No commit() needed - connection is in autocommit mode
         job_id = cursor.lastrowid
         assert job_id is not None, "INSERT should always return a valid lastrowid"
@@ -191,38 +200,42 @@ class JobQueue:
         """
         conn = self._get_conn()
 
-        # Use explicit transaction for read-then-write atomicity
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = conn.execute(
-                """
-                SELECT result_metadata FROM results_cache
-                WHERE output_file = ? AND content_hash = ?
-                """,
-                (output_file, content_hash),
-            )
-            row = cursor.fetchone()
-
-            if row:
-                # Update access statistics
-                conn.execute(
+        def _probe() -> dict[str, Any] | None:
+            # Use explicit transaction for read-then-write atomicity. Rolled
+            # back on any failure, so the whole probe is safe to retry.
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = conn.execute(
                     """
-                    UPDATE results_cache
-                    SET last_accessed = CURRENT_TIMESTAMP,
-                        access_count = access_count + 1
+                    SELECT result_metadata FROM results_cache
                     WHERE output_file = ? AND content_hash = ?
                     """,
                     (output_file, content_hash),
                 )
-                conn.commit()
-                return json.loads(row[0]) if row[0] else None
-            else:
+                row = cursor.fetchone()
+
+                if row:
+                    # Update access statistics
+                    conn.execute(
+                        """
+                        UPDATE results_cache
+                        SET last_accessed = CURRENT_TIMESTAMP,
+                            access_count = access_count + 1
+                        WHERE output_file = ? AND content_hash = ?
+                        """,
+                        (output_file, content_hash),
+                    )
+                    conn.commit()
+                    return json.loads(row[0]) if row[0] else None
                 # Cache miss
                 conn.rollback()
                 return None
-        except Exception:
-            conn.rollback()
-            raise
+            except Exception:
+                if conn.in_transaction:
+                    conn.rollback()
+                raise
+
+        return retry_on_busy(_probe, label=f"check_cache({output_file})")
 
     def add_to_cache(self, output_file: str, content_hash: str, result_metadata: dict[str, Any]):
         """Add result to cache.
