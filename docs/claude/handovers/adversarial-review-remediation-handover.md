@@ -372,7 +372,9 @@ been explicitly granted access.
 
 **Read this before you start — it is specific to this phase.**
 
-- **The Docker CI job is not a required status check.** You are about to change
+- **The Docker CI job is not a required status check.** *(Historical: it became
+  required on 2026-08-04 via #679 — a green PR now does cover `-m docker`. The
+  rest of this bullet is kept as written at the time.)* You are about to change
   Docker-mode networking and the worker-API contract, which is precisely the
   code `-m docker` covers and the PR matrix does not. A green PR proves nothing
   about it. Run `pytest <module> -m ""` locally, and check the merge commit's
