@@ -500,14 +500,21 @@ matrix (3.12 and 3.13):
 The four selectors partition cleanly — nothing runs twice. All eight jobs plus
 `Lint and type check` are **required** status checks.
 
-A ninth job builds the Docker images and runs `-m "docker"`. It is **not**
-required: the image builds fetch base images plus deno / ijava / dotnet / the
-DrawIO `.deb` from four external hosts, and that has produced a ~12% infra
-failure rate (Docker Hub timeouts, partial `curl` transfers) unrelated to any
-change. Consequence worth internalising: **a green PR proves nothing about the
-Docker tier**, and a Docker regression can reach `master`. Before merging
-anything that un-skips a test module or touches worker/image wiring, check what
-it does under `-m docker`.
+A ninth job, `Docker Integration Tests`, builds the Docker images and runs
+`-m "docker"`. It is **required too** — the tenth context in the ruleset —
+since 2026-08-04 (#679). It was not, for a long time: the image builds fetch
+base images plus deno / ijava / dotnet / the DrawIO `.deb` from four external
+hosts, which produced a ~12% infra failure rate (Docker Hub timeouts, partial
+`curl` transfers) unrelated to any change. PR #678's BuildKit layer cache and
+installer retry loops fixed that, and 25 consecutive green non-skipped runs on
+`master` earned the promotion. Two consequences: **a green PR now does prove
+the Docker tier**, and auto-merge waits ~15 minutes longer for the image
+builds. A docs-only PR still merges fast — the job skips at the job level
+(`if: needs.changes.outputs.code == 'true'`), and a `skipped` conclusion
+satisfies a required check.
+
+If the external-fetch flake ever returns, the revert is removing the context
+from the `Require CI green` ruleset rather than living with a red gate.
 
 > **Adding or renaming a suite?** Required checks are matched by job *name*, so
 > a matrix change must be paired with an update to the "Require CI green"

@@ -1,8 +1,8 @@
 """Track whether the Docker CI job is stable enough to become a required check.
 
-The "Docker Integration Tests" job is deliberately not a required status check:
-its image builds reach four external hosts and flaked ~12% of runs on registry
-timeouts and partial transfers. PR #678 added a BuildKit layer cache and retry
+The "Docker Integration Tests" job was deliberately not a required status
+check: its image builds reach four external hosts and flaked ~12% of runs on
+registry timeouts and partial transfers. PR #678 added a BuildKit layer cache and retry
 loops to attack that. Whether it worked is an empirical question that needs
 ~20 runs of evidence — which is exactly the kind of follow-up that gets
 forgotten.
@@ -15,6 +15,13 @@ branch, tallies that job's outcomes, and keeps ONE tracking issue up to date:
   dashboard rather than a stale note;
 * a **comment** is posted only when the promotion criterion first becomes
   satisfied, because that is the one moment worth interrupting for.
+
+The tracker also knows when its own job is done. Before measuring anything it
+asks the branch ruleset whether the context is *already* required, and if it
+is, it closes the tracking issue and stops. That check is not cosmetic: the job
+was promoted on 2026-08-04 and issue #679 closed, whereupon the nightly — which
+only ever looked for an *open* issue — opened a fresh one the next morning and
+spent a month rewriting instructions for a decision already taken (#793).
 
 Deliberately crude. A rolling success rate over the last N runs is not a
 statistically defensible estimate of flake probability, and it does not
@@ -45,6 +52,9 @@ JOB_NAME = "Docker Integration Tests"
 
 # The workflow the job lives in.
 WORKFLOW = "CI"
+
+# The branch whose runs are the evidence, and whose ruleset decides promotion.
+BRANCH = "master"
 
 # How many recent default-branch runs to consider.
 WINDOW = 30
@@ -119,6 +129,40 @@ def collect_outcomes(repo: str, window: int = WINDOW) -> list[RunOutcome]:
                 )
                 break
     return outcomes
+
+
+def required_contexts(rules: list[dict[str, Any]]) -> set[str]:
+    """Status-check contexts required by *rules*, a ``rules/branches`` payload.
+
+    A branch can be covered by several rulesets, so the required contexts are
+    the union over every ``required_status_checks`` rule that applies.
+    """
+    contexts: set[str] = set()
+    for rule in rules:
+        if rule.get("type") != "required_status_checks":
+            continue
+        for check in (rule.get("parameters") or {}).get("required_status_checks", []):
+            context = check.get("context")
+            if context:
+                contexts.add(context)
+    return contexts
+
+
+def is_already_required(repo: str, branch: str = BRANCH) -> bool:
+    """Whether *JOB_NAME* is already a required check on *branch*.
+
+    Fails open: if the rules cannot be read (token scope, API hiccup), report
+    ``False`` and let the tracker do its normal, harmless work rather than
+    silently closing an issue on the strength of a failed request.
+    """
+    try:
+        rules = json.loads(_gh(repo, "api", f"repos/{repo}/rules/branches/{branch}"))
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        print(f"Could not read branch rules ({exc}); assuming not yet required.")
+        return False
+    if not isinstance(rules, list):
+        return False
+    return JOB_NAME in required_contexts(rules)
 
 
 def current_streak(outcomes: list[RunOutcome]) -> int:
@@ -244,6 +288,39 @@ def ensure_label(repo: str) -> None:
         pass  # already exists
 
 
+def retire(repo: str, *, dry_run: bool = False) -> int:
+    """Close the tracking issue: the promotion it tracks has happened.
+
+    Also the reason a *closed* issue is not simply recreated the next night —
+    ``find_issue`` only sees open issues, so without this branch the nightly
+    reopens the question forever.
+    """
+    if dry_run:
+        print(f"{JOB_NAME!r} is already a required check; would close the tracking issue.")
+        return 0
+
+    issue = find_issue(repo)
+    if issue is None:
+        print(f"{JOB_NAME!r} is already a required check; nothing left to track.")
+        return 0
+
+    number = str(issue["number"])
+    _gh(
+        repo,
+        "issue",
+        "comment",
+        number,
+        "--repo",
+        repo,
+        "--body",
+        f"`{JOB_NAME}` is now a required status check on `{BRANCH}`, so this "
+        f"tracker has nothing left to decide. Closing automatically.",
+    )
+    _gh(repo, "issue", "close", number, "--repo", repo)
+    print(f"{JOB_NAME!r} is already required; closed tracking issue #{number}.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "hoelzl/clm"))
@@ -253,6 +330,9 @@ def main() -> int:
         help="print the report instead of creating or updating the issue",
     )
     args = parser.parse_args()
+
+    if is_already_required(args.repo):
+        return retire(args.repo, dry_run=args.dry_run)
 
     outcomes = collect_outcomes(args.repo)
     if not outcomes:
