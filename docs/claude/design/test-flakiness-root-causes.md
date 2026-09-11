@@ -677,3 +677,66 @@ shared defaults, not merely remove overrides, or they create the very
 cross-test coupling they exist to prevent. And every cross-process
 rendezvous over a file needs generous-timeout polling, never a single-shot
 read.
+
+---
+
+## 12. Sub-second wall-clock ratios in the backend/worker timing tests (2026-09-11)
+
+*(pre-push gate reds on the loaded Windows dev box; #910, and the sqlite
+family from #847's rotating sets)*
+
+**Signature.** Rotating victims across `test_sqlite_backend.py` (stall
+detector / completion cap), `test_sqlite_backend_resilience.py`
+(`wait_for_completion` variants), and `test_worker_base.py` (shutdown
+asserts) — every victim green single-process and in CI, red only under
+local xdist load. Measured baseline on the dev box (16 xdist workers,
+family loop of `test_worker_base.py` + `test_lifecycle_mock.py` +
+`tests/infrastructure/backends`): **2 of 3 runs failed, 3-4 victims per
+run**, drawn from exactly four tests.
+
+**Mechanism — three unsound timing shapes, one class.**
+
+1. *Tight wall-clock ratio.* The #851 stall-detector regression test
+   raced a real `asyncio.sleep(0.2)` inter-completion gap against a real
+   0.35s `job_stall_timeout` — 1.75x headroom. Under load a single
+   timer overshoot of >0.15s trips the detector on a perfectly healthy
+   drain.
+2. *Hang guard within load's reach.* The resilience file's backend
+   helper set `max_wait_for_completion_duration=5.0`. No test asserts on
+   it — it only guards against a wedged wait — but 5s of stretched poll
+   cycles under xdist is attainable, so the guard itself became the
+   flake (`JobsPendingTimeoutError: completion cap exceeded`).
+3. *Fixed shutdown window.* `test_worker_base.py` did
+   `thread.join(timeout=2); assert not thread.is_alive()` after
+   `worker.stop()`. On a loaded machine the graceful-shutdown path is
+   still running 2s in (#910).
+
+**Fix.**
+
+- `SqliteBackend` gained a `clock: Callable[[], float] | None` test
+  hook; every clock read in the `wait_for_completion` poll loop (stall
+  detector, absolute cap, dead-worker sweep cadence) routes through it,
+  defaulting to the event loop's monotonic clock — zero behaviour change
+  in production. The five timing tests now advance a `_FakeClock`
+  explicitly: the poll loop paces itself in real time but every timing
+  *decision* is fake-time, so load can no longer stretch a measured gap
+  past a threshold. Test shapes preserved: the stall test's batch still
+  totals 6s against a 4s timeout with 1s gaps; the cap tests still trip,
+  deterministically, on a fake jump past the cap.
+- The resilience helper's cap is raised 5s → 60s (hang guard only).
+- The worker shutdown asserts use the file's existing
+  `_wait_until(lambda: not thread.is_alive())` bounded poll (15s
+  ceiling, returns as soon as the thread dies) instead of the fixed 2s
+  join window.
+
+**Verification.** Same family loop, same machine, post-fix: **4 of 4
+runs green** (217 passed each). ruff/mypy/import-linter clean.
+
+**Lesson.** A wall-clock assertion is only as sound as its margin
+ratio: anything below ~10x headroom between the action's timer and the
+threshold that judges it is a load flake waiting for a busy afternoon.
+Prefer driving the clock to widening the margin — an injectable clock
+makes the test *deterministic*, not merely *less likely* to flake, and
+it usually makes the test faster too (no real waits). Where the clock
+can't be injected, poll a predicate with a generous ceiling that returns
+early on success; reserve fixed windows for nothing.

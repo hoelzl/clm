@@ -190,6 +190,13 @@ class SqliteBackend(LocalOpsBackend):
     # hardcoded 1200 s flat deadline, which deterministically aborted healthy
     # large builds whose stage held more than 20 minutes of queued work.
     max_wait_for_completion_duration: float | None = None
+    # Test hook: injectable clock for the ``wait_for_completion`` poll loop
+    # (stall detector, absolute completion cap, dead-worker sweep cadence).
+    # None (the default) uses the event loop's monotonic clock. Tests advance
+    # a fake clock instead: sub-second wall-clock ratios in the timing tests
+    # flaked on the loaded Windows dev box whenever xdist load stretched a
+    # 0.2s sleep past a 0.35s stall timeout (pre-push gate reds, #910 family).
+    clock: Callable[[], float] | None = None
     progress_tracker: ProgressTracker | None = field(init=False, default=None)
     enable_progress_tracking: bool = True
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
@@ -924,7 +931,13 @@ class SqliteBackend(LocalOpsBackend):
         if self.progress_tracker:
             self.progress_tracker.start_progress_logging()
 
-        start_time = asyncio.get_event_loop().time()
+        # All clock reads in this poll loop route through the injectable
+        # test hook (see the ``clock`` field); the default is the event
+        # loop's monotonic clock.
+        _now: Callable[[], float] = (
+            self.clock if self.clock is not None else lambda: asyncio.get_event_loop().time()
+        )
+        start_time = _now()
         failed_jobs: list[dict[str, Any]] = []
         last_cleanup_time = start_time
         # Stall detection state (issue #851): the time any job last left
@@ -960,7 +973,7 @@ class SqliteBackend(LocalOpsBackend):
             # loop (issue #917: no blocking DB write may freeze the poll loop,
             # because the progress bar only advances from here) and never
             # queued behind the submit thread's backlog.
-            current_time = asyncio.get_event_loop().time()
+            current_time = _now()
             if current_time - last_cleanup_time >= DEAD_WORKER_SWEEP_INTERVAL_SECONDS:
                 reset_count = await asyncio.get_running_loop().run_in_executor(
                     self._ensure_maintenance_executor(), self._cleanup_dead_worker_jobs
@@ -1150,7 +1163,7 @@ class SqliteBackend(LocalOpsBackend):
                     cycle_gap, len(completed_jobs), len(self.active_jobs), self.poll_interval
                 )
 
-            now = asyncio.get_event_loop().time()
+            now = _now()
             if completed_jobs:
                 last_progress_time = now
                 drained_count += len(completed_jobs)

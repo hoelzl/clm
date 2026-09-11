@@ -492,10 +492,12 @@ def test_worker_stops_gracefully(worker_id, db_path):
 
     # Stop it
     worker.stop()
-    thread.join(timeout=2)
 
-    # Verify it stopped
-    assert not thread.is_alive()
+    # Verify it stopped: poll with a generous ceiling instead of a fixed
+    # join window — on a loaded machine the worker thread is often still
+    # alive 2s after stop() even though shutdown is proceeding (#910).
+    _wait_until(lambda: not thread.is_alive())
+    thread.join(timeout=5)
     assert worker.running is False
 
 
@@ -682,10 +684,13 @@ class TestParentProcessDeathDetection:
         thread = threading.Thread(target=worker.run)
         thread.start()
 
-        # Worker should stop quickly due to parent death detection
-        thread.join(timeout=2)
+        # Worker should stop quickly due to parent death detection —
+        # poll with a generous ceiling instead of a fixed join window;
+        # under load the thread can still be alive 2s after the shutdown
+        # log line appears (#910).
+        _wait_until(lambda: not thread.is_alive())
+        thread.join(timeout=5)
 
-        assert not thread.is_alive()
         assert worker.running is False
 
     def test_register_worker_with_retry_includes_parent_pid(self, db_path):
