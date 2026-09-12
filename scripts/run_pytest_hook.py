@@ -87,6 +87,35 @@ LEAKING_GIT_VARS = (
 _MAX_AUTO_WORKERS = 16
 
 
+#: Marker expression for the deterministic tier: the fast-suite base filter
+#: from ``pyproject.toml`` ``addopts`` plus the ``load_sensitive`` exclusion
+#: (issue #926 — heavyweight-process and wall-clock-timing suites move out
+#: of the local gate; CI runs them). A command-line ``-m`` overrides the ini
+#: addopts one, so appending this expression is what narrows the gate.
+#: ``tests/test_run_pytest_hook.py`` pins this expression against pyproject's
+#: addopts so the two cannot drift apart.
+PRE_PUSH_MARKER_EXPR = (
+    "not slow and not db_only and not integration and not e2e and not docker "
+    "and not load_sensitive"
+)
+
+#: The smoke tier (default): a hard-budget (~30s) core set run on every push.
+#: ``tests/build`` exercises the build engine end to end; the named root
+#: files are the gate's own meta-tests (hook wrapper, xdist group mapping,
+#: load_sensitive tagging, global-state isolation) — cheap guards that the
+#: gate machinery itself still works. Anything bigger belongs to the
+#: deterministic tier (``--tier``) or the full fast suite (``--full``); the
+#: repo's push protocol (AGENTS.md) assigns those to merge-intended branches
+#: and CI.
+SMOKE_TEST_PATHS = (
+    "tests/build",
+    "tests/test_run_pytest_hook.py",
+    "tests/test_load_sensitive_gate.py",
+    "tests/test_serial_xdist_groups.py",
+    "tests/test_global_state_isolation.py",
+)
+
+
 def main() -> int:
     env = os.environ.copy()
     for var in LEAKING_GIT_VARS:
@@ -95,8 +124,30 @@ def main() -> int:
         "PYTEST_XDIST_AUTO_NUM_WORKERS",
         str(min(_MAX_AUTO_WORKERS, os.cpu_count() or _MAX_AUTO_WORKERS)),
     )
+    args = list(sys.argv[1:])
+    mode = "smoke"
+    for flag in ("--full", "--tier"):
+        if flag in args:
+            args.remove(flag)
+            mode = flag.lstrip("-")
+    if mode == "full":
+        tier_note = "pre-push gate: FULL fast suite (--full given)"
+    elif mode == "tier":
+        # CLI ``-m`` overrides the ini addopts filter, so this narrows the
+        # run to the deterministic tier (see PRE_PUSH_MARKER_EXPR).
+        args += ["-m", PRE_PUSH_MARKER_EXPR]
+        tier_note = "pre-push gate: deterministic tier (--tier given)"
+    else:
+        args += SMOKE_TEST_PATHS
+        tier_note = (
+            "pre-push gate: smoke tier (~30s core set). For merge-intended "
+            "branches run `python scripts/run_pytest_hook.py --tier` "
+            "(deterministic tier) or `--full` (whole fast suite); CI runs "
+            "everything on every PR"
+        )
+    print(f"[run_pytest_hook] {tier_note}", flush=True)
     result = subprocess.run(
-        ["uv", "run", "pytest", *sys.argv[1:]],
+        ["uv", "run", "pytest", *args],
         env=env,
     )
     return result.returncode

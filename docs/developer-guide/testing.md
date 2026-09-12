@@ -143,8 +143,17 @@ pytest -m e2e -v
 ## Parallelism, the `serial` marker, and keeping the commit gate fast
 
 The fast test suite runs on the **pre-push** git hook (not pre-commit), so a
-commit pays only ruff + mypy (~3–5s) and the ~72s suite gates `git push` instead.
-Both hooks install from one `pre-commit install` (`default_install_hook_types` in
+commit pays only ruff + mypy (~3–5s) and a **~30s smoke tier** gates `git push`
+(the build-engine core in `tests/build` plus the gate's own meta-tests;
+issue #926). Bigger local gates are on demand via the same wrapper:
+`python scripts/run_pytest_hook.py --tier` runs the **deterministic tier**
+(~6 min: the full fast suite minus the `load_sensitive` families —
+heavyweight-process spawners and wall-clock-timing suites; the directory set is
+`LOAD_SENSITIVE_TEST_DIRS` in `tests/conftest.py`, tagging is automatic), and
+`--full` runs the whole fast suite (~8.5 min). The repo's **push protocol**
+(AGENTS.md) assigns the tier to merge-intended branches touching
+build/worker/test infrastructure; CI runs everything on every PR and is
+*required* for merge to master. Both hooks install from one `pre-commit install` (`default_install_hook_types` in
 `.pre-commit-config.yaml`). Run the suite manually any time with `pytest`, or as
 the hook would with `uv run pre-commit run --hook-stage pre-push pytest`.
 
@@ -208,6 +217,23 @@ integration smoke tests — real `mitmdump` subprocess; the sole transport's
 integration coverage) and the two `test_reaping_kernel_manager_kills_grandchild_*` tests
 (real `ipykernel`). Note `slow` is the *wrong* marker for this — CI excludes
 `slow` everywhere, so a `slow` test runs nowhere automatically.
+
+**2b. `load_sensitive` — keep the load-dependent families out of the local
+gate entirely.** Where `integration` and `serial` make heavy tests *safe* to
+run under xdist, whole directories whose runtime or correctness inherently
+tracks machine load (heavyweight-process spawners, wall-clock backoff/timing
+asserters) are tagged `load_sensitive` and excluded from the **deterministic
+tier's** marker expression (`scripts/run_pytest_hook.py --tier`; issue #926) —
+and thereby from the even smaller smoke tier that gates `git push`. The
+tagging is automatic and directory-driven (`LOAD_SENSITIVE_TEST_DIRS` in
+`tests/conftest.py` — currently `infrastructure/workers`,
+`infrastructure/backends`, `infrastructure/database`, `workers`), so a test
+added under those directories needs no marker of its own; the meta-tests in
+`tests/test_load_sensitive_gate.py` pin the tagging. CI, a plain
+`uv run pytest`, and `run_pytest_hook.py --full` all run these families —
+nothing runs *nowhere*. The difference from `integration`: those tests are
+semantically integration tests; `load_sensitive` suites are unit tests that
+are merely expensive or load-fragile locally.
 
 **3. Event-driven waits — never busy-poll an async state.** When a test waits
 for a background thread to drive a state transition, block on an event/callback,
