@@ -24,8 +24,10 @@ from clm.workers.notebook.cpp_code_analysis import (
 from clm.workers.notebook.cpp_code_emitter import (
     DANGLING_NOTE,
     CppCell,
+    CppDeckExport,
     emit_cpp_deck,
     identifier_from_slide_id,
+    merge_adjacent_workshop_ranges,
 )
 
 
@@ -194,6 +196,11 @@ def slide(title: str, slide_id: str | None, tag: str = "slide") -> CppCell:
 
 
 def emit(*cells: CppCell, **kwargs) -> str:
+    """The lecture file (``<stem>.cpp``) of the emitted file set."""
+    return emit_cpp_deck(list(cells), **kwargs).main
+
+
+def emit_files(*cells: CppCell, **kwargs) -> CppDeckExport:
     return emit_cpp_deck(list(cells), **kwargs)
 
 
@@ -475,10 +482,12 @@ class TestPromotion:
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("p.x = 2;\nq->x = 3;"))
         assert "    int x{1};" in _function_body(tu, "a")
 
-    def test_global_tag_forces_namespace_scope(self):
-        tu = emit(slide("A", "a"), code("int cfg{1};", tags=("global",)), code("f();"))
-        assert "\nint cfg{1};\n" in tu
-        assert tu.index("int cfg{1};") < tu.index("void a()")
+    def test_global_tag_moves_the_cell_to_the_header(self):
+        files = emit_files(slide("A", "a"), code("int cfg{1};", tags=("global",)), code("f();"))
+        assert files.header is not None
+        assert "\nint cfg{1};\n" in files.header
+        assert "int cfg{1};" not in files.main
+        assert files.main.startswith('#include "deck.hpp"\n')
 
 
 class TestEmitCodeAlongTodos:
@@ -552,9 +561,13 @@ class TestEmitCodeAlongTodos:
         assert "void a()" not in tu  # the section body is empty
         assert "    // TODO: B" in _function_body(tu, "b")
 
-    def test_blanked_global_cell_todo_goes_to_namespace_scope(self):
-        tu = emit(slide("A", "a"), code("", original_source="f();", tags=("global",)), code("g();"))
-        assert tu.index("// TODO: A") < tu.index("void a()")
+    def test_blanked_global_cell_todo_goes_to_the_header(self):
+        files = emit_files(
+            slide("A", "a"), code("", original_source="f();", tags=("global",)), code("g();")
+        )
+        assert files.header is not None
+        assert "// TODO: A" in files.header
+        assert "TODO" not in files.main
 
     def test_mixed_definition_and_statement_cell_todo_goes_to_namespace_scope(self):
         tu = emit(slide("A", "a"), code("", original_source="int f() { return 1; }\nf();"))
@@ -1042,6 +1055,309 @@ class TestEmitClassifierRegressions:
         assert tu.count("CLM_DISPLAY(") == 1  # the one call; the macro lives in the header
 
 
+def workshop(title: str, slide_id: str | None = None, *tags: str) -> CppCell:
+    return md(f"## {title}", tags=("slide", "workshop", *tags), slide_id=slide_id)
+
+
+class TestMultiFileExport:
+    """Phase 3 of #928: header and one file per workshop range."""
+
+    def test_plain_deck_is_a_single_file(self):
+        files = emit_files(slide("A", "a"), code("#include <vector>"), code("f();"))
+        assert files.header is None
+        assert files.workshops == ()
+        assert files.main.startswith("#include <vector>\n")
+        assert files.companion_files("deck") == {}
+
+    def test_header_carries_pragma_includes_and_global_cells(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("#include <vector>"),
+            code("int cfg{1};", tags=("global",)),
+            code("std::vector<int> v{cfg};\nv"),
+            stem="03 Deck",
+        )
+        assert files.header is not None
+        assert files.header.startswith("#pragma once\n\n#include <vector>\n")
+        # Forced includes (banner, display helper) move to the header too.
+        assert "#include <iostream>" in files.header
+        assert "#include <clm/display.hpp>" in files.header
+        assert files.header.endswith("\n\nint cfg{1};\n")
+        assert files.main.startswith('#include "03 Deck.hpp"\n\n')
+        assert "#include <vector>" not in files.main
+        assert files.companion_files("03 Deck") == {"03 Deck.hpp": files.header}
+
+    def test_dangling_global_cell_is_commented_out_in_the_header(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("", original_source="int base{1};"),
+            code("int twice{2 * base};", tags=("global", "keep")),
+        )
+        assert files.header is not None
+        assert f"{DANGLING_NOTE}\n// int twice{{2 * base}};" in files.header
+        assert "// TODO: define base" in files.main
+
+    def test_workshop_range_becomes_its_own_file(self):
+        files = emit_files(
+            slide("Lecture", "lecture"),
+            code("int lecture_value{1};\nlecture_value"),
+            workshop("Workshop", "workshop-sum"),
+            md("Write `sum`."),
+            code("int sum(int a, int b) { return a + b; }"),
+            code("sum(1, 2)"),
+            stem="deck",
+        )
+        assert files.header is not None
+        assert len(files.workshops) == 1
+        ordinal, ws = files.workshops[0]
+        assert ordinal == 1
+        assert ws.startswith('#include "deck.hpp"\n\n')
+        assert "// ## Workshop\n\n// Write `sum`.\nint sum(int a, int b) { return a + b; }" in ws
+        assert "    CLM_DISPLAY(sum(1, 2));" in _function_body(ws, "workshop_sum")
+        assert ws.endswith("int main() {\n    workshop_sum();\n}\n")
+        # Nothing of the workshop leaks into the lecture file, and vice versa.
+        assert "sum" not in files.main
+        assert "lecture_value" not in ws
+        assert files.main.endswith("int main() {\n    lecture();\n}\n")
+        assert set(files.companion_files("deck")) == {"deck.hpp", "deck_workshop_1.cpp"}
+
+    def test_workshop_opener_without_slide_tag_still_opens_a_section(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            md("## Workshop", tags=("workshop",), slide_id="ws"),
+            code("g();"),
+        )
+        assert "    f();" in _function_body(files.main, "a")
+        assert "g();" not in files.main
+        assert "    g();" in _function_body(files.workshops[0][1], "ws")
+
+    def test_end_workshop_returns_to_the_lecture_file(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            workshop("Workshop", "ws"),
+            code("g();"),
+            code("h();", tags=("end-workshop",)),
+            slide("B", "b"),
+            code("i();"),
+        )
+        ws = files.workshops[0][1]
+        assert "g();" in ws and "h();" not in ws and "i();" not in ws
+        # The closer opens a new lecture section (no slide tag: numbered).
+        assert "    h();" in _function_body(files.main, "section_03")
+        assert "    i();" in _function_body(files.main, "b")
+        assert files.main.endswith("int main() {\n    a();\n    section_03();\n    b();\n}\n")
+
+    def test_every_separated_workshop_gets_a_file_in_deck_order(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            workshop("First", "ws-1"),
+            code("g();"),
+            slide("Between", "between", "end-workshop"),
+            code("h();"),
+            workshop("Second", "ws-2"),
+            md("Only prose here."),
+        )
+        assert [ordinal for ordinal, _ in files.workshops] == [1, 2]
+        first, second = (text for _, text in files.workshops)
+        assert "g();" in first
+        assert "// Only prose here." in second
+        assert second.endswith("int main() {}\n")
+        assert "    h();" in _function_body(files.main, "between")
+        assert set(files.companion_files("d")) == {"d.hpp", "d_workshop_1.cpp", "d_workshop_2.cpp"}
+
+    def test_back_to_back_ranges_form_one_workshop_file(self):
+        # ``workshop-task-N`` sub-slides each open a range under the
+        # canonical detector; the tasks build on each other, so they share
+        # one file (each still its own section function).
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            workshop("Workshop", "workshop-monitor"),
+            code("int check(double c) { return c > 1 ? 1 : 0; }", tags=("keep",)),
+            md("## Task 1", tags=("subslide",), slide_id="workshop-task-1"),
+            code("check(2.0)"),
+            md("## Task 2", tags=("subslide",), slide_id="workshop-task-2"),
+            code("check(0.5)"),
+        )
+        assert [ordinal for ordinal, _ in files.workshops] == [1]
+        ws = files.workshops[0][1]
+        assert "int check(double c)" in ws
+        assert "    CLM_DISPLAY(check(2.0));" in _function_body(ws, "workshop_task_1")
+        assert "    CLM_DISPLAY(check(0.5));" in _function_body(ws, "workshop_task_2")
+        assert ws.endswith("int main() {\n    workshop_task_1();\n    workshop_task_2();\n}\n")
+        assert set(files.companion_files("d")) == {"d.hpp", "d_workshop_1.cpp"}
+
+    def test_global_cell_inside_a_workshop_stays_in_the_workshop_file(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            workshop("Workshop", "ws"),
+            code("int answer{42};", tags=("global",)),
+            code("answer"),
+        )
+        assert files.header is not None
+        assert "answer" not in files.header
+        ws = files.workshops[0][1]
+        assert "\nint answer{42};\n" in ws
+        assert ws.index("int answer{42};") < ws.index("void ws()")
+
+    def test_reference_from_a_workshop_does_not_promote_a_lecture_variable(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("int x{1};"),
+            workshop("Workshop", "ws"),
+            code("x"),
+        )
+        assert "    int x{1};" in _function_body(files.main, "a")
+
+    def test_reference_from_a_later_lecture_section_promotes_across_a_workshop(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("int x{1};"),
+            workshop("Workshop", "ws"),
+            code("f();"),
+            slide("B", "b", "end-workshop"),
+            code("x"),
+        )
+        assert "\nint x{1};\n" in files.main
+        assert "int x{1};" not in files.workshops[0][1]
+
+    def test_code_along_workshop_file_is_a_skeleton(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("", original_source="int base{1};"),
+            workshop("Workshop", "ws"),
+            code("", original_source="int twice(int x) { return 2 * x; }"),
+            code("twice(base)", tags=("keep",)),
+            code("f();", tags=("keep",)),
+        )
+        ws = files.workshops[0][1]
+        assert "// TODO: define twice" in ws
+        assert "return 2 * x" not in ws
+        # Deck-global dangling scan: ``base`` is blanked in the lecture file.
+        assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(twice(base));" in ws
+        assert "    f();" in _function_body(ws, "ws")
+        assert "// TODO: define base" in _function_body(files.main, "a")
+
+    def test_deck_defined_main_is_per_file(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            code("int main() { f(); }"),
+            workshop("Workshop", "ws"),
+            code("g();"),
+        )
+        assert "int main() { f(); }" in files.main
+        assert files.main.count("int main()") == 1
+        ws = files.workshops[0][1]
+        assert ws.endswith("int main() {\n    ws();\n}\n")
+
+    def test_workshop_defined_main_suppresses_its_generated_main(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            workshop("Workshop", "ws"),
+            code("int main() { return 0; }"),
+        )
+        ws = files.workshops[0][1]
+        assert ws.count("int main()") == 1
+        assert files.main.endswith("int main() {\n    a();\n}\n")
+
+    def test_explicit_workshop_ranges_override_detection(self):
+        cells = [slide("A", "a"), code("f();"), slide("B", "b"), code("g();")]
+        files = emit_files(*cells, workshop_ranges=[(2, 4)])
+        assert files.header is not None
+        assert "g();" in files.workshops[0][1]
+        assert "g();" not in files.main
+        assert emit_files(*cells, workshop_ranges=[]).header is None
+
+    def test_lecture_using_directive_moves_to_the_header(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("#include <string>"),
+            code("using namespace std::literals;"),
+            code('auto s = "x"s;'),
+            workshop("Workshop", "ws"),
+            code('"y"sv'),
+        )
+        assert files.header is not None
+        assert "\nusing namespace std::literals;\n" in files.header
+        assert "using namespace" not in files.main
+        assert "using namespace" not in files.workshops[0][1]
+
+    def test_using_directive_stays_in_place_without_a_header(self):
+        tu = emit(slide("A", "a"), code("using namespace std;"), code("f();"))
+        assert tu.index("using namespace std;") < tu.index("void a()")
+
+    def test_using_directive_inside_a_workshop_stays_there(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("f();"),
+            workshop("Workshop", "ws"),
+            code("using namespace std;"),
+            code("g();"),
+        )
+        assert "using namespace" not in files.header
+        assert "using namespace std;" in files.workshops[0][1]
+
+    def test_lecture_definitions_a_workshop_uses_are_reported(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("struct Point { int x; };"),
+            code("int scale{2};"),
+            code("int shared{3};", tags=("global",)),
+            code("void helper() {}"),
+            workshop("Workshop", "ws"),
+            code("Point p{scale * shared};\nint local{1};\nlocal"),
+            code("", original_source="int twice(int v) { return 2 * v; }"),
+        )
+        # ``shared`` is in the header, ``local``/``twice`` are the workshop's
+        # own, ``helper`` is unused: only Point and scale are reported.
+        assert files.workshop_lecture_uses == {1: ("Point", "scale")}
+
+    def test_lecture_use_report_skips_names_the_workshop_declares_locally(self):
+        files = emit_files(
+            slide("A", "a"),
+            code("int i{0};\nint pos{1};\nstruct Point { int x; };"),
+            workshop("Workshop", "ws"),
+            code(
+                "void loop() {\n    for (int i{1}; i <= 5; ++i) { std::cout << i; }\n"
+                "    std::string::size_type pos = 0;\n    return;\n}\n"
+                "std::size(v)\nstd::vector<Point> pts;"
+            ),
+        )
+        # ``i``/``pos`` are the workshop's own locals, ``std::size`` is
+        # qualified; ``Point`` is a genuine lecture use.
+        assert files.workshop_lecture_uses == {1: ("Point",)}
+
+    def test_no_lecture_uses_reported_when_nothing_is_used(self):
+        files = emit_files(
+            slide("A", "a"), code("int x{1};"), workshop("Workshop", "ws"), code("int y{2};")
+        )
+        assert files.workshop_lecture_uses == {}
+        assert emit_files(slide("A", "a"), code("int x{1};")).workshop_lecture_uses == {}
+
+    def test_merge_adjacent_workshop_ranges(self):
+        assert merge_adjacent_workshop_ranges([(2, 5), (5, 9), (12, 14), (14, 15)]) == [
+            (2, 9),
+            (12, 15),
+        ]
+        assert merge_adjacent_workshop_ranges([]) == []
+
+    def test_section_names_stay_unique_across_files(self):
+        files = emit_files(
+            slide("A", "same"),
+            code("f();"),
+            workshop("Workshop", "same"),
+            code("g();"),
+        )
+        assert "void same()" in files.main
+        assert "void same_2()" in files.workshops[0][1]
+
+
 # ---------------------------------------------------------------------------
 # Compile smoke test (runs only when a C++ compiler is available)
 # ---------------------------------------------------------------------------
@@ -1145,6 +1461,23 @@ class TestEmittedCodeCompiles:
         assert "// TODO: define twice" in tu
         assert "// TODO: define shared" in tu
         self._check(tu, tmp_path)
+
+    def test_multi_file_deck_compiles_against_its_header(self, tmp_path):
+        files = emit_files(
+            slide("Vectors", "vectors"),
+            code("#include <vector>"),
+            code("int scale{2};", tags=("global",)),
+            code("std::vector<int> numbers{1, 2, 3};"),
+            code("numbers.size()"),
+            workshop("Workshop", "workshop-scaled"),
+            code("int scaled(int x) { return scale * x; }"),
+            code("scaled(21)"),
+            stem="deck",
+        )
+        assert files.header is not None
+        (tmp_path / "deck.hpp").write_text(files.header, encoding="utf-8")
+        self._check(files.main, tmp_path)
+        self._check(files.workshops[0][1], tmp_path)
 
     def test_digit_separator_cell_compiles(self, tmp_path):
         # #922: the declaration and the call stay together in the body.

@@ -472,3 +472,26 @@ class TestNotebookResult:
         assert isinstance(tags, tuple)
         assert len(tags) == 4
         assert tags == ("completed", "python", "en", "html")
+
+    def test_companion_files_default_to_none(self, sample_result):
+        """Every non-C++ result carries no companion files (#928 phase 3)."""
+        assert sample_result.companion_files == {}
+        assert sample_result.companion_bytes() == {}
+
+    def test_companion_bytes_are_utf8(self):
+        result = NotebookResult(
+            correlation_id="c",
+            output_file="/o/01 Deck.cpp",
+            input_file="/i/deck.cpp",
+            content_hash="h",
+            result="int main() {}\n",
+            output_metadata_tags=("completed", "cpp", "en", "code"),
+            companion_files={"01 Deck.hpp": "// Einführung\n"},
+        )
+        assert result.companion_bytes() == {"01 Deck.hpp": "// Einführung\n".encode()}
+
+    def test_companion_bytes_tolerates_a_pre_phase3_pickle(self, sample_result):
+        # An object unpickled from a cache written before the field existed
+        # has no ``companion_files`` entry in its ``__dict__``.
+        del sample_result.__dict__["companion_files"]
+        assert sample_result.companion_bytes() == {}

@@ -1005,13 +1005,123 @@ class TestOutputFormatCode:
 
         nb = await processor._process_notebook_node(notebook, payload)
         result = await processor.create_contents(nb, payload)
+        companions = processor.get_companion_outputs()
 
+        # The lecture file is complete; the workshop is its own skeleton
+        # file (phase 3), named after the output file's stem.
         assert "CLM_DISPLAY(demo_value);" in result
-        assert result.count("TODO") == 1
-        assert result.index("// TODO: define solution") < result.index("void workshop()")
-        assert "return x + 1" not in result
-        assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(solution(demo_value));" in result
-        assert '    std::cout << "hint\\n";' in result
+        assert "TODO" not in result
+        assert set(companions) == {"notebook.hpp", "notebook_workshop_1.cpp"}
+        ws = companions["notebook_workshop_1.cpp"]
+        assert ws.startswith('#include "notebook.hpp"\n')
+        assert ws.count("TODO") == 1
+        assert ws.index("// TODO: define solution") < ws.index("void workshop()")
+        assert "return x + 1" not in ws
+        assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(solution(demo_value));" in ws
+        assert '    std::cout << "hint\\n";' in ws
+        assert companions["notebook.hpp"].startswith("#pragma once\n\n#include <iostream>\n")
+
+    @pytest.mark.asyncio
+    async def test_cpp_export_companion_files_follow_the_output_stem(self):
+        """Phase 3 of #928: a deck with a workshop yields a header and one
+        workshop file next to the main output, named after its stem; a deck
+        without workshops or ``global`` cells yields none."""
+        workshop = make_cell("markdown", "## Workshop", tags=["slide", "workshop"])
+        workshop["metadata"]["slide_id"] = "workshop-sum"
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "#include <iostream>"),
+                make_cell("code", "int base{1};", tags=["global"]),
+                workshop,
+                make_cell("code", "int sum(int a) { return base + a; }"),
+                make_cell("code", "sum(1)"),
+            ]
+        )
+        spec = CompletedOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", prog_lang="cpp")
+        payload = payload.model_copy(update={"output_file": "/out/03 Sums.cpp"})
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+        companions = processor.get_companion_outputs()
+
+        assert result.startswith('#include "03 Sums.hpp"\n')
+        assert set(companions) == {"03 Sums.hpp", "03 Sums_workshop_1.cpp"}
+        assert "int base{1};" in companions["03 Sums.hpp"]
+        assert "int sum(int a) { return base + a; }" in companions["03 Sums_workshop_1.cpp"]
+        assert "sum" not in result
+
+        plain = make_notebook_node([make_cell("code", "int x{1};")])
+        processor = NotebookProcessor(spec)
+        nb = await processor._process_notebook_node(plain, payload)
+        await processor.create_contents(nb, payload)
+        assert processor.get_companion_outputs() == {}
+
+    @pytest.mark.asyncio
+    async def test_cpp_export_warns_about_lecture_definitions_a_workshop_uses(self):
+        """A workshop file cannot see untagged lecture definitions (D8): the
+        Completed export reports them once per deck as a build warning; the
+        code-along export of the same deck stays silent."""
+        workshop = make_cell("markdown", "## Workshop", tags=["slide", "workshop"])
+        workshop["metadata"]["slide_id"] = "ws"
+        cells = [
+            make_cell("code", "struct Point { int x; };"),
+            make_cell("code", "int shared{1};", tags=["global"]),
+            workshop,
+            make_cell("code", "Point p{shared};"),
+        ]
+        payload = make_payload("", format_="code", prog_lang="cpp")
+
+        processor = NotebookProcessor(CompletedOutput(format="code", prog_lang="cpp"))
+        nb = await processor._process_notebook_node(make_notebook_node(cells), payload)
+        await processor.create_contents(nb, payload)
+        warnings = processor.get_warnings()
+        assert len(warnings) == 1
+        assert warnings[0].category == "cpp_export_workshop_scope"
+        assert "workshop 1" in warnings[0].message
+        assert "Point" in warnings[0].message and "shared" not in warnings[0].message
+        assert warnings[0].details == {"workshop": 1, "names": ["Point"]}
+
+        processor = NotebookProcessor(CodeAlongOutput(format="code", prog_lang="cpp"))
+        payload = make_payload("", format_="code", kind="code-along", prog_lang="cpp")
+        nb = await processor._process_notebook_node(make_notebook_node(cells), payload)
+        await processor.create_contents(nb, payload)
+        assert processor.get_warnings() == []
+
+    @pytest.mark.asyncio
+    async def test_cpp_export_workshop_ranges_come_from_the_full_cell_list(self):
+        """The ``end-workshop`` closer may sit on a cell the view drops (a
+        ``notes`` cell here): the workshop file must still end there, as it
+        does for the Partial view's blanking range."""
+        workshop = make_cell("markdown", "## Workshop", tags=["slide", "workshop"])
+        workshop["metadata"]["slide_id"] = "ws"
+        closer = make_cell("markdown", "Trainer note", tags=["notes", "end-workshop"])
+        after = make_cell("markdown", "## After", tags=["slide"])
+        after["metadata"]["slide_id"] = "after"
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "int before{1};"),
+                workshop,
+                make_cell("code", "int inside{2};"),
+                closer,
+                after,
+                make_cell("code", "int later{3};"),
+            ]
+        )
+        spec = CompletedOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+        ws = processor.get_companion_outputs()["notebook_workshop_1.cpp"]
+
+        assert "int inside{2};" in ws
+        assert "int later{3};" not in ws
+        assert "int before{1};" in result
+        assert "    int later{3};" in result
+        assert "Trainer note" not in result and "Trainer note" not in ws
 
     @pytest.mark.asyncio
     async def test_cpp_notebook_format_unaffected(self):

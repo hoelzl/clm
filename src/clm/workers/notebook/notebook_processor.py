@@ -6,10 +6,11 @@ import re
 import time
 import warnings
 from base64 import b64decode
+from bisect import bisect_left
 from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha3_224
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, cast
 
@@ -39,6 +40,7 @@ from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 from .output_spec import (
     POST_WORKSHOP_TAG,
     SOLUTION_ONLY_TAGS,
+    CompletedOutput,
     OutputSpec,
     PartialOutput,
     find_workshop_ranges,
@@ -81,7 +83,11 @@ from clm.core.utils.prog_lang_utils import (
     kernelspec_for,
     language_info,
 )
-from clm.workers.notebook.cpp_code_emitter import CppCell, emit_cpp_deck
+from clm.workers.notebook.cpp_code_emitter import (
+    CppCell,
+    emit_cpp_deck,
+    merge_adjacent_workshop_ranges,
+)
 
 from .utils.jupyter_utils import (
     Cell,
@@ -467,6 +473,40 @@ def _drop_start_cells(cells: Iterable[Cell]) -> list[Cell]:
     cells before caching.
     """
     return [cell for cell in cells if "start" not in get_tags(cell)]
+
+
+@dataclass(frozen=True)
+class _CppSnapshotCell:
+    """What the C++ code export needs of a cell before blanking/stripping (#928).
+
+    ``index`` is the cell's position in the full source cell list, so the
+    workshop ranges computed there can be mapped onto the snapshot.
+    """
+
+    index: int
+    cell_type: str
+    tags: tuple[str, ...]
+    slide_id: str | None
+    source: str
+    excluded: bool
+
+
+def _translate_ranges(
+    ranges: Iterable[tuple[int, int]], source_indices: list[int]
+) -> list[tuple[int, int]]:
+    """Map half-open ranges over source cell indices onto a subsequence.
+
+    ``source_indices`` are the (ascending) source positions of the kept
+    cells; a range ``[start, end)`` becomes the range of kept positions
+    whose source index falls inside it. Empty images are dropped.
+    """
+    translated: list[tuple[int, int]] = []
+    for start, end in ranges:
+        lo = bisect_left(source_indices, start)
+        hi = bisect_left(source_indices, end)
+        if lo < hi:
+            translated.append((lo, hi))
+    return translated
 
 
 def _strip_internal_cell_metadata(cells: Iterable[Cell]) -> None:
@@ -891,12 +931,16 @@ class NotebookProcessor:
         # (e.g. unit tests that instantiate the processor directly).
         self.heartbeat_store: WorkerHeartbeatStore | None = heartbeat_store
         self.heartbeat_job_id: int | None = heartbeat_job_id
-        # Per-cell (cell_type, tags, slide_id, pre-blank source, excluded) snapshot for
-        # the C++ code export (#928), taken in _process_notebook_node before
-        # blanking and metadata stripping; None outside that export.
-        self._cpp_export_cells: list[tuple[str, tuple[str, ...], str | None, str, bool]] | None = (
-            None
-        )
+        # Per-cell snapshot for the C++ code export (#928), taken in
+        # _process_notebook_node before blanking and metadata stripping,
+        # with the workshop ranges of the full source cell list; None
+        # outside that export.
+        self._cpp_export_cells: list[_CppSnapshotCell] | None = None
+        self._cpp_export_ranges: list[tuple[int, int]] = []
+        # Companion files of the last C++ code export (file name → text):
+        # the deck header and one file per workshop range, to be written
+        # next to the main output. Empty for every other output.
+        self._companion_outputs: dict[str, str] = {}
 
     def add_warning(
         self,
@@ -929,6 +973,16 @@ class NotebookProcessor:
         """Return all collected warnings."""
         return self._warnings.copy()
 
+    def get_companion_outputs(self) -> dict[str, str]:
+        """Files to write next to the main output, by file name (#928).
+
+        Only the C++ code export produces any: the deck header and one
+        ``<stem>_workshop_N.cpp`` per workshop range. The worker writes
+        them into the output's directory and reports their names with the
+        job result so the host can register, cache and replay them.
+        """
+        return dict(self._companion_outputs)
+
     def clear_warnings(self) -> None:
         """Clear all collected warnings."""
         self._warnings.clear()
@@ -956,6 +1010,7 @@ class NotebookProcessor:
         # Set author/organization from payload for Jinja template globals
         self._author = payload.author
         self._organization = payload.organization
+        self._companion_outputs = {}
 
         # Check if we can reuse a cached executed notebook (Completed HTML).
         # ``payload.skip_evaluation`` short-circuits this path because the
@@ -1323,19 +1378,25 @@ class NotebookProcessor:
         # an output must not carry the original source of a blanked or
         # dropped cell.
         self._cpp_export_cells = None
+        self._cpp_export_ranges = []
         if self.output_spec.format == "code" and payload.prog_lang == "cpp":
             included_indices = {index for index, _ in included}
             self._cpp_export_cells = [
-                (
-                    get_cell_type(cell),
-                    tuple(get_tags(cell)),
-                    cell.get("metadata", {}).get("slide_id"),
-                    cell.get("source", ""),
-                    index not in included_indices,
+                _CppSnapshotCell(
+                    index=index,
+                    cell_type=get_cell_type(cell),
+                    tags=tuple(get_tags(cell)),
+                    slide_id=cell.get("metadata", {}).get("slide_id"),
+                    source=cell.get("source", ""),
+                    excluded=index not in included_indices,
                 )
                 for index, cell in enumerate(source_cells)
                 if index in included_indices or self._is_solution_only_code_cell(cell)
             ]
+            # Workshop ranges over the FULL cell list — an ``end-workshop``
+            # closer may sit on a cell this view drops — so the split into
+            # workshop files agrees with the range the Partial view blanks.
+            self._cpp_export_ranges = find_workshop_ranges(source_cells)
         new_cells = [await self._process_cell(cell, index, payload) for index, cell in included]
         # Strip slide_id/for_slide (internal CLM metadata that must never
         # appear in output) and the synthetic _post_workshop tag attached by
@@ -1642,7 +1703,7 @@ class NotebookProcessor:
                     processed_nb, payload, source_dir=source_dir
                 )
             elif self.output_spec.format == "code" and payload.prog_lang == "cpp":
-                result = self._create_cpp_code_export(processed_nb)
+                result = self._create_cpp_code_export(processed_nb, payload)
             else:
                 result = await self._create_using_jupytext(processed_nb)
             return result
@@ -2393,8 +2454,8 @@ class NotebookProcessor:
         if payload.other_files and hasattr(os, "sync"):
             os.sync()
 
-    def _create_cpp_code_export(self, processed_nb) -> str:
-        """Emit the C++ study-material translation unit for ``format="code"``.
+    def _create_cpp_code_export(self, processed_nb, payload: NotebookPayload) -> str:
+        """Emit the C++ study-material file set for ``format="code"``.
 
         Replaces the jupytext concatenation for C++ decks (issue #333): the
         concatenation yields top-level statements and mid-file includes,
@@ -2407,26 +2468,39 @@ class NotebookProcessor:
         ``_process_code_cell``, stripped in ``_process_notebook_node``), so
         ``_process_notebook_node`` snapshots them into
         ``_cpp_export_cells`` first — solution-only cells the view dropped
-        included, flagged ``excluded``, for the dangling-cell scan. Without
-        a snapshot (a caller that skips processing) the cells are used as
-        they are.
+        included, flagged ``excluded``, for the dangling-cell scan — along
+        with the workshop ranges of the full cell list. Without a snapshot
+        (a caller that skips processing) the cells are used as they are.
+
+        Returns the lecture file; the header and workshop files (phase 3)
+        are kept in :meth:`get_companion_outputs`, named after the output
+        file's stem.
         """
         cells = processed_nb.get("cells", [])
         snapshot = self._cpp_export_cells
-        if snapshot is not None and sum(1 for entry in snapshot if not entry[4]) == len(cells):
+        workshop_ranges: list[tuple[int, int]] | None = None
+        if snapshot is not None and sum(1 for entry in snapshot if not entry.excluded) == len(
+            cells
+        ):
             cpp_cells = []
             processed = iter(cells)
-            for cell_type, tags, slide_id, original_source, excluded in snapshot:
+            for entry in snapshot:
                 cpp_cells.append(
                     CppCell(
-                        cell_type=cell_type,
-                        source="" if excluded else next(processed).get("source", ""),
-                        original_source=original_source,
-                        tags=tags,
-                        slide_id=slide_id,
-                        excluded=excluded,
+                        cell_type=entry.cell_type,
+                        source="" if entry.excluded else next(processed).get("source", ""),
+                        original_source=entry.source,
+                        tags=entry.tags,
+                        slide_id=entry.slide_id,
+                        excluded=entry.excluded,
                     )
                 )
+            # Blocks are merged on the full cell list first: a range that is
+            # empty in this view must not split a block in two.
+            workshop_ranges = _translate_ranges(
+                merge_adjacent_workshop_ranges(self._cpp_export_ranges),
+                [entry.index for entry in snapshot],
+            )
         else:
             cpp_cells = [
                 CppCell(
@@ -2437,7 +2511,33 @@ class NotebookProcessor:
                 )
                 for cell in cells
             ]
-        return emit_cpp_deck(cpp_cells, blanks_code_cells=self.output_spec.blanks_code_cells)
+        stem = PurePath(payload.output_file).stem
+        export = emit_cpp_deck(
+            cpp_cells,
+            stem=stem,
+            blanks_code_cells=self.output_spec.blanks_code_cells,
+            workshop_ranges=workshop_ranges,
+        )
+        self._companion_outputs = export.companion_files(stem)
+        # Report once per deck (the Completed view; the scan is view-
+        # independent) which lecture definitions a workshop file uses
+        # without a ``global`` tag — it will not compile until tagged.
+        if isinstance(self.output_spec, CompletedOutput):
+            for ordinal, names in sorted(export.workshop_lecture_uses.items()):
+                self.add_warning(
+                    category="cpp_export_workshop_scope",
+                    message=(
+                        f"C++ export: workshop {ordinal} of '{payload.input_file_name}' uses "
+                        f"lecture definitions the workshop file cannot see: "
+                        f"{', '.join(names)}. Tag their cells `global` to share them "
+                        f"via the deck header (see the C++ code export section of "
+                        f"`clm info commands`)."
+                    ),
+                    file_path=payload.input_file,
+                    severity="medium",
+                    details={"workshop": ordinal, "names": list(names)},
+                )
+        return export.main
 
     async def _create_using_jupytext(self, processed_nb) -> str:
         config = jupytext_config.JupytextConfiguration(

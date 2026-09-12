@@ -529,13 +529,47 @@ would put statements and mid-file `#include`s at namespace scope) but a
   through their operand types (every later cell touching the type is
   commented out). Section names and variable promotion are identical to
   the completed output, so the two files line up side by side.
+- **A deck with workshops or `global` cells is a file set** (since CLM
+  {version}, #928 phase 3), written next to each other in the deck's
+  output directory and named after the deck output `<deck>.cpp`:
+  - `<deck>.hpp` — `#pragma once`, the deck's hoisted includes (the
+    banner's `<iostream>` and `clm/display.hpp` included) and the
+    lecture part's **`global`-tagged cells**, in source order; `<deck>.cpp`
+    and every workshop file `#include` it. This is how a workshop file
+    sees a lecture definition: tag the cell `global`. Definitions that
+    are not tagged stay in `<deck>.cpp` next to their narrative.
+  - `<deck>_workshop_N.cpp` — one per **workshop block**: a run of
+    back-to-back workshop ranges (`workshop-task-1`, `workshop-task-2`…
+    sub-slides or mini-workshops that follow each other without an
+    `end-workshop` closer or lecture cells in between count as one
+    workshop; `N` is the block's 1-based position in the deck). The file
+    holds the block's cells under the same section rules — every task
+    stays its own section function — and its own generated `main()`
+    unless the block defines one. A `global` cell *inside* a workshop
+    stays at namespace scope of the workshop file, never in the header.
+    The workshop file is the code-along/partial skeleton for that
+    workshop; the lecture file is complete in partial output.
+  - Workshop boundaries also open sections, so no section function
+    straddles two files. Variable promotion looks only at later sections
+    of the *same* file — a workshop cannot see a lecture-file variable,
+    so promotion cannot help it (tag the cell `global`).
+  - A deck with neither workshops nor `global` cells stays a single
+    `<deck>.cpp` with its includes at the top.
 
-Every code-output directory also gets a generated `CMakeLists.txt` (one
-executable target per deck, C++20; open the directory as a CMake project in
-VS Code, CLion or Visual Studio). A deck whose code legitimately cannot
+Every code-output directory also gets generated CMake projects (C++20):
+a `CMakeLists.txt` at the kind root that adds one subdirectory per module,
+and a standalone `CMakeLists.txt` in every module directory with **one
+executable target per deck and per workshop file**
+(`s01_03_functions`, `s01_03_functions_workshop_1`). Open the kind root as
+a CMake project in VS Code, CLion or Visual Studio for the whole course, or
+a single module directory on its own (since CLM {version}; before, one
+flat project listed every deck). A deck whose code legitimately cannot
 compile outside the kernel carries the header marker `// clm: no-compile`
-and becomes an `EXCLUDE_FROM_ALL` target. `clm build --no-html` builds the
-code export without any Jupyter kernel.
+and becomes an `EXCLUDE_FROM_ALL` target, its workshop targets included.
+`clm build --no-html` builds the code export without any Jupyter kernel.
+The header and workshop files are part of the build's output set: they
+are listed in the provenance manifest, kept by the stray-file sweep,
+cached and replayed together with `<deck>.cpp`.
 
 ### `clm kernel-triage` (CLM {version}+)
 

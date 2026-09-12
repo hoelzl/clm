@@ -108,6 +108,35 @@ class _StoreError:
         )
 
 
+def _parse_result_json(result_json: str | None) -> dict[str, Any]:
+    """Parse a job's stored ``result`` column; ``{}`` when absent or malformed."""
+    if not result_json:
+        return {}
+    try:
+        data = json.loads(result_json)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _companion_paths(output_path: Path, metadata: dict[str, Any] | None) -> list[Path]:
+    """Paths of the companion files named in a job result / job-cache entry.
+
+    ``metadata`` carries ``companion_files``: file names the worker wrote
+    next to ``output_path`` (#928). Names are taken as plain file names —
+    a path component would let a stored entry point outside the output
+    directory, so anything with a separator is dropped.
+    """
+    if not metadata:
+        return []
+    names = metadata.get("companion_files") or []
+    return [
+        output_path.parent / name
+        for name in names
+        if isinstance(name, str) and name and Path(name).name == name
+    ]
+
+
 class _ResultCacheWrite:
     """Queued cache write for a completed job's result blob — in two phases.
 
@@ -454,6 +483,9 @@ class SqliteBackend(LocalOpsBackend):
                             # files in the same directory.
                             atomic_write_bytes(output_file, content_bytes)
                             logger.debug(f"Wrote cached result to {output_file}")
+                    # The result's companion files (C++ header/workshop
+                    # files, #928) replay next to it, registered like it.
+                    self._replay_companion_files(output_file, result, source_path)
 
                 # Report any stored errors/warnings for this cached result
                 self._report_cached_issues(
@@ -597,6 +629,17 @@ class SqliteBackend(LocalOpsBackend):
                     logger.debug(
                         f"Could not register cached output {registry_output_path}: {reg_exc}"
                     )
+                # The entry's companion files (#928) are on disk too — the
+                # probe only reports a hit when every one of them is — and
+                # need the same registration to survive the sweep.
+                if self.job_queue is not None:
+                    companion_paths = _companion_paths(
+                        registry_output_path,
+                        self.job_queue.peek_cache_metadata(
+                            str(payload.output_file), payload.content_hash()
+                        ),
+                    )
+                    self._register_on_disk_outputs(companion_paths, registry_source)
             return True
 
         # outcome == "submitted": the job is in the jobs DB and already
@@ -685,9 +728,19 @@ class SqliteBackend(LocalOpsBackend):
                 output_path = Path(payload.output_file)
                 if not output_path.is_absolute():
                     output_path = self.workspace_path / output_path
-                if output_path.exists():
+                # A stored result is only usable when its whole file set is
+                # on disk — the main output and every companion file the
+                # worker wrote next to it (#928).
+                missing = [
+                    path
+                    for path in (output_path, *_companion_paths(output_path, cached))
+                    if not path.exists()
+                ]
+                if not missing:
                     return ("jobcache_hit", None)
-                logger.warning(f"Cache indicated file exists but not found: {output_path}")
+                logger.warning(
+                    f"Cache indicated file exists but not found: {', '.join(map(str, missing))}"
+                )
 
         # Worker availability (may briefly block waiting for workers to activate).
         if not self.skip_worker_check:
@@ -1062,6 +1115,13 @@ class SqliteBackend(LocalOpsBackend):
                                 logger.debug(
                                     f"Could not register worker output {output_path}: {reg_exc}"
                                 )
+                            # Companion files the worker reported with the
+                            # job result (#928) are outputs of this build
+                            # too; unregistered, the sweep would delete them.
+                            self._register_on_disk_outputs(
+                                _companion_paths(output_path, self._job_result_data(job_id)),
+                                source_for_registry,
+                            )
 
                             # Hand the slow part — read the output back, pickle
                             # it, commit the blob with retention pruning — to the
@@ -1953,7 +2013,9 @@ class SqliteBackend(LocalOpsBackend):
         if self.job_queue is None:
             return None
         conn = self.job_queue._get_conn()
-        cursor = conn.execute("SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,))
+        cursor = conn.execute(
+            "SELECT payload, content_hash, result FROM jobs WHERE id = ?", (job_id,)
+        )
         row = cursor.fetchone()
         if not row:
             return None
@@ -1972,6 +2034,13 @@ class SqliteBackend(LocalOpsBackend):
 
         if job_type == "notebook":
             result_text = output_path.read_text(encoding="utf-8")
+            # Companion files (#928) are cached with the main result so a
+            # replay reproduces the whole file set.
+            companion_files = {
+                path.name: path.read_text(encoding="utf-8")
+                for path in _companion_paths(output_path, _parse_result_json(row[2]))
+                if path.is_file()
+            }
             result_obj = NotebookResult(
                 correlation_id=correlation_id,
                 output_file=str(job_info["output_file"]),
@@ -1979,6 +2048,7 @@ class SqliteBackend(LocalOpsBackend):
                 content_hash=content_hash,
                 result=result_text,
                 output_metadata_tags=notebook_metadata_tags_from_payload(payload_dict),
+                companion_files=companion_files,
             )
         elif job_type in ("plantuml", "drawio"):
             result_bytes = output_path.read_bytes()
@@ -2015,6 +2085,51 @@ class SqliteBackend(LocalOpsBackend):
         runs before the batch transaction opens.
         """
         _ResultCacheWrite(self, job_id, job_info, output_path)(db_manager)
+
+    def _job_result_data(self, job_id: int) -> dict[str, Any]:
+        """The parsed ``result`` JSON a worker stored for ``job_id`` (``{}`` if none)."""
+        if self.job_queue is None:
+            return {}
+        try:
+            conn = self.job_queue._get_conn()
+            row = conn.execute("SELECT result FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        except Exception as e:
+            logger.debug(f"Could not read result data for job {job_id}: {e}")
+            return {}
+        return _parse_result_json(row[0] if row else None)
+
+    def _register_on_disk_outputs(self, paths: list[Path], source: Path) -> None:
+        """Register outputs that already exist on disk (worker-written or cached)."""
+        for path in paths:
+            if not path.exists():
+                continue
+            try:
+                self.output_write_registry.record_write(path, content_source=path, source=source)
+            except Exception as reg_exc:
+                logger.debug(f"Could not register output {path}: {reg_exc}")
+
+    def _replay_companion_files(self, output_file: Path, result: Any, source_path: Path) -> None:
+        """Write a cached result's companion files next to ``output_file``.
+
+        Only notebook results carry any (the C++ code export's header and
+        workshop files, #928). Each write is registered and hash-aware like
+        the main result's.
+        """
+        companion_bytes = getattr(result, "companion_bytes", None)
+        if companion_bytes is None:
+            return
+        for name, content in companion_bytes().items():
+            path = output_file.parent / name
+            write_result = self.output_write_registry.record_write(
+                path, content=content, source=source_path
+            )
+            if write_result.outcome == WriteOutcome.DEDUP:
+                continue
+            if self.output_write_registry.is_destination_identical(path, content=content):
+                logger.debug(f"Hash-aware skip: {path} already has identical content")
+                continue
+            atomic_write_bytes(path, content)
+            logger.debug(f"Wrote cached companion file to {path}")
 
     def _clear_stored_issues_for_job(self, job_id: int, job_info: dict) -> None:
         """Drop stored errors/warnings superseded by a successful run.
