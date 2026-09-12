@@ -306,6 +306,16 @@ markers = [
     # the root cause, not to widen the net. Reserve it for the known
     # thread-starvation / subprocess-contention families.
     "flaky: scoped pytest-rerunfailures retry for known-contention tests",
+    # ``load_sensitive`` tags whole suites whose runtime or correctness depends
+    # on machine load — heavyweight-process spawners (worker pools, real
+    # kernels) and wall-clock-timing asserters (busy-retry backoffs, threaded
+    # shutdowns). The pre-push hook excludes them (``-m "not load_sensitive"``,
+    # see scripts/run_pytest_hook.py) so the local gate stays a fast,
+    # deterministic tier; CI and a plain ``uv run pytest`` run them
+    # unconditionally. The directory set lives in ``tests/conftest.py``
+    # (``LOAD_SENSITIVE_TEST_DIRS``); tagging there is automatic, so a test
+    # added under one of those directories needs no marker of its own.
+    "load_sensitive: heavyweight-process or wall-clock-timing suite, excluded from the pre-push gate only",
 ]
 # Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests.
 # Use -n auto for parallel execution via pytest-xdist (pass -n0 to disable).

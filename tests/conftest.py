@@ -807,6 +807,23 @@ def pytest_configure(config):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
+#: Directory families (relative to ``tests/``) tagged ``load_sensitive`` and
+#: therefore excluded from the pre-push gate (``scripts/run_pytest_hook.py``
+#: adds ``-m "not load_sensitive"``). Measured heavy and/or flake-history
+#: suites — heavyweight-process spawners and wall-clock-timing asserters —
+#: that CI (and a plain ``uv run pytest``) still runs unconditionally:
+#: gate-time measurements and the rationale live in issue #926. Tagging is
+#: automatic in ``pytest_collection_modifyitems`` below, so a test added
+#: under one of these directories needs no marker of its own; the meta-tests
+#: in ``tests/test_load_sensitive_gate.py`` pin the tagging.
+LOAD_SENSITIVE_TEST_DIRS = (
+    ("infrastructure", "workers"),
+    ("infrastructure", "backends"),
+    ("infrastructure", "database"),
+    ("workers",),
+)
+
+
 # ``tryfirst`` so the ``serial`` -> ``xdist_group`` mapping below runs before
 # pytest-xdist's own (unordered) ``pytest_collection_modifyitems`` in
 # ``xdist/remote.py``, which appends the ``@group`` suffix to each nodeid by
@@ -818,6 +835,25 @@ def pytest_collection_modifyitems(config, items):
     from tests.xdist_group_helpers import serial_group_name
 
     tool_status = get_tool_availability()
+
+    # Tag the load-sensitive families. Like the serial tally below, this hook
+    # sees the full collected item list on every xdist worker, so the counts
+    # stashed on ``config`` are complete wherever the meta-test runs.
+    tests_root = Path(__file__).parent.resolve()
+    load_sensitive_counts: dict[str, int] = {}
+    for item in items:
+        try:
+            rel_parts = Path(str(item.fspath)).resolve().relative_to(tests_root).parts
+        except ValueError:
+            continue
+        for family in LOAD_SENSITIVE_TEST_DIRS:
+            if rel_parts[: len(family)] == family:
+                item.add_marker(pytest.mark.load_sensitive)
+                load_sensitive_counts["/".join(family)] = (
+                    load_sensitive_counts.get("/".join(family), 0) + 1
+                )
+                break
+    config._clm_load_sensitive_counts = load_sensitive_counts
 
     # Tally serial-marked items per resulting load group so the meta-test
     # (``tests/test_serial_xdist_groups.py``) can confirm the heavy families

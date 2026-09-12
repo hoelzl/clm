@@ -87,6 +87,20 @@ LEAKING_GIT_VARS = (
 _MAX_AUTO_WORKERS = 16
 
 
+#: Marker expression for the pre-push tier: the fast-suite base filter from
+#: ``pyproject.toml`` ``addopts`` plus the ``load_sensitive`` exclusion
+#: (issue #926 — heavyweight-process and wall-clock-timing suites move out
+#: of the local gate; CI runs them). A command-line ``-m`` overrides the ini
+#: addopts one, so appending this expression is what slims the gate; the
+#: ``--full`` escape hatch runs the unfiltered fast suite instead.
+#: ``tests/test_run_pytest_hook.py`` pins this expression against pyproject's
+#: addopts so the two cannot drift apart.
+PRE_PUSH_MARKER_EXPR = (
+    "not slow and not db_only and not integration and not e2e and not docker "
+    "and not load_sensitive"
+)
+
+
 def main() -> int:
     env = os.environ.copy()
     for var in LEAKING_GIT_VARS:
@@ -95,8 +109,23 @@ def main() -> int:
         "PYTEST_XDIST_AUTO_NUM_WORKERS",
         str(min(_MAX_AUTO_WORKERS, os.cpu_count() or _MAX_AUTO_WORKERS)),
     )
+    args = list(sys.argv[1:])
+    if "--full" in args:
+        args.remove("--full")
+        tier_note = "pre-push gate: FULL fast suite (--full given)"
+    else:
+        # CLI ``-m`` overrides the ini addopts filter, so this narrows the
+        # run to the deterministic tier (see PRE_PUSH_MARKER_EXPR).
+        args += ["-m", PRE_PUSH_MARKER_EXPR]
+        tier_note = (
+            "pre-push gate: deterministic tier — excluding load_sensitive "
+            "suites (heavyweight-process / wall-clock-timing families); "
+            "run `python scripts/run_pytest_hook.py --full` for the whole "
+            "fast suite, CI runs it regardless"
+        )
+    print(f"[run_pytest_hook] {tier_note}", flush=True)
     result = subprocess.run(
-        ["uv", "run", "pytest", *sys.argv[1:]],
+        ["uv", "run", "pytest", *args],
         env=env,
     )
     return result.returncode

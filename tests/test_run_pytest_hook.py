@@ -104,3 +104,54 @@ class TestEnvironmentClearing:
 
         # Must not raise, and must propagate the subprocess exit code.
         assert run_pytest_hook.main() == 7
+
+
+class TestPrePushTier:
+    """The wrapper slims the gate to the deterministic tier (issue #926)."""
+
+    def _captured_cmd(self, monkeypatch, argv):
+        captured: list[str] = []
+
+        class _FakeResult:
+            returncode = 0
+
+        def fake_run(cmd, env, **kwargs):
+            captured.extend(cmd)
+            return _FakeResult()
+
+        monkeypatch.setattr(run_pytest_hook.subprocess, "run", fake_run)
+        monkeypatch.setattr(run_pytest_hook.sys, "argv", argv)
+        assert run_pytest_hook.main() == 0
+        return captured
+
+    def test_adds_load_sensitive_exclusion_by_default(self, monkeypatch):
+        cmd = self._captured_cmd(monkeypatch, ["run_pytest_hook.py", "-q"])
+        m_index = cmd.index("-m")
+        assert cmd[m_index + 1] == run_pytest_hook.PRE_PUSH_MARKER_EXPR
+        assert "not load_sensitive" in cmd[m_index + 1]
+
+    def test_full_flag_runs_unfiltered_suite(self, monkeypatch):
+        cmd = self._captured_cmd(monkeypatch, ["run_pytest_hook.py", "--full", "-q"])
+        # The flag is consumed by the wrapper, not forwarded to pytest,
+        # and no narrowing -m is appended (the ini addopts filter stands).
+        assert "--full" not in cmd
+        assert "-m" not in cmd
+
+    def test_marker_expr_matches_pyproject_addopts_plus_exclusion(self):
+        """The wrapper's filter must stay the ini addopts filter plus the
+        ``load_sensitive`` clause — if addopts gains a new exclusion and the
+        wrapper doesn't, the pre-push gate silently runs a broader tier
+        than a plain ``uv run pytest``."""
+        import re
+
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(r"addopts\s*=\s*\"([^\"]+)\"", pyproject)
+        assert match, "addopts not found in pyproject.toml"
+        addopts = match.group(1)
+        ini_match = re.search(r"-m\s*'([^']+)'", addopts)
+        assert ini_match, "no -m expression in addopts"
+        assert run_pytest_hook.PRE_PUSH_MARKER_EXPR == (
+            f"{ini_match.group(1)} and not load_sensitive"
+        )
