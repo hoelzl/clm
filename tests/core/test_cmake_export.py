@@ -234,6 +234,27 @@ class TestWriteCmakeProjects:
                 encoding="utf-8"
             )
 
+    def test_display_helper_header_copied_when_referenced(self, tmp_path):
+        # The #928 emitter includes the labeled-display helper instead of
+        # inlining it; the CMake export must vendor it like the xcpp shim.
+        course = _make_cpp_course(tmp_path)
+        target = course.output_targets[0]
+        outputs = _materialize_code_outputs(course, target)
+        outputs[0].write_text(
+            "#include <clm/display.hpp>\nint main() { CLM_DISPLAY(1 + 1); }\n", encoding="utf-8"
+        )
+
+        write_cmake_projects(course)
+
+        kind_root = outputs[0].parent.parent
+        header = kind_root / SUPPORT_INCLUDE_DIRNAME / "clm" / "display.hpp"
+        assert header.is_file()
+        assert "#define CLM_DISPLAY" in header.read_text(encoding="utf-8")
+        # Standalone: the display helper does not drag in nlohmann.
+        assert not (kind_root / SUPPORT_INCLUDE_DIRNAME / "nlohmann").exists()
+        cmake = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+        assert "include_directories" in cmake
+
     def test_deck_local_header_triggers_vendoring(self, tmp_path):
         course = _make_cpp_course(tmp_path)
         target = course.output_targets[0]
