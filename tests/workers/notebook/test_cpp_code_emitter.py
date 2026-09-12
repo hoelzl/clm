@@ -17,6 +17,7 @@ from clm.workers.notebook.cpp_code_analysis import (
     mask_comments_and_strings,
     split_top_level,
     split_top_level_spans,
+    strip_comments_and_strings,
 )
 from clm.workers.notebook.cpp_code_emitter import emit_cpp_translation_unit
 
@@ -410,3 +411,144 @@ class TestEmittedCodeCompiles:
             "numbers.push_back(4)",
         ]
         self._check(emit_cpp_translation_unit(cells), tmp_path)
+
+    def test_digit_separator_cell_compiles(self, tmp_path):
+        # #922: the declaration goes to namespace scope, the call into a slide.
+        cells = ["void h(int, long) {}", _MIXED_DECL_STMT_CELL]
+        self._check(emit_cpp_translation_unit(cells), tmp_path)
+
+    def test_requires_clause_template_compiles(self, tmp_path):
+        # #921: the constrained template must not be display-wrapped.
+        cells = ["#include <concepts>", _REQUIRES_CLAUSE_TEMPLATE, "ordered_min(1, 2)"]
+        self._check(emit_cpp_translation_unit(cells), tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Classifier regressions: #922 digit separators, #921 requires clauses
+# ---------------------------------------------------------------------------
+
+_MIXED_DECL_STMT_CELL = "long arg2{2'000'000'000};\nh(1, arg2);"
+
+_REQUIRES_CLAUSE_TEMPLATE = _dedent(
+    """
+    template <typename T>
+        requires std::totally_ordered<T>
+    T ordered_min(T a, T b)
+    {
+        return a < b ? a : b;
+    }
+    """
+)
+
+
+class TestDigitSeparators:
+    """Issue #922: a ``'`` inside a numeric literal is not a char-literal quote.
+
+    The stripper used to open a char literal at ``2'000`` and swallow the
+    rest of the cell, so the declaration and the statement after it became
+    one item that the emitter placed at namespace scope.
+    """
+
+    def test_strip_keeps_digit_separators(self):
+        assert strip_comments_and_strings(_MIXED_DECL_STMT_CELL) == _MIXED_DECL_STMT_CELL
+
+    def test_mask_keeps_digit_separators(self):
+        assert mask_comments_and_strings(_MIXED_DECL_STMT_CELL) == _MIXED_DECL_STMT_CELL
+
+    @pytest.mark.parametrize(
+        "src", ["auto x = 0x1'F'FF;", "double d = 1'000.5;", "int w = 1'0;", "auto b = 0b1'01;"]
+    )
+    def test_hex_binary_and_fractional_separators_survive(self, src):
+        assert strip_comments_and_strings(src) == src
+        assert mask_comments_and_strings(src) == src
+
+    @pytest.mark.parametrize(
+        "src, expected",
+        [
+            ("char c = 'a';", "char c = ' ';"),
+            ("char c = u8'a';", "char c = u8' ';"),
+            ("char c = L'x';", "char c = L' ';"),
+            ("auto s = 1 + 'a';", "auto s = 1 + ' ';"),
+        ],
+    )
+    def test_char_literals_are_still_literals(self, src, expected):
+        assert strip_comments_and_strings(src) == expected
+
+    def test_declaration_and_statement_split_into_two_items(self):
+        items = classify_source(_MIXED_DECL_STMT_CELL)
+        assert [(i.category, i.name) for i in items] == [
+            ("var_decl", "arg2"),
+            ("call_stmt", None),
+        ]
+
+    def test_spans_split_the_same_way(self):
+        items = classify_source_spans(_MIXED_DECL_STMT_CELL)
+        assert [i.original for i in items] == ["long arg2{2'000'000'000};", "h(1, arg2);"]
+
+
+class TestRequiresClause:
+    """Issue #921: a requires-clause between the template head and declarator.
+
+    The declaration regexes are anchored at the item start, so the clause
+    hid the declarator and the expression fallback took the whole function
+    template for a display expression.
+    """
+
+    def test_constrained_function_template_is_a_definition(self):
+        (item,) = classify_source(_REQUIRES_CLAUSE_TEMPLATE)
+        assert (item.category, item.name, item.signature) == (
+            "fn_def",
+            "ordered_min",
+            "ordered_min(T,T)",
+        )
+
+    @pytest.mark.parametrize(
+        "src, category, name",
+        [
+            (
+                "template <typename T> requires (sizeof(T) > 4) && !std::is_void_v<T> void f(T) {}",
+                "fn_def",
+                "f",
+            ),
+            (
+                "template <typename T> requires std::integral<T> || std::floating_point<T> "
+                "struct Num { T v; };",
+                "type_def",
+                "Num",
+            ),
+            ("template <typename T> requires C<T> T g(T a);", "fn_decl", "g"),
+            ("template <typename T> requires C<T> using Ref = T&;", "alias_def", "Ref"),
+        ],
+    )
+    def test_compound_and_parenthesized_constraints(self, src, category, name):
+        (item,) = classify_source(src)
+        assert (item.category, item.name) == (category, name)
+
+    def test_trailing_requires_clause_unchanged(self):
+        (item,) = classify_source(
+            "template <typename T> T h(T a) requires std::totally_ordered<T> { return a; }"
+        )
+        assert (item.category, item.name) == ("fn_def", "h")
+
+    def test_constrained_parameter_form_unchanged(self):
+        (item,) = classify_source("template <std::totally_ordered T> T k(T a) { return a; }")
+        assert (item.category, item.name) == ("fn_def", "k")
+
+    def test_spans_keep_the_original_text(self):
+        (item,) = classify_source_spans(_REQUIRES_CLAUSE_TEMPLATE)
+        assert item.category == "fn_def"
+        assert item.original == _REQUIRES_CLAUSE_TEMPLATE
+
+
+class TestEmitClassifierRegressions:
+    def test_mixed_declaration_and_statement_cell_routes_statement_into_slide(self):
+        tu = emit_cpp_translation_unit(["void h(int, long) {}", _MIXED_DECL_STMT_CELL])
+        assert "long arg2{2'000'000'000};" in tu
+        assert "void slide_01() {\n    h(1, arg2);\n}" in tu
+        assert tu.index("long arg2") < tu.index("void slide_01")
+
+    def test_requires_clause_template_stays_at_namespace_scope(self):
+        tu = emit_cpp_translation_unit([_REQUIRES_CLAUSE_TEMPLATE, "ordered_min(1, 2)"])
+        assert _REQUIRES_CLAUSE_TEMPLATE in tu
+        assert "CLM_DISPLAY(ordered_min(1, 2));" in tu
+        assert tu.count("CLM_DISPLAY(") == 2  # the #define and the one call
