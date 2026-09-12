@@ -813,19 +813,60 @@ class TestOutputFormatCode:
 
         result = await processor.create_contents(notebook, payload)
 
-        # Includes hoisted to the top, statements wrapped, main generated.
+        # Includes hoisted to the top, the statements in a section function
+        # (no slide tags → one leading section), main generated.
         assert result.startswith("#include <iostream>")
+        assert "// # A C++ Deck" in result
         assert "int x = 42;" in result
-        assert "void slide_01() {" in result
-        assert "int main() {" in result
+        assert "void section_01() {" in result
+        assert "int main() {\n    section_01();\n}" in result
         # No jupytext percent-format cell markers in the output.
         assert "// %%" not in result
 
     @pytest.mark.asyncio
-    async def test_cpp_code_along_blanked_cells_become_todo_stubs(self):
-        """Code-along C++ export: blanked cells turn into // TODO slide
-        stubs so students have a compilable place for each cell (#333
-        phase 4). The keep cell's content survives as usual."""
+    async def test_cpp_code_export_groups_sections_by_slide_id(self):
+        """The section functions are named after the opener's slide_id and
+        the markdown narrative survives as comments (#928). The snapshot
+        taken in _process_notebook_node carries tags and slide_id past the
+        metadata strip."""
+        intro = make_cell("markdown", "## Variables", tags=["slide"])
+        intro["metadata"]["slide_id"] = "variables"
+        later = make_cell("markdown", "## Using them", tags=["subslide"])
+        later["metadata"]["slide_id"] = "using-them"
+        notebook = make_notebook_node(
+            [
+                intro,
+                make_cell("code", "int x{42};"),
+                make_cell("code", "x"),
+                later,
+                make_cell("code", "int y{x + 1};"),
+            ]
+        )
+
+        spec = CompletedOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert "void variables() {" in result
+        assert "void using_them() {" in result
+        assert "// ## Variables" in result
+        # x is used by the later section, so it was promoted out of the
+        # function; y stays local.
+        assert result.index("int x{42};") < result.index("void variables()")
+        assert "    int y{x + 1};" in result
+        assert "int main() {\n    variables();\n    using_them();\n}" in result
+        # The output must not leak the internal metadata the snapshot used.
+        assert all("slide_id" not in cell.get("metadata", {}) for cell in nb.cells)
+
+    @pytest.mark.asyncio
+    async def test_cpp_code_along_blanked_cells_become_todo_markers(self):
+        """Code-along C++ export: a blanked cell leaves a // TODO in its
+        section body so students have a compilable place for the cell's
+        code (#333 phase 4, #928). The keep cell's content survives as usual,
+        and the blanked cell's original source never reaches the output."""
         notebook = make_notebook_node(
             [
                 make_cell("code", "#include <iostream>", tags=["keep"]),
@@ -841,7 +882,8 @@ class TestOutputFormatCode:
         result = await processor.create_contents(nb, payload)
 
         assert "#include <iostream>" in result
-        assert "void slide_01() {\n    // TODO\n}" in result
+        assert "void section_01() {\n" in result
+        assert "    // TODO\n}" in result
         assert 'std::cout << "x";' not in result
 
     @pytest.mark.asyncio

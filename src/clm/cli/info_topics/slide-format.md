@@ -85,6 +85,7 @@ is also valid; `clm slides normalize --operations interleaving` converts to cano
 | `private` | Visible only in trainer/speaker output |
 | `del` | Removed from all outputs |
 | `nodataurl` | Prevents image inlining as data-URL |
+| `global` | (since {version}, issue #928) **Code cells, C++ code export only.** Emits the cell at namespace scope instead of inside its section function — the manual override for a top-level variable the export's reference scan does not promote (see "C++ code export" under `clm build` in `clm info commands`). Orthogonal to `keep`; no effect on any other output. |
 | `allow-untranslated` | (since {version}, issue #772) **Validate-only, code cells.** Declares that German text in a shared (no-`lang`) code cell is intentional — e.g. a DE↔EN dictionary example — so `clm validate`'s shared-cell German-text check (an `error` since issue #782) skips the cell. No effect on output processing. Shared cells are byte-identical across a split pair, so the tag always applies to both halves at once. |
 
 ### Workshop scope

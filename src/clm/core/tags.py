@@ -20,6 +20,8 @@ alt          Alternative solution, no ``start`` partner (deleted in code-along,
 answer       Solution text (cleared in code-along, shown in completed/speaker)
 notes        Brief speaker hints (speaker output only)
 voiceover    Text to read aloud (speaker output only)
+global       C++ code export only: emit the code cell at namespace scope
+             instead of inside its section function (#928)
 workshop     Marks the heading cell of a workshop section (structural metadata)
 end-workshop Marks the first cell after a workshop, ending its scope (any cell type)
 private      Cell visible only in private documents
@@ -48,6 +50,14 @@ PRIVATE_TAGS: frozenset[str] = frozenset({"notes", "voiceover", "private"})
 # --- Content-control tags (code cells) ---
 CODE_CONTENT_TAGS: frozenset[str] = frozenset({"keep", "start", "completed"})
 
+# --- Scope tags (code cells) ---
+# ``global`` (#928): the C++ code export emits the cell at namespace scope
+# (the shared per-deck header once it exists) instead of inside its section
+# function — the manual override for a top-level variable the export's own
+# reference scan does not promote. Orthogonal to ``keep``: variant selection
+# and scope never influence each other. No effect on any other output.
+SCOPE_TAGS: frozenset[str] = frozenset({"global"})
+
 # --- Structural metadata tags ---
 # Tags that carry structural meaning but don't affect output processing.
 # ``workshop`` opens a range only on markdown cells; ``end-workshop`` closes
@@ -73,7 +83,7 @@ EXPECTED_GENERIC_TAGS: frozenset[str] = frozenset(
 )
 
 EXPECTED_CODE_TAGS: frozenset[str] = frozenset(
-    CODE_CONTENT_TAGS | EXPECTED_GENERIC_TAGS | VALIDATE_ONLY_TAGS
+    CODE_CONTENT_TAGS | SCOPE_TAGS | EXPECTED_GENERIC_TAGS | VALIDATE_ONLY_TAGS
 )
 
 EXPECTED_MARKDOWN_TAGS: frozenset[str] = frozenset(

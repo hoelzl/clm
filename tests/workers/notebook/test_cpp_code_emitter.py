@@ -1,8 +1,8 @@
-"""Tests for the C++ translation-unit emitter (#333 phase 1).
+"""Tests for the C++ deck emitter (#333 phase 1, #928 phase 1).
 
 Covers the span-aware classification layer in ``cpp_code_analysis``
-(length-preserving masking, original-text recovery) and the per-item
-dispatch of :func:`emit_cpp_translation_unit`.
+(length-preserving masking, original-text recovery) and the section-function
+export of :func:`emit_cpp_deck`.
 """
 
 import shutil
@@ -19,7 +19,7 @@ from clm.workers.notebook.cpp_code_analysis import (
     split_top_level_spans,
     strip_comments_and_strings,
 )
-from clm.workers.notebook.cpp_code_emitter import emit_cpp_translation_unit
+from clm.workers.notebook.cpp_code_emitter import CppCell, emit_cpp_deck, identifier_from_slide_id
 
 
 def _dedent(text: str) -> str:
@@ -170,257 +170,390 @@ class TestClassifySourceSpans:
 
 
 # ---------------------------------------------------------------------------
-# emit_cpp_translation_unit
+# emit_cpp_deck
 # ---------------------------------------------------------------------------
+
+
+def code(source: str, **kwargs) -> CppCell:
+    return CppCell("code", source, **kwargs)
+
+
+def md(source: str, **kwargs) -> CppCell:
+    return CppCell("markdown", source, **kwargs)
+
+
+def slide(title: str, slide_id: str | None, tag: str = "slide") -> CppCell:
+    return md(f"## {title}", tags=(tag,), slide_id=slide_id)
+
+
+def emit(*cells: CppCell, **kwargs) -> str:
+    return emit_cpp_deck(list(cells), **kwargs)
+
+
+def _function_body(tu: str, name: str) -> str:
+    start = tu.index(f"void {name}() {{")
+    return tu[start : tu.index("\n}\n", start)]
 
 
 class TestEmitBasicStructure:
     def test_basic_deck(self):
-        cells = [
-            "#include <iostream>",
-            "int x = 42;",
-            "int add(int a, int b) { return a + b; }",
-            'std::cout << add(x, 1) << "\\n";',
-        ]
-        tu = emit_cpp_translation_unit(cells)
+        tu = emit(
+            code("#include <iostream>"),
+            code("int x = 42;"),
+            code("int add(int a, int b) { return a + b; }"),
+            code('std::cout << add(x, 1) << "\\n";'),
+        )
         assert tu.startswith("#include <iostream>")
-        assert "int x = 42;" in tu
-        assert "int add(int a, int b) { return a + b; }" in tu
-        assert "void slide_01() {" in tu
+        # No slide tags: everything is one leading section.
+        assert "void section_01() {" in tu
+        assert '    std::cout << "== section_01 ==\\n";' in tu
+        # x is only used inside the section, so it stays a local.
+        assert "    int x = 42;" in tu
         assert '    std::cout << add(x, 1) << "\\n";' in tu
-        assert "int main() {\n    slide_01();\n}" in tu
+        assert "int main() {\n    section_01();\n}" in tu
         assert tu.endswith("\n")
-        # Statements come after the definitions they use.
-        assert tu.index("int add") < tu.index("void slide_01")
+        # The definition precedes the function that uses it.
+        assert tu.index("int add") < tu.index("void section_01")
 
     def test_includes_hoisted_and_deduped(self):
-        cells = [
-            "#include <vector>\nstd::vector<int> v{1};",
-            "#include <vector>\n#include <string>\nv.push_back(2);",
-        ]
-        tu = emit_cpp_translation_unit(cells)
+        tu = emit(
+            code("#include <vector>\nstd::vector<int> v{1};"),
+            code("#include <vector>\n#include <string>\nv.push_back(2);"),
+        )
         assert tu.count("#include <vector>") == 1
         assert tu.count("#include <string>") == 1
-        # Hoisted above all code.
         assert tu.index("#include <string>") < tu.index("std::vector<int> v{1};")
 
     def test_brace_init_fluent_chain_stays_one_statement(self):
         # Regression: the builder deck's `RequestBuilder{}.setTimeout(10)...`
         # was split after the brace-init `}`, leaving a stray `.setTimeout`
         # item that cannot compile.
-        cells = ["// Change only the timeout....\nRequestBuilder{}.setTimeout(10).send();"]
-        tu = emit_cpp_translation_unit(cells)
+        tu = emit(code("// Change only the timeout....\nRequestBuilder{}.setTimeout(10).send();"))
         assert "    RequestBuilder{}.setTimeout(10).send();" in tu
         assert "\n    .setTimeout" not in tu
 
-    def test_statement_cells_become_numbered_slides_called_in_order(self):
-        cells = ["f();", "g();", "h();"]
-        tu = emit_cpp_translation_unit(cells)
-        assert "void slide_01() {" in tu
-        assert "void slide_02() {" in tu
-        assert "void slide_03() {" in tu
-        body = tu[tu.index("int main()") :]
-        assert body.index("slide_01();") < body.index("slide_02();") < body.index("slide_03();")
+    def test_statement_cells_stay_in_order_within_a_section(self):
+        tu = emit(code("f();"), code("g();"), code("h();"))
+        body = _function_body(tu, "section_01")
+        assert body.index("f();") < body.index("g();") < body.index("h();")
+        # One cell per paragraph.
+        assert "    f();\n\n    g();\n\n    h();" in body
 
-    def test_definition_only_cells_get_no_slide_function(self):
-        cells = ["int x = 1;", "struct S { int a; };"]
-        tu = emit_cpp_translation_unit(cells)
-        assert "slide_" not in tu
+    def test_items_of_one_cell_stay_together(self):
+        tu = emit(code("f();\ng();"), code("h();"))
+        assert "    f();\n    g();\n\n    h();" in tu
+
+    def test_definition_only_deck_gets_no_function(self):
+        tu = emit(code("struct S { int a; };"), code("void f() {}"))
+        assert "void section_01" not in tu
         assert "int main() {}" in tu
 
     def test_empty_cells_are_skipped(self):
-        tu = emit_cpp_translation_unit(["", "   \n  ", "int x = 1;"])
-        assert "int x = 1;" in tu
-        assert "slide_" not in tu
+        tu = emit(code(""), code("   \n  "), code("struct S {};"))
+        assert "struct S {};" in tu
+        assert "TODO" not in tu
+        assert "void section_01" not in tu
 
     def test_empty_deck_still_has_main(self):
-        assert "int main() {}" in emit_cpp_translation_unit([])
+        assert "int main() {}" in emit()
 
     def test_string_contents_survive(self):
-        tu = emit_cpp_translation_unit(['std::cout << "Hello, world!\\n";'])
+        tu = emit(code('std::cout << "Hello, world!\\n";'))
         assert '"Hello, world!\\n"' in tu
 
     def test_comments_survive(self):
-        tu = emit_cpp_translation_unit(["// the answer\nint answer = 42;"])
+        tu = emit(code("// the answer\nint answer = 42;"))
         assert "// the answer" in tu
 
-    def test_mixed_cell_routes_defs_before_statements(self):
-        cells = ["int x = next_id();\nregister_id(x);"]
-        tu = emit_cpp_translation_unit(cells)
-        assert tu.index("int x = next_id();") < tu.index("void slide_01")
-        assert "    register_id(x);" in tu
+    def test_mixed_cell_keeps_declaration_and_statement_together(self):
+        tu = emit(code("int x = next_id();\nregister_id(x);"))
+        assert "    int x = next_id();\n    register_id(x);" in tu
 
-    def test_control_statement_wrapped_in_slide(self):
-        cells = ["for (int i = 0; i < 3; ++i) { std::cout << i; }"]
-        tu = emit_cpp_translation_unit(cells)
-        assert "void slide_01() {" in tu
+    def test_control_statement_in_body(self):
+        tu = emit(code("for (int i = 0; i < 3; ++i) { std::cout << i; }"))
         assert "    for (int i = 0; i < 3; ++i)" in tu
 
     def test_anonymous_enum_at_namespace_scope(self):
-        cells = ["enum { RED, GREEN };", "int color = RED;"]
-        tu = emit_cpp_translation_unit(cells)
-        assert "slide_" not in tu
-        assert tu.index("enum { RED, GREEN };") < tu.index("int color = RED;")
+        tu = emit(code("enum { RED, GREEN };"), code("int color = RED;"))
+        assert not tu.index("enum { RED, GREEN };") > tu.index("int color = RED;")
+        assert "\nenum { RED, GREEN };" in tu
+        assert "    int color = RED;" in tu
 
     def test_using_directive_at_namespace_scope(self):
-        tu = emit_cpp_translation_unit(["using namespace std::literals;"])
-        assert "using namespace std::literals;" in tu
-        assert "slide_" not in tu
+        tu = emit(code("using namespace std::literals;"))
+        assert tu.startswith("using namespace std::literals;\n")
+        assert "void section_01" not in tu
 
     def test_define_emitted_in_place(self):
-        tu = emit_cpp_translation_unit(["#define ANSWER 42", "int x = ANSWER;"])
-        assert "#define ANSWER 42" in tu
+        tu = emit(code("#define ANSWER 42"), code("int x = ANSWER;"))
+        assert "\n#define ANSWER 42" in tu
 
     def test_missing_semicolon_terminated(self):
-        tu = emit_cpp_translation_unit(["int x = 1"])
+        tu = emit(code("int x = 1"))
         assert "int x = 1;" in tu
+
+
+class TestSections:
+    def test_slide_and_subslide_open_functions_named_by_slide_id(self):
+        tu = emit(
+            slide("Intro", "intro"),
+            code("f();"),
+            slide("Brace initialization", "brace-initialization", tag="subslide"),
+            code("g();"),
+        )
+        assert "void intro() {" in tu
+        assert "void brace_initialization() {" in tu
+        assert "    f();" in _function_body(tu, "intro")
+        assert "    g();" in _function_body(tu, "brace_initialization")
+        assert "int main() {\n    intro();\n    brace_initialization();\n}" in tu
+
+    def test_cells_before_the_first_opener_form_a_leading_section(self):
+        tu = emit(code("setup();"), slide("Intro", "intro"), code("f();"))
+        assert "void section_01() {" in tu
+        assert "int main() {\n    section_01();\n    intro();\n}" in tu
+
+    def test_code_cell_opener_belongs_to_the_section_it_opens(self):
+        tu = emit(
+            slide("Intro", "intro"),
+            code("f();"),
+            code("g();", tags=("subslide",), slide_id="demo"),
+        )
+        assert "    g();" in _function_body(tu, "demo")
+        assert "g();" not in _function_body(tu, "intro")
+
+    @pytest.mark.parametrize(
+        "slide_id, expected",
+        [
+            ("brace-initialization", "brace_initialization"),
+            ("42-answer", "s_42_answer"),
+            ("Einführung", "Einfuhrung"),
+            ("main", "main_section"),
+            ("class", "class_section"),
+            ("a--b__c", "a_b_c"),
+            ("---", None),
+            ("", None),
+            (None, None),
+        ],
+    )
+    def test_identifier_from_slide_id(self, slide_id, expected):
+        assert identifier_from_slide_id(slide_id) == expected
+
+    def test_duplicate_slide_ids_get_numeric_suffix(self):
+        tu = emit(slide("A", "intro"), code("f();"), slide("B", "intro"), code("g();"))
+        assert "void intro() {" in tu
+        assert "void intro_2() {" in tu
+        assert "int main() {\n    intro();\n    intro_2();\n}" in tu
+
+    def test_section_name_avoids_names_the_deck_defines(self):
+        # Code-derived slide_ids often equal the function the cell defines.
+        tu = emit(
+            md("## Twice", tags=("slide",), slide_id="twice"),
+            code("int twice(int x) { return 2 * x; }"),
+            code("twice(1)"),
+            md("## Counter", tags=("slide",), slide_id="counter"),
+            code("int counter{0};"),
+            code("counter++;"),
+        )
+        assert "void twice_section() {" in tu
+        assert "void counter_section() {" in tu
+        assert "int main() {\n    twice_section();\n    counter_section();\n}" in tu
+
+    def test_opener_without_slide_id_falls_back_to_section_number(self):
+        tu = emit(slide("A", "a"), code("f();"), slide("B", None), code("g();"))
+        assert "void section_02() {" in tu
+
+    def test_banner_uses_the_first_heading(self):
+        tu = emit(md("# Deck\n\n## Brace `init` 100%", tags=("slide",), slide_id="x"), code("f();"))
+        assert '    std::cout << "== Deck ==\\n";' in tu
+
+    def test_banner_escapes_quotes_and_backslashes(self):
+        tu = emit(md('## Say "hi" \\ bye', tags=("slide",), slide_id="x"), code("f();"))
+        assert '    std::cout << "== Say \\"hi\\" \\\\ bye ==\\n";' in tu
+
+    def test_banner_falls_back_to_humanized_slide_id(self):
+        tu = emit(md("Just text.", tags=("slide",), slide_id="brace-init"), code("f();"))
+        assert '    std::cout << "== Brace init ==\\n";' in tu
+
+    def test_banner_falls_back_to_function_name(self):
+        tu = emit(code("f();"))
+        assert '    std::cout << "== section_01 ==\\n";' in tu
+
+    def test_markdown_only_section_emits_comments_but_no_function(self):
+        tu = emit(slide("Title", "title"), md("Some prose."), slide("Code", "c"), code("f();"))
+        assert "// ## Title\n\n// Some prose." in tu
+        assert "void title()" not in tu
+        assert "int main() {\n    c();\n}" in tu
+
+    def test_markdown_before_first_statement_goes_above_the_function(self):
+        tu = emit(
+            slide("Intro", "intro"),
+            md("Explains the helper."),
+            code("int helper() { return 1; }"),
+            md("Now use it."),
+            code("helper();"),
+            md("And that's it."),
+        )
+        assert (
+            "// ## Intro\n\n// Explains the helper.\nint helper() { return 1; }\n\n"
+            "// Now use it.\nvoid intro() {"
+        ) in tu
+        assert "    helper();\n\n    // And that's it." in _function_body(tu, "intro")
+
+    def test_markdown_after_first_statement_goes_into_the_body(self):
+        tu = emit(slide("Intro", "intro"), code("f();"), md("Then g."), code("g();"))
+        assert "    f();\n\n    // Then g.\n    g();" in _function_body(tu, "intro")
+
+    def test_multiline_markdown_becomes_a_comment_block(self):
+        tu = emit(md("Line one\n\n- bullet"), code("f();"))
+        assert "// Line one\n//\n// - bullet" in tu
+
+    def test_iostream_is_forced_for_the_banner(self):
+        tu = emit(code("f();"))
+        assert tu.startswith("#include <iostream>")
+
+    def test_no_iostream_without_functions(self):
+        tu = emit(code("struct S {};"))
+        assert "#include <iostream>" not in tu
+
+
+class TestPromotion:
+    def test_variable_used_by_a_later_section_is_promoted(self):
+        tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("x++;"))
+        assert "\nint x{1};\n" in tu
+        assert "    int x{1};" not in tu
+        assert tu.index("int x{1};") < tu.index("void b()")
+        assert "    x++;" in _function_body(tu, "b")
+
+    def test_unreferenced_variable_stays_local(self):
+        tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("f();"))
+        assert "    int x{1};" in _function_body(tu, "a")
+
+    def test_variable_used_by_a_hoisted_definition_is_promoted(self):
+        tu = emit(code("int counter{0};\nvoid bump() { ++counter; }"))
+        assert tu.startswith("int counter{0};\nvoid bump() { ++counter; }\n")
+        assert "void section_01" not in tu
+
+    def test_promotion_is_transitive_within_the_section(self):
+        tu = emit(slide("A", "a"), code("int n{3};\nint total{n};"), slide("B", "b"), code("total"))
+        assert "\nint n{3};\nint total{n};\n" in tu
+        assert tu.index("int total{n};") < tu.index("void b()")
+        assert "void a()" not in tu  # nothing was left for a body
+
+    def test_reference_in_a_comment_does_not_promote(self):
+        tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("f(); // x"))
+        assert "    int x{1};" in _function_body(tu, "a")
+
+    def test_reference_in_a_string_does_not_promote(self):
+        tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code('puts("x");'))
+        assert "    int x{1};" in _function_body(tu, "a")
+
+    def test_partial_identifier_match_does_not_promote(self):
+        tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("xs.clear();"))
+        assert "    int x{1};" in _function_body(tu, "a")
+
+    def test_reference_in_a_blanked_later_cell_promotes(self):
+        # Code-along: the later cell is blank in this view, but its original
+        # source still uses x, so a student typing it back needs x visible.
+        tu = emit(
+            slide("A", "a"),
+            code("int x{1};"),
+            slide("B", "b"),
+            code("", original_source="x++;"),
+        )
+        assert "    int x{1};" not in tu
+        assert tu.index("int x{1};") < tu.index("void b()")
+        assert "    // TODO" in _function_body(tu, "b")
+
+    def test_global_tag_forces_namespace_scope(self):
+        tu = emit(slide("A", "a"), code("int cfg{1};", tags=("global",)), code("f();"))
+        assert "\nint cfg{1};\n" in tu
+        assert tu.index("int cfg{1};") < tu.index("void a()")
 
 
 class TestEmitCodeAlongTodos:
-    def test_empty_cells_become_todo_stubs(self):
-        # Code-along: the pipeline blanks non-keep cells before emission.
-        cells = ["#include <iostream>", "", "  \n "]
-        tu = emit_cpp_translation_unit(cells, empty_cells_as_todo=True)
-        assert "void slide_01() {\n    // TODO\n}" in tu
-        assert "void slide_02() {\n    // TODO\n}" in tu
-        assert "int main() {\n    slide_01();\n    slide_02();\n}" in tu
+    def test_blanked_cell_leaves_a_todo_in_the_body(self):
+        tu = emit(code("#include <iostream>"), code("", original_source="f();"))
+        assert "void section_01() {" in tu
+        assert "    // TODO" in _function_body(tu, "section_01")
+
+    def test_empty_cell_counts_as_blanked_when_the_spec_blanks(self):
+        tu = emit(code("#include <iostream>"), code(""), code("  \n "), blanks_code_cells=True)
+        assert tu.count("    // TODO") == 2
 
     def test_kept_cells_emit_normally_between_todos(self):
-        cells = ["int x = 1;", "", "f(x);"]
-        tu = emit_cpp_translation_unit(cells, empty_cells_as_todo=True)
-        assert "int x = 1;" in tu
-        assert "    // TODO" in tu
-        assert "    f(x);" in tu
-        # The TODO stub comes before the kept statement cell.
-        assert tu.index("// TODO") < tu.index("f(x);")
+        tu = emit(code("int x = 1;"), code("", original_source="g(x);"), code("f(x);"))
+        body = _function_body(tu, "section_01")
+        assert "    int x = 1;\n\n    // TODO\n\n    f(x);" in body
 
     def test_default_still_skips_empty_cells(self):
-        tu = emit_cpp_translation_unit(["", "int x = 1;"])
+        tu = emit(code(""), code("struct S {};"))
         assert "TODO" not in tu
-        assert "slide_" not in tu
 
 
 class TestEmitMain:
     def test_deck_defined_main_suppresses_generated_main(self):
-        cells = ["#include <iostream>", 'int main() {\n    std::cout << "hi";\n    return 0;\n}']
-        tu = emit_cpp_translation_unit(cells)
+        tu = emit(
+            code("#include <iostream>"),
+            code('int main() {\n    std::cout << "hi";\n    return 0;\n}'),
+        )
         assert tu.count("int main()") == 1
         assert "return 0;" in tu
+        assert "section_01" not in tu
+
+    def test_deck_defined_main_still_gets_section_functions(self):
+        tu = emit(slide("A", "a"), code("f();"), code("int main() { a(); }"))
+        assert "void a() {" in tu
+        assert tu.count("int main()") == 1
 
 
 class TestEmitDisplayExpressions:
-    def test_expr_display_wrapped_with_helper(self):
-        tu = emit_cpp_translation_unit(["int x = 2;", "x + 40"])
-        assert "CLM_DISPLAY(x + 40);" in tu
+    def test_expr_display_wrapped_with_labeled_helper(self):
+        tu = emit(code("int x = 2;"), code("x + 40"))
+        assert "    CLM_DISPLAY(x + 40);" in tu
         assert "namespace clm {" in tu
+        assert "void display(const char* label," in tu
+        assert "#__VA_ARGS__" in tu
         assert "#include <iostream>" in tu
         assert "#include <type_traits>" in tu
         # Helper precedes its first use.
         assert tu.index("#define CLM_DISPLAY") < tu.index("CLM_DISPLAY(x + 40);")
 
     def test_no_helper_without_display_expressions(self):
-        tu = emit_cpp_translation_unit(["int x = 1;", "f(x);"])
+        tu = emit(code("int x = 1;"), code("f(x);"))
         assert "CLM_DISPLAY" not in tu
         assert "namespace clm" not in tu
 
     def test_display_with_line_comment_closes_on_own_line(self):
-        tu = emit_cpp_translation_unit(["x + 1 // off by one"])
+        tu = emit(code("x + 1 // off by one"))
         assert "CLM_DISPLAY(\n" in tu
         # The closing paren must sit on a line of its own so the trailing
         # line comment cannot swallow it.
         assert "\n    );" in tu
 
     def test_display_helper_includes_not_duplicated(self):
-        tu = emit_cpp_translation_unit(["#include <iostream>", "1 + 1"])
+        tu = emit(code("#include <iostream>"), code("1 + 1"))
         assert tu.count("#include <iostream>") == 1
 
     def test_bare_call_without_semicolon_is_displayed(self):
         # `sqrt(2.0)` without `;` relied on the kernel's auto-display even
         # though it classifies as call_stmt.
-        tu = emit_cpp_translation_unit(["#include <cmath>", "sqrt(2.0)"])
+        tu = emit(code("#include <cmath>"), code("sqrt(2.0)"))
         assert "CLM_DISPLAY(sqrt(2.0));" in tu
 
     def test_terminated_call_stays_plain_statement(self):
-        tu = emit_cpp_translation_unit(["setup();"])
+        tu = emit(code("setup();"))
         assert "CLM_DISPLAY" not in tu
         assert "    setup();" in tu
 
     def test_qualified_call_is_a_statement_not_a_declaration(self):
         # std::sort(...) matches the out-of-class-ctor pattern; it must end
-        # up inside a slide function, not at namespace scope.
-        cells = [
-            "#include <algorithm>\n#include <vector>",
-            "std::vector<int> xs{3, 1, 2};",
-            "std::sort(xs.begin(), xs.end());",
-        ]
-        tu = emit_cpp_translation_unit(cells)
-        assert "void slide_01() {\n    std::sort(xs.begin(), xs.end());\n}" in tu
-
-
-# ---------------------------------------------------------------------------
-# Compile smoke test (runs only when a C++ compiler is available)
-# ---------------------------------------------------------------------------
-
-_CXX = shutil.which("g++") or shutil.which("clang++")
-
-
-@pytest.mark.skipif(_CXX is None, reason="no C++ compiler on PATH")
-class TestEmittedCodeCompiles:
-    def _check(self, tu: str, tmp_path):
-        path = tmp_path / "deck.cpp"
-        path.write_text(tu, encoding="utf-8")
-        proc = subprocess.run(
-            [_CXX, "-std=c++20", "-fsyntax-only", str(path)],
-            capture_output=True,
-            text=True,
+        # up inside the section function, not at namespace scope.
+        tu = emit(
+            code("#include <algorithm>\n#include <vector>"),
+            code("std::vector<int> xs{3, 1, 2};"),
+            code("std::sort(xs.begin(), xs.end());"),
         )
-        assert proc.returncode == 0, proc.stderr
-
-    def test_representative_deck_compiles(self, tmp_path):
-        cells = [
-            "#include <iostream>\n#include <vector>",
-            "std::vector<int> numbers{1, 2, 3};",
-            "int sum(const std::vector<int>& xs) {\n"
-            "    int result{0};\n"
-            "    for (int x : xs) { result += x; }\n"
-            "    return result;\n"
-            "}",
-            'std::cout << sum(numbers) << "\\n";',
-            "numbers.size()",
-            "struct Point { int x; int y; };",
-            "Point p{3, 4};",
-            "p.x + p.y",
-        ]
-        self._check(emit_cpp_translation_unit(cells), tmp_path)
-
-    def test_display_fallback_for_unstreamable_type_compiles(self, tmp_path):
-        cells = [
-            "struct Opaque { int v; };",
-            "Opaque o{1};",
-            "o",
-        ]
-        self._check(emit_cpp_translation_unit(cells), tmp_path)
-
-    def test_void_display_expression_compiles(self, tmp_path):
-        # A bare member call classifies as expr_display (the identifier-then-
-        # paren call_stmt pattern doesn't match through the `.`); push_back
-        # returns void, so this exercises the void branch of clm::display.
-        cells = [
-            "#include <vector>",
-            "std::vector<int> numbers{1, 2, 3};",
-            "numbers.push_back(4)",
-        ]
-        self._check(emit_cpp_translation_unit(cells), tmp_path)
-
-    def test_digit_separator_cell_compiles(self, tmp_path):
-        # #922: the declaration goes to namespace scope, the call into a slide.
-        cells = ["void h(int, long) {}", _MIXED_DECL_STMT_CELL]
-        self._check(emit_cpp_translation_unit(cells), tmp_path)
-
-    def test_requires_clause_template_compiles(self, tmp_path):
-        # #921: the constrained template must not be display-wrapped.
-        cells = ["#include <concepts>", _REQUIRES_CLAUSE_TEMPLATE, "ordered_min(1, 2)"]
-        self._check(emit_cpp_translation_unit(cells), tmp_path)
+        assert "    std::sort(xs.begin(), xs.end());" in _function_body(tu, "section_01")
 
 
 # ---------------------------------------------------------------------------
@@ -540,15 +673,137 @@ class TestRequiresClause:
         assert item.original == _REQUIRES_CLAUSE_TEMPLATE
 
 
+class TestParenInitialization:
+    """``int i2(20);`` is a variable, not a function declaration (#928)."""
+
+    @pytest.mark.parametrize(
+        "src, name",
+        [
+            ("int i2(20);", "i2"),
+            ("double d(-1.5);", "d"),
+            ('std::string s("hi");', "s"),
+            ("char c('x');", "c"),
+            ("bool b(true);", "b"),
+            ("int* p(nullptr);", "p"),
+        ],
+    )
+    def test_literal_paren_initializer_is_a_variable(self, src, name):
+        (item,) = classify_source(src)
+        assert (item.category, item.name) == ("var_decl", name)
+
+    def test_identifier_argument_stays_a_declaration(self):
+        # The most vexing parse: without knowing whether `value` names a type
+        # or a variable, this reads as a function declaration.
+        (item,) = classify_source("int i2b(value);")
+        assert item.category == "fn_decl"
+
+    def test_type_argument_stays_a_declaration(self):
+        (item,) = classify_source("int f(int);")
+        assert (item.category, item.name) == ("fn_decl", "f")
+
+    def test_paren_initialized_variable_stays_local(self):
+        tu = emit(code("int i2(20);"), code("i2"))
+        assert "    int i2(20);" in _function_body(tu, "section_01")
+
+
 class TestEmitClassifierRegressions:
-    def test_mixed_declaration_and_statement_cell_routes_statement_into_slide(self):
-        tu = emit_cpp_translation_unit(["void h(int, long) {}", _MIXED_DECL_STMT_CELL])
-        assert "long arg2{2'000'000'000};" in tu
-        assert "void slide_01() {\n    h(1, arg2);\n}" in tu
-        assert tu.index("long arg2") < tu.index("void slide_01")
+    def test_mixed_declaration_and_statement_cell_stays_in_the_body(self):
+        tu = emit(code("void h(int, long) {}"), code(_MIXED_DECL_STMT_CELL))
+        assert "    long arg2{2'000'000'000};\n    h(1, arg2);" in _function_body(tu, "section_01")
 
     def test_requires_clause_template_stays_at_namespace_scope(self):
-        tu = emit_cpp_translation_unit([_REQUIRES_CLAUSE_TEMPLATE, "ordered_min(1, 2)"])
+        tu = emit(code(_REQUIRES_CLAUSE_TEMPLATE), code("ordered_min(1, 2)"))
         assert _REQUIRES_CLAUSE_TEMPLATE in tu
-        assert "CLM_DISPLAY(ordered_min(1, 2));" in tu
+        assert "    CLM_DISPLAY(ordered_min(1, 2));" in tu
         assert tu.count("CLM_DISPLAY(") == 2  # the #define and the one call
+
+
+# ---------------------------------------------------------------------------
+# Compile smoke test (runs only when a C++ compiler is available)
+# ---------------------------------------------------------------------------
+
+_CXX = shutil.which("g++") or shutil.which("clang++")
+
+
+@pytest.mark.skipif(_CXX is None, reason="no C++ compiler on PATH")
+class TestEmittedCodeCompiles:
+    def _check(self, tu: str, tmp_path):
+        path = tmp_path / "deck.cpp"
+        path.write_text(tu, encoding="utf-8")
+        proc = subprocess.run(
+            [_CXX, "-std=c++20", "-fsyntax-only", str(path)],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+    def test_representative_deck_compiles(self, tmp_path):
+        tu = emit(
+            md("# Vectors", tags=("slide",), slide_id="vectors"),
+            code("#include <iostream>\n#include <vector>"),
+            md("A vector of numbers."),
+            code("std::vector<int> numbers{1, 2, 3};"),
+            code(
+                "int sum(const std::vector<int>& xs) {\n"
+                "    int result{0};\n"
+                "    for (int x : xs) { result += x; }\n"
+                "    return result;\n"
+                "}"
+            ),
+            code('std::cout << sum(numbers) << "\\n";'),
+            code("numbers.size()"),
+            md('## Points with a "quoted" heading', tags=("subslide",), slide_id="points"),
+            code("struct Point { int x; int y; };"),
+            code("Point p{3, 4};"),
+            code("p.x + p.y"),
+            md("## Reuse", tags=("subslide",), slide_id="reuse"),
+            code("numbers.push_back(p.x);"),
+            code("sum(numbers)"),
+        )
+        self._check(tu, tmp_path)
+
+    def test_display_fallback_for_unstreamable_type_compiles(self, tmp_path):
+        tu = emit(code("struct Opaque { int v; };"), code("Opaque o{1};"), code("o"))
+        self._check(tu, tmp_path)
+
+    def test_void_display_expression_compiles(self, tmp_path):
+        # A bare member call classifies as expr_display (the identifier-then-
+        # paren call_stmt pattern doesn't match through the `.`); push_back
+        # returns void, so this exercises the void branch of clm::display.
+        tu = emit(
+            code("#include <vector>"),
+            code("std::vector<int> numbers{1, 2, 3};"),
+            code("numbers.push_back(4)"),
+        )
+        self._check(tu, tmp_path)
+
+    def test_promoted_variable_used_by_hoisted_function_compiles(self, tmp_path):
+        tu = emit(
+            slide("Counter", "counter"),
+            code("int counter{0};\nvoid bump() { ++counter; }"),
+            code("bump();"),
+            slide("Later", "later"),
+            code("counter"),
+        )
+        self._check(tu, tmp_path)
+
+    def test_code_along_todos_compile(self, tmp_path):
+        tu = emit(
+            slide("A", "a"),
+            code("#include <iostream>", tags=("keep",)),
+            code("", original_source="int x{1};"),
+            code('std::cout << "kept\\n";', tags=("keep",)),
+            blanks_code_cells=True,
+        )
+        self._check(tu, tmp_path)
+
+    def test_digit_separator_cell_compiles(self, tmp_path):
+        # #922: the declaration and the call stay together in the body.
+        self._check(emit(code("void h(int, long) {}"), code(_MIXED_DECL_STMT_CELL)), tmp_path)
+
+    def test_requires_clause_template_compiles(self, tmp_path):
+        # #921: the constrained template must not be display-wrapped.
+        tu = emit(
+            code("#include <concepts>"), code(_REQUIRES_CLAUSE_TEMPLATE), code("ordered_min(1, 2)")
+        )
+        self._check(tu, tmp_path)

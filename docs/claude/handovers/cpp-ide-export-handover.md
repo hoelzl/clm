@@ -1,7 +1,7 @@
 # C++ IDE Export (#928) — Handover
 
-**Created**: 2026-09-12 | **Updated**: 2026-09-12 | **Status**: Phase 0 in PR,
-Phase 1 not started
+**Created**: 2026-09-12 | **Updated**: 2026-09-12 (evening) | **Status**: Phase 0
+merged (#932), Phase 1 in PR, Phase 2 next
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -144,7 +144,7 @@ both need the same worker output-contract change.
 
 ## 3. Phase Breakdown
 
-### Phase 0 — Classifier fixes #921 / #922 [IN PROGRESS → PR]
+### Phase 0 — Classifier fixes #921 / #922 [DONE — PR #932, merged 2026-09-12]
 
 Branch `claude/issue-921-922-cpp-classifier`, commit `cdeba445`.
 `cpp_code_analysis.py`: `_is_digit_separator` (a `'` between two
@@ -155,7 +155,10 @@ quote) used by both `strip_comments_and_strings` and
 Acceptance: `TestDigitSeparators`, `TestRequiresClause`,
 `TestEmitClassifierRegressions`, two new compile tests; CI green; auto-merge.
 
-### Phase 1 — Section functions in a single file [TODO — NEXT]
+### Phase 1 — Section functions in a single file [IN PROGRESS — PR open]
+
+Implemented on `claude/issue-928-phase1-sections` (see Current Status for
+what landed and what the corpus run showed). Original scope:
 
 Accomplishes: new emitter entry point taking structured cells (D4); sections
 per D1; markdown comments (D8); labeled `CLM_DISPLAY` (D3); auto-promotion +
@@ -211,60 +214,98 @@ code-along workshop targets into the CppCourses CI gate; `SHOW`-in-notebooks is 
 ## 4. Current Status
 
 - **Done**: design evaluation posted on #928 (2026-09-12); owner decisions
-  D1–D3, D9 recorded above; scan script merged path CppCourses
-  `tools/scan_section_export.py` (PR #128); Phase 0 implemented and committed
-  (`cdeba445` on `claude/issue-921-922-cpp-classifier`, worktree
-  `.claude/worktrees/issue-928-cpp-ide-export`).
-- **In progress**: Phase 0 push. Three pre-push runs on 2026-09-12 each failed
-  2–4 timing-sensitive tests (`test_stall_detector_progress_resets_the_clock`,
-  `test_worker_stops_gracefully`, parent-death detection, `test_operations`)
-  that pass in isolation and under `-n 8` on their modules; a master baseline
-  was started to decide whether the box, not the diff, is red. PR → auto-merge
-  once the branch lands.
-- **Tests**: `tests/workers/notebook/test_cpp_code_emitter.py` 117 passed, 5
-  skipped locally (compile tests skip without a compiler; CI's ubuntu runner
-  has g++). `tests/slides/test_validator_code_export.py` green.
-- **Open / deferred**: exact heading-derivation rule when a section's opener
-  is a code cell (use the nearest preceding markdown heading, else slide_id);
-  whether `using namespace std;` from a lecture cell should reach the header
-  (D8 says no unless tagged `global`).
+  D1–D3, D9 recorded above; scan script in CppCourses
+  `tools/scan_section_export.py` (PR #128); Phase 0 merged (PR #932); `SHOW`
+  split off as #930; this handover merged (PR #931).
+- **Phase 1 implemented** on `claude/issue-928-phase1-sections` (worktree
+  `.claude/worktrees/issue-928-cpp-ide-export`):
+  - `cpp_code_emitter.py` rewritten: `CppCell` (attrs, frozen) +
+    `emit_cpp_deck(cells, *, blanks_code_cells)`; `emit_cpp_translation_unit`
+    is gone. Two passes: classify every cell and decide promotions
+    (`_decide_promotions`: later-section reference, namespace-scope-item
+    reference, then a same-section transitive closure), then emit per
+    section into a namespace-scope stream and a body stream (`_Stream`
+    renders items of one cell tight, cells blank-line separated, a comment
+    glued to the code after it). Markdown goes to the namespace stream until
+    the body has code, then into the body. A section with an empty body
+    emits no function (definitions/comments only). Section names:
+    `identifier_from_slide_id` + `_section` suffix when the name is one the
+    deck defines (code-derived slide_ids make that common: `void include()`
+    showed up in `topic_160_functions`), numeric suffix on duplicates,
+    `section_NN` fallback. Banner = first markdown heading, else humanized
+    slide_id, else the name. `CLM_DISPLAY` prints `label = value`.
+  - `notebook_processor.py`: `_process_notebook_node` snapshots
+    `(cell_type, tags, slide_id, pre-blank source)` of the included cells
+    into `self._cpp_export_cells` before blanking/stripping (only for
+    `format == "code"` and `prog_lang == "cpp"`); `_create_cpp_code_export`
+    zips it with the processed cells (length-checked) and falls back to the
+    bare cells when there is no snapshot (a caller that skips processing).
+  - `cpp_code_analysis.py`: `int i2(20);` / `std::string s("hi");` — a
+    parenthesized initializer starting with a literal — now classifies as
+    `var_decl` instead of `fn_decl` (`_PAREN_INIT_LITERAL_RE`);
+    `int i(value);` stays `fn_decl` (most vexing parse, either scope compiles).
+  - `tags.py`: `SCOPE_TAGS = {"global"}` joined `EXPECTED_CODE_TAGS`
+    (validator and unknown-tag warnings pick it up automatically).
+  - Info topics: `commands.md` gained "C++ code export" under `clm build`
+    (the export was undocumented there before); `slide-format.md` gained the
+    `global` row. Changelog fragment `changelog.d/928-section-functions.added.md`.
+- **Corpus run (357 `.en.cpp` decks, scratch script)**: 0 errors; 4,035
+  sections, 1,363 functions, 274 of 916 top-level variables promoted, 739
+  labeled displays, 2 deck-defined `main`s. The three M1 review decks
+  (`variables_core`, `functions`, `const_constexpr`) pass MSVC 2022
+  `cl /std:c++20 /Zs` in both Completed and code-along form. **Owner review
+  of those three as a student would is the open acceptance item.**
+- **Tests**: `test_cpp_code_emitter.py` rewritten for the new API (sections,
+  naming, banners, markdown placement, promotion incl. comment/string/partial
+  identifier negatives and the blanked-later-cell case, `global`, TODOs,
+  main, labeled display, paren-init, #921/#922, compile smoke tests);
+  processor tests cover the snapshot path, slide_id-named sections, no
+  metadata leak, and the code-along TODO. 240 passed in those two files;
+  `tests/slides tests/core tests/workers/notebook tests/cli` 5,945 passed.
+- **Open / deferred**: `SHOW` in `global` cells is ill-formed and not yet
+  diagnosed by validate; `int i(value);` paren-init stays namespace-scope;
+  markdown-only trailing sections read fine but a section whose opener is a
+  code cell takes its heading from a *following* markdown heading if any
+  (rare, cosmetic).
 
-## 5. Next Steps (Phase 1)
+## 5. Next Steps (Phase 2 — code-along skeleton)
 
-Start on a **fresh branch off `origin/master`** once Phase 0 has merged
-(`git fetch origin && git switch -C worktree-issue-928-cpp-ide-export
-origin/master && git switch -c claude/issue-928-phase1-sections`) — never
-switch a worktree to literal `master`.
+Start on a **fresh branch off `origin/master`** once the Phase 1 PR has
+merged (`git fetch origin && git switch -C worktree-issue-928-cpp-ide-export
+origin/master && git switch -c claude/issue-928-phase2-code-along`) — never
+switch a worktree to literal `master`. Everything Phase 2 needs is already
+in the emitter's input: `CppCell.original_source` carries the blanked text.
 
-1. **Plumb the structured cells.** Read `_process_notebook_node`
-   (`notebook_processor.py` ~L1285) and `_process_code_cell` (~L1360). The
-   cheapest capture: in `_process_notebook_node`, *before* the
-   `_strip_internal_cell_metadata` call and before blanking, when
-   `output_spec.format == "code"` and the payload is C++, snapshot
-   `(cell_type, tags, slide_id, original source)` per included cell onto the
-   processor (e.g. `self._cpp_cells`) and have `_create_cpp_code_export` zip
-   that snapshot with the processed cells (same order, same length — assert
-   it). Do not push the original source into cell metadata: outputs must not
-   carry it.
-2. **Emitter.** Add a `CppCell` attrs model and `emit_cpp_deck(cells, *,
-   blanks_code_cells)` in `cpp_code_emitter.py`. Section grouping per D1;
-   per-section split into namespace-scope items vs. body items per D8; the
-   promotion scan per D2 (`strip_comments_and_strings` + word-boundary regex,
-   `(?<![\w:])name(?!\w)`); `CLM_DISPLAY` gains the label
-   (`::clm::display(#__VA_ARGS__, thunk)` printing `expr = value`; the void
-   branch prints nothing extra); keep the existing `_terminate`,
-   `_wrap_display`, include dedupe.
-3. **Tags / validate / info topics** as listed under Phase 1.
-4. **Tests**: extend `test_cpp_code_emitter.py` (new class per D-item), a
-   compile test with cross-section variable use, a processor-level test that
-   the code export of a small C++ notebook contains a section function named
-   after its slide_id and the markdown comment. Then run the CppCourses build
-   for the three M1 decks and attach the output to the PR.
+1. **Blanked definitions.** Today every blanked cell leaves `// TODO` in the
+   section body. Classify `original_source` instead: items that would have
+   gone to namespace scope (definitions, `global` cells) leave their TODO in
+   the namespace stream at the cell's position, statements in the body. One
+   TODO per cell, not per item.
+2. **TODO text.** `// TODO: <section heading>` — or, when the blanked cell
+   defined named entities, `// TODO: define <names>` so the student knows what
+   the video types here (names come from the classifier; `global:NAME` is the
+   escape hatch for shapes it cannot name — add the prefix rule to
+   `get_invalid_code_tags` / the validator then).
+3. **Dangling keep cells (D5).** Deck-global scan: collect the names every
+   blanked cell defines (all sections); a `keep` cell whose comment-stripped
+   text references one is emitted commented out, preceded by
+   `// depends on code you'll type above — uncomment after`. 12 corpus decks
+   hit this; `tools/scan_section_export.py --mode both` lists the count.
+4. **Promotion under blanking.** The scan already reads `pre_blank_source`,
+   so a variable a blanked later cell uses is promoted; keep that (test
+   `test_reference_in_a_blanked_later_cell_promotes`).
+5. **Tests**: rewrite `TestEmitCodeAlongTodos`, add the dangling-keep cases
+   and a compile smoke test for a deck with a blanked definition + kept
+   caller; processor test with `CodeAlongOutput` and `PartialOutput`.
+6. **Docs**: the "Code-along outputs" bullet in `commands.md`'s "C++ code
+   export" section; changelog fragment.
 
-Gotchas: the `unknown` category still falls through to statements; a display
-expression in a `global` cell is ill-formed (D3); `subslide` on a *code* cell
-opens a section whose heading must come from the preceding markdown; empty
-sections (markdown only) should emit the comment block but no function.
+Gotchas: `PartialOutput.blanks_code_cells` is `True` while only in-range
+cells are blank — the emitter must not treat empty pre-workshop cells as
+TODOs (it only does when `original_source` is non-empty or the spec blanks;
+keep the `original_source` check first). The MSVC gate in CppCourses runs
+MinGW (#922 showed it accepts things g++/MSVC reject); the local VS 2022
+`cl /Zs` check used here is the stricter one.
 
 ## 6. Key Files & Architecture
 

@@ -80,7 +80,7 @@ from clm.core.utils.prog_lang_utils import (
     kernelspec_for,
     language_info,
 )
-from clm.workers.notebook.cpp_code_emitter import emit_cpp_translation_unit
+from clm.workers.notebook.cpp_code_emitter import CppCell, emit_cpp_deck
 
 from .utils.jupyter_utils import (
     Cell,
@@ -890,6 +890,10 @@ class NotebookProcessor:
         # (e.g. unit tests that instantiate the processor directly).
         self.heartbeat_store: WorkerHeartbeatStore | None = heartbeat_store
         self.heartbeat_job_id: int | None = heartbeat_job_id
+        # Per-cell (cell_type, tags, slide_id, pre-blank source) snapshot for
+        # the C++ code export (#928), taken in _process_notebook_node before
+        # blanking and metadata stripping; None outside that export.
+        self._cpp_export_cells: list[tuple[str, tuple[str, ...], str | None, str]] | None = None
 
     def add_warning(
         self,
@@ -1292,8 +1296,8 @@ class NotebookProcessor:
         # in-range, and every export view drops or blanks them at its own
         # boundary. They are excluded from execution in preprocess_cell.
         keep_start = self.output_spec.should_cache_execution
-        new_cells = [
-            await self._process_cell(cell, index, payload)
+        included = [
+            (index, cell)
             for index, cell in enumerate(source_cells)
             if self.output_spec.is_cell_included(cell)
             or (
@@ -1305,6 +1309,24 @@ class NotebookProcessor:
                 and is_cell_included_for_language(cell, self.output_spec.language)
             )
         ]
+        # The C++ code export (#928) groups cells into section functions by
+        # tag and slide_id and scans the pre-blank source of code-along
+        # cells; all three are gone by the time create_contents runs, so
+        # snapshot them before the cells are blanked and stripped below.
+        # Kept on the processor, never on the cells: an output must not
+        # carry the original source of a blanked cell.
+        self._cpp_export_cells = None
+        if self.output_spec.format == "code" and payload.prog_lang == "cpp":
+            self._cpp_export_cells = [
+                (
+                    get_cell_type(cell),
+                    tuple(get_tags(cell)),
+                    cell.get("metadata", {}).get("slide_id"),
+                    cell.get("source", ""),
+                )
+                for _, cell in included
+            ]
+        new_cells = [await self._process_cell(cell, index, payload) for index, cell in included]
         # Strip slide_id/for_slide (internal CLM metadata that must never
         # appear in output) and the synthetic _post_workshop tag attached by
         # PartialOutput.annotate_cells. A CACHING spec (Recording HTML) keeps
@@ -2354,19 +2376,47 @@ class NotebookProcessor:
             os.sync()
 
     def _create_cpp_code_export(self, processed_nb) -> str:
-        """Emit a compilable C++ translation unit for ``format="code"``.
+        """Emit the C++ study-material translation unit for ``format="code"``.
 
         Replaces the jupytext concatenation for C++ decks (issue #333): the
         concatenation yields top-level statements and mid-file includes,
         which is not valid C++. ``processed_nb`` has already been filtered
         for this output spec, so the emitter sees exactly the cells of this
-        (language × kind) view. For code-along-style specs, blanked cells
-        become ``// TODO`` slide stubs.
+        (language × kind) view — grouped into one section function per
+        slide (#928). The section grouping needs tags and ``slide_id``, and
+        the variable-promotion scan needs the pre-blank source of code-along
+        cells; both are gone from ``processed_nb`` (blanked in
+        ``_process_code_cell``, stripped in ``_process_notebook_node``), so
+        ``_process_notebook_node`` snapshots them into
+        ``_cpp_export_cells`` first. Without a snapshot (a caller that skips
+        processing) the cells are used as they are.
         """
-        sources = [cell.source for cell in processed_nb.cells if is_code_cell(cell)]
-        return emit_cpp_translation_unit(
-            sources, empty_cells_as_todo=self.output_spec.blanks_code_cells
-        )
+        cells = processed_nb.get("cells", [])
+        snapshot = self._cpp_export_cells
+        if snapshot is not None and len(snapshot) == len(cells):
+            cpp_cells = [
+                CppCell(
+                    cell_type=cell_type,
+                    source=cell.get("source", ""),
+                    original_source=original_source,
+                    tags=tags,
+                    slide_id=slide_id,
+                )
+                for (cell_type, tags, slide_id, original_source), cell in zip(
+                    snapshot, cells, strict=True
+                )
+            ]
+        else:
+            cpp_cells = [
+                CppCell(
+                    cell_type=get_cell_type(cell),
+                    source=cell.get("source", ""),
+                    tags=tuple(get_tags(cell)),
+                    slide_id=cell.get("metadata", {}).get("slide_id"),
+                )
+                for cell in cells
+            ]
+        return emit_cpp_deck(cpp_cells, blanks_code_cells=self.output_spec.blanks_code_cells)
 
     async def _create_using_jupytext(self, processed_nb) -> str:
         config = jupytext_config.JupytextConfiguration(
