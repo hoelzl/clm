@@ -65,10 +65,17 @@ mode needs `[docker]` and `clm build --watch` needs `[watch]`.
 ## Testing
 
 ```bash
-pytest                    # Fast suite only (~8 min; the pre-PUSH hook runs its deterministic tier, ~4-6 min — see docs/developer-guide/testing.md)
+pytest                    # Fast suite (~8 min). The pre-PUSH hook runs only a ~30s smoke tier — see "Push protocol" below
 pytest -m "not docker"    # Full suite minus Docker tests (~2 min, pre-release gate)
 pytest -m ""              # Everything including docker/slow/integration/e2e
 ```
+
+**Push protocol (issue #926):** `git push` is gated only by a ~30s smoke tier
+(build-engine core + gate meta-tests). Before pushing a branch you intend to
+**merge**, run the deterministic tier — `python scripts/run_pytest_hook.py
+--tier` (~6 min) — when the change touches build/worker/test infrastructure;
+otherwise trust CI, which runs everything on every PR and is *required* for
+merge to master. `--full` runs the whole fast suite locally.
 
 Tests run in parallel by default via `pytest-xdist` (`-n auto`). The fast
 suite excludes `slow`, `integration`, `e2e`, `db_only`, and `docker` markers.

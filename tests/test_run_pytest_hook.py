@@ -107,7 +107,7 @@ class TestEnvironmentClearing:
 
 
 class TestPrePushTier:
-    """The wrapper slims the gate to the deterministic tier (issue #926)."""
+    """The wrapper's gate modes: smoke (default) / --tier / --full (#926)."""
 
     def _captured_cmd(self, monkeypatch, argv):
         captured: list[str] = []
@@ -124,8 +124,23 @@ class TestPrePushTier:
         assert run_pytest_hook.main() == 0
         return captured
 
-    def test_adds_load_sensitive_exclusion_by_default(self, monkeypatch):
+    def test_default_runs_smoke_paths(self, monkeypatch):
         cmd = self._captured_cmd(monkeypatch, ["run_pytest_hook.py", "-q"])
+        # Smoke tier: the curated core paths, no marker narrowing.
+        assert "-m" not in cmd
+        for path in run_pytest_hook.SMOKE_TEST_PATHS:
+            assert path in cmd
+
+    def test_smoke_paths_exist(self):
+        """A renamed/moved smoke path must fail loudly here, not silently
+        shrink the gate to less than intended."""
+        repo_root = Path(__file__).resolve().parents[1]
+        for path in run_pytest_hook.SMOKE_TEST_PATHS:
+            assert (repo_root / path).exists(), f"smoke path missing: {path}"
+
+    def test_tier_flag_uses_marker_expr(self, monkeypatch):
+        cmd = self._captured_cmd(monkeypatch, ["run_pytest_hook.py", "--tier", "-q"])
+        assert "--tier" not in cmd
         m_index = cmd.index("-m")
         assert cmd[m_index + 1] == run_pytest_hook.PRE_PUSH_MARKER_EXPR
         assert "not load_sensitive" in cmd[m_index + 1]

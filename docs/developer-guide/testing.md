@@ -143,14 +143,17 @@ pytest -m e2e -v
 ## Parallelism, the `serial` marker, and keeping the commit gate fast
 
 The fast test suite runs on the **pre-push** git hook (not pre-commit), so a
-commit pays only ruff + mypy (~3–5s) and the suite gates `git push` instead.
-The hook runs the **deterministic tier** (~3-4 min): the full fast suite minus
-the `load_sensitive` families — heavyweight-process spawners and
-wall-clock-timing suites whose flake history lived in the local gate
-(issue #926; the directory set is `LOAD_SENSITIVE_TEST_DIRS` in
-`tests/conftest.py`, tagging is automatic). CI runs those families on every PR,
-and `python scripts/run_pytest_hook.py --full` runs the unfiltered fast suite
-locally. Both hooks install from one `pre-commit install` (`default_install_hook_types` in
+commit pays only ruff + mypy (~3–5s) and a **~30s smoke tier** gates `git push`
+(the build-engine core in `tests/build` plus the gate's own meta-tests;
+issue #926). Bigger local gates are on demand via the same wrapper:
+`python scripts/run_pytest_hook.py --tier` runs the **deterministic tier**
+(~6 min: the full fast suite minus the `load_sensitive` families —
+heavyweight-process spawners and wall-clock-timing suites; the directory set is
+`LOAD_SENSITIVE_TEST_DIRS` in `tests/conftest.py`, tagging is automatic), and
+`--full` runs the whole fast suite (~8.5 min). The repo's **push protocol**
+(AGENTS.md) assigns the tier to merge-intended branches touching
+build/worker/test infrastructure; CI runs everything on every PR and is
+*required* for merge to master. Both hooks install from one `pre-commit install` (`default_install_hook_types` in
 `.pre-commit-config.yaml`). Run the suite manually any time with `pytest`, or as
 the hook would with `uv run pre-commit run --hook-stage pre-push pytest`.
 
@@ -219,8 +222,9 @@ integration coverage) and the two `test_reaping_kernel_manager_kills_grandchild_
 gate entirely.** Where `integration` and `serial` make heavy tests *safe* to
 run under xdist, whole directories whose runtime or correctness inherently
 tracks machine load (heavyweight-process spawners, wall-clock backoff/timing
-asserters) are tagged `load_sensitive` and excluded only from the **pre-push
-hook's** marker expression (`scripts/run_pytest_hook.py`; issue #926). The
+asserters) are tagged `load_sensitive` and excluded from the **deterministic
+tier's** marker expression (`scripts/run_pytest_hook.py --tier`; issue #926) —
+and thereby from the even smaller smoke tier that gates `git push`. The
 tagging is automatic and directory-driven (`LOAD_SENSITIVE_TEST_DIRS` in
 `tests/conftest.py` — currently `infrastructure/workers`,
 `infrastructure/backends`, `infrastructure/database`, `workers`), so a test

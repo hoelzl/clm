@@ -6,13 +6,11 @@
 # This config installs TWO git hook types:
 #   * pre-commit — ruff (lint+format) + mypy. Fast (~3-5s), runs on every commit
 #     so a commit stays near-instant.
-#   * pre-push — the deterministic tier of the fast test suite (~3-4 min):
-#     the full fast suite minus the ``load_sensitive`` families (heavyweight-
-#     process / wall-clock-timing suites, see pyproject's marker list and
-#     issue #926). Runs on ``git push`` so the test
-#     gate happens once before code leaves the machine instead of on every
-#     commit. CI runs the full suite (plus integration/e2e/slow/docker jobs);
-#     ``python scripts/run_pytest_hook.py --full`` runs it locally too.
+#   * pre-push — a ~30s smoke tier (build-engine core + gate meta-tests).
+#     The deterministic tier (`scripts/run_pytest_hook.py --tier`, ~6 min)
+#     and the full fast suite (`--full`, ~8.5 min) run on demand per the
+#     push protocol in AGENTS.md; CI runs everything on every PR and is
+#     *required* for merge to master.
 # ``default_install_hook_types`` makes a plain ``pre-commit install`` wire up both.
 # If you installed hooks before this line existed, re-run
 # ``uv run pre-commit install`` once to pick up the pre-push hook.
@@ -66,16 +64,16 @@ repos:
         types: [python]
         pass_filenames: false
 
-  # Fast suite, deterministic tier (~3-4 min) — runs on PRE-PUSH, not
-  # pre-commit, so commits stay
-  # fast (ruff+mypy only) and the test gate fires once before a push. Invoked
+  # Smoke tier (~30s: build-engine core + gate meta-tests) — runs on PRE-PUSH,
+  # not pre-commit, so commits stay
+  # fast (ruff+mypy only) and a small test gate fires once before a push. Invoked
   # via scripts/run_pytest_hook.py, which clears leaking GIT_* env vars before
   # spawning pytest (see docs/proposals/PRE_COMMIT_HOOK_HARDENING.md Fix 2) and
-  # caps xdist workers (see that script's comment). The wrapper narrows the
-  # suite to the deterministic tier with ``-m "... and not load_sensitive"``
-  # (issue #926: heavyweight-process and wall-clock-timing families are
-  # excluded locally, always run in CI); pass ``--full`` to the script for the
-  # unfiltered fast suite. always_run is false + the
+  # caps xdist workers (see that script's comment). Bigger gates are on demand:
+  # ``--tier`` runs the deterministic tier (fast suite minus the
+  # ``load_sensitive`` families, ~6 min) and ``--full`` the whole fast suite —
+  # the push protocol in AGENTS.md assigns those to merge-intended branches;
+  # CI runs everything and is required for merge. always_run is false + the
   # files filter so a docs-only push doesn't pay the cost. To run the suite on a
   # commit anyway (the old behaviour), use ``uv run pre-commit run --hook-stage
   # pre-push pytest`` or just run ``pytest`` directly.
