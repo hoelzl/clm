@@ -9,6 +9,418 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.28.0] - 2026-09-12
+
+### Added
+
+- **`clm cassette scan` can gate a course repo (#883).** Two new options,
+  `--write-baseline PATH` and `--baseline PATH`, record the findings a repo
+  already has so only *new* ones fail the exit code. Without them nothing
+  changes — a bare scan still fails on any finding. This exists because a repo
+  whose findings are all known and benign could never turn the gate green:
+  PythonCourses holds 294, every one a non-credential response cookie and none
+  worth re-recording live teaching material to clear (#874), so the check could
+  not be wired up at all — and an unsatisfiable gate gets switched off.
+  A baseline entry is `(path relative to the scan root, location, key)`,
+  deliberately **without** the interaction index (re-recording shifts every
+  index, so an index-keyed baseline would fail the gate the first time someone
+  did the right thing) and **without** the value (a finding never carries one,
+  and `__cf_bm` rotates on every recording). That makes the key name-level:
+  accepting `set-cookie` for a file accepts any `set-cookie` in it — a limit
+  documented in `clm info commands` rather than implied away, and one the audit
+  could not avoid in any case, since it only ever sees the header name.
+  Entries matching nothing are **stale**, split by cause because the reasons
+  mean different things: *cleared* (scanned and parsed, finding gone — that
+  deck was re-recorded, which is exactly what the audit asks for) never fails;
+  *unreadable* (the file is there but will not parse) and *missing* (the file
+  was not scanned at all — a sparse checkout, content that did not
+  materialize, moved decks, or the wrong scan root) both do.
+  Entries are relative to the scan root, so without that a gate pointed at the
+  wrong tree would find nothing, accept nothing and pass over a repo it never
+  looked at. The report is always printed *before* such a refusal, so a run
+  with both missing entries and a genuinely new finding still shows the
+  finding. An unreadable cassette is not baselineable and still fails, which
+  is why `--write-baseline` exits non-zero when it meets one. `--json` gains
+  `accepted_count`, `new_count`, `stale_count`, `stale_cleared_count`,
+  `stale_unreadable_count`, `stale_missing_count` and `stale_entries`;
+  `finding_count` keeps its existing meaning, and every finding now carries an
+  `accepted` field (always `false` without a baseline).
+
+### Fixed
+
+- Fixed: `clm info sync-agents` documented a decision-document shape (`{"decisions": [...]}` — in both the primary example and the "generate the document with a script" working pattern) that `apply` refuses since the `report_id` freshness token became mandatory; both examples now carry `schema` + `report_id`, and the no-token refusal message names the exact top-level key path and document shape instead of just the field name. (Refs #787)
+
+- The Docker-job promotion tracker (`scripts/docker_job_stability.py`) now
+  checks the branch ruleset first and retires itself once
+  `Docker Integration Tests` is a required status check, closing its tracking
+  issue instead of refreshing it. Previously it only ever looked for an *open*
+  issue, so after the job was promoted and #679 closed, the nightly opened a
+  fresh issue the next morning and spent a month asking for a decision that had
+  already been taken (#793). The rules lookup fails open: an unreadable ruleset
+  means "not yet promoted", never a spurious close.
+
+- Fixed: a mid-pool class transition (fork, unify, or id-stamp) shifted a positional pool's cross-side pairing, and the pool's mechanical rows then executed against that guess — a decision-free `clm slides sync apply` overwrote a sibling cell's tags (`mirror_tags`), or its whole body (`propagate_shared_edit`), silently corrupted the ledger's pool entries, and duplicated the mis-married cell on the next pass. A shifted pool now suspends its cross-side trust for the pass: every slot not provably at base on both sides frames one answerless `pool_pairing_shifted` row naming the in-flight transition, nothing executes or banks against the guessed pairings (the pool's ledger entries are frozen), and the pool re-derives mechanically once the transition resolves. The suspicion also fires when a fork's side gained a new cell that backfills the pool count (where the pos→id migration correctly refuses). (#826)
+
+- Replayed (cached) failures are no longer presented identically to fresh
+  execution failures (#860). Errors replayed from stored results now carry a
+  `cached` label in every output mode (`✗ [User Error, cached]`, quiet-mode
+  `ERROR (cached):`), plus a provenance line naming the remedy (rebuild with
+  `--ignore-cache`, inspect with `clm cache explain`); the summary splits the
+  count (`11 errors (0 from this run's execution, 11 replayed from cache)`),
+  and the JSON report exposes per-error/per-warning `from_cache` plus
+  `error_count_from_execution` / `error_count_from_cache`. When the same
+  finding is both replayed and freshly reproduced in one build, fresh
+  evidence wins — "cached" always means "not executed in this build".
+
+- **Cassette response-body redaction no longer corrupts word-keyed JSON maps**
+  (#875). The response filter decided to redact from the key name alone, so a
+  body that is a *dictionary keyed by ordinary words* lost data: GPT-2's BPE
+  vocabulary (`encoder.json`, fetched by the text-chunking deck) maps
+  `"secret"` to the integer `21078`, and recording it replaced four integer
+  token ids with the placeholder **string** — a corrupted vocabulary on replay,
+  and a changed JSON value type under whatever reads it.
+
+  A number, boolean or `null` under a secret-named key is now left alone; no
+  credential this filter exists for is one. Strings, objects and arrays are
+  still redacted, containers wholesale — note that the tempting inverse rule,
+  "redact only strings", *leaks*: `{"secret": {"value": "sk-live-…"}}` would be
+  recursed into, and `value` is not on the key list, so the secret would
+  survive. There is a regression test for that.
+
+  Also fixed, found while reviewing the above: a **repeated JSON name** could
+  hide a secret from both the filter and the audit. `json.loads` keeps only the
+  last of two identically-named pairs, so `{"secret":"sk-live-…","secret":1}`
+  parsed to the exempt number, redacted to nothing, and the byte-preservation
+  shortcut re-emitted the plaintext verbatim while `clm cassette scan` reported
+  the file clean. The recorder now re-serializes such a body and the audit
+  reports it under the new location `response body (repeated name)`. Scoped to
+  filter-list names, so an ordinary `{"a":1,"a":2}` still takes the fast path.
+
+- **A pathologically nested JSON response body no longer forwards the request to
+  the live network, nor aborts a repo-wide audit** (#878). Recursing over a body
+  a few thousand levels deep raised `RecursionError` out of the response filter,
+  and the replay addon reads a raised filter as "unfilterable" — handling it
+  like an ignore-host, forwarding to the **live network** in every mode
+  including strict `replay`, and recording nothing. The same overflow escaping
+  `clm cassette scan` took down the audit of every cassette after it. Both sides
+  now leave such a body alone and keep going. Note *which* half overflows —
+  the parse or the walk — depends on the interpreter build, so both are guarded
+  together.
+
+- **`clm cassette scan` no longer reports a false all-clear for a response body
+  with a byte-order mark** (#875). The audit decoded cassette bodies as strict
+  UTF-8 before parsing, so a body carrying a BOM — or encoded as UTF-16/32,
+  both of which `json.loads` detects on its own — was silently unparseable and
+  reported **clean**, while the recorder redacted the token inside it. That is
+  the worst direction for a gate, and it hit exactly the population the audit
+  exists for: bodies written verbatim before the response filter existed. The
+  scan now hands bytes to the parser exactly as the recorder does.
+
+  `clm cassette scan` applies the same value rule as the recorder. It has to: a
+  finding the recorder would not act on is one that re-recording cannot clear,
+  and the scan exits non-zero on findings, so a divergence makes a repo audit
+  unsatisfiable. The two implementations never disagreed — they agreed and were
+  wrong together, which is the more dangerous shape, because one bug then needs
+  fixing in two files and nothing notices if you fix only one. The value test is
+  shared now, and a new parity suite runs ~60 payload shapes — including raw
+  bodies and non-UTF-8 encodings a Python dict cannot express — through *both*
+  sides and requires the same verdict.
+
+  No committed cassette was damaged — the affected decks predate the
+  response-side filter, so this fixes what re-recording them *would* have done.
+
+- **Cassette request bodies are filtered at any depth (#877).** The
+  record-time filter read only the top level of a JSON request body, and so
+  did `clm cassette scan` — so `{"data": {"api_key": "sk-live-…"}}` was
+  recorded verbatim *and* the audit reported the file clean. The
+  scanner/recorder parity suite did not catch it because it had no
+  request-body rows at all; and adding rows would not have caught it either,
+  since both sides were consistently top-level-only and therefore agreed. The
+  filter now walks the whole body (nested objects, arrays, and a top-level
+  array root), removing a matched key together with its subtree, and the audit
+  reports the same shapes. Both sides share one implementation now instead of
+  two walks. Unmatched content is preserved — an array or scalar root stays
+  byte-identical, while a JSON object body is still re-dumped either way (the
+  long-standing vcrpy quirk) — and a body too deeply nested to walk is left
+  alone rather than raising, since raising would send the request to the live
+  network unrecorded. Request bodies are part of the replay match key, so a
+  cassette carrying a nested secret will now replay-*miss* until the deck is
+  re-recorded; `clm info migration` documents that class and `clm cassette
+  scan` names the entries.
+- **`clm cassette scan` reads form-encoded request bodies exactly as the
+  recorder does.** Three fixes in one, all of them cases where the audit and
+  the recorder disagreed about what a parameter name even is: a name with no
+  `=` (a bare `token`) is now reported, because the recorder strips it; a
+  percent-encoded name (`api%5Fkey=…`) is now **not** reported, because the
+  recorder does not strip it; and a non-UTF-8 byte in a
+  parameter *value* no longer makes the audit skip the whole body, which had
+  it vouching for a cassette the recorder does rewrite. The recorder missing a
+  percent-encoded name is a real leak, tracked separately as #881.
+
+- Fixed: `clm slides sync apply` could rewrite the very side an `order_decision` answer designated to preserve — answering `de` ("adopt DE's order") co-executed mechanical member-keyed `mirror_order` rows derived from the contested pre-answer bracketing, moving a slide-start cell across its own body cells on DE and silently changing slide membership in built output. Apply now enforces **one order authority per pass**: while an `order_decision` is framed — answered or not — mechanical `mirror_order` rows defer with a reason naming the framed handle and re-derive from the settled order on the next report. (#885)
+- Fixed: a `translate_new` anchor mint blocked by the order-parity write guard was rejected identically forever — `apply` reported `wrote: true` with no `decision_errors`, the differ re-framed the same row with no memory, and nothing named the blocking order question. While the same pass frames an `order_decision`, the refusal is now a deferral naming that handle; and the apply JSON envelope gains a top-level `left_undone` list (rejected/deferred/failed rows) so a partial pass is never silent. (#885)
+
+- **`clm build` no longer prints its log to the terminal.** Every run dumped
+  third-party `DEBUG` records on the way past — `docker.utils.config`,
+  `docker.auth`, `urllib3.connectionpool` — and `--log-level=warning` did not
+  stop them, because that flag sets the level of the `clm` logger and a
+  `docker` record is not filtered there. Two things combined to cause it: the
+  CLI's start-up `logging.basicConfig(level=INFO)` installed a console handler
+  with **no level of its own** (so it emitted whatever the *logger* allowed),
+  and `setup_logging` then opened the root logger to `DEBUG` so its file
+  handler could capture everything — while never retiring that first handler.
+  The console now shows **warnings and errors only**, which is what
+  `--verbose-logging` has always advertised ("by default logs go to file
+  only"); the full stream at `--log-level` goes to the rotating `clm.log`
+  (10 MB × 3 backups) in the platform log directory, or under `CLM_LOG_DIR`.
+  Pass `--verbose-logging` to echo it to the console as well. A *stricter*
+  `--log-level` still applies to the console, so `--log-level=ERROR` hides
+  warnings; a more permissive one does not, which is what `--verbose-logging`
+  is for. Commands other than `build`, which do not configure a log file, now
+  print warnings and errors instead of everything at `INFO`.
+
+- Builds restricted to a subset of output targets no longer leave `recording` HTML in those targets. The cache-warming `recording` run that `completed`/`trainer`/`partial` HTML depends on used to write a full `<target>/speaker/<Course-xx>/…/Html/Recording/…` tree — speaker notes and voiceover included — into *every* target, including targets that requested no HTML at all, in a directory the stray-file sweep never walked. It now runs once per build and writes to a build-internal `.clm-implicit/` scratch directory that is discarded when the build ends and again when the next one starts. Delete any `speaker/` directory an older build left inside a non-speaker target. (#890)
+
+- Fixed: `clm slides sync report` surfaced parse-refusal classes one per repair round — fixing the `[idless_anchor]` cells round 1 named only then revealed an `[idless_localized]` cell that had been there all along, turning one repair into N report cycles with no way to know N in advance. The parse now returns early only on `duplicate_id` (which genuinely poisons pairing); the id-less anchor and id-less localized/narrative classes are enumerated together in one refusal. (Refs #892)
+
+- Fixed: `clm slides normalize` surfaced assign-ids soft refusals verbatim, telling users to "pass `--accept-content-derived`" — a flag `normalize` does not have (following the hint gave `Error: No such option`). The engine's refusal now carries the accepting option as a structured field and each surface renders its own remedy: `assign-ids` still says "pass `--accept-content-derived` to accept", while `normalize` names the full command `clm slides assign-ids --accept-content-derived`. The `assign-ids --json` refusal rows gain an `accept_flag` field. (Refs #892)
+
+- Fixed: the `sync report` ↔ `normalize --stamp-ids` deadlock on a split deck with new id-less cells (#892). `report` refused with "run `normalize --stamp-ids` first"; `--stamp-ids` soft-refused because the pair was "not unifiable" — but the new one-sided cells that needed stamping were exactly what broke the text-level unify walk, and every named escape declined, leaving hand-written `slide_id=`s as the only way forward (3 report rounds + 7 hand-edits in the field report). When the unify gate fails, `--stamp-ids` now stamps from the doc-lens pairing — the engine's one pairing authority: id-less localized/narrative twins get one EN-authority slug per pair, one-sided cells (id-less anchors; shared cells inside a two-sided group, whose `verify_cold` was an answerless dead end) are stamped solo, and an id-less anchor added to both halves pairs with its twin so slugs cannot diverge. A `duplicate_id` or nothing-to-stamp pair still refuses loudly. The `verify_cold` detail for one-sided positional cells now names the command.
+
+- **`clm slides sync`: a fork in flight pairs with its true twin.** Langness is member state, not identity (design P2): a cell that gained `lang=` and an id on one half is offered by the lens to the shared pool of its kind, where the #443 adoption rule marries it to the byte-equal id-less twin at its cursor slot. Before, the marked half sat in the localized class, the shared pool's cursor shifted, and the `fork_pending_twin` frame absorbed the wrong sibling (or none) — with byte-identical pool siblings the true twin was mis-married into a two-sided member the frame could not reach, and the pool was suspended (`pool_pairing_shifted`) for the pass. The frame now carries the true twin, `mark_twin` writes the twin's `lang=` attribute *and* the fork's id (§7.3 mints the id at fork time — one framed row per member, no mechanical `stamp_twin_id` beside it), the sibling slots stay at base, and the pos→id key migration prefers an exact content match over the body-only fork channel so identical bodies migrate the right sibling's entry. An edited twin (no byte proof) still frames one-sided and keeps the #826 suspension. (#900)
+
+- Running the test suite no longer clobbers the real per-user mitmproxy CA:
+  `TestMitmproxyTransportBindHost` used to overwrite it, breaking subsequent
+  builds with `SSLError: PEM lib` until the CA was regenerated. The tests now
+  isolate their CA state. (#902)
+
+- The mitmproxy replay environment injected for notebook workers now sets
+  `PIP_DISABLE_PIP_VERSION_CHECK=1`. Notebooks can execute pip mid-build
+  (jupytext reactivates commented `# !pip install` cells — see #904), and
+  pip's weekly self-version-check then issued an untagged
+  `GET https://pypi.org/simple/pip/` through the replay proxy, recording an
+  untagged flow in the catch-all cassette and logging
+  `CLM-HTTP-REPLAY-UNTAGGED` once per build. (#905)
+
+- **`clm slides sync`: positional matching no longer crosses an id-keyed sibling.** An id-keyed member present on both halves is now a *sync point*: the lens pairs id-less cells only inside the spans sync points delimit, and the differ aligns each half's positional pool to base per span — a slot's span is learned from the half whose cell is provably the slot's (fingerprint identity) and constrains the other half. Before, a setup pool with an id'd cell mid-pool and one editing pass that deleted two cells and edited the rest aligned over the whole pool: the surviving `create_rag_system` cell was written into the DE slot of the deleted cell *in front of* the id'd `docs_content` it depends on, DE's own copy behind it was removed as surplus, and the mis-ordered twin passed `sync verify` and banked into the ledger (the built DE notebook failed with `NameError`). Byte-identical boilerplate around a sync point now removes the copy the other half actually removed. A cross-side pairing that still straddles a sync point — a one-sided move of a positional cell across an id'd sibling (silent before), or a span-less residue guess — frames one `pool_placement_divergence` row naming both placements and freezes the pool's ledger entries instead of executing; answer `de`/`en` to adopt that half's placement (the other half's cell is re-homed next to it, bytes untouched, nothing banked until the slot re-derives), or mint a `slide_id` and re-report. (#906)
+
+- Strict HTTP replay no longer misses downstream of a cosmetic reason-phrase
+  difference: `_build_reply` now restores the *recorded* reason phrase (e.g.
+  Nominatim's `429 Too many requests`) instead of the RFC-standard phrase
+  `Response.make` synthesizes, so exception text embedded in a deck's recorded
+  LLM conversation replays byte-identically (#909). The replay-miss envelope's
+  `error.code` is now an integer — the string code crashed the
+  Speakeasy-generated openrouter SDK's strict unmarshaller and buried the
+  actual miss message — and a `miss` trace event now carries the forensics a
+  post-mortem needs: request path, target cassette, recorded-episode count,
+  and the filtered request body (truncated at 20 kB).
+
+- The `mcp` optional dependency is now constrained to `mcp>=1.0.0,<2` to
+  preserve the existing FastMCP imports; MCP 2 would break `clm mcp` at
+  import time. A proper MCP 2 migration is tracked in #914. (#915)
+
+- **Multi-worker builds no longer lose jobs, abort on a busy pool, or drop
+  cache writes under load** (#917). Three independent races in the SQLite
+  job/worker bookkeeping were fixed at their root:
+  - A submitted job is now registered with the progress tracker and the
+    completion loop in one step (tracker first), so a job that a fast worker
+    finishes before the event loop resumes is counted instead of producing
+    `Job #N completed but not found in tracked jobs` and a progress bar that
+    stayed short for the rest of the stage.
+  - Worker availability uses one liveness rule shared with the pool's health
+    monitor (`clm.infrastructure.database.worker_liveness`): a worker this
+    build session owns counts while its status is idle/busy, regardless of
+    heartbeat age — busy workers never heartbeat mid-job, so the old
+    "heartbeat under 30 s" gate raised `No workers available` and killed a
+    healthy build as soon as every worker was mid-job for more than 30 s.
+    Unowned workers still need a fresh heartbeat (either channel, 120 s
+    grace); another session's workers never count. The error message now
+    describes the actual condition.
+  - Every cache-DB write in the completion path (`clear_issues`,
+    `store_warning`, `store_error`, the result blob) runs on the background
+    writer thread in FIFO order, batched into one transaction per drain and
+    retried with backoff on `database is locked` instead of being dropped —
+    a dropped row silently re-executed that notebook on the next build. The
+    dead-worker sweep also runs off the event loop. Workers retry a job's
+    terminal `completed`/`failed` status write the same way (also on the
+    host side for Docker/API-mode workers), as do `add_job` and the job-cache
+    probe, so lock contention can no longer strand a finished job in
+    `processing` until the stall detector fires or abort a build from a
+    single starved submission. A failed `completed` write is never
+    re-recorded as a failed build of the file, and the health monitor marks
+    an idle worker that has been silent on both heartbeat channels for the
+    whole grace period as `hung`.
+
+### Security
+
+- **Docker workers run unprivileged, with the course sources read-only for the
+  notebook worker** (adversarial-review findings S10 + D7, #798). Docker-mode
+  workers ran as **root** with the course tree mounted read-write, so
+  course-authored notebook code executed as uid 0 and could rewrite the
+  repository it was built from.
+
+  All three worker images now declare `USER 1000:1000`, and `/source` is
+  mounted **read-only for the notebook worker** — the one that executes
+  arbitrary course code and writes only to `/workspace`. PlantUML and Draw.io
+  keep it writable, because rendering diagrams into the source tree is what
+  they do. The images are written to run under *any* uid (world-readable
+  installs, world-writable `$HOME`, caches under `/tmp`), and on POSIX hosts
+  the executor starts containers as the host user so bind-mount writes keep
+  their ownership — the uid-remapping caveat that a build-time uid cannot
+  solve, since the right uid belongs to the machine, not the image. Draw.io's
+  entrypoint starts a *session* D-Bus instead of the system bus, which needed
+  root.
+
+  **Whole-volume mounts are refused.** The existing guard covered only the
+  multi-target output case: a *single* output target at a drive root returned
+  before the check ran, and the data dir had no guard at all — either would
+  have bind-mounted an entire disk into the container. Both are now refused
+  before any container starts, in one place that covers every construction
+  site.
+
+  The "does this build run a Docker notebook worker?" probe no longer swallows
+  an error into a fixed answer. Its two callers have **opposite** safe
+  directions: the workspace resolver must assume Docker (that path carries the
+  whole-volume guard; assuming Direct silently returns the unguarded root),
+  while the replay proxy must assume Direct (assuming Docker binds `0.0.0.0`
+  and opens a LAN listener). Each caller now states its own default and the
+  failure is logged.
+
+  Executed notebooks keep working: the kernel now runs in a writable temporary
+  directory in Docker mode too, which is what Direct mode has always done, so a
+  cell that writes `data.txt` or `plot.png` still succeeds — it simply can no
+  longer write into the course repository. That also removes a Docker/Direct
+  behavioural divergence rather than adding one.
+
+  **Breaking**: anyone running the images by hand on native Linux needs
+  `--user "$(id -u):$(id -g)"` to write into a bind mount, and a data dir or
+  output root at a drive root is now rejected before any container starts.
+  Note that rebuilt images do *not* invalidate the execution cache: the
+  identity in the key is the image tag, not its content (#744), so pass
+  `--ignore-cache` to re-execute against the new image. One Docker-only read
+  also changes — a cell reading an image from its own directory worked in
+  Docker because the kernel ran inside the mount, and now behaves like Direct
+  mode, which never supported it. See `clm info migration` and
+  `docker/README.md`.
+
+- **Spec-driven writes are contained, and the destructive output operations
+  now require proof of ownership** (adversarial-review finding S11, #798).
+  A course spec decides what `clm build` writes *and deletes*: the post-build
+  sweep removes everything under an output root the build did not write, and
+  `--clean` wipes the root outright. Neither the paths nor the deletions were
+  bounded. Two layers now bound them.
+
+  **Spec validation** (fails before any job runs): an
+  `<output-target><path>` is refused when it is absolute, blank, contains a
+  `..` segment, or resolves onto the course data directory itself — the
+  one-character `<path>.</path>` typo that used to aim the sweep at the
+  course sources, and its likelier sibling, a pretty-printed empty
+  `<path>` element that resolved to the course root on Windows. Both sides
+  of the overlap check are resolved, so a path that reaches the course root
+  through a symlink is caught too. `OutputTarget.from_spec` enforces the
+  same rules, and the three commands that read the spec path without
+  building a `Course` — `clm git`, `clm release`, `clm zip` — validate
+  explicitly (surfacing a usage error, not a traceback), so no command acts
+  on a path `clm build` refuses. `<dir-group><path>` and each `<subdir>` go
+  through the canonical `<include>`-path validator (course-root relative,
+  no `..`), and `<dir-group><name>` is sanitized per path segment the way
+  section names always were — nesting (`Code/Solutions`) still works,
+  traversal no longer does. `sanitize_file_name` never returns a directory
+  reference again (`.`, `..`, and on Windows any run of dots, which
+  collapses the same way), closing the same hole for section names, course
+  names and notebook titles.
+
+  **Ownership gate**: `--clean` and the sweep only act inside an output root
+  clm can prove is its own — one that was empty or absent at build start,
+  that carries the `.clm-manifest.json` provenance index from an earlier
+  build, or (sweep only) whose entire content is accounted for by the build's
+  write registries. Anything else is refused with the directory named:
+  `--clean` fails the build having deleted nothing (the check runs before
+  `git_dir_mover` moves anything), and the sweep leaves that root untouched.
+  The sweep is now plan-then-execute so a refusal cannot leave a half-swept
+  tree, and a root clm could not prove it owns gets **no provenance
+  manifest** — the manifest is the evidence the next build's gate reads, so
+  writing it would hand that build the permission this one declined. That
+  holds whether or not a sweep ran, so `--no-sweep` / `--incremental` (and a
+  build with errors) cannot quietly mark an unverified tree either; targets
+  that swept cleanly still get theirs. The new
+  `clm build --allow-unowned-output` overrides the gate — that build sweeps
+  the tree *and* marks it, so later builds are ungated; `--clean`
+  deliberately does not override, since it is the operation being gated.
+
+  **Breaking**: absolute `<output-target><path>` values are refused — make
+  the path course-relative and move (or symlink) the tree under the course
+  root. Output trees that predate the provenance manifest (CLM < 1.8), or
+  were built with `--no-provenance-manifest`, and that hold files the build
+  does not produce are refused on their next `--clean` or sweep; the refusal
+  is permanent until the directory changes or `--allow-unowned-output`
+  adopts the tree. See `clm info migration`.
+
+- **HTTP-replay cassettes no longer record response secrets, and the mitmproxy
+  CA private key left the course tree** (adversarial-review finding S9, #798).
+  Cassettes are committed files in course repositories, so whatever the
+  recorder writes goes out in a pull request — and the recorder filtered
+  *requests* only. A `Set-Cookie` header or an OAuth token response was
+  committed verbatim.
+
+  Recording now applies a response filter as well: `Set-Cookie` is dropped, and
+  the values of OAuth-shaped keys in JSON response bodies (`access_token`,
+  `refresh_token`, `id_token`, `client_secret`, `api_key`, `apikey`,
+  `authorization`, `password`, `secret`, `session_token`) are replaced with
+  `[REDACTED-BY-CLM]`, recursively, with the payload's shape preserved. Key
+  names are matched **exactly**, never as substrings — an LLM response
+  legitimately carries `completion_tokens` / `total_tokens`, and clipping those
+  would silently corrupt the usage data of every replayed cassette. A response
+  that cannot be scrubbed is not recorded at all, the same stance the request
+  side already took — but the filter avoids raising wherever it can
+  (unparseable, deeply nested, or surrogate-bearing bodies are left alone),
+  because a dropped response to a *repeated* request replays as the previous
+  one rather than missing loudly.
+
+  The request side gained the provider spellings it was missing — headers
+  `api-key` (Azure), `x-goog-api-key` (Gemini), `proxy-authorization`,
+  `x-amz-security-token`, `x-auth-token`; query parameters `key`,
+  `access_token`, `apikey`, `subscription-key`, `X-Amz-Signature` — and closed
+  four gaps in how they were applied: a JSON content-type is matched by prefix
+  (so `application/json; charset=utf-8` bodies are filtered instead of
+  skipped), query *and* body parameter names are matched case-insensitively,
+  and bodies are filtered on any method rather than `POST` alone.
+
+  A request the filter cannot process is no longer refused, either. That
+  mattered more than it sounds: the recorder treats an unfilterable request
+  like an ignore-host, forwarding it to the live network in *every* mode —
+  including strict `replay` in CI — and recording nothing, with no miss to
+  notice. A binary upload, a latin-1 form body, a non-ASCII header value
+  (`X-Title: Übung 3`) and a pathologically nested JSON body each did exactly
+  that; they are now recorded with whatever filtering applies and no
+  exception.
+
+  New `clm cassette scan [SPEC-FILE]` audits **already-committed** cassettes
+  read-only, naming the file, interaction index and key, and exits non-zero
+  when it finds anything — or when a cassette cannot be read at all, since an
+  unparseable file is not evidence of cleanliness. It is the way to decide
+  which decks in a course repo are worth re-recording, instead of blanket
+  re-recording thousands of files that each need a live service. Every finding
+  is one a re-record actually clears: the audit asks "would the recorder
+  change this file today?", so it deliberately says nothing about a token in
+  a body the recorder does not touch. Responses are not part of the replay match key, so
+  the response-side change cannot cause a replay miss. Two request-side ones
+  can, loudly: a cassette recorded with a now-filtered *query parameter*, and
+  one whose *request body* kept a `password`/`token`/`api_key` because its
+  content-type carried a charset, its method was not `POST`, or the key was
+  spelled with different casing. Both are part of the replay match key; the
+  scanner flags
+  exactly those cassettes, and `clm info migration` says which findings are
+  urgent.
+
+  The mitmproxy confdir — which holds the proxy's CA **private key** — was
+  created next to the jobs database, i.e. inside the course working tree, where
+  `umask_secret()` is a no-op on Windows and a `CLM_JOBS_DB_PATH` pointing at a
+  network share put the key on that share. It now lives in the per-user data
+  dir alongside `kernel-envs/`, giving one stable CA per machine. Delete any
+  leftover `<jobs-db-dir>/mitm/confdir` — it contains a private key. See
+  `clm info migration`.
+
 ## [1.27.0] - 2026-08-17
 
 ### Fixed
