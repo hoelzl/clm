@@ -24,6 +24,7 @@ from nbformat import NotebookNode
 
 from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.workers.notebook import notebook_processor as notebook_processor_module
+from clm.workers.notebook.cpp_code_emitter import DANGLING_NOTE
 from clm.workers.notebook.notebook_processor import (
     CellIdGenerator,
     NotebookProcessor,
@@ -867,8 +868,11 @@ class TestOutputFormatCode:
         section body so students have a compilable place for the cell's
         code (#333 phase 4, #928). The keep cell's content survives as usual,
         and the blanked cell's original source never reaches the output."""
+        heading = make_cell("markdown", "## Output", tags=["slide"])
+        heading["metadata"]["slide_id"] = "output"
         notebook = make_notebook_node(
             [
+                heading,
                 make_cell("code", "#include <iostream>", tags=["keep"]),
                 make_cell("code", 'std::cout << "x";'),
             ]
@@ -882,9 +886,132 @@ class TestOutputFormatCode:
         result = await processor.create_contents(nb, payload)
 
         assert "#include <iostream>" in result
-        assert "void section_01() {\n" in result
-        assert "    // TODO\n}" in result
+        assert "void output() {\n" in result
+        assert "    // TODO: Output\n}" in result
         assert 'std::cout << "x";' not in result
+
+    @pytest.mark.asyncio
+    async def test_cpp_code_along_skeleton_places_todos_and_comments_out_dependents(self):
+        """Phase 2 of #928: a blanked definition leaves ``// TODO: define
+        <name>`` at namespace scope, and a keep cell that uses the blanked
+        name is emitted commented out behind the dangling note — the
+        skeleton compiles as shipped. The blanked source never leaks."""
+        heading = make_cell("markdown", "## Functions", tags=["slide"])
+        heading["metadata"]["slide_id"] = "functions"
+        notebook = make_notebook_node(
+            [
+                heading,
+                make_cell("code", "#include <iostream>", tags=["keep"]),
+                make_cell("code", "int twice(int x) { return 2 * x; }"),
+                make_cell("code", "twice(21)", tags=["keep"]),
+                make_cell("code", 'std::cout << "done\\n";', tags=["keep"]),
+            ]
+        )
+
+        spec = CodeAlongOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", kind="code-along", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert "return 2 * x" not in result
+        assert result.index("// TODO: define twice") < result.index("void functions()")
+        assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(twice(21));" in result
+        assert '    std::cout << "done\\n";' in result
+
+    @pytest.mark.asyncio
+    async def test_cpp_code_along_solution_cells_count_as_missing(self):
+        """A ``completed`` solution cell is dropped from the code-along view,
+        yet the kept cells after it depend on the solution version, not on
+        the kept ``start`` stub: they are commented out, and the solution
+        source never leaks into the output."""
+        heading = make_cell("markdown", "## Members", tags=["slide"])
+        heading["metadata"]["slide_id"] = "members"
+        notebook = make_notebook_node(
+            [
+                heading,
+                make_cell("code", "struct Point2 { double x; };", tags=["start"]),
+                make_cell("code", "struct Point2 { double x; double len(); };", tags=["completed"]),
+                make_cell("code", "double Point2::len() { return x; }", tags=["keep"]),
+                make_cell("code", "Point2 p{1.0};", tags=["keep"]),
+                make_cell("code", "int unrelated{1};", tags=["keep"]),
+            ]
+        )
+
+        spec = CodeAlongOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", kind="code-along", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert "double len();" not in result
+        assert "\nstruct Point2 { double x; };\n" in result
+        assert f"{DANGLING_NOTE}\n// double Point2::len() {{ return x; }}" in result
+        assert "    // Point2 p{1.0};" in result
+        assert "    int unrelated{1};" in result
+        assert "TODO" not in result
+
+    @pytest.mark.asyncio
+    async def test_cpp_partial_pre_workshop_start_cell_does_not_hide_the_solution(self):
+        """Partial drops ``start`` pre-workshop and keeps ``completed``: the
+        dropped stub must not make the solution's name look missing."""
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "struct Shape { int a; };", tags=["start"]),
+                make_cell("code", "struct Shape { int a; int b; };", tags=["completed"]),
+                make_cell("code", "Shape s{1, 2};", tags=["keep"]),
+            ]
+        )
+
+        spec = PartialOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", kind="partial", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert DANGLING_NOTE not in result
+        assert "struct Shape { int a; int b; };" in result
+        assert "    Shape s{1, 2};" in result
+
+    @pytest.mark.asyncio
+    async def test_cpp_partial_export_blanks_only_the_workshop_range(self):
+        """Partial C++ export: pre-workshop cells are emitted in full (an
+        originally empty cell is not a TODO although the spec blanks),
+        workshop cells leave TODOs, and a workshop keep cell that depends
+        on a blanked workshop cell is commented out."""
+        demo = make_cell("markdown", "## Demo", tags=["slide"])
+        demo["metadata"]["slide_id"] = "demo"
+        workshop = make_cell("markdown", "## Workshop", tags=["slide", "workshop"])
+        workshop["metadata"]["slide_id"] = "workshop"
+        notebook = make_notebook_node(
+            [
+                demo,
+                make_cell("code", "#include <iostream>"),
+                make_cell("code", "int demo_value{1};\ndemo_value"),
+                make_cell("code", ""),
+                workshop,
+                make_cell("code", "int solution(int x) { return x + 1; }"),
+                make_cell("code", "solution(demo_value)", tags=["keep"]),
+                make_cell("code", 'std::cout << "hint\\n";', tags=["keep"]),
+            ]
+        )
+
+        spec = PartialOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", kind="partial", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert "CLM_DISPLAY(demo_value);" in result
+        assert result.count("TODO") == 1
+        assert result.index("// TODO: define solution") < result.index("void workshop()")
+        assert "return x + 1" not in result
+        assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(solution(demo_value));" in result
+        assert '    std::cout << "hint\\n";' in result
 
     @pytest.mark.asyncio
     async def test_cpp_notebook_format_unaffected(self):

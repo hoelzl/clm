@@ -516,8 +516,19 @@ would put statements and mid-file `#include`s at namespace scope) but a
   header `clm/display.hpp` (`#include <clm/display.hpp>` at the top of the
   deck), which the generated CMake project copies into `include/` and puts
   on the include path, so students never see the template code behind it.
-- **Code-along outputs**: a blanked (non-`keep`) cell leaves `// TODO` in
-  its section body; `keep` cells are emitted as usual.
+- **Code-along and partial outputs** are a compilable skeleton: a blanked
+  (non-`keep`) cell leaves one TODO marker where its code would have gone —
+  `// TODO: define <names>` when the cell defined functions, types or
+  variables (at namespace scope for definitions and promoted variables, in
+  the section body for statements), `// TODO: <section heading>` otherwise.
+  A `keep` cell that uses a name the student has yet to type — defined by
+  an earlier blanked cell, by a `completed`/`alt` solution cell the view
+  drops, or by another such commented-out cell — is emitted **commented
+  out** behind `// depends on code you'll type above — uncomment after`,
+  so the skeleton compiles as shipped. Operator overloads are tracked
+  through their operand types (every later cell touching the type is
+  commented out). Section names and variable promotion are identical to
+  the completed output, so the two files line up side by side.
 
 Every code-output directory also gets a generated `CMakeLists.txt` (one
 executable target per deck, C++20; open the directory as a CMake project in

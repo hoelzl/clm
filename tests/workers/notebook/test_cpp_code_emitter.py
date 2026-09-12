@@ -1,4 +1,4 @@
-"""Tests for the C++ deck emitter (#333 phase 1, #928 phase 1).
+"""Tests for the C++ deck emitter (#333 phase 1, #928 phases 1-2).
 
 Covers the span-aware classification layer in ``cpp_code_analysis``
 (length-preserving masking, original-text recovery) and the section-function
@@ -21,7 +21,12 @@ from clm.workers.notebook.cpp_code_analysis import (
     split_top_level_spans,
     strip_comments_and_strings,
 )
-from clm.workers.notebook.cpp_code_emitter import CppCell, emit_cpp_deck, identifier_from_slide_id
+from clm.workers.notebook.cpp_code_emitter import (
+    DANGLING_NOTE,
+    CppCell,
+    emit_cpp_deck,
+    identifier_from_slide_id,
+)
 
 
 def _dedent(text: str) -> str:
@@ -464,7 +469,11 @@ class TestPromotion:
         )
         assert "    int x{1};" not in tu
         assert tu.index("int x{1};") < tu.index("void b()")
-        assert "    // TODO" in _function_body(tu, "b")
+        assert "    // TODO: B" in _function_body(tu, "b")
+
+    def test_member_access_does_not_promote(self):
+        tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("p.x = 2;\nq->x = 3;"))
+        assert "    int x{1};" in _function_body(tu, "a")
 
     def test_global_tag_forces_namespace_scope(self):
         tu = emit(slide("A", "a"), code("int cfg{1};", tags=("global",)), code("f();"))
@@ -473,23 +482,338 @@ class TestPromotion:
 
 
 class TestEmitCodeAlongTodos:
-    def test_blanked_cell_leaves_a_todo_in_the_body(self):
-        tu = emit(code("#include <iostream>"), code("", original_source="f();"))
-        assert "void section_01() {" in tu
-        assert "    // TODO" in _function_body(tu, "section_01")
+    """Phase 2 of #928: TODO markers sit where the blanked code would go."""
+
+    def test_blanked_statement_leaves_a_todo_in_the_body(self):
+        tu = emit(
+            slide("Calls", "calls"), code("#include <iostream>"), code("", original_source="f();")
+        )
+        assert "    // TODO: Calls" in _function_body(tu, "calls")
+        assert tu.count("TODO") == 1
+
+    def test_todo_names_the_section_heading_not_the_slide_id(self):
+        tu = emit(slide("Brace init", "brace-init"), code("", original_source="f();"))
+        assert "// TODO: Brace init" in tu
+
+    def test_todo_falls_back_to_humanized_slide_id_without_heading(self):
+        tu = emit(code("", original_source="f();", tags=("slide",), slide_id="brace-init"))
+        assert "// TODO: Brace init" in _function_body(tu, "brace_init")
 
     def test_empty_cell_counts_as_blanked_when_the_spec_blanks(self):
         tu = emit(code("#include <iostream>"), code(""), code("  \n "), blanks_code_cells=True)
-        assert tu.count("    // TODO") == 2
+        assert tu.count("    // TODO: section_01") == 2
 
-    def test_kept_cells_emit_normally_between_todos(self):
-        tu = emit(code("int x = 1;"), code("", original_source="g(x);"), code("f(x);"))
-        body = _function_body(tu, "section_01")
-        assert "    int x = 1;\n\n    // TODO\n\n    f(x);" in body
+    def test_originally_empty_cell_is_not_a_todo_even_when_the_spec_blanks(self):
+        # Partial blanks only its workshop range, so an empty pre-workshop
+        # cell (snapshot present, original empty) must not become a TODO.
+        tu = emit(code("f();"), code("", original_source=""), blanks_code_cells=True)
+        assert "TODO" not in tu
 
     def test_default_still_skips_empty_cells(self):
         tu = emit(code(""), code("struct S {};"))
         assert "TODO" not in tu
+
+    def test_kept_cells_emit_normally_between_todos(self):
+        tu = emit(code("int x = 1;"), code("", original_source="g();"), code("f(x);"))
+        body = _function_body(tu, "section_01")
+        assert "    int x = 1;\n\n    // TODO: section_01\n\n    f(x);" in body
+
+    def test_blanked_definition_leaves_a_todo_at_namespace_scope(self):
+        tu = emit(
+            slide("Functions", "functions"),
+            code("", original_source="int twice(int x) { return 2 * x; }"),
+            code('std::cout << "hi";', tags=("keep",)),
+        )
+        assert "// TODO: define twice" in tu
+        assert tu.index("// TODO: define twice") < tu.index("void functions()")
+        assert "TODO" not in _function_body(tu, "functions")
+
+    def test_blanked_variable_names_the_variable_in_the_body(self):
+        tu = emit(slide("Vars", "vars"), code("", original_source="int i1{10};"))
+        assert "    // TODO: define i1" in _function_body(tu, "vars")
+
+    def test_blanked_cell_with_several_definitions_gets_one_todo(self):
+        tu = emit(
+            slide("Types", "types"),
+            code("", original_source="struct Point { int x; };\nusing P = Point;\nint f();"),
+        )
+        assert tu.count("TODO") == 1
+        assert "// TODO: define Point, P, f" in tu
+
+    def test_blanked_variable_used_by_a_later_section_gets_its_todo_at_namespace_scope(self):
+        # The student must type ``x`` where the later section can see it.
+        tu = emit(
+            slide("A", "a"),
+            code("", original_source="int x{1};"),
+            slide("B", "b"),
+            code("", original_source="x++;"),
+        )
+        assert tu.index("// TODO: define x") < tu.index("void b()")
+        assert "void a()" not in tu  # the section body is empty
+        assert "    // TODO: B" in _function_body(tu, "b")
+
+    def test_blanked_global_cell_todo_goes_to_namespace_scope(self):
+        tu = emit(slide("A", "a"), code("", original_source="f();", tags=("global",)), code("g();"))
+        assert tu.index("// TODO: A") < tu.index("void a()")
+
+    def test_mixed_definition_and_statement_cell_todo_goes_to_namespace_scope(self):
+        tu = emit(slide("A", "a"), code("", original_source="int f() { return 1; }\nf();"))
+        assert "// TODO: define f" in tu
+        assert "void a()" not in tu
+
+    def test_kept_variable_used_by_a_blanked_definition_is_promoted(self):
+        tu = emit(
+            slide("A", "a"),
+            code("int counter{0};", tags=("keep",)),
+            code("", original_source="void bump() { ++counter; }"),
+        )
+        assert tu.index("int counter{0};") < tu.index("// TODO: define bump")
+        assert "void a()" not in tu
+
+    def test_section_name_avoids_a_name_a_blanked_cell_defines(self):
+        # Completed and code-along must name the sections identically.
+        tu = emit(
+            md("## Include", tags=("slide",), slide_id="include"),
+            code("", original_source="void include() {}"),
+            code("include();", tags=("keep",)),
+        )
+        assert "void include_section()" in tu
+
+
+class TestDanglingKeepCells:
+    """D5: a kept cell that needs blanked code is emitted commented out."""
+
+    def test_keep_cell_referencing_a_blanked_name_is_commented_out(self):
+        tu = emit(
+            slide("A", "a"),
+            code("", original_source="int twice(int x) { return 2 * x; }"),
+            code("twice(21)", tags=("keep",)),
+        )
+        body = _function_body(tu, "a")
+        assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(twice(21));" in body
+        assert "\n    CLM_DISPLAY" not in body
+
+    def test_note_precedes_the_first_commented_item_only_once(self):
+        tu = emit(
+            code("", original_source="int x{1};"),
+            code("f(x);\ng(x);", tags=("keep",)),
+        )
+        assert tu.count(DANGLING_NOTE) == 1
+        assert "    // f(x);\n    // g(x);" in tu
+
+    def test_reference_is_deck_global(self):
+        tu = emit(
+            slide("A", "a"),
+            code("", original_source="int x{1};"),
+            slide("B", "b"),
+            code("x++;", tags=("keep",)),
+        )
+        assert "    // x++;" in _function_body(tu, "b")
+
+    def test_dependency_is_transitive(self):
+        tu = emit(
+            code("", original_source="int x{1};"),
+            code("int y{x + 1};", tags=("keep",)),
+            code("std::cout << y;", tags=("keep",)),
+        )
+        assert "    // int y{x + 1};" in tu
+        assert "    // std::cout << y;" in tu
+        assert tu.count(DANGLING_NOTE) == 2
+
+    def test_keep_cell_before_the_blank_is_not_dangling(self):
+        # A kept section may reuse a local name a later workshop cell blanks.
+        tu = emit(
+            slide("Demo", "demo"),
+            code("int result{1};\nresult"),
+            slide("Workshop", "workshop"),
+            code("", original_source="int result{2};"),
+        )
+        assert DANGLING_NOTE not in tu
+        assert "\nint result{1};\n" in tu
+        assert "    CLM_DISPLAY(result);" in _function_body(tu, "demo")
+
+    def test_keep_cell_defining_the_name_itself_is_not_dangling(self):
+        tu = emit(
+            code("", original_source="int x{1};"),
+            code("int x{2};\nx", tags=("keep",)),
+        )
+        assert DANGLING_NOTE not in tu
+
+    def test_member_access_is_not_a_reference(self):
+        tu = emit(
+            code("struct P { int x; };\nP p{1};", tags=("keep",)),
+            code("", original_source="int x{1};"),
+            code("p.x", tags=("keep",)),
+        )
+        assert DANGLING_NOTE not in tu
+
+    def test_reference_in_a_string_or_comment_is_not_a_reference(self):
+        tu = emit(
+            code("", original_source="int x{1};"),
+            code('std::cout << "x"; // x', tags=("keep",)),
+        )
+        assert DANGLING_NOTE not in tu
+
+    def test_dangling_definition_is_commented_out_at_namespace_scope(self):
+        tu = emit(
+            slide("A", "a"),
+            code("", original_source="struct Point { int x; };"),
+            code("Point origin() { return {}; }", tags=("keep",)),
+            code("f();", tags=("keep",)),
+        )
+        assert f"{DANGLING_NOTE}\n// Point origin() {{ return {{}}; }}" in tu
+        assert tu.index("// Point origin()") < tu.index("void a()")
+        assert "    f();" in _function_body(tu, "a")
+
+    def test_dangling_cell_with_both_scopes_gets_the_note_in_each(self):
+        tu = emit(
+            code("", original_source="int x{1};"),
+            code("int f() { return x; }\nf();", tags=("keep",)),
+        )
+        assert tu.count(DANGLING_NOTE) == 2
+        assert "// int f() { return x; }" in tu
+        assert "    // f();" in tu
+
+    def test_dangling_display_still_pulls_in_the_helper_include(self):
+        tu = emit(code("", original_source="int x{1};"), code("x", tags=("keep",)))
+        assert "#include <clm/display.hpp>" in tu
+
+    def test_dangling_main_is_commented_out_and_main_generated(self):
+        tu = emit(
+            code("", original_source="int f() { return 1; }"),
+            code("int main() { return f(); }", tags=("keep",)),
+        )
+        assert "// int main() { return f(); }" in tu
+        assert "\nint main() {}" in tu
+
+    def test_completed_view_has_no_dangling_cells(self):
+        tu = emit(code("int x{1};"), code("x++;"))
+        assert DANGLING_NOTE not in tu
+
+    def test_qualified_reference_counts(self):
+        tu = emit(
+            code("", original_source="namespace frac { struct Fraction { int n; }; }"),
+            code("frac::Fraction half{1};", tags=("keep",)),
+        )
+        assert "    // frac::Fraction half{1};" in tu
+
+    def test_class_inside_a_missing_namespace_block_is_missing(self):
+        # The classifier sees only the namespace block; the scan looks inside.
+        tu = emit(
+            code("namespace poly { class Polynomial; }", tags=("keep", "start")),
+            code("", original_source="namespace poly { class Polynomial { int d; }; }"),
+            code("namespace poly { Polynomial::Polynomial() {} }", tags=("keep",)),
+        )
+        assert "// namespace poly { Polynomial::Polynomial() {} }" in tu
+
+    def test_member_definition_does_not_provide_the_class(self):
+        tu = emit(
+            code("", original_source="struct Point { double x; double distance(); };"),
+            code("double Point::distance() { return x; }", tags=("keep",)),
+        )
+        assert "// double Point::distance() { return x; }" in tu
+
+    def test_blanked_member_definition_comments_out_its_callers(self):
+        tu = emit(
+            code("struct Point { double x; double distance(); };", tags=("keep",)),
+            code("", original_source="double Point::distance() { return x; }"),
+            code("Point p{1.0};", tags=("keep",)),
+            code("p.distance()", tags=("keep",)),
+        )
+        assert "    Point p{1.0};" in tu
+        assert "    // CLM_DISPLAY(p.distance());" in tu
+
+    def test_missing_operator_makes_its_operand_type_missing(self):
+        # ``a * b`` never spells ``operator*``: every later cell touching
+        # the operand type is commented out instead.
+        tu = emit(
+            code("struct Fraction { int n; };", tags=("keep",)),
+            code("Fraction one{1};", tags=("keep",)),
+            code("", original_source="Fraction operator*(Fraction a, Fraction b) { return a; }"),
+            code("Fraction two{2};", tags=("keep",)),
+            code("two * one", tags=("keep",)),
+            code("one.n", tags=("keep",)),
+        )
+        assert "    Fraction one{1};" in tu
+        assert "    // Fraction two{2};" in tu
+        assert "    // CLM_DISPLAY(two * one);" in tu
+        assert "    CLM_DISPLAY(one.n);" in tu
+
+    def test_later_kept_definition_makes_the_name_available_again(self):
+        tu = emit(
+            code("", original_source="int f() { return 1; }"),
+            code("int f() { return 2; }", tags=("keep",)),
+            code("f()", tags=("keep",)),
+        )
+        assert DANGLING_NOTE not in tu
+
+
+class TestExcludedCells:
+    """Solution cells the view drops (``completed``/``alt``) still count."""
+
+    def test_excluded_cell_is_never_emitted_and_leaves_no_todo(self):
+        tu = emit(code("f();"), code("", original_source="int secret{42};", excluded=True))
+        assert "secret" not in tu
+        assert "TODO" not in tu
+
+    def test_excluded_cell_does_not_open_a_section(self):
+        tu = emit(
+            slide("A", "a"),
+            code("f();"),
+            code("", original_source="g();", excluded=True, tags=("subslide",), slide_id="b"),
+            code("h();"),
+        )
+        assert "void b()" not in tu
+        assert "    f();\n\n    h();" in _function_body(tu, "a")
+
+    def test_start_completed_pair_stub_does_not_satisfy_dependents(self):
+        # The kept ``start`` stub defines Point2 too, but the solution twin
+        # comes later and is the version the kept cells need.
+        tu = emit(
+            code("struct Point2 { double x; };", tags=("start",)),
+            code(
+                "",
+                original_source="struct Point2 { double x; double len(); };",
+                excluded=True,
+                tags=("completed",),
+            ),
+            code("double Point2::len() { return x; }", tags=("keep",)),
+            code("Point2 p{1.0};", tags=("keep",)),
+        )
+        assert "\nstruct Point2 { double x; };\n" in tu
+        assert "// double Point2::len() { return x; }" in tu
+        assert "    // Point2 p{1.0};" in tu
+
+    def test_excluded_specialization_shares_the_primary_name(self):
+        tu = emit(
+            code("template <typename T> struct Buf { T d; };", tags=("keep",)),
+            code(
+                "",
+                original_source="template <typename T> struct Buf<std::vector<T>> { T d; };",
+                excluded=True,
+            ),
+            code("Buf<int> b;", tags=("keep",)),
+        )
+        assert "    // Buf<int> b;" in tu
+
+    def test_excluded_cell_still_drives_promotion(self):
+        # Parity with the Completed view, which contains the cell.
+        tu = emit(
+            slide("A", "a"),
+            code("int x{1};", tags=("keep",)),
+            slide("B", "b"),
+            code("", original_source="x++;", excluded=True),
+        )
+        assert "\nint x{1};\n" in tu
+        assert "    int x{1};" not in tu
+
+    def test_excluded_cell_reserves_its_name_for_section_naming(self):
+        tu = emit(
+            md("## Include", tags=("slide",), slide_id="include"),
+            code("", original_source="void include() {}", excluded=True),
+            code("f();", tags=("keep",)),
+        )
+        assert "void include_section()" in tu
 
 
 class TestEmitMain:
@@ -799,6 +1123,27 @@ class TestEmittedCodeCompiles:
             code('std::cout << "kept\\n";', tags=("keep",)),
             blanks_code_cells=True,
         )
+        self._check(tu, tmp_path)
+
+    def test_code_along_with_dangling_keep_cells_compiles(self, tmp_path):
+        # A blanked definition, a kept caller (dangling), a kept cell that
+        # depends on the dangling one, a blanked promoted variable and an
+        # untouched kept statement — the skeleton must compile as shipped.
+        tu = emit(
+            slide("Functions", "functions"),
+            code("#include <iostream>", tags=("keep",)),
+            code("", original_source="int twice(int x) { return 2 * x; }"),
+            code("twice(21)", tags=("keep",)),
+            code("int answer{twice(21)};\nstd::cout << answer;", tags=("keep",)),
+            code("", original_source="int shared{1};"),
+            code('std::cout << "kept\\n";', tags=("keep",)),
+            slide("Later", "later"),
+            code("", original_source="shared++;"),
+            code("int local{2};\nlocal", tags=("keep",)),
+        )
+        assert tu.count(DANGLING_NOTE) == 2
+        assert "// TODO: define twice" in tu
+        assert "// TODO: define shared" in tu
         self._check(tu, tmp_path)
 
     def test_digit_separator_cell_compiles(self, tmp_path):
