@@ -65,7 +65,7 @@ mode needs `[docker]` and `clm build --watch` needs `[watch]`.
 ## Testing
 
 ```bash
-pytest                    # Fast suite only (~72s; runs on the pre-PUSH hook)
+pytest                    # Fast suite only (~8 min; the pre-PUSH hook runs its deterministic tier, ~4-6 min — see docs/developer-guide/testing.md)
 pytest -m "not docker"    # Full suite minus Docker tests (~2 min, pre-release gate)
 pytest -m ""              # Everything including docker/slow/integration/e2e
 ```
