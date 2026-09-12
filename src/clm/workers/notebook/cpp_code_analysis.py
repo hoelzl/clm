@@ -345,6 +345,10 @@ _MEMBER_VAR_RE = re.compile(
     rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)+{_QUAL}(\w+)\s*(\{{|=|;)",
 )
 _TYPE_DEF_RE = re.compile(r"^(?:class|struct|union|enum(?:\s+(?:class|struct))?)\s+(\w+)")
+# Parenthesized initializer that cannot be a parameter list: starts with a
+# numeric / string / char literal (literals are blanked to `""` / `' '` by the
+# stripper), a signed number, or a literal keyword.
+_PAREN_INIT_LITERAL_RE = re.compile(r"^\s*(?:[+-]?\s*(?:\d|\.\d)|\"|'|true\b|false\b|nullptr\b)")
 
 
 def normalize_args(args: str) -> str:
@@ -491,6 +495,13 @@ def classify_item(item: str) -> CppItem:
                     # return type is illegal at namespace scope, so a `;` tail
                     # after the ctor-like pattern always means a call.
                     return CppItem("call_stmt", text=text)
+                if tail.startswith(";") and _PAREN_INIT_LITERAL_RE.match(args):
+                    # `int i2(20);` / `std::string s("hi");` — parenthesized
+                    # initialization, not a declaration: a parameter list
+                    # cannot start with a literal. (`int i(value);` stays
+                    # ambiguous — the most vexing parse — and reads as a
+                    # declaration here; either scope compiles.)
+                    return CppItem("var_decl", name, text=text)
                 return CppItem("fn_decl", name, sig, text=text)
     fp = _FNPTR_VAR_RE.match(text)
     if fp:

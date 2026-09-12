@@ -479,6 +479,46 @@ observable instead of being silently absorbed by the retry loop. Clean
 first-attempt passes are not recorded. See `clm kernel-triage` for acting
 on this history.
 
+#### C++ code export (`format="code"`, `prog_lang="cpp"`)
+
+For C++ decks the `code` output format is not a jupytext concatenation (that
+would put statements and mid-file `#include`s at namespace scope) but a
+**compilable per-deck translation unit** laid out as study material
+(since CLM {version}, issue #928; the compile-gate form dates from #333):
+
+- `#include` lines are hoisted to the top and deduplicated.
+- **One section function per slide**: a new function opens at every cell
+  tagged `slide` or `subslide` (code cells included), named after that cell's
+  `slide_id` (`brace-initialization` → `void brace_initialization()`; decks
+  without `slide_id`s get `section_NN`). Cells before the first opener form
+  a leading section. Each function starts with a banner
+  (`std::cout << "== Brace initialization ==\n";`) taken from the section's
+  first markdown heading, and a generated `main()` calls the functions in
+  order — unless the deck defines its own `main()`.
+- **Markdown cells become `//` comment blocks** at their source position:
+  above the function while the section has produced no statement yet, inside
+  the body afterwards.
+- Definitions (functions, classes, templates, aliases, namespaces, `using`
+  directives, other preprocessor lines) go to namespace scope in source
+  order. **Statements and variable definitions stay local** to their section
+  function. A variable that a *later* section or a namespace-scope definition
+  references is **promoted to namespace scope automatically** (the emitter
+  scans identifiers; a false positive only costs locality, a miss fails the
+  compile gate). Tag a code cell **`global`** to force it to namespace scope.
+- **Bare display expressions** (`i1` on its own line, relying on the
+  kernel's auto-display) become `CLM_DISPLAY(i1);`, which prints
+  `i1 = 10` — the expression text is the label — or `<unprintable value>`
+  when no `operator<<` exists.
+- **Code-along outputs**: a blanked (non-`keep`) cell leaves `// TODO` in
+  its section body; `keep` cells are emitted as usual.
+
+Every code-output directory also gets a generated `CMakeLists.txt` (one
+executable target per deck, C++20; open the directory as a CMake project in
+VS Code, CLion or Visual Studio). A deck whose code legitimately cannot
+compile outside the kernel carries the header marker `// clm: no-compile`
+and becomes an `EXCLUDE_FROM_ALL` target. `clm build --no-html` builds the
+code export without any Jupyter kernel.
+
 ### `clm kernel-triage` (CLM {version}+)
 
 Re-test kernel-crash workarounds and known-flaky decks against the current
