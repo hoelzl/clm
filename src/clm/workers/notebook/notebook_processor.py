@@ -38,6 +38,7 @@ from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
 
 from .output_spec import (
     POST_WORKSHOP_TAG,
+    SOLUTION_ONLY_TAGS,
     OutputSpec,
     PartialOutput,
     find_workshop_ranges,
@@ -890,10 +891,12 @@ class NotebookProcessor:
         # (e.g. unit tests that instantiate the processor directly).
         self.heartbeat_store: WorkerHeartbeatStore | None = heartbeat_store
         self.heartbeat_job_id: int | None = heartbeat_job_id
-        # Per-cell (cell_type, tags, slide_id, pre-blank source) snapshot for
+        # Per-cell (cell_type, tags, slide_id, pre-blank source, excluded) snapshot for
         # the C++ code export (#928), taken in _process_notebook_node before
         # blanking and metadata stripping; None outside that export.
-        self._cpp_export_cells: list[tuple[str, tuple[str, ...], str | None, str]] | None = None
+        self._cpp_export_cells: list[tuple[str, tuple[str, ...], str | None, str, bool]] | None = (
+            None
+        )
 
     def add_warning(
         self,
@@ -1313,18 +1316,25 @@ class NotebookProcessor:
         # tag and slide_id and scans the pre-blank source of code-along
         # cells; all three are gone by the time create_contents runs, so
         # snapshot them before the cells are blanked and stripped below.
-        # Kept on the processor, never on the cells: an output must not
-        # carry the original source of a blanked cell.
+        # Solution-only code cells the view drops (``completed``/``alt``)
+        # ride along flagged ``excluded``: the names they define are
+        # missing from a code-along skeleton, and a kept cell that uses one
+        # must be commented out. Kept on the processor, never on the cells:
+        # an output must not carry the original source of a blanked or
+        # dropped cell.
         self._cpp_export_cells = None
         if self.output_spec.format == "code" and payload.prog_lang == "cpp":
+            included_indices = {index for index, _ in included}
             self._cpp_export_cells = [
                 (
                     get_cell_type(cell),
                     tuple(get_tags(cell)),
                     cell.get("metadata", {}).get("slide_id"),
                     cell.get("source", ""),
+                    index not in included_indices,
                 )
-                for _, cell in included
+                for index, cell in enumerate(source_cells)
+                if index in included_indices or self._is_solution_only_code_cell(cell)
             ]
         new_cells = [await self._process_cell(cell, index, payload) for index, cell in included]
         # Strip slide_id/for_slide (internal CLM metadata that must never
@@ -1345,6 +1355,14 @@ class NotebookProcessor:
         nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang)
         _, normalized_nb = normalize(nb)
         return cast(NotebookNode, normalized_nb)
+
+    def _is_solution_only_code_cell(self, cell: Cell) -> bool:
+        """A code cell of this language the view drops for being solution code."""
+        return (
+            is_code_cell(cell)
+            and bool(SOLUTION_ONLY_TAGS.intersection(get_tags(cell)))
+            and is_cell_included_for_language(cell, self.output_spec.language)
+        )
 
     async def _process_cell(self, cell: Cell, index: int, payload: NotebookPayload) -> Cell:
         cid = payload.correlation_id
@@ -2388,24 +2406,27 @@ class NotebookProcessor:
         cells; both are gone from ``processed_nb`` (blanked in
         ``_process_code_cell``, stripped in ``_process_notebook_node``), so
         ``_process_notebook_node`` snapshots them into
-        ``_cpp_export_cells`` first. Without a snapshot (a caller that skips
-        processing) the cells are used as they are.
+        ``_cpp_export_cells`` first — solution-only cells the view dropped
+        included, flagged ``excluded``, for the dangling-cell scan. Without
+        a snapshot (a caller that skips processing) the cells are used as
+        they are.
         """
         cells = processed_nb.get("cells", [])
         snapshot = self._cpp_export_cells
-        if snapshot is not None and len(snapshot) == len(cells):
-            cpp_cells = [
-                CppCell(
-                    cell_type=cell_type,
-                    source=cell.get("source", ""),
-                    original_source=original_source,
-                    tags=tags,
-                    slide_id=slide_id,
+        if snapshot is not None and sum(1 for entry in snapshot if not entry[4]) == len(cells):
+            cpp_cells = []
+            processed = iter(cells)
+            for cell_type, tags, slide_id, original_source, excluded in snapshot:
+                cpp_cells.append(
+                    CppCell(
+                        cell_type=cell_type,
+                        source="" if excluded else next(processed).get("source", ""),
+                        original_source=original_source,
+                        tags=tags,
+                        slide_id=slide_id,
+                        excluded=excluded,
+                    )
                 )
-                for (cell_type, tags, slide_id, original_source), cell in zip(
-                    snapshot, cells, strict=True
-                )
-            ]
         else:
             cpp_cells = [
                 CppCell(

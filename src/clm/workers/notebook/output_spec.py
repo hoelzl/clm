@@ -35,6 +35,12 @@ from .utils.jupyter_utils import (
 # decisions and is stripped from output metadata by the notebook processor.
 POST_WORKSHOP_TAG = "_post_workshop"
 
+# Code-cell tags the code-along views delete but Completed keeps: the
+# solution side of a ``start``/``completed`` pair and ``alt`` variants. The
+# C++ code export snapshots such cells as *excluded* so a kept cell that
+# depends on one is commented out in the code-along skeleton (#928).
+SOLUTION_ONLY_TAGS: frozenset[str] = frozenset({"alt", "completed"})
+
 
 class _NotebookCellView:
     """Adapt an nbformat cell dict to the workshop-scope cell protocol.

@@ -1,7 +1,7 @@
 # C++ IDE Export (#928) — Handover
 
-**Created**: 2026-09-12 | **Updated**: 2026-09-12 (evening) | **Status**: Phase 0
-merged (#932), Phase 1 in PR, Phase 2 next
+**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–1
+merged (#932, #933, #934), Phase 2 in PR, Phase 3 next
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -159,10 +159,10 @@ quote) used by both `strip_comments_and_strings` and
 Acceptance: `TestDigitSeparators`, `TestRequiresClause`,
 `TestEmitClassifierRegressions`, two new compile tests; CI green; auto-merge.
 
-### Phase 1 — Section functions in a single file [IN PROGRESS — PR open]
+### Phase 1 — Section functions in a single file [DONE — PR #933 + #934, merged 2026-09-12]
 
-Implemented on `claude/issue-928-phase1-sections` (see Current Status for
-what landed and what the corpus run showed). Original scope:
+Implemented on `claude/issue-928-phase1-sections`; #934 moved the display
+helper into the vendored header `clm/display.hpp`. Original scope:
 
 Accomplishes: new emitter entry point taking structured cells (D4); sections
 per D1; markdown comments (D8); labeled `CLM_DISPLAY` (D3); auto-promotion +
@@ -190,15 +190,20 @@ named in the issue (`variables_core`, `functions`, `const_constexpr`) reviewed
 by the owner as a student would; existing compile gate in CppCourses stays
 green.
 
-### Phase 2 — Code-along skeleton [TODO]
+### Phase 2 — Code-along skeleton [IN PROGRESS — PR open]
 
-Bodies = keep cells in order + `// TODO: <heading of the enclosing section>`
-at each blank position; deck-global name scan (D5) comments out a `keep` cell
-that references a blank-defined name, with the note "depends on code you'll
-type above — uncomment after". Blanked *definitions* leave a TODO at namespace
-scope. Files: emitter, `notebook_processor.py` (CodeAlong and Partial specs),
-tests, info topic. Acceptance: the 12 dangling decks from the scan produce
-compiling code-along output; `TestEmitCodeAlongTodos` rewritten.
+Branch `claude/issue-928-phase2-code-along`. Planned scope: bodies = keep
+cells in order + `// TODO: <heading>` at each blank position; deck-global
+name scan (D5) comments out a `keep` cell that references a blank-defined
+name behind "depends on code you'll type above — uncomment after"; blanked
+*definitions* leave a TODO at namespace scope. What the corpus forced on
+top of that (see Current Status): **solution cells the view drops**
+(`completed`/`alt`) must count as missing definitions — eight decks pair a
+kept `start` stub with a dropped `completed` twin and every kept cell after
+depends on the twin — plus latest-definition-wins ordering, namespace
+recursion, member access and operator tracking. Acceptance: no code-along
+or partial deck fails MSVC `/Zs` that the Completed view passes (met:
+0 / 357); `TestEmitCodeAlongTodos` rewritten.
 
 ### Phase 3 — Multi-file output: header, workshop files, per-module CMake [TODO]
 
@@ -219,10 +224,72 @@ code-along workshop targets into the CppCourses CI gate; `SHOW`-in-notebooks is 
 
 - **Done**: design evaluation posted on #928 (2026-09-12); owner decisions
   D1–D3, D9 recorded above; scan script in CppCourses
-  `tools/scan_section_export.py` (PR #128); Phase 0 merged (PR #932); `SHOW`
-  split off as #930; this handover merged (PR #931).
-- **Phase 1 implemented** on `claude/issue-928-phase1-sections` (worktree
+  `tools/scan_section_export.py` (PR #128, branch
+  `claude/scan-section-export` — not merged there yet); Phase 0 merged (PR
+  #932); `SHOW` split off as #930; this handover merged (PR #931); Phase 1
+  merged (PR #933, header follow-up PR #934).
+- **Phase 2 implemented** on `claude/issue-928-phase2-code-along` (worktree
   `.claude/worktrees/issue-928-cpp-ide-export`):
+  - `cpp_code_emitter.py`: blanked cells are classified from
+    `original_source`; the TODO goes where the code would have gone
+    (`_todo_target`: namespace scope for a `global` cell or any hoisted
+    item / include / promoted variable, else the body) and reads
+    `// TODO: define <names>` (classifier names, one marker per cell) or
+    `// TODO: <heading>`. `_is_blanked` is exact when a snapshot exists
+    (an originally empty cell is never a TODO — the Partial gotcha); the
+    `blanks_code_cells` flag only decides for snapshot-less callers.
+    `_find_dangling(promoted)` runs after promotion as a deck-order state
+    machine, latest definition wins: names from blanked, **excluded** or
+    dangling cells are *missing*; names from emitted cells are available
+    deck-wide (namespace scope) or per section (local var); a kept cell
+    that `_uses` a missing name outside its own definitions, or accesses a
+    missing member (`p.f`, `T::f`), is dangling and rendered by
+    `_CellWriter` commented out behind `DANGLING_NOTE` (once per stream it
+    touches); its own names become missing (transitive closure). Namespace
+    blocks are recursed (`_entity_items`); member definitions never
+    provide their class; a missing operator overload marks its
+    deck-defined operand types missing (`_operator_operands`) — broader
+    than needed but the only name-based handle on `a * b`. A dangling
+    `main` is commented out and a `main` generated. `_references` now
+    skips member accesses (`p.x`, `p->x`); `_uses` additionally accepts
+    `ns::x`.
+  - `CppCell.excluded`: solution cells the view drops. Never emitted,
+    never open a section, but classified for the dangling scan, for
+    promotion (`_later_code` / `_namespace_texts` — parity with Completed,
+    which contains them) and for section-name reservation.
+  - `output_spec.py`: `SOLUTION_ONLY_TAGS = {"alt", "completed"}` (= the
+    CodeAlong delete set minus Completed's). `notebook_processor.py`: the
+    snapshot is a 5-tuple with an `excluded` flag; it walks `source_cells`
+    and keeps included cells plus solution-only code cells of the build's
+    language (`_is_solution_only_code_cell`); `_create_cpp_code_export`
+    re-zips by consuming a processed cell per non-excluded entry. Dropped
+    `start` cells (Partial pre-workshop, Completed) are *not* snapshotted:
+    a dropped stub must not make the kept solution's name look missing.
+  - Docs: the "Code-along and partial outputs" bullet in `commands.md`;
+    `changelog.d/928-code-along-skeleton.added.md`.
+- **Corpus run (357 `.en.cpp` decks, all three views, MSVC 2022
+  `cl /std:c++20 /Zs`, scratch script)**: 0 emit errors. Completed fails
+  13 decks (baseline, untouched by this phase: `slides_header`,
+  `program_structure`, `more_initialization`, `compile_time`,
+  `good_tests`, the `*_disabled` topics, `observer`, `builder`,
+  `ws_100_employee` — kernel-only constructs; candidates for
+  `clm: no-compile` or Phase 1 follow-ups). **Code-along: 8 failing, all in
+  the baseline; Partial: 12, all in the baseline.** Before the
+  excluded-cell handling code-along had 8 *extra* failures, every one a
+  `start`/`completed` pair (`member_functions`, `copy_and_call`,
+  `unique_ptr`, `destruction`, `slicing`, `names_part2`,
+  `class_templates` — a dropped partial specialization — and
+  `operator_overloading`: blanked `operator*` + a class inside a
+  namespace). Code-along: 1,981 TODOs (506 `define`, 384 at namespace
+  scope), 136 dangling cells in 26 decks (D5's scan said 12 — it ignored
+  dropped solution cells and transitivity). Partial: 443 TODOs, 32
+  dangling cells in 8 decks.
+- **Tests**: `TestEmitCodeAlongTodos`, `TestDanglingKeepCells`,
+  `TestExcludedCells`, two compile smoke tests (skip without g++ — the
+  dangling one was checked with MSVC by hand), processor tests
+  (code-along skeleton, solution cells missing, Partial pre-workshop
+  `start`, Partial workshop range).
+- **Phase 1 (for reference)** landed on `claude/issue-928-phase1-sections`:
   - `cpp_code_emitter.py` rewritten: `CppCell` (attrs, frozen) +
     `emit_cpp_deck(cells, *, blanks_code_cells)`; `emit_cpp_translation_unit`
     is gone. Two passes: classify every cell and decide promotions
@@ -272,53 +339,60 @@ code-along workshop targets into the CppCourses CI gate; `SHOW`-in-notebooks is 
   code cell takes its heading from a *following* markdown heading if any
   (rare, cosmetic).
 
-## 5. Next Steps (Phase 2 — code-along skeleton)
+## 5. Next Steps (Phase 3 — multi-file output)
 
-Start on a **fresh branch off `origin/master`** once the Phase 1 PR has
+Start on a **fresh branch off `origin/master`** once the Phase 2 PR has
 merged (`git fetch origin && git switch -C worktree-issue-928-cpp-ide-export
-origin/master && git switch -c claude/issue-928-phase2-code-along`) — never
-switch a worktree to literal `master`. Everything Phase 2 needs is already
-in the emitter's input: `CppCell.original_source` carries the blanked text.
+origin/master && git switch -c claude/issue-928-phase3-multifile`) — never
+switch a worktree to literal `master`.
 
-1. **Blanked definitions.** Today every blanked cell leaves `// TODO` in the
-   section body. Classify `original_source` instead: items that would have
-   gone to namespace scope (definitions, `global` cells) leave their TODO in
-   the namespace stream at the cell's position, statements in the body. One
-   TODO per cell, not per item.
-2. **TODO text.** `// TODO: <section heading>` — or, when the blanked cell
-   defined named entities, `// TODO: define <names>` so the student knows what
-   the video types here (names come from the classifier; `global:NAME` is the
-   escape hatch for shapes it cannot name — add the prefix rule to
-   `get_invalid_code_tags` / the validator then).
-3. **Dangling keep cells (D5).** Deck-global scan: collect the names every
-   blanked cell defines (all sections); a `keep` cell whose comment-stripped
-   text references one is emitted commented out, preceded by
-   `// depends on code you'll type above — uncomment after`. 12 corpus decks
-   hit this; `tools/scan_section_export.py --mode both` lists the count.
-4. **Promotion under blanking.** The scan already reads `pre_blank_source`,
-   so a variable a blanked later cell uses is promoted; keep that (test
-   `test_reference_in_a_blanked_later_cell_promotes`).
-5. **Tests**: rewrite `TestEmitCodeAlongTodos`, add the dangling-keep cases
-   and a compile smoke test for a deck with a blanked definition + kept
-   caller; processor test with `CodeAlongOutput` and `PartialOutput`.
-6. **Docs**: the "Code-along outputs" bullet in `commands.md`'s "C++ code
-   export" section; changelog fragment.
+1. **Output contract.** `NotebookResult.result: str` is the only place the
+   "one string" assumption lives (§6). Add a sibling-file map (published
+   path → text) and teach the worker's writer to emit it; the CLI/build
+   side must copy the extra files next to the deck.
+2. **Header `foo.hpp`** (D8): hoisted, deduped includes + `global`-tagged
+   cells, source order; `foo.cpp` includes it. Keep definitions in
+   `foo.cpp` next to their narrative.
+3. **Workshop files `foo_workshop_N.cpp`** per `find_workshop_ranges`
+   (D6): `#include "foo.hpp"`, the range's cells under the same section
+   rules, own generated `main()`. Workshop-range definitions never go to
+   the header. Code-along workshop files use the Phase 2 skeleton rules
+   (TODO placement, dangling cells, excluded solution cells) unchanged —
+   the emitter already sees the whole deck, so the scan stays deck-global
+   even when the output is split.
+4. **CMake**: `cmake_export.py` emits one target per deck plus one per
+   workshop, grouped per module via `add_subdirectory`; code-along
+   workshop targets become gate-able.
+5. **Tests**: emitter tests for the split, a compile smoke test that builds
+   `foo.cpp` + one workshop file against the header, cmake export tests,
+   worker output-contract test; info topic (`commands.md` C++ section) and
+   changelog fragment.
 
-Gotchas: `PartialOutput.blanks_code_cells` is `True` while only in-range
-cells are blank — the emitter must not treat empty pre-workshop cells as
-TODOs (it only does when `original_source` is non-empty or the spec blanks;
-keep the `original_source` check first). The MSVC gate in CppCourses runs
-MinGW (#922 showed it accepts things g++/MSVC reject); the local VS 2022
-`cl /Zs` check used here is the stricter one.
+Phase 2 leftovers worth a look while there: (a) the 13 Completed baseline
+failures (kernel-only constructs — decide `clm: no-compile` per deck in
+CppCourses vs. emitter fixes); (b) the operator rule comments out every
+later cell that touches the operand type — a per-variable type map would
+narrow it; (c) `global:NAME` as the escape hatch for shapes the classifier
+cannot name is not implemented (no corpus deck needed it); (d) a dangling
+deck-defined `main` leaves the student with two `main`s after
+uncommenting — the note does not say so.
+
+Gotchas carried forward: the Partial spec blanks only its workshop range
+while `blanks_code_cells` is `True` — the emitter decides blanking from the
+snapshot (`original_source`), never from the flag, when a snapshot exists;
+dropped `start` cells must never be snapshotted as excluded (a stub would
+make the kept solution look missing). The CppCourses compile gate runs
+MinGW (#922: it accepts things g++/MSVC reject); the local VS 2022 `cl /Zs`
+check used here is the stricter one.
 
 ## 6. Key Files & Architecture
 
 | File | Role |
 |---|---|
 | `src/clm/workers/notebook/cpp_code_analysis.py` | Heuristic top-level item classifier (spans, categories, names). Phase 0 added `_is_digit_separator`, `_skip_requires_clause`. |
-| `src/clm/workers/notebook/cpp_code_emitter.py` | Emits the translation unit from cell sources (#333). Phase 1 replaces its entry point with the structured-cell emitter. |
-| `src/clm/workers/notebook/notebook_processor.py` | `_create_cpp_code_export` (call site), `_process_notebook_node` / `_process_code_cell` (filtering, blanking, metadata strip). |
-| `src/clm/workers/notebook/output_spec.py` | Output kinds; which tags delete/blank cells per view; `find_workshop_ranges` adapter. |
+| `src/clm/workers/notebook/cpp_code_emitter.py` | Structured-cell emitter (`CppCell`, `emit_cpp_deck`): sections, promotion, TODO placement, dangling scan (`_find_dangling`), `_CellWriter`. |
+| `src/clm/workers/notebook/notebook_processor.py` | `_create_cpp_code_export` (call site), `_process_notebook_node` (snapshot incl. excluded solution cells) / `_process_code_cell` (filtering, blanking, metadata strip). |
+| `src/clm/workers/notebook/output_spec.py` | Output kinds; which tags delete/blank cells per view; `SOLUTION_ONLY_TAGS`; `find_workshop_ranges` adapter. |
 | `src/clm/core/workshop_scope.py` | Canonical workshop range detector (Phase 3). |
 | `src/clm/core/tags.py` | Tag registry (`global` lands here). |
 | `src/clm/core/cmake_export.py` | Generated `CMakeLists.txt`, `clm: no-compile`, vendored support headers (Phase 3). |
@@ -346,7 +420,14 @@ that is the only place the "one string" assumption lives.
 - End-to-end: build CppCourses with the `Cpp` code output and run its compile
   gate (windows-latest MinGW today — note #922's finding that MinGW accepted
   namespace-scope statements g++/MSVC reject; consider adding a Linux g++ job).
-- Still needs tests: everything in Phases 1–4.
+- Corpus compile check used in Phase 2 (no `g++` on this box): a scratch
+  script emits every `.en.cpp` deck through `NotebookProcessor` for the
+  three specs into `D:/tmp/clm-corpus-928/<kind>/` and runs one
+  `cl /nologo /std:c++20 /EHsc /utf-8 /Zs /w` per topic directory (with
+  `/I` for the vendored include dir, the topic and the module dir) from a
+  generated `.bat` that calls `vcvars64.bat` once; failures are diffed
+  against the Completed view. Rebuild it from §4's description if needed.
+- Still needs tests: Phases 3–4.
 
 ## 8. Session Notes
 
@@ -359,3 +440,9 @@ that is the only place the "one string" assumption lives.
   off `origin/master`, not stacked.
 - The `.ipynb_checkpoints` directories under `slides/` inflate corpus counts
   (442 → 385 decks); the scan excludes them.
+- Phase 2 (2026-09-13): the first corpus run had every extra code-along
+  failure caused by dropped `completed` cells, which the emitter never saw
+  — D5's "12 decks" was computed on blanked cells only. Snapshot what the
+  view *drops* as well as what it blanks. The worktree guard also refuses
+  `for` loops, `comm`, and heredoc-in-pipeline compounds — put multi-step
+  work in a scratch `.py` and run it with one plain command.

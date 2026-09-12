@@ -39,7 +39,14 @@ Rules (the design record is ``docs/claude/handovers/cpp-ide-export-handover.md``
   scope wholesale.
 - Bare display expressions are wrapped in ``CLM_DISPLAY``, which prints the
   expression text as a label, so the transcript reads ``i1 = 10``.
-- Blanked (code-along) cells leave a ``// TODO`` in the section body.
+- Blanked (code-along) cells leave one ``// TODO: define <names>`` (or
+  ``// TODO: <section heading>`` when the cell defined nothing) where the
+  code would have gone — namespace scope for definitions and promoted
+  variables, the section body for statements — and a kept cell that uses
+  a name whose latest definition is missing from the view (a blanked cell,
+  a ``completed``/``alt`` solution cell the view drops, or another
+  commented-out cell) is emitted commented out, so the skeleton compiles
+  as shipped.
 """
 
 from __future__ import annotations
@@ -48,11 +55,12 @@ import re
 import unicodedata
 from collections.abc import Sequence
 
-from attrs import define
+from attrs import Factory, define
 
 from clm.workers.notebook.cpp_code_analysis import (
     STATEMENT_CATEGORIES,
     CppItem,
+    classify_source,
     classify_source_spans,
     strip_comments_and_strings,
 )
@@ -64,6 +72,10 @@ from clm.workers.notebook.cpp_code_analysis import (
 DISPLAY_INCLUDE = "#include <clm/display.hpp>"
 # The section banner needs std::cout.
 _BANNER_INCLUDES = ("#include <iostream>",)
+
+# Note above a kept cell that cannot compile until the student has typed
+# the blanked code it depends on (D5 in the handover).
+DANGLING_NOTE = "// depends on code you'll type above \u2014 uncomment after"
 
 _LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -115,6 +127,13 @@ class CppCell:
     blanking, when the caller can supply it — it drives the reference scan
     so a variable a *blanked* later cell uses is still promoted. ``tags`` and
     ``slide_id`` come from the cell metadata before the pipeline strips it.
+
+    An ``excluded`` cell is not part of this view at all — the solution side
+    of a ``start``/``completed`` pair (or an ``alt`` variant) that the
+    code-along views drop. It is never emitted and opens no section; it is
+    carried only so the names it defines count as *missing* for the
+    dangling-cell scan (D5), and so promotion decisions match the Completed
+    view, which does contain it.
     """
 
     cell_type: str
@@ -122,6 +141,7 @@ class CppCell:
     original_source: str | None = None
     tags: tuple[str, ...] = ()
     slide_id: str | None = None
+    excluded: bool = False
 
     @property
     def is_code(self) -> bool:
@@ -133,7 +153,7 @@ class CppCell:
 
     @property
     def opens_section(self) -> bool:
-        return "slide" in self.tags or "subslide" in self.tags
+        return not self.excluded and ("slide" in self.tags or "subslide" in self.tags)
 
     @property
     def pre_blank_source(self) -> str:
@@ -183,8 +203,96 @@ def _comment_block(markdown: str) -> str:
 
 
 def _references(name: str, text: str) -> bool:
-    """Whether identifier ``name`` occurs in (comment/string-stripped) ``text``."""
-    return re.search(rf"(?<![\w:]){re.escape(name)}(?!\w)", text) is not None
+    """Whether identifier ``name`` occurs in (comment/string-stripped) ``text``.
+
+    A member access (``p.x``, ``p->x``) or a qualified name (``ns::x``)
+    never refers to the top-level entity ``x``, so those are skipped.
+    """
+    return re.search(rf"(?<![\w:.])(?<!->){re.escape(name)}(?!\w)", text) is not None
+
+
+def _comment_out(text: str) -> str:
+    """Prefix every line of ``text`` with ``// ``."""
+    return "\n".join(f"// {line}" if line.strip() else "//" for line in text.split("\n"))
+
+
+def _uses(name: str, text: str) -> bool:
+    """Like :func:`_references`, but a qualified ``ns::name`` counts too.
+
+    The dangling scan tracks entities by their unqualified name, so a
+    reference through a namespace (``frac::Fraction``) must match.
+    """
+    return re.search(rf"(?<![\w.])(?<!->){re.escape(name)}(?!\w)", text) is not None
+
+
+def _uses_member(name: str, text: str) -> bool:
+    """Whether ``text`` accesses a member called ``name`` (``p.f``, ``p->f``, ``T::f``)."""
+    return re.search(rf"(?:\.|->|::)\s*{re.escape(name)}(?!\w)", text) is not None
+
+
+def _short_name(name: str) -> str:
+    """The unqualified identifier of a classifier name (``A::f<int>`` → ``f``)."""
+    return name.split("<")[0].split("::")[-1]
+
+
+_MEMBER_CATEGORIES = frozenset({"member_fn_def", "member_var_def"})
+
+
+def _namespace_body(text: str) -> str:
+    """The text between the outer braces of a ``namespace X { ... }`` item."""
+    start = text.find("{")
+    end = text.rfind("}")
+    return text[start + 1 : end] if 0 <= start < end else ""
+
+
+def _entity_items(items: Sequence[CppItem]) -> list[CppItem]:
+    """``items`` with every ``namespace_def`` replaced by its (nested) members.
+
+    A class defined inside ``namespace poly { ... }`` is an entity of the
+    deck like any other; the classifier only sees the namespace block.
+    """
+    out: list[CppItem] = []
+    for item in items:
+        if item.category == "namespace_def":
+            out.extend(_entity_items(classify_source(_namespace_body(item.text))))
+        else:
+            out.append(item)
+    return out
+
+
+def _defined_names(items: Sequence[CppItem]) -> set[str]:
+    """Short names of the entities ``items`` define (members excluded)."""
+    return {
+        _short_name(item.name)
+        for item in _entity_items(items)
+        if item.name and item.category not in _MEMBER_CATEGORIES
+    }
+
+
+def _defined_members(items: Sequence[CppItem]) -> set[str]:
+    """Short names of the out-of-class members ``items`` define."""
+    return {
+        _short_name(item.name)
+        for item in _entity_items(items)
+        if item.name and item.category in _MEMBER_CATEGORIES
+    }
+
+
+def _operator_operands(items: Sequence[CppItem], deck_names: frozenset[str]) -> set[str]:
+    """Deck-defined types an operator overload in ``items`` is declared for.
+
+    An operator cannot be tracked by name (``a * b`` never spells
+    ``operator*``), so a missing overload makes its operand types missing
+    instead — every later cell that touches the type is then commented
+    out, which is broader than necessary but compiles.
+    """
+    types: set[str] = set()
+    for item in _entity_items(items):
+        if not item.name or "operator" not in item.name:
+            continue
+        signature = item.text.split("{", 1)[0]
+        types.update(name for name in deck_names if _uses(name, signature))
+    return types
 
 
 def _cpp_string(text: str) -> str:
@@ -327,6 +435,27 @@ class _Stream:
         return "".join(out)
 
 
+@define
+class _CellWriter:
+    """Adds one cell's rendered items to a stream, commented out if dangling.
+
+    The dangling note is written once per stream the cell touches, ahead of
+    the first commented-out item.
+    """
+
+    cell: int
+    dangling: bool
+    noted: set[int] = Factory(set)
+
+    def add(self, stream: _Stream, text: str) -> None:
+        if self.dangling:
+            if id(stream) not in self.noted:
+                self.noted.add(id(stream))
+                stream.add("comment", self.cell, DANGLING_NOTE)
+            text = _comment_out(text)
+        stream.add("code", self.cell, text)
+
+
 class _DeckEmitter:
     def __init__(self, cells: Sequence[CppCell], *, blanks_code_cells: bool) -> None:
         self.blanks_code_cells = blanks_code_cells
@@ -339,22 +468,54 @@ class _DeckEmitter:
         # Per section, per cell: classified items (None for non-code cells).
         self.items: dict[tuple[int, int], list[CppItem]] = {}
         self.vars: list[_VarSlot] = []
+        # Cells whose source is blank in this view (code-along); their
+        # items are classified from the pre-blank source and only decide
+        # where the TODO goes and what it names.
+        self.blanked: set[tuple[int, int]] = set()
+        # Cells not in this view at all (see ``CppCell.excluded``).
+        self.excluded: set[tuple[int, int]] = set()
+        # Kept cells that reference a name whose latest definition is
+        # missing from the view; emitted commented out.
+        self.dangling: set[tuple[int, int]] = set()
 
     # -- pass 1: classify and decide promotions -----------------------------
 
     def _is_blanked(self, cell: CppCell) -> bool:
+        """Whether ``cell`` is an empty code cell that had content before.
+
+        With an ``original_source`` snapshot the answer is exact — an empty
+        cell that was empty in the source is not a TODO even for a spec that
+        blanks (Partial blanks only its workshop range). Without a snapshot
+        the spec's ``blanks_code_cells`` flag decides.
+        """
         if not cell.is_code or cell.source.strip():
             return False
-        return bool(cell.pre_blank_source.strip()) or self.blanks_code_cells
+        if cell.original_source is not None:
+            return bool(cell.original_source.strip())
+        return self.blanks_code_cells
 
     def _classify(self) -> None:
         order = 0
         for section in self.sections:
             for ci, cell in enumerate(section.cells):
-                if not cell.is_code or not cell.source.strip():
+                if not cell.is_code:
                     continue
-                items = classify_source_spans(cell.source)
-                self.items[(section.index, ci)] = items
+                key = (section.index, ci)
+                if cell.excluded:
+                    if not cell.pre_blank_source.strip():
+                        continue
+                    self.excluded.add(key)
+                    self.items[key] = classify_source_spans(cell.pre_blank_source)
+                    continue
+                if self._is_blanked(cell):
+                    self.blanked.add(key)
+                    source = cell.pre_blank_source
+                elif cell.source.strip():
+                    source = cell.source
+                else:
+                    continue
+                items = classify_source_spans(source)
+                self.items[key] = items
                 if "global" in cell.tags:
                     continue
                 for item in items:
@@ -362,8 +523,66 @@ class _DeckEmitter:
                     if item.category == "var_decl" and item.name:
                         self.vars.append(_VarSlot(section.index, order, item))
 
+    _GLOBAL = -1
+    _MISSING = -2
+
+    def _find_dangling(self, promoted: set[int]) -> None:
+        """Mark kept cells that depend on code the student has yet to type.
+
+        Deck-global (D5), in cell order, latest definition wins: a name
+        defined by a blanked cell, an excluded solution cell, or a cell that
+        is itself dangling (so the closure holds) is *missing*; a name
+        defined by an emitted cell is available — deck-wide when it lands
+        at namespace scope, within its section when it stays local. A kept
+        cell that references a missing name (outside its own definitions),
+        or accesses a missing member, is dangling. Only earlier cells
+        count: a kept section may reuse a local name a later workshop cell
+        blanks. Operator overloads are tracked through their operand types.
+        """
+        deck_names = self._deck_names()
+        state: dict[str, int] = {}
+        missing_members: set[str] = set()
+        for section in self.sections:
+            for ci, cell in enumerate(section.cells):
+                key = (section.index, ci)
+                items = self.items.get(key)
+                if items is None:
+                    continue
+                own = _defined_names(items)
+                own_members = _defined_members(items)
+                if key in self.blanked or key in self.excluded:
+                    for name in own | _operator_operands(items, deck_names):
+                        state[name] = self._MISSING
+                    missing_members |= own_members
+                    continue
+                text = strip_comments_and_strings(cell.source)
+                missing = {name for name, st in state.items() if st == self._MISSING}
+                dangling = any(_uses(name, text) for name in missing - own) or any(
+                    _uses_member(name, text) for name in missing_members - own_members
+                )
+                if dangling:
+                    self.dangling.add(key)
+                    for name in own:
+                        state[name] = self._MISSING
+                    missing_members |= own_members
+                    continue
+                is_global = "global" in cell.tags
+                for item in _entity_items(items):
+                    if not item.name or item.category in _MEMBER_CATEGORIES:
+                        continue
+                    local = (
+                        item.category == "var_decl" and not is_global and id(item) not in promoted
+                    )
+                    state[_short_name(item.name)] = section.index if local else self._GLOBAL
+                missing_members -= own_members
+
     def _namespace_texts(self) -> list[str]:
-        """Comment-stripped text of every item that lands at namespace scope."""
+        """Comment-stripped text of every item that lands at namespace scope.
+
+        Blanked cells count too: the student types their definitions back at
+        namespace scope, so a variable such a definition uses must be
+        promoted for the typed-in code to compile.
+        """
         texts: list[str] = []
         for section in self.sections:
             for ci, cell in enumerate(section.cells):
@@ -438,38 +657,49 @@ class _DeckEmitter:
                 continue
             if not cell.is_code:
                 continue
-            if self._is_blanked(cell):
-                body.add("code", ci, "// TODO")
+            key = (section.index, ci)
+            if key in self.excluded:
                 continue
-            items = self.items.get((section.index, ci))
+            items = self.items.get(key)
+            if key in self.blanked:
+                if items is None:
+                    # No snapshot; the spec says the cell was blanked.
+                    body.add("code", ci, f"// TODO: {section.heading}")
+                    continue
+                target = self._todo_target(cell, items, promoted, namespace, body)
+                target.add("code", ci, self._todo_text(section, items))
+                continue
             if items is None:
                 continue
             is_global = "global" in cell.tags
+            dangling = key in self.dangling
+            add = _CellWriter(ci, dangling=dangling).add
             for item in items:
                 cat = item.category
                 text = item.original.strip()
                 if cat == "include":
                     self._add_include(text)
                 elif cat == "main_def":
-                    self.deck_defines_main = True
-                    namespace.add("code", ci, text)
+                    # A dangling main is commented out like the rest of its
+                    # cell, so the deck still gets a generated main.
+                    self.deck_defines_main = self.deck_defines_main or not dangling
+                    add(namespace, text)
                 elif is_global:
-                    namespace.add("code", ci, _terminate(text))
+                    add(namespace, _terminate(text))
                 elif cat == "expr_display" or (cat == "call_stmt" and not text.endswith(";")):
                     # A bare call without `;` also relied on the kernel's
                     # auto-display; the helper's void branch makes the wrap
                     # safe for calls that don't return a value.
                     self.uses_display = True
-                    body.add("code", ci, _wrap_display(text))
+                    add(body, _wrap_display(text))
                 elif cat in STATEMENT_CATEGORIES or cat == "unknown":
                     # ``unknown`` is rare; treat it as a statement and let the
                     # compile check flag it if that guess is wrong.
-                    body.add("code", ci, _terminate(text))
+                    add(body, _terminate(text))
                 elif cat == "var_decl":
-                    target = namespace if id(item) in promoted else body
-                    target.add("code", ci, _terminate(text))
+                    add(namespace if id(item) in promoted else body, _terminate(text))
                 else:
-                    namespace.add("code", ci, _terminate(text))
+                    add(namespace, _terminate(text))
         function_name: str | None = None
         if body:
             self.uses_banner = True
@@ -480,20 +710,53 @@ class _DeckEmitter:
             namespace.add("code", -1, fn)
         return namespace.render(), function_name
 
-    def _defined_names(self) -> frozenset[str]:
-        names = {
-            item.name.split("<")[0].split("::")[-1]
-            for items in self.items.values()
-            for item in items
-            if item.name
-        }
+    @staticmethod
+    def _todo_target(
+        cell: CppCell,
+        items: Sequence[CppItem],
+        promoted: set[int],
+        namespace: _Stream,
+        body: _Stream,
+    ) -> _Stream:
+        """Where a blanked cell's TODO goes: where its code would have gone.
+
+        Namespace scope if the cell is ``global`` or any of its items would
+        land there (a definition, an include, a promoted variable) — a
+        student cannot type a function definition inside the section
+        function; otherwise the section body.
+        """
+        if "global" in cell.tags:
+            return namespace
+        for item in items:
+            if item.category in _HOISTED_CATEGORIES or item.category == "include":
+                return namespace
+            if item.category == "var_decl" and id(item) in promoted:
+                return namespace
+        return body
+
+    @staticmethod
+    def _todo_text(section: _Section, items: Sequence[CppItem]) -> str:
+        names: list[str] = []
+        for item in items:
+            if item.name and item.name not in names:
+                names.append(item.name)
+        if names:
+            return f"// TODO: define {', '.join(names)}"
+        return f"// TODO: {section.heading}"
+
+    def _deck_names(self) -> frozenset[str]:
+        """Short names of everything any cell of the deck defines."""
+        names: set[str] = set()
+        for items in self.items.values():
+            names |= _defined_names(items) | _defined_members(items)
         return frozenset(names)
 
     def emit(self) -> str:
         self._classify()
-        _name_sections(self.sections, reserved=self._defined_names())
+        _name_sections(self.sections, reserved=self._deck_names())
         self._decide_promotions()
         promoted = {id(slot.item) for slot in self.vars if slot.promoted}
+        self._find_dangling(promoted)
         chunks: list[str] = []
         calls: list[str] = []
         for section in self.sections:
@@ -526,10 +789,13 @@ class _DeckEmitter:
 def emit_cpp_deck(cells: Sequence[CppCell], *, blanks_code_cells: bool = False) -> str:
     """Emit one translation unit of study material from a deck's cells.
 
-    ``cells`` must already reflect the desired (language × kind) view. With
+    ``cells`` must already reflect the desired (language × kind) view. A
+    blanked cell (empty ``source`` with a non-empty ``original_source``)
+    leaves one ``// TODO`` where its code would have gone; with
     ``blanks_code_cells`` (code-along-style variants) an empty code cell
-    counts as blanked even when no ``original_source`` is available, and
-    leaves a ``// TODO`` in its section body. Returns the text, ending in a
-    newline.
+    without an ``original_source`` counts as blanked too. ``excluded``
+    cells (solution cells the view drops) are never emitted but count as
+    missing definitions. Kept cells that depend on missing code are emitted
+    commented out. Returns the text, ending in a newline.
     """
     return _DeckEmitter(cells, blanks_code_cells=blanks_code_cells).emit()
