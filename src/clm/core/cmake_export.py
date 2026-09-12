@@ -52,6 +52,9 @@ SUPPORT_INCLUDE_DIRNAME = "include"
 _SUPPORT_HEADER_TOKENS: dict[str, tuple[str, ...]] = {
     "nlohmann/json.hpp": ("nlohmann/json.hpp",),
     "xcpp/xdisplay.hpp": ("xcpp/xdisplay.hpp", "nlohmann/json.hpp"),
+    # The emitter's labeled-display helper (#928): every deck with a bare
+    # display expression includes it.
+    "clm/display.hpp": ("clm/display.hpp",),
 }
 
 

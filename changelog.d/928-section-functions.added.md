@@ -5,7 +5,10 @@
   `slide_id`, e.g. `void brace_initialization()`, with a
   `== Brace initialization ==` banner from the section's heading), keeps
   the **markdown narrative as `//` comment blocks**, and labels displayed
-  expressions — `CLM_DISPLAY(i1)` now prints `i1 = 10`. Top-level variables
+  expressions — `CLM_DISPLAY(i1)` now prints `i1 = 10`; the macro lives in
+  the vendored support header `clm/display.hpp` (copied into the code
+  output's `include/` by the CMake export) instead of an inline template
+  block at the top of every deck. Top-level variables
   stay local to their section unless a later section or a namespace-scope
   definition references them, in which case the emitter **promotes them to
   namespace scope automatically**; the new code-cell tag **`global`** forces

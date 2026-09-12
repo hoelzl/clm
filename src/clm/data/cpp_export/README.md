@@ -9,6 +9,7 @@ include path.
 |---|---|---|
 | `include/nlohmann/json.hpp` | <https://github.com/nlohmann/json> (single-header release asset, MIT) | v3.12.0 |
 | `include/xcpp/xdisplay.hpp` | CLM shim for the xeus-cpp display header | — |
+| `include/clm/display.hpp` | `CLM_DISPLAY(expr)` — the export's labeled display of bare expressions (#928) | — |
 
 To update nlohmann/json, download `json.hpp` from the desired GitHub
 release and update the version here.

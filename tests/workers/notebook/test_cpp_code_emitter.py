@@ -5,9 +5,11 @@ Covers the span-aware classification layer in ``cpp_code_analysis``
 export of :func:`emit_cpp_deck`.
 """
 
+import importlib.resources
 import shutil
 import subprocess
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -510,18 +512,16 @@ class TestEmitDisplayExpressions:
     def test_expr_display_wrapped_with_labeled_helper(self):
         tu = emit(code("int x = 2;"), code("x + 40"))
         assert "    CLM_DISPLAY(x + 40);" in tu
-        assert "namespace clm {" in tu
-        assert "void display(const char* label," in tu
-        assert "#__VA_ARGS__" in tu
-        assert "#include <iostream>" in tu
-        assert "#include <type_traits>" in tu
-        # Helper precedes its first use.
-        assert tu.index("#define CLM_DISPLAY") < tu.index("CLM_DISPLAY(x + 40);")
+        # The helper is a vendored support header, not an inline block.
+        assert "#include <clm/display.hpp>" in tu
+        assert "namespace clm" not in tu
+        assert "#define CLM_DISPLAY" not in tu
+        assert tu.index("#include <clm/display.hpp>") < tu.index("CLM_DISPLAY(x + 40);")
 
     def test_no_helper_without_display_expressions(self):
         tu = emit(code("int x = 1;"), code("f(x);"))
         assert "CLM_DISPLAY" not in tu
-        assert "namespace clm" not in tu
+        assert "clm/display.hpp" not in tu
 
     def test_display_with_line_comment_closes_on_own_line(self):
         tu = emit(code("x + 1 // off by one"))
@@ -715,7 +715,7 @@ class TestEmitClassifierRegressions:
         tu = emit(code(_REQUIRES_CLAUSE_TEMPLATE), code("ordered_min(1, 2)"))
         assert _REQUIRES_CLAUSE_TEMPLATE in tu
         assert "    CLM_DISPLAY(ordered_min(1, 2));" in tu
-        assert tu.count("CLM_DISPLAY(") == 2  # the #define and the one call
+        assert tu.count("CLM_DISPLAY(") == 1  # the one call; the macro lives in the header
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +723,10 @@ class TestEmitClassifierRegressions:
 # ---------------------------------------------------------------------------
 
 _CXX = shutil.which("g++") or shutil.which("clang++")
+# The vendored support headers the CMake export puts on the include path.
+_SUPPORT_INCLUDE_DIR = (
+    Path(str(importlib.resources.files("clm"))) / "data" / "cpp_export" / "include"
+)
 
 
 @pytest.mark.skipif(_CXX is None, reason="no C++ compiler on PATH")
@@ -731,7 +735,7 @@ class TestEmittedCodeCompiles:
         path = tmp_path / "deck.cpp"
         path.write_text(tu, encoding="utf-8")
         proc = subprocess.run(
-            [_CXX, "-std=c++20", "-fsyntax-only", str(path)],
+            [_CXX, "-std=c++20", "-fsyntax-only", f"-I{_SUPPORT_INCLUDE_DIR}", str(path)],
             capture_output=True,
             text=True,
         )

@@ -79,6 +79,10 @@ name) cost only locality; false negatives hit the compile gate. Not coupled to
 
 `CLM_DISPLAY(...)` already receives the expression tokens; stringizing
 `#__VA_ARGS__` prints `i1 = 10` in the export with zero deck changes. The
+macro lives in the vendored support header `clm/display.hpp`
+(`src/clm/data/cpp_export/include/`, copied by `cmake_export` like the xcpp
+shim) so the deck only carries `#include <clm/display.hpp>` — owner request
+after reviewing the first output. The
 issue's `SHOW` macro needs a header the *kernel* can see: no hidden-but-executed
 cell mechanism exists (`del` cells are dropped before execution; the kernel runs
 in a temp dir with only the topic's siblings copied in). That is a notebook-UX

@@ -10,7 +10,7 @@ plain cell text preserves.
 Output shape (one translation unit)::
 
     #include <...>                 hoisted, deduplicated
-    <display helper>               only when a bare expression is displayed
+    #include <clm/display.hpp>     only when a bare expression is displayed
 
     // ## Brace initialization     markdown preceding the section's first
     int helper(int x) { ... }      statement, and namespace-scope items
@@ -57,41 +57,11 @@ from clm.workers.notebook.cpp_code_analysis import (
     strip_comments_and_strings,
 )
 
-# C++20 (the course standard): concepts and if-constexpr drive the
-# operator<<-availability fallback at compile time.
-_DISPLAY_HELPER = """\
-// Replicates the notebook's automatic display of bare expressions, labeled
-// with the expression text: prints `expr = value` if the value has an
-// operator<<, a placeholder otherwise; void expressions are just evaluated.
-namespace clm {
-
-template <typename T>
-concept Streamable = requires(std::ostream& os, const T& value) { os << value; };
-
-template <typename ExprThunk>
-void display(const char* label, ExprThunk&& expr_thunk) {
-    if constexpr (std::is_void_v<std::invoke_result_t<ExprThunk>>) {
-        std::forward<ExprThunk>(expr_thunk)();
-    } else {
-        decltype(auto) value = std::forward<ExprThunk>(expr_thunk)();
-        std::cout << label << " = ";
-        if constexpr (Streamable<std::remove_cvref_t<decltype(value)>>) {
-            const auto flags = std::cout.flags();
-            std::cout << std::boolalpha << value << "\\n";
-            std::cout.flags(flags);
-        } else {
-            std::cout << "<unprintable value>\\n";
-        }
-    }
-}
-
-}  // namespace clm
-
-#define CLM_DISPLAY(...) \\
-    ::clm::display(#__VA_ARGS__, [&]() -> decltype(auto) { return (__VA_ARGS__); })"""
-
-# Includes the display helper itself needs.
-_DISPLAY_INCLUDES = ("#include <iostream>", "#include <type_traits>", "#include <utility>")
+# The labeled-display helper (``CLM_DISPLAY``) lives in a vendored support
+# header — ``clm/data/cpp_export/include/clm/display.hpp`` — that the CMake
+# export copies next to the decks and puts on the include path, so students
+# see one ``#include`` instead of a template block at the top of every file.
+DISPLAY_INCLUDE = "#include <clm/display.hpp>"
 # The section banner needs std::cout.
 _BANNER_INCLUDES = ("#include <iostream>",)
 
@@ -533,12 +503,11 @@ class _DeckEmitter:
             if function_name:
                 calls.append(f"{function_name}();")
 
-        if self.uses_display:
-            for forced in _DISPLAY_INCLUDES:
-                self._add_include(forced)
         if self.uses_banner:
             for forced in _BANNER_INCLUDES:
                 self._add_include(forced)
+        if self.uses_display:
+            self._add_include(DISPLAY_INCLUDE)
 
         if not self.deck_defines_main:
             if calls:
@@ -550,8 +519,6 @@ class _DeckEmitter:
         parts: list[str] = []
         if self.includes:
             parts.append("\n".join(self.includes))
-        if self.uses_display:
-            parts.append(_DISPLAY_HELPER)
         parts.extend(chunks)
         return "\n\n".join(parts) + "\n"
 

@@ -512,7 +512,10 @@ would put statements and mid-file `#include`s at namespace scope) but a
 - **Bare display expressions** (`i1` on its own line, relying on the
   kernel's auto-display) become `CLM_DISPLAY(i1);`, which prints
   `i1 = 10` — the expression text is the label — or `<unprintable value>`
-  when no `operator<<` exists.
+  when no `operator<<` exists. The macro comes from the vendored support
+  header `clm/display.hpp` (`#include <clm/display.hpp>` at the top of the
+  deck), which the generated CMake project copies into `include/` and puts
+  on the include path, so students never see the template code behind it.
 - **Code-along outputs**: a blanked (non-`keep`) cell leaves `// TODO` in
   its section body; `keep` cells are emitted as usual.
 
