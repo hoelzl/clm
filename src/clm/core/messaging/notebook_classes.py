@@ -19,7 +19,10 @@ from clm.core.messaging.base_classes import Payload, ProcessingError, Result
 # ``start`` cells (the cached-partial path keeps them in-range; every other
 # view drops them at its boundary); pre-v4 artifacts lack the starters and
 # would silently keep emitting scaffolding-less partial HTML.
-CACHE_HASH_SCHEMA_VERSION = 4
+# v5 (#928 phase 3): a C++ ``code`` result is a file set (``NotebookResult
+# .companion_files``: the deck header and one file per workshop); a pre-v5
+# entry replays the single-file form without its companions.
+CACHE_HASH_SCHEMA_VERSION = 5
 
 
 def notebook_metadata(kind, prog_lang, language, output_format) -> str:
@@ -217,9 +220,20 @@ class NotebookResult(Result):
     result_type: Literal["result"] = "result"
     result: str
     output_metadata_tags: tuple[str, str, str, str]
+    # Files the worker wrote next to ``output_file``, by file name (#928
+    # phase 3): the C++ code export's deck header and workshop files. Empty
+    # for every other output. A cache replay writes them alongside the
+    # main result; the host learns their names from the job's result JSON
+    # (``companion_files``) and reads them back from the output directory.
+    companion_files: dict[str, str] = {}
 
     def result_bytes(self) -> bytes:
         return self.result.encode("utf-8")
+
+    def companion_bytes(self) -> dict[str, bytes]:
+        """``companion_files`` UTF-8 encoded, tolerant of pre-#928 pickles."""
+        files = getattr(self, "companion_files", None) or {}
+        return {name: text.encode("utf-8") for name, text in files.items()}
 
     def output_metadata(self) -> str:
         return ":".join(self.output_metadata_tags)

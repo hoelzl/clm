@@ -237,6 +237,23 @@ class JobQueue:
 
         return retry_on_busy(_probe, label=f"check_cache({output_file})")
 
+    def peek_cache_metadata(self, output_file: str, content_hash: str) -> dict[str, Any] | None:
+        """Read a cache entry's metadata without touching its access statistics.
+
+        A read-only companion of :meth:`check_cache` for callers that only
+        need to know what a stored result consists of — e.g. the names of
+        the companion files a job-cache hit must register (#928).
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "SELECT result_metadata FROM results_cache WHERE output_file = ? AND content_hash = ?",
+            (output_file, content_hash),
+        )
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        return json.loads(row[0])  # type: ignore[no-any-return]
+
     def add_to_cache(self, output_file: str, content_hash: str, result_metadata: dict[str, Any]):
         """Add result to cache.
 

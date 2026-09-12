@@ -461,6 +461,97 @@ class TestNotebookWorkerProcessJob:
                 assert output_file.read_text() == result_content
 
     @pytest.mark.asyncio
+    async def test_process_job_async_writes_companion_files_and_reports_them(
+        self, worker_id, db_path, tmp_path
+    ):
+        """The C++ code export's companion files (#928 phase 3) are written
+        next to the main output with LF endings, named in the job result
+        JSON, and named in the job-cache metadata."""
+        import json
+
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        input_file = tmp_path / "deck.cpp"
+        input_file.write_text("// %%\nint x = 1;\n")
+        output_file = tmp_path / "out" / "01 Deck.cpp"
+
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(input_file),
+            output_file=str(output_file),
+            content_hash="test-hash",
+            payload={"kind": "completed", "prog_lang": "cpp", "language": "en", "format": "code"},
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path)
+        companions = {"01 Deck.hpp": "#pragma once\n", "01 Deck_workshop_1.cpp": "int main() {}\n"}
+
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+            mock_create_spec.return_value = MagicMock()
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = AsyncMock(return_value='#include "01 Deck.hpp"\n')
+                mock_processor.get_warnings.return_value = []
+                mock_processor.get_companion_outputs.return_value = companions
+                MockProcessor.return_value = mock_processor
+
+                with patch.object(worker.job_queue, "add_to_cache") as mock_cache:
+                    await worker._process_job_async(job)
+
+        assert output_file.read_bytes() == b'#include "01 Deck.hpp"\n'
+        assert (output_file.parent / "01 Deck.hpp").read_bytes() == b"#pragma once\n"
+        assert (output_file.parent / "01 Deck_workshop_1.cpp").read_bytes() == b"int main() {}\n"
+        result_json = worker._get_job_result_json()
+        assert result_json is not None
+        assert json.loads(result_json) == {"companion_files": list(companions)}
+        metadata = mock_cache.call_args[0][2]
+        assert metadata["companion_files"] == list(companions)
+        assert metadata["format"] == "code"
+
+    @pytest.mark.asyncio
+    async def test_process_job_async_without_companions_reports_none(
+        self, worker_id, db_path, tmp_path
+    ):
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        input_file = tmp_path / "notebook.ipynb"
+        input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
+        output_file = tmp_path / "output.html"
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(input_file),
+            output_file=str(output_file),
+            content_hash="test-hash",
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
+            status="processing",
+            created_at=datetime.now(),
+        )
+        worker = NotebookWorker(worker_id, db_path)
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+            mock_create_spec.return_value = MagicMock()
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = AsyncMock(return_value="<html/>")
+                mock_processor.get_warnings.return_value = []
+                mock_processor.get_companion_outputs.return_value = {}
+                MockProcessor.return_value = mock_processor
+                with patch.object(worker.job_queue, "add_to_cache") as mock_cache:
+                    await worker._process_job_async(job)
+
+        assert worker._get_job_result_json() is None
+        assert "companion_files" not in mock_cache.call_args[0][2]
+        assert output_file.read_text() == "<html/>"
+
+    @pytest.mark.asyncio
     async def test_process_job_async_writes_lf_line_endings(self, worker_id, db_path, tmp_path):
         """Output must be written with LF line endings on every platform.
 

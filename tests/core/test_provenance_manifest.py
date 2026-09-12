@@ -128,6 +128,80 @@ def _course_from_test_spec_1(out_root):
     return Course.from_spec(spec, test_data, out_root)
 
 
+def _cpp_course(tmp_path):
+    """A minimal C++ course: one section, one topic, one deck."""
+    import io
+
+    from clm.core.course import Course
+    from clm.core.course_spec import CourseSpec
+
+    xml = """
+<course>
+    <name><de>C++ Kurs</de><en>C++ Course</en></name>
+    <prog-lang>cpp</prog-lang>
+    <description><de>d</de><en>d</en></description>
+    <certificate><de>c</de><en>c</en></certificate>
+    <sections>
+        <section>
+            <name><de>Woche 1</de><en>Week 1</en></name>
+            <topics><topic>intro</topic></topics>
+        </section>
+    </sections>
+</course>
+"""
+    data_dir = tmp_path / "course"
+    topic_dir = data_dir / "slides" / "module_100_test" / "topic_100_intro"
+    topic_dir.mkdir(parents=True)
+    (topic_dir / "slides_intro.cpp").write_text(
+        "// j2 from 'macros.j2' import header\n"
+        '// {{ header("Intro De", "Intro En") }}\n\n// %%\nint x = 1;\n',
+        encoding="utf-8",
+    )
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    return Course.from_spec(spec, data_dir, tmp_path / "out")
+
+
+def test_manifest_records_cpp_companion_files_next_to_a_code_output(tmp_path):
+    """The C++ code export's header and workshop files (#928 phase 3) are
+    not predictable from the spec — they depend on the deck's workshop
+    ranges — so they are enumerated from disk next to each code output,
+    with that output's topic ownership, kind and format."""
+    course = _cpp_course(tmp_path)
+    target = course.output_targets[0]
+    code_records = [
+        (p, r)
+        for p, r in enumerate_expected_outputs(course, target)
+        if r["format"] == "code" and p.suffix == ".cpp"
+    ]
+    assert code_records
+    out_path, record = code_records[0]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text('#include "deck.hpp"\n', encoding="utf-8")
+    header = out_path.parent / f"{out_path.stem}.hpp"
+    workshop = out_path.parent / f"{out_path.stem}_workshop_1.cpp"
+    header.write_text("#pragma once\n", encoding="utf-8")
+    workshop.write_text("int main() {}\n", encoding="utf-8")
+    # A deck-local header with another name is not a companion.
+    (out_path.parent / "point.hpp").write_text("#pragma once\n", encoding="utf-8")
+
+    manifest = build_provenance_manifest(
+        course, target, source_commit=None, source_dirty=None, built_at=BUILT_AT
+    )
+    by_path = {f["path"]: f for f in manifest["files"]}
+    rel = lambda p: p.relative_to(target.output_root).as_posix()  # noqa: E731
+    assert rel(out_path) in by_path
+    assert rel(header) in by_path
+    assert rel(workshop) in by_path
+    assert rel(out_path.parent / "point.hpp") not in by_path
+    for path in (header, workshop):
+        entry = by_path[rel(path)]
+        assert entry["topic_id"] == record["topic_id"]
+        assert entry["kind"] == record["kind"]
+        assert entry["format"] == "code"
+        assert entry["language"] == record["language"]
+        assert entry["content_hash"].startswith("sha256:")
+
+
 def test_manifest_records_data_file_assets(tmp_path):
     course = _course_from_test_spec_1(tmp_path / "out")
     target = course.output_targets[0]

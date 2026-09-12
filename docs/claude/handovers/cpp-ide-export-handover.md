@@ -1,7 +1,7 @@
 # C++ IDE Export (#928) — Handover
 
-**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–1
-merged (#932, #933, #934), Phase 2 in PR, Phase 3 next
+**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–2
+merged (#932, #933, #934, #935), Phase 3 in PR, Phase 4 next
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -20,7 +20,7 @@ VS Code and *run and repeat* the slide examples from:
   per slide, a generated `main()` calling sections in order;
 - `foo.hpp` — hoisted includes plus `global`-tagged cells, so workshop files are
   standalone;
-- `foo_workshop_N.cpp` — one file per workshop range (skeleton in code-along,
+- `foo_workshop_N.cpp` — one file per workshop block (skeleton in code-along,
   solution in completed);
 - labeled display output (`i1 = 10`), a compilable code-along skeleton with
   `// TODO` markers, and per-module CMake projects.
@@ -146,6 +146,36 @@ Phased PRs, each fresh off `origin/master`, each with a handover update. Phase
 meaningful. Multi-file output (header + workshop files) is one phase because
 both need the same worker output-contract change.
 
+### D10 — A workshop *block* is the file unit; lecture definitions need `global`
+
+The canonical detector (`find_workshop_ranges`) opens a new range at every
+`workshop` tag or `workshop-…` slide_id, so a workshop whose tasks are
+`workshop-task-1`, `workshop-task-2`… sub-slides is several ranges. For
+blanking that is invisible; for the export it would put each task in its
+own program although the tasks build on each other. The Phase 3 corpus
+scan: 121 decks with ranges, 20 with more than one, **all 20 a single run
+of back-to-back ranges** (no deck has two workshops separated by lecture
+content). So the emitter merges adjacent ranges into one block and writes
+one file per block; an `end-workshop` closer or lecture cells between two
+openers keep them separate.
+
+Cross-file visibility stays as D8 says: lecture definitions live in
+`foo.cpp`, and a workshop that needs one gets the cell tagged `global`. The
+corpus has 8 decks whose workshop uses an untagged lecture definition
+(`array_basics`: `print_array`; `pointers_to_struct`, `reference_args`,
+`overloading`: `Point`/`print`/`Point3d`; `lifetime_observer`: `Obs`;
+`std_library_overview`: `numbers`; `my_vector_stl`: `MyVector`;
+`variables`: `i`) — they compiled as one translation unit before and fail the
+Completed gate now until tagged. The export reports them as a build warning
+(`cpp_export_workshop_scope`, Completed view, once per deck) so the tagging
+pass is mechanical. The alternative — auto-hoisting referenced lecture
+definitions into the header, D2-style — was **not** implemented because D8
+explicitly keeps definitions next to their narrative; it is a one-function
+change in `_DeckEmitter` if the owner prefers zero tags over narrative
+locality. `using namespace` directives of the lecture part *are* hoisted into
+the header (environment, like includes — `string_views` needed
+`std::literals` in its workshop).
+
 ## 3. Phase Breakdown
 
 ### Phase 0 — Classifier fixes #921 / #922 [DONE — PR #932, merged 2026-09-12]
@@ -190,7 +220,7 @@ named in the issue (`variables_core`, `functions`, `const_constexpr`) reviewed
 by the owner as a student would; existing compile gate in CppCourses stays
 green.
 
-### Phase 2 — Code-along skeleton [IN PROGRESS — PR open]
+### Phase 2 — Code-along skeleton [DONE — PR #935, merged 2026-09-13]
 
 Branch `claude/issue-928-phase2-code-along`. Planned scope: bodies = keep
 cells in order + `// TODO: <heading>` at each blank position; deck-global
@@ -205,20 +235,27 @@ recursion, member access and operator tracking. Acceptance: no code-along
 or partial deck fails MSVC `/Zs` that the Completed view passes (met:
 0 / 357); `TestEmitCodeAlongTodos` rewritten.
 
-### Phase 3 — Multi-file output: header, workshop files, per-module CMake [TODO]
+### Phase 3 — Multi-file output: header, workshop files, per-module CMake [IN PROGRESS — PR open]
 
-`foo.hpp` (D8) and `foo_workshop_N.cpp` per `find_workshop_ranges` (D6);
-worker output contract grows from one file to a file set for the code format;
-`cmake_export.py` emits one target per deck plus one per workshop, grouped per
-module via `add_subdirectory`; code-along workshop targets become gate-able.
-Acceptance: CppCourses compile gate includes workshop targets; a student can
-open one module directory as a CMake project.
+Branch `claude/issue-928-phase3-multifile`. `foo.hpp` (D8) and
+`foo_workshop_N.cpp` per **workshop block** (D6, see D10 below); worker
+output contract grew from one file to a file set for the code format
+(*companion files*); `cmake_export.py` emits one target per deck plus one per
+workshop, grouped per module via `add_subdirectory`; workshop targets are
+gate-able. Acceptance: CppCourses compile gate includes workshop targets
+(automatic — the gate builds the kind root, which now adds every module);
+a student can open one module directory as a CMake project. What the
+corpus forced on top (Current Status): merging back-to-back ranges, hoisting
+lecture `using` directives into the header, and a build warning naming the
+lecture definitions a workshop uses without a `global` tag.
 
 ### Phase 4 — Verification tooling and rollout [TODO]
 
 Opt-in differential check (kernel output vs. compiled-executable output per
 deck; kernel side is `tools/execute_deck_kernel.py` in CppCourses); wire
-code-along workshop targets into the CppCourses CI gate; `SHOW`-in-notebooks is #930.
+the code-along kind (workshop skeletons) into the CppCourses CI gate next to
+Completed; tag the 8 D10 decks `global` in CppCourses; `SHOW`-in-notebooks
+is #930.
 
 ## 4. Current Status
 
@@ -228,6 +265,79 @@ code-along workshop targets into the CppCourses CI gate; `SHOW`-in-notebooks is 
   `claude/scan-section-export` — not merged there yet); Phase 0 merged (PR
   #932); `SHOW` split off as #930; this handover merged (PR #931); Phase 1
   merged (PR #933, header follow-up PR #934).
+- **Phase 3 implemented** on `claude/issue-928-phase3-multifile` (worktree
+  `.claude/worktrees/issue-928-cpp-ide-export`):
+  - `src/clm/core/cpp_export_files.py` (new): the naming rule
+    (`header_file_name`, `workshop_file_name`, `workshop_ordinal`,
+    `companion_output_files`) shared by emitter, manifest and CMake.
+  - `cpp_code_emitter.py`: `emit_cpp_deck(cells, *, stem, blanks_code_cells,
+    workshop_ranges)` returns `CppDeckExport(main, header, workshops,
+    workshop_lecture_uses)`. Sections split at workshop-block boundaries
+    and carry a `file` id; `_later_code`/`_namespace_texts` are per file
+    (promotion never crosses files); the dangling scan is untouched
+    (deck-global). Lecture `global` cells and `using` directives go to
+    `header_stream`; the header exists iff the deck has a block or a
+    lecture `global` cell, and then carries `#pragma once` + every include
+    (banner/display ones too) + that stream. `defines_main` is per file.
+    `merge_adjacent_workshop_ranges` (public) folds ranges into blocks;
+    `_workshop_lecture_uses` scans pre-blank workshop code for lecture
+    names (`_references`, minus names `_declared_locally` — a same-line
+    type+name heuristic).
+  - `notebook_processor.py`: the snapshot is `_CppSnapshotCell` (with the
+    source index) plus `_cpp_export_ranges` computed on the **full** cell
+    list (an `end-workshop` closer may sit on a dropped cell); blocks are
+    merged, then `_translate_ranges` maps them onto the snapshot. The stem
+    is `PurePath(payload.output_file).stem`. `get_companion_outputs()`
+    mirrors `get_warnings()`. The scope warning is added for
+    `CompletedOutput` only.
+  - Worker/host contract: the worker writes companions next to the output
+    (LF), `set_job_companion_files` puts their names into the job result
+    JSON (`companion_files`) and into the job-cache metadata;
+    `NotebookResult.companion_files` (+ `companion_bytes()`, tolerant of
+    pre-field pickles) carries them in the result cache;
+    `CACHE_HASH_SCHEMA_VERSION` → 5. `sqlite_backend.py`: the job-cache
+    probe requires every companion on disk; the jobcache-hit path
+    registers them via the new read-only `JobQueue.peek_cache_metadata`;
+    the DB replay writes and registers them (`_replay_companion_files`);
+    completion registers them from the job result
+    (`_job_result_data`, `_register_on_disk_outputs`);
+    `_prepare_result_for_cache` reads them back. `_companion_paths` drops
+    any name with a path separator.
+  - `provenance_manifest.py`: companions found on disk next to a `.cpp`
+    code output are enumerated with that output's record (the release
+    sync copies by manifest). `cmake_export.py`: `generate_cmake_files`
+    returns the kind-root file (toolchain + `add_subdirectory` per module)
+    and one standalone project per module (`if(NOT
+    CLM_CODE_EXPORT_CONFIGURED)` toolchain block, `../include`); target
+    names are assigned project-wide, workshop targets are
+    `<deck target>_workshop_N`, `EXCLUDE_FROM_ALL` covers a no-compile
+    deck's workshops. The CppCourses gate builds the kind root, so
+    workshop targets join it without a workflow change.
+  - Docs: `commands.md` C++ section (file set, blocks, CMake layout),
+    `slide-format.md` `global` row, `changelog.d/928-multi-file-export.added.md`.
+- **Corpus run (357 `.en.cpp` decks, three views, MSVC 2022 `cl /Zs`)**:
+  356 emitted per view (`slides_header` fails template expansion in the
+  harness only — its `add.h` Jinja include). 120 headers, 121 workshop
+  files per view, file sets identical across views. Failing topics
+  (Phase 2 baseline in parentheses): Completed 19 (13) — the 8 D10 decks
+  are the only new ones, everything else is the kernel-only baseline;
+  code-along 9 (8) — new: `pointers_to_struct`, `reference_args`,
+  `my_vector_stl` (their *kept* workshop cells use the lecture type; in
+  the other D10 decks the using cells are blanked); partial 14 (12) —
+  new: those three plus `variables`. Before merging adjacent ranges the
+  same run had 15 new Completed failures (`workshop-task-2` files not
+  seeing task 1) and `string_views` failed on `"…"sv` until the lecture
+  `using namespace std::literals` moved to the header. The scope warning
+  lists the 8 decks plus two advisory false positives
+  (`templates_and_strategy`: a template parameter named like a lecture
+  class; `command`: a member function `Undo`).
+- **Tests**: `TestMultiFileExport` (+ compile smoke test building
+  `deck.cpp` and a workshop file against the header), processor tests
+  (companion naming, full-list ranges, scope warning),
+  `tests/infrastructure/backends/test_companion_outputs.py` (all four
+  host paths + path-component rejection), worker tests (companions
+  written/reported/cached), `NotebookResult` tests, `TestGenerateCmakeFiles`,
+  a manifest companion test.
 - **Phase 2 implemented** on `claude/issue-928-phase2-code-along` (worktree
   `.claude/worktrees/issue-928-cpp-ide-export`):
   - `cpp_code_emitter.py`: blanked cells are classified from
@@ -339,51 +449,49 @@ code-along workshop targets into the CppCourses CI gate; `SHOW`-in-notebooks is 
   code cell takes its heading from a *following* markdown heading if any
   (rare, cosmetic).
 
-## 5. Next Steps (Phase 3 — multi-file output)
+## 5. Next Steps (Phase 4 — verification tooling and rollout)
 
-Start on a **fresh branch off `origin/master`** once the Phase 2 PR has
+Start on a **fresh branch off `origin/master`** once the Phase 3 PR has
 merged (`git fetch origin && git switch -C worktree-issue-928-cpp-ide-export
-origin/master && git switch -c claude/issue-928-phase3-multifile`) — never
+origin/master && git switch -c claude/issue-928-phase4-verification`) — never
 switch a worktree to literal `master`.
 
-1. **Output contract.** `NotebookResult.result: str` is the only place the
-   "one string" assumption lives (§6). Add a sibling-file map (published
-   path → text) and teach the worker's writer to emit it; the CLI/build
-   side must copy the extra files next to the deck.
-2. **Header `foo.hpp`** (D8): hoisted, deduped includes + `global`-tagged
-   cells, source order; `foo.cpp` includes it. Keep definitions in
-   `foo.cpp` next to their narrative.
-3. **Workshop files `foo_workshop_N.cpp`** per `find_workshop_ranges`
-   (D6): `#include "foo.hpp"`, the range's cells under the same section
-   rules, own generated `main()`. Workshop-range definitions never go to
-   the header. Code-along workshop files use the Phase 2 skeleton rules
-   (TODO placement, dangling cells, excluded solution cells) unchanged —
-   the emitter already sees the whole deck, so the scan stays deck-global
-   even when the output is split.
-4. **CMake**: `cmake_export.py` emits one target per deck plus one per
-   workshop, grouped per module via `add_subdirectory`; code-along
-   workshop targets become gate-able.
-5. **Tests**: emitter tests for the split, a compile smoke test that builds
-   `foo.cpp` + one workshop file against the header, cmake export tests,
-   worker output-contract test; info topic (`commands.md` C++ section) and
-   changelog fragment.
+1. **CppCourses tagging pass (D10)**: tag the lecture cells the 8 decks'
+   workshops use `global` (the `cpp_export_workshop_scope` warnings of a
+   Completed build list deck, workshop and names); rerun the gate. Decide
+   `clm: no-compile` vs. emitter fixes for the 4 Completed baseline
+   failures (`program_structure`, `more_initialization`, `compile_time`,
+   `good_tests`) and the `*_disabled`/`observer`/`ws_100_employee` ones.
+2. **Gate the skeletons**: add the code-along kind's CMake projects to
+   `code-export-compile.yml` in CppCourses (the workshop skeletons compile
+   as shipped — corpus: 0 code-along failures outside the baseline).
+3. **Differential check** (opt-in): run each Completed deck executable and
+   diff its stdout against the kernel transcript
+   (`tools/execute_deck_kernel.py`); labeled `CLM_DISPLAY` output makes the
+   comparison line-based.
+4. **Owner review** of the three M1 decks as a student would (still the
+   open Phase 1 acceptance item), now including a workshop deck
+   (`functions` has none — take `array_basics` after tagging).
 
-Phase 2 leftovers worth a look while there: (a) the 13 Completed baseline
-failures (kernel-only constructs — decide `clm: no-compile` per deck in
-CppCourses vs. emitter fixes); (b) the operator rule comments out every
-later cell that touches the operand type — a per-variable type map would
-narrow it; (c) `global:NAME` as the escape hatch for shapes the classifier
-cannot name is not implemented (no corpus deck needed it); (d) a dangling
-deck-defined `main` leaves the student with two `main`s after
-uncommenting — the note does not say so.
+Phase 3 leftovers worth a look while there: (a) auto-hoisting referenced
+lecture definitions into the header instead of `global` tags (D10 — owner
+call); (b) `preproc_other` items (`#define`) stay in the lecture file, so a
+workshop using a lecture macro fails like a definition — hoist with the
+using-directives if it shows up; (c) the scope warning is advisory:
+template parameters and member functions named like a lecture entity
+(`Strategy`, `Undo`) produce false positives, a local declared on a
+different line than its type is a false negative; (d) Phase 2's leftovers
+(13 baseline decks, operator rule breadth, `global:NAME`, two `main`s after
+uncommenting) are untouched.
 
-Gotchas carried forward: the Partial spec blanks only its workshop range
-while `blanks_code_cells` is `True` — the emitter decides blanking from the
-snapshot (`original_source`), never from the flag, when a snapshot exists;
-dropped `start` cells must never be snapshotted as excluded (a stub would
-make the kept solution look missing). The CppCourses compile gate runs
-MinGW (#922: it accepts things g++/MSVC reject); the local VS 2022 `cl /Zs`
-check used here is the stricter one.
+Gotchas carried forward: the emitter decides blanking from the snapshot,
+never from `blanks_code_cells`, when a snapshot exists; dropped `start`
+cells are never snapshotted; workshop ranges must come from the full cell
+list and be merged **before** translation (a range that is empty in one
+view must not split a block); the companion file set must be identical
+across views (it is a function of the source cells only) or the manifest,
+CMake and cache paths disagree per kind; `_companion_paths` is the only
+place that validates names coming from the DB — keep it that way.
 
 ## 6. Key Files & Architecture
 
@@ -393,22 +501,29 @@ check used here is the stricter one.
 | `src/clm/workers/notebook/cpp_code_emitter.py` | Structured-cell emitter (`CppCell`, `emit_cpp_deck`): sections, promotion, TODO placement, dangling scan (`_find_dangling`), `_CellWriter`. |
 | `src/clm/workers/notebook/notebook_processor.py` | `_create_cpp_code_export` (call site), `_process_notebook_node` (snapshot incl. excluded solution cells) / `_process_code_cell` (filtering, blanking, metadata strip). |
 | `src/clm/workers/notebook/output_spec.py` | Output kinds; which tags delete/blank cells per view; `SOLUTION_ONLY_TAGS`; `find_workshop_ranges` adapter. |
-| `src/clm/core/workshop_scope.py` | Canonical workshop range detector (Phase 3). |
+| `src/clm/core/workshop_scope.py` | Canonical workshop range detector; the emitter merges adjacent ranges into blocks (D10). |
+| `src/clm/core/cpp_export_files.py` | File-set naming rule (`<stem>.hpp`, `<stem>_workshop_N.cpp`) and on-disk companion discovery. |
+| `src/clm/core/messaging/notebook_classes.py` | `NotebookResult.companion_files`; `CACHE_HASH_SCHEMA_VERSION`. |
+| `src/clm/infrastructure/backends/sqlite_backend.py` | Host side of the companion contract: jobcache probe/hit, DB replay, completion registration, result-cache prepare. |
+| `src/clm/workers/notebook/notebook_worker.py`, `src/clm/infrastructure/workers/worker_base.py` | Worker side: writes companions, reports `companion_files` in the job result JSON and job-cache metadata. |
+| `src/clm/core/provenance_manifest.py` | Enumerates companions next to each `.cpp` code output. |
 | `src/clm/core/tags.py` | Tag registry (`global` lands here). |
-| `src/clm/core/cmake_export.py` | Generated `CMakeLists.txt`, `clm: no-compile`, vendored support headers (Phase 3). |
+| `src/clm/core/cmake_export.py` | Generated CMake projects: kind root + one per module, deck and workshop targets, `clm: no-compile`, vendored support headers. |
 | `src/clm/cli/info_topics/slide-format.md`, `commands.md` | Version-accurate docs downstream agents rely on; the C++ export is not documented there yet. |
 | `tests/workers/notebook/test_cpp_code_emitter.py` | Classifier + emitter + compile-smoke tests. |
 | CppCourses `tools/scan_section_export.py` | Corpus scan (`--mode slide|heading|both`); rerun after any grouping/promotion rule change. |
 
 Flow: `process_notebook` → `process_notebook_for_spec` →
-`_process_notebook_node` (filter, blank, strip) → `create_contents` (same
-processor instance; branches on `format == "code" and prog_lang == "cpp"`) →
-`_create_cpp_code_export` → emitter → **one string** returned as
-`NotebookResult.result: str` (`src/clm/core/messaging/notebook_classes.py`,
-a Pydantic message crossing the worker/CLI boundary) → written by the worker
-→ `cmake_export` post-build. Phase 3 must extend `NotebookResult` with a
-sibling-file map (published path → text) and teach the writer to emit them;
-that is the only place the "one string" assumption lives.
+`_process_notebook_node` (filter, blank, strip; snapshot + full-list
+workshop ranges) → `create_contents` (same processor instance; branches on
+`format == "code" and prog_lang == "cpp"`) → `_create_cpp_code_export` →
+emitter → the lecture file is returned as the result string, the header and
+workshop files sit in `get_companion_outputs()` → the worker writes all of
+them next to each other and names the companions in the job result JSON
+and the job-cache metadata → the host registers them (sweep), stores them
+in `NotebookResult.companion_files` (result cache) and replays them on a
+hit → manifest + `cmake_export` post-build find them on disk by the naming
+rule.
 
 ## 7. Testing Approach
 
@@ -420,14 +535,19 @@ that is the only place the "one string" assumption lives.
 - End-to-end: build CppCourses with the `Cpp` code output and run its compile
   gate (windows-latest MinGW today — note #922's finding that MinGW accepted
   namespace-scope statements g++/MSVC reject; consider adding a Linux g++ job).
-- Corpus compile check used in Phase 2 (no `g++` on this box): a scratch
-  script emits every `.en.cpp` deck through `NotebookProcessor` for the
-  three specs into `D:/tmp/clm-corpus-928/<kind>/` and runs one
-  `cl /nologo /std:c++20 /EHsc /utf-8 /Zs /w` per topic directory (with
-  `/I` for the vendored include dir, the topic and the module dir) from a
-  generated `.bat` that calls `vcvars64.bat` once; failures are diffed
-  against the Completed view. Rebuild it from §4's description if needed.
-- Still needs tests: Phases 3–4.
+- Corpus compile check used in Phases 2–3 (no `g++` on this box): a
+  scratch script emits every `.en.cpp` deck through `NotebookProcessor` for
+  the three specs into `D:/tmp/clm-corpus-928-p3/<kind>/<module>__<topic>/`
+  (main + companions side by side, one `files.rsp` per topic listing its
+  `.cpp` files) and runs one `cl /nologo /std:c++20 /EHsc /utf-8 /Zs /w`
+  per topic (with `/I` for the vendored include dir, the output dir, the
+  topic and the module dir) from a generated `compile.bat` per kind that
+  calls `vcvars64.bat` once and echoes `### <topic>` before each `cl`; a
+  report script groups `error C` lines by topic and diffs against the
+  Phase 2 logs in `D:/tmp/clm-corpus-928/`. Run the `.bat` files through
+  the PowerShell tool — the worktree guard refuses `cmd //c`. Rebuild from
+  this description if needed.
+- Still needs tests: Phase 4.
 
 ## 8. Session Notes
 
@@ -446,3 +566,10 @@ that is the only place the "one string" assumption lives.
   view *drops* as well as what it blanks. The worktree guard also refuses
   `for` loops, `comm`, and heredoc-in-pipeline compounds — put multi-step
   work in a scratch `.py` and run it with one plain command.
+- Phase 3 (2026-09-13): the first corpus run put 7 files out of one workshop
+  (`workshop-task-N` sub-slides) — check *how* the canonical detector's
+  ranges relate to each other before building on them. The "no longer
+  failing" list of a compile diff needs a sanity check: two of the entries
+  were a harness artifact (a deck that failed template expansion, a deck
+  whose output dir was renamed). A `_workshop_` substring count over deck
+  names is wrong when a deck is *called* `..._workshop.cpp`.

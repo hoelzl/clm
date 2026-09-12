@@ -24,7 +24,7 @@ import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from clm.core.messaging.base_classes import ProcessingWarning
 from clm.infrastructure.database.busy_retry import retry_on_busy
@@ -315,6 +315,10 @@ class Worker(ABC):
 
         # Per-job warnings collection
         self._current_job_warnings: list[ProcessingWarning] = []
+        # Names of the files the current job wrote next to its output file
+        # (the C++ code export's header and workshop files, #928); reported
+        # with the job result so the host can register and cache them.
+        self._current_job_companion_files: list[str] = []
 
         # Store parent process ID for orphan detection
         self.parent_pid = os.getppid()
@@ -655,22 +659,35 @@ class Worker(ABC):
         """
         self._current_job_warnings = warnings
 
+    def set_job_companion_files(self, names: list[str]) -> None:
+        """Record the files the current job wrote next to its output file.
+
+        ``names`` are file names relative to the output file's directory.
+        They travel in the job result JSON under ``companion_files`` so the
+        host registers them for the stray-file sweep, stores them with the
+        cached result, and replays them on a cache hit (#928 phase 3).
+        """
+        self._current_job_companion_files = list(names)
+
     def _clear_job_warnings(self) -> None:
-        """Clear warnings for the current job."""
+        """Clear the per-job result data (warnings, companion files)."""
         self._current_job_warnings = []
+        self._current_job_companion_files = []
 
     def _get_job_result_json(self) -> str | None:
         """Get job result as JSON string for storing in database.
 
         Returns:
-            JSON string with warnings, or None if no warnings
+            JSON string with warnings and/or companion files, or None if
+            there is nothing to report
         """
-        if not self._current_job_warnings:
+        result_data: dict[str, Any] = {}
+        if self._current_job_warnings:
+            result_data["warnings"] = [w.model_dump() for w in self._current_job_warnings]
+        if self._current_job_companion_files:
+            result_data["companion_files"] = list(self._current_job_companion_files)
+        if not result_data:
             return None
-
-        result_data = {
-            "warnings": [w.model_dump() for w in self._current_job_warnings],
-        }
         return json.dumps(result_data)
 
     def _log_event(self, event_type: str, message: str, metadata: dict | None = None):

@@ -42,6 +42,7 @@ from clm.core.course_files.data_file import DataFile
 from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_files.shared_image_file import SharedImageFile
+from clm.core.cpp_export_files import companion_output_files
 from clm.core.image_registry import get_relative_img_path
 from clm.core.utils.path_utils import (
     ext_for,
@@ -131,16 +132,22 @@ def enumerate_expected_outputs(
                         "provenance: skip %s (%s/%s/%s): %s", file.path, lang, fmt, kind, e
                     )
                     continue
-                yield (
-                    out_path,
-                    {
-                        "section_id": section.id,
-                        "topic_id": topic.id,
-                        "kind": kind,
-                        "format": fmt,
-                        "language": lang,
-                    },
-                )
+                record = {
+                    "section_id": section.id,
+                    "topic_id": topic.id,
+                    "kind": kind,
+                    "format": fmt,
+                    "language": lang,
+                }
+                yield out_path, record
+                # A C++ code output is a file set (#928 phase 3): the deck
+                # header and workshop files the worker wrote next to it
+                # belong to the same topic and output kind. Their number
+                # depends on the deck's workshop ranges, so they are found
+                # on disk rather than predicted.
+                if fmt == "code" and out_path.suffix == ".cpp":
+                    for companion in companion_output_files(out_path):
+                        yield companion, dict(record)
         elif isinstance(file, (DataFile, DuplicatedImageFile)):
             # Topic data assets and duplicated images accompany every output
             # variant: the build copies them under each (language, format, kind)

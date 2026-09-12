@@ -277,17 +277,28 @@ class NotebookWorker(Worker):
 
             logger.info(f"Notebook written to {output_path}")
 
+            # Companion files (the C++ code export's header and workshop
+            # files, #928 phase 3) go next to the main output; their names
+            # ride along in the job result and the job-cache metadata so the
+            # host can register, cache and replay them with the main file.
+            companions = processor.get_companion_outputs()
+            for name, text in companions.items():
+                with open(output_path.parent / name, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(text)
+            if companions:
+                logger.info(f"Wrote {len(companions)} companion file(s) next to {output_path}")
+                self.set_job_companion_files(list(companions))
+
             # Add to cache (works for both SQLite and API modes)
-            self.job_queue.add_to_cache(
-                job.output_file,
-                job.content_hash,
-                {
-                    "format": payload.format,
-                    "kind": payload.kind,
-                    "prog_lang": payload.prog_lang,
-                    "language": payload.language,
-                },
-            )
+            cache_metadata: dict[str, object] = {
+                "format": payload.format,
+                "kind": payload.kind,
+                "prog_lang": payload.prog_lang,
+                "language": payload.language,
+            }
+            if companions:
+                cache_metadata["companion_files"] = list(companions)
+            self.job_queue.add_to_cache(job.output_file, job.content_hash, cache_metadata)
             logger.debug(f"Added result to cache for {job.output_file}")
 
         except Exception as e:
