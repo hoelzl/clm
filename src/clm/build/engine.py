@@ -1147,7 +1147,10 @@ def _maybe_run_sweep(
       changed files; the sweep would delete everything else.
     - The build recorded fatal errors: the registry is missing entries
       for writes that never happened, so sweeping would remove valid
-      files from prior successful builds.
+      files from prior successful builds. This is the only skip reason
+      that also prints a user-facing notice: the strays it leaves
+      behind (e.g. notebooks of topics moved in a spec restructure)
+      otherwise look like a clm bug (#923).
 
     ``ownership`` is the pre-build ownership snapshot (finding S11,
     #798); roots it could not prove are CLM's are refused by the sweep
@@ -1161,6 +1164,7 @@ def _maybe_run_sweep(
         return
 
     skip_reason: str | None = None
+    skipped_due_to_errors = False
     if config.clean:
         skip_reason = "--clean already regenerates the whole tree"
     elif only_sections_mode:
@@ -1172,11 +1176,26 @@ def _maybe_run_sweep(
             f"build recorded {len(build_reporter.errors)} error(s); "
             f"sweep skipped to avoid removing files from prior successful builds"
         )
+        skipped_due_to_errors = True
 
     if skip_reason is None:
         # The sweep walks every output root; on big courses that is a
         # noticeable pause after the last stage, so tell the user.
         build_reporter.formatter.show_startup_message("Sweeping stale output files...")
+    elif skipped_due_to_errors:
+        # #923: a silent skip here reads as a clm bug — stale outputs
+        # from previous builds stay in the tree with no explanation.
+        # Say the strays were kept deliberately and name the remedy.
+        # Other skip reasons stay quiet: the user opted into them
+        # explicitly (``--clean``/``--only-sections``/``--no-sweep``),
+        # or a per-rebuild notice would be noise (watch mode).
+        build_reporter.formatter.show_startup_message(
+            f"Stale output files were NOT swept because the build recorded "
+            f"{len(build_reporter.errors)} error(s). Outdated files from "
+            f"previous builds (e.g. notebooks of moved or removed topics) "
+            f"are kept in place; rerun the build after fixing the errors "
+            f"to remove them."
+        )
 
     unowned_roots: tuple[Path, ...] = ()
     if ownership is not None and not config.allow_unowned_output:

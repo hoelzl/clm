@@ -1997,6 +1997,107 @@ class TestMaybeRunSweepSkipReasons:
         assert calls[0]["skip_reason"] is None
 
 
+class TestMaybeRunSweepUserNotice:
+    """User-visible notice for the sweep outcome (#923).
+
+    A build that records errors skips the stray-file sweep on purpose
+    (the write registry is incomplete), but used to do so silently —
+    stale notebooks from a spec restructure stayed in the output tree
+    with no explanation, which read as a clm bug. The orchestrator now
+    tells the user, in the same slot the "Sweeping stale output
+    files..." notice occupies, that strays were deliberately kept.
+    """
+
+    def _backend_with_empty_registry(self):
+        from clm.core.image_registry import ImageRegistry
+        from clm.core.output_write_registry import OutputWriteRegistry
+
+        return SimpleNamespace(
+            output_write_registry=OutputWriteRegistry(),
+            image_registry=ImageRegistry(),
+        )
+
+    def _reporter(self, *, has_errors: bool = False):
+        reporter = MagicMock()
+        reporter.errors = [object()] if has_errors else []
+        return reporter
+
+    def _run_sweep(self, monkeypatch: pytest.MonkeyPatch, config, reporter, tmp_path: Path):
+        from clm.build import output_sweep as sweep_module
+        from clm.build.engine import _maybe_run_sweep
+
+        monkeypatch.setattr(
+            sweep_module,
+            "sweep_stray_files",
+            lambda *args, **kwargs: sweep_module.SweepReport(skipped=True),
+        )
+        _maybe_run_sweep(
+            config=config,
+            root_dirs=[tmp_path],
+            backend=self._backend_with_empty_registry(),
+            build_reporter=reporter,
+            only_sections_mode=False,
+        )
+
+    def _shown_messages(self, reporter) -> list[str]:
+        return [call.args[0] for call in reporter.formatter.show_startup_message.call_args_list]
+
+    def test_sweep_notice_shown_when_sweep_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        reporter = self._reporter()
+        config = _make_config(sweep=True, output_dir=tmp_path)
+        self._run_sweep(monkeypatch, config, reporter, tmp_path)
+        assert self._shown_messages(reporter) == ["Sweeping stale output files..."]
+
+    def test_not_swept_notice_shown_when_reporter_has_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        reporter = self._reporter(has_errors=True)
+        config = _make_config(sweep=True, output_dir=tmp_path)
+        self._run_sweep(monkeypatch, config, reporter, tmp_path)
+        messages = self._shown_messages(reporter)
+        assert len(messages) == 1
+        assert "NOT swept" in messages[0]
+        assert "1 error(s)" in messages[0]
+        # The notice must say the strays were kept deliberately and name
+        # the remedy, so users don't read leftover files as a clm bug.
+        assert "rerun" in messages[0].lower()
+
+    def test_no_sweep_notice_for_non_error_skip_reasons(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # ``--clean``/watch mode skip the sweep for reasons the user
+        # explicitly opted into (or that leave nothing stale) — a notice
+        # there would be noise, and in watch mode it would repeat on
+        # every rebuild.
+        for config in (
+            _make_config(sweep=True, clean=True, output_dir=tmp_path),
+            _make_config(sweep=True, watch=True, output_dir=tmp_path),
+        ):
+            reporter = self._reporter()
+            self._run_sweep(monkeypatch, config, reporter, tmp_path)
+            assert self._shown_messages(reporter) == []
+
+    def test_clean_mode_wins_over_errors_notice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # ``--clean`` regenerates the whole tree, so even with build
+        # errors there is nothing stale to warn about.
+        reporter = self._reporter(has_errors=True)
+        config = _make_config(sweep=True, clean=True, output_dir=tmp_path)
+        self._run_sweep(monkeypatch, config, reporter, tmp_path)
+        assert self._shown_messages(reporter) == []
+
+    def test_no_notice_when_sweep_disabled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # ``--no-sweep``/``--incremental`` short-circuit before any
+        # notice: the user explicitly opted out.
+        reporter = self._reporter(has_errors=True)
+        config = _make_config(sweep=False, output_dir=tmp_path)
+        self._run_sweep(monkeypatch, config, reporter, tmp_path)
+        assert self._shown_messages(reporter) == []
+
+
 class TestProcessCourseInvokesCassetteSweep:
     """Regression for issue #145.
 

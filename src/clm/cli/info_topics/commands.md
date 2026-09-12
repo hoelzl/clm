@@ -272,7 +272,11 @@ The sweep is skipped automatically under:
   state, so a sweep would delete files cache replay decided not to
   re-emit.
 - After fatal stage errors — the registry is incomplete, so sweeping
-  could remove files from prior successful builds.
+  could remove files from prior successful builds. The build prints an
+  explicit "Stale output files were NOT swept..." note in this case, so
+  leftover files from previous builds (e.g. notebooks of moved or
+  removed topics) are expected and not a clm bug; rerun the build after
+  fixing the errors to remove them.
 
 `--no-sweep` opts out manually (useful when iterating on a single
 section and you don't want orphans from other sections deleted).
