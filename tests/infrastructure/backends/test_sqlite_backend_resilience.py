@@ -103,7 +103,11 @@ def _backend(db, ws, **kwargs) -> SqliteBackend:
         workspace_path=ws,
         skip_worker_check=True,
         poll_interval=0.02,
-        max_wait_for_completion_duration=5.0,
+        # The cap is only a hang guard here — no test in this file asserts
+        # on it. 5s was within reach of a loaded xdist run's stretched
+        # poll cycles (pre-push flake); 60s keeps the guard while putting
+        # it out of load's reach.
+        max_wait_for_completion_duration=60.0,
         **kwargs,
     )
 

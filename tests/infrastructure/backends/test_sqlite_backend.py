@@ -324,15 +324,42 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
         await backend.shutdown()
 
 
+class _FakeClock:
+    """Deterministic clock for ``SqliteBackend(clock=...)``.
+
+    The wait poll loop paces itself in real time (``asyncio.sleep``) but
+    evaluates the stall detector and the absolute completion cap against
+    this clock. A test therefore decides exactly how much "time" elapses
+    between completions, which removes the flake channel that hit the
+    pre-push gate: real sub-second sleeps overshooting tight thresholds
+    under xdist load (0.2s gap vs 0.35s stall timeout) on the loaded
+    Windows dev box (#910 family).
+
+    Keep fake-time jumps below ``DEAD_WORKER_SWEEP_INTERVAL_SECONDS`` (5s)
+    unless deliberately exercising the dead-worker sweep.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @pytest.mark.asyncio
 async def test_wait_for_completion_timeout(temp_db, temp_workspace):
     """A configured absolute completion cap still aborts the wait."""
+    clock = _FakeClock()
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        max_wait_for_completion_duration=0.5,  # Short opt-in cap
+        max_wait_for_completion_duration=4.0,  # Opt-in cap (fake clock)
         poll_interval=0.05,
         skip_worker_check=True,  # Unit test - no workers needed
+        clock=clock,
     )
 
     try:
@@ -341,6 +368,14 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         payload = MockPayload()
         await backend.execute_operation(operation, payload)
 
+        async def advance_clock_past_cap():
+            # Let the wait loop settle into polling, then jump past the
+            # cap; the loop trips on its next iteration regardless of how
+            # loaded the machine is.
+            await asyncio.sleep(0.05)
+            clock.advance(4.5)
+
+        task = asyncio.create_task(advance_clock_past_cap())
         # Should abort at the cap. The typed JobsPendingTimeoutError
         # subclasses TimeoutError, so this assertion keeps matching while
         # the build orchestration can detect the typed variant (issue #143).
@@ -348,6 +383,7 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
 
         with pytest.raises(JobsPendingTimeoutError, match="completion cap") as excinfo:
             await backend.wait_for_completion()
+        await task
         # Pending jobs are attached so the orchestration can record one
         # infrastructure error per stuck job.
         assert len(excinfo.value.pending_jobs) == 1
@@ -370,14 +406,16 @@ async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_wo
     from clm.core.backend import JobsPendingTimeoutError
 
     reporter = MagicMock()
+    clock = _FakeClock()
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        max_wait_for_completion_duration=0.5,
+        max_wait_for_completion_duration=4.0,
         poll_interval=0.05,
         skip_worker_check=True,
         build_reporter=reporter,
         enable_progress_tracking=False,
+        clock=clock,
     )
 
     try:
@@ -385,8 +423,14 @@ async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_wo
         payload = MockPayload()
         await backend.execute_operation(operation, payload)
 
+        async def advance_clock_past_cap():
+            await asyncio.sleep(0.05)
+            clock.advance(4.5)
+
+        task = asyncio.create_task(advance_clock_past_cap())
         with pytest.raises(JobsPendingTimeoutError):
             await backend.wait_for_completion()
+        await task
 
         # Exactly one error reported, with the never-started signature.
         assert reporter.report_error.call_count == 1
@@ -410,6 +454,7 @@ async def test_stall_detector_aborts_when_no_job_completes(temp_db, temp_workspa
     for ``job_stall_timeout`` seconds."""
     from clm.core.backend import JobsPendingTimeoutError
 
+    clock = _FakeClock()
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
@@ -417,6 +462,7 @@ async def test_stall_detector_aborts_when_no_job_completes(temp_db, temp_workspa
         poll_interval=0.05,
         skip_worker_check=True,
         enable_progress_tracking=False,
+        clock=clock,
     )
     # The default absolute cap is unlimited.
     assert backend.max_wait_for_completion_duration is None
@@ -426,8 +472,16 @@ async def test_stall_detector_aborts_when_no_job_completes(temp_db, temp_workspa
         payload = MockPayload()
         await backend.execute_operation(operation, payload)
 
+        async def advance_clock_past_stall_timeout():
+            # No job ever completes; once fake time passes the stall
+            # timeout, the next poll iteration must abort.
+            await asyncio.sleep(0.05)
+            clock.advance(4.0)
+
+        task = asyncio.create_task(advance_clock_past_stall_timeout())
         with pytest.raises(JobsPendingTimeoutError, match="stalled") as excinfo:
             await backend.wait_for_completion()
+        await task
         assert len(excinfo.value.pending_jobs) == 1
     finally:
         backend.active_jobs.clear()
@@ -442,18 +496,20 @@ async def test_stall_detector_progress_resets_the_clock(temp_db, temp_workspace)
     healthy-but-long drain."""
     from clm.infrastructure.database.job_queue import JobQueue as JQ
 
+    clock = _FakeClock()
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
-        job_stall_timeout=0.35,
+        job_stall_timeout=4.0,
         poll_interval=0.05,
         skip_worker_check=True,
         enable_progress_tracking=False,
+        clock=clock,
     )
 
     try:
         operation = MockOperation(service_name_value="notebook-processor")
-        for i in range(3):
+        for i in range(6):
             await backend.execute_operation(
                 operation,
                 MockPayload(
@@ -465,16 +521,20 @@ async def test_stall_detector_progress_resets_the_clock(temp_db, temp_workspace)
                 ),
             )
         job_ids = sorted(backend.active_jobs.keys())
-        assert len(job_ids) == 3
+        assert len(job_ids) == 6
 
         async def drain_slowly():
-            # Total drain time (~0.6s) far exceeds the stall timeout
-            # (0.35s), but the inter-completion gap (0.2s) never does.
+            # Total fake drain time (6s) far exceeds the stall timeout
+            # (4s), but the fake inter-completion gap (1s) never does.
+            # Real time only paces the steps; every timing decision the
+            # poll loop makes reads the fake clock, so xdist load cannot
+            # stretch a gap past the timeout.
             job_queue = JQ(temp_db)
             try:
                 for job_id in job_ids:
-                    await asyncio.sleep(0.2)
+                    clock.advance(1.0)
                     job_queue.update_job_status(job_id, "completed")
+                    await asyncio.sleep(0.05)
             finally:
                 job_queue.close()
 
@@ -496,19 +556,21 @@ async def test_absolute_cap_aborts_despite_steady_progress(temp_db, temp_workspa
     from clm.core.backend import JobsPendingTimeoutError
     from clm.infrastructure.database.job_queue import JobQueue as JQ
 
+    clock = _FakeClock()
     backend = SqliteBackend(
         db_path=temp_db,
         workspace_path=temp_workspace,
         job_stall_timeout=None,  # isolate the cap
-        max_wait_for_completion_duration=0.4,
+        max_wait_for_completion_duration=4.0,
         poll_interval=0.05,
         skip_worker_check=True,
         enable_progress_tracking=False,
+        clock=clock,
     )
 
     try:
         operation = MockOperation(service_name_value="notebook-processor")
-        for i in range(4):
+        for i in range(6):
             await backend.execute_operation(
                 operation,
                 MockPayload(
@@ -524,6 +586,12 @@ async def test_absolute_cap_aborts_despite_steady_progress(temp_db, temp_workspa
         stop = asyncio.Event()
 
         async def drain_slowly():
+            # Keep making progress (one fake second per completion), but
+            # the absolute cap at 4 fake seconds is a hard limit: with 6
+            # jobs to drain, the cap fires while jobs remain unfinished.
+            # The real-time pacing (0.2s per step vs the 0.05s poll
+            # interval) only guarantees the poll loop several iterations
+            # per step; every timing decision reads the fake clock.
             job_queue = JQ(temp_db)
             try:
                 for job_id in job_ids:
@@ -532,6 +600,7 @@ async def test_absolute_cap_aborts_despite_steady_progress(temp_db, temp_workspa
                         return  # wait aborted; stop completing jobs
                     except TimeoutError:
                         pass
+                    clock.advance(1.0)
                     job_queue.update_job_status(job_id, "completed")
             finally:
                 job_queue.close()
