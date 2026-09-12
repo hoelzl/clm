@@ -71,12 +71,35 @@ PREPROCESSOR_CATEGORIES = frozenset({"include", "preproc_other"})
 # ---------------------------------------------------------------------------
 
 
+def _is_digit_separator(src: str, i: int) -> bool:
+    """Whether the ``'`` at ``src[i]`` is a C++14 digit separator, not a quote.
+
+    ``2'000'000'000`` (issue #922): a ``'`` inside a numeric literal must not
+    open a char literal, or the scanner swallows everything up to the next
+    stray ``'`` — in the #922 cell the ``;`` and the following statement,
+    which then rode along inside the declaration and landed at namespace
+    scope. A ``'`` is a separator when it sits between two literal
+    characters and the alphanumeric run it belongs to starts with a digit
+    (``0x1'F``, ``1'000.5``); the char-literal prefixes ``u8'a'`` / ``L'a'``
+    start with a letter and stay literals.
+    """
+    if i == 0 or i + 1 >= len(src):
+        return False
+    if not (src[i - 1].isalnum() and src[i + 1].isalnum()):
+        return False
+    j = i - 1
+    while j > 0 and (src[j - 1].isalnum() or src[j - 1] in "'."):
+        j -= 1
+    return src[j].isdigit() or (src[j] == "." and j + 1 < len(src) and src[j + 1].isdigit())
+
+
 def strip_comments_and_strings(src: str) -> str:
     """Blank out comments and string/char literals (incl. raw strings).
 
     Preserves the structural characters (braces, parens, semicolons) the
     splitter and classifier rely on; replaces literals with empty
-    placeholders so their contents can't confuse them.
+    placeholders so their contents can't confuse them. Digit separators
+    (``1'000``) are kept — see :func:`_is_digit_separator`.
     """
     out: list[str] = []
     i, n = 0, len(src)
@@ -107,7 +130,7 @@ def strip_comments_and_strings(src: str) -> str:
             out.append('""')
             i = j + 1
             continue
-        if c == "'":
+        if c == "'" and not _is_digit_separator(src, i):
             j = i + 1
             while j < n and src[j] != "'":
                 j += 2 if src[j] == "\\" else 1
@@ -171,7 +194,7 @@ def mask_comments_and_strings(src: str) -> str:
             blank(i + 1, j)
             i = j + 1
             continue
-        if c == "'":
+        if c == "'" and not _is_digit_separator(src, i):
             j = i + 1
             while j < n and src[j] != "'":
                 j += 2 if src[j] == "\\" else 1
@@ -351,6 +374,34 @@ def normalize_args(args: str) -> str:
     return ",".join(p for p in parts if p)
 
 
+# A requires-clause constraint: a primary constraint expression — parenthesized
+# (one nesting level, ``requires (sizeof(T) > 4)``), or a possibly negated,
+# possibly qualified concept-id (``std::totally_ordered<T>``,
+# ``!std::is_void_v<T>``) — joined by ``&&`` / ``||``.
+_CONSTRAINT_PRIMARY = r"!?\s*(?:\((?:[^()]|\([^()]*\))*\)|[\w:]+(?:<[^;{}()]*>)?)"
+_REQUIRES_CLAUSE_RE = re.compile(
+    rf"^requires\s+{_CONSTRAINT_PRIMARY}(?:\s*(?:&&|\|\|)\s*{_CONSTRAINT_PRIMARY})*\s+"
+)
+
+
+def _skip_requires_clause(text: str) -> str:
+    """Drop a leading ``requires <constraint>`` from a post-template-head item.
+
+    ``template <typename T> requires std::totally_ordered<T> T f(T a)`` (issue
+    #921): the clause sits between the template head and the declarator, so
+    the declaration regexes — anchored at the start of the item — never saw
+    the declarator and the fallback took the whole function for a display
+    expression. The trailing form (``T f(T a) requires C<T> {``) needs no
+    handling: it lands in the tail after the parameter list, which the
+    function detector already inspects for ``{``.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("requires"):
+        return text
+    m = _REQUIRES_CLAUSE_RE.match(stripped)
+    return stripped[m.end() :] if m else text
+
+
 def classify_item(item: str) -> CppItem:
     """Classify one comment/string-stripped top-level item."""
     text = re.sub(r"\s+", " ", item).strip()
@@ -367,7 +418,7 @@ def classify_item(item: str) -> CppItem:
             elif ch == ">":
                 depth -= 1
                 if depth == 0:
-                    inner = classify_item(text[k + 1 :])
+                    inner = classify_item(_skip_requires_clause(text[k + 1 :]))
                     inner.text = text
                     return inner
         return CppItem("unknown", text=text)
