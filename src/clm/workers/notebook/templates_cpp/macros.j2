@@ -4,7 +4,6 @@
 // <img src="data:image/png;base64,{% include "cpp-logo.base64" %}"
 //      style="display:block;margin:auto;width:5%"/>
 // <br>
-{% endif %}
 // <div style="text-align:center; font-size:200%;">
 //  <b>{{ title_de }}</b>
 // </div>
@@ -15,13 +14,18 @@
 // <div style="text-align:center;">{{ organization }}</div>
 // <br/>
 {% endif %}
+{% else %}
+{# The code export keeps markdown as comments: a plain title, not the HTML title slide. #}
+// # {{ title_de }}
+//
+// {{ author }}{% if organization %} — {{ organization }}{% endif %}
+{% endif %}
 
 // %% [markdown] lang="en" tags=["slide"]
 {% if is_notebook or is_html %}
 // <img src="data:image/png;base64,{% include "cpp-logo.base64" %}"
 //      style="display:block;margin:auto;width:5%"/>
 // <br>
-{% endif %}
 // <div style="text-align:center; font-size:200%;">
 //   <b>{{ title_en }}</b>
 // </div>
@@ -31,6 +35,12 @@
 {% if organization %}
 // <div style="text-align:center;">{{ organization }}</div>
 // <br/>
+{% endif %}
+{% else %}
+{# The code export keeps markdown as comments: a plain title, not the HTML title slide. #}
+// # {{ title_en }}
+//
+// {{ author }}{% if organization %} — {{ organization }}{% endif %}
 {% endif %}
 {% endmacro -%}
 
@@ -40,7 +50,6 @@
 // <img src="data:image/png;base64,{% include "cpp-logo.base64" %}"
 //      style="display:block;margin:auto;width:5%"/>
 // <br>
-{% endif %}
 // <div style="text-align:center; font-size:200%;">
 //  <b>{{ title_de }}</b>
 // </div>
@@ -50,6 +59,12 @@
 {% if organization %}
 // <div style="text-align:center;">{{ organization }}</div>
 // <br/>
+{% endif %}
+{% else %}
+{# The code export keeps markdown as comments: a plain title, not the HTML title slide. #}
+// # {{ title_de }}
+//
+// {{ author }}{% if organization %} — {{ organization }}{% endif %}
 {% endif -%}
 {% endmacro -%}
 
@@ -59,7 +74,6 @@
 // <img src="data:image/png;base64,{% include "cpp-logo.base64" %}"
 //      style="display:block;margin:auto;width:5%"/>
 // <br>
-{% endif %}
 // <div style="text-align:center; font-size:200%;">
 //   <b>{{ title_en }}</b>
 // </div>
@@ -69,6 +83,12 @@
 {% if organization %}
 // <div style="text-align:center;">{{ organization }}</div>
 // <br/>
+{% endif %}
+{% else %}
+{# The code export keeps markdown as comments: a plain title, not the HTML title slide. #}
+// # {{ title_en }}
+//
+// {{ author }}{% if organization %} — {{ organization }}{% endif %}
 {% endif %}
 {% endmacro -%}
 

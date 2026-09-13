@@ -501,7 +501,9 @@ would put statements and mid-file `#include`s at namespace scope) but a
   order — unless the deck defines its own `main()`.
 - **Markdown cells become `//` comment blocks** at their source position:
   above the function while the section has produced no statement yet, inside
-  the body afterwards.
+  the body afterwards. The deck's `header` / `header_de` / `header_en`
+  macro renders as a plain `# Title` line plus the author for this format,
+  not as the HTML title slide the notebook and HTML outputs get.
 - Definitions (functions, classes, templates, aliases, namespaces, `using`
   directives, other preprocessor lines) go to namespace scope in source
   order. **Statements and variable definitions stay local** to their section
