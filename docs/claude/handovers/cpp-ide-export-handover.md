@@ -1,8 +1,9 @@
 # C++ IDE Export (#928) — Handover
 
 **Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–4
-merged (#932–#937, CppCourses #129); owner-review follow-ups in progress
-(#938 title slide, naming/HTML PR, display-macro rewrite next)
+merged (#932–#937, CppCourses #129); owner-review follow-ups #938 (title
+slide) and #939 (naming/HTML) merged, #940 (SHOW macro + `clm slides
+cpp-show`) and CppCourses rewrite PR open
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -277,8 +278,20 @@ Next Steps) — not something a session can fake.
     `f()` loses even its `std::cout` output. Decision: decks always
     terminate with `;` and use a display macro; the export's
     `CLM_DISPLAY` becomes the notebook's macro too (header shipped in
-    the worker image; `SHOW` alias). Rewrite tool + image change are
-    the next PR (see Next Steps).
+    the worker image; `SHOW` alias). Done in PR #940: `SHOW(...)` alias in
+    `clm/display.hpp`, `docker/notebook/Dockerfile` copies the header to
+    `/opt/conda/include/clm` (probed by mounting it into the `1.22.1`
+    image: `SHOW(x);` → `x = 42`, void call runs, unstreamable →
+    placeholder), `src/clm/slides/cpp_show.py` + `clm slides cpp-show`
+    (lossless `raw_cells` rewrite; classifier `expr_display` or `call_stmt`
+    without `;`/`}`; matches anchored at line boundaries — a bare `arg`
+    was first found inside `int arg{1};`; multi-line block comments stay
+    in front; backtick = prose → reported, not wrapped; `global` cells
+    reported, exit 1). CppCourses rewrite PR: 1458 displays in 156 decks;
+    left alone: two `!true` shell-escape cells, one prose paragraph in
+    `invoice_v6`, the disabled `adventure_v1_editscript` topic (CMake
+    text in code cells). With `SHOW` in the decks the export needs no
+    `CLM_DISPLAY` wrapping and the differential check compares values.
   - PR #938: the `header*` macros render `# Title` + author for the code
     format (the Python macros never removed the title either — only the
     logo is gated on notebook/HTML).
@@ -549,17 +562,13 @@ Next Steps) — not something a session can fake.
 
 ## 5. Next Steps (Phase 4 close-out)
 
-0. **Display-macro rewrite** (owner request, next PR): (a) `clm/display.hpp`
-   gains `SHOW(...)` as the deck-facing alias of `CLM_DISPLAY`; (b) the
-   notebook worker image installs the header into its include path
-   (`docker/notebook/Dockerfile`, micromamba prefix `/opt/conda/include`)
-   so `#include <clm/display.hpp>` works in the kernel; (c) a `clm slides`
-   subcommand rewrites every bare display expression (`expr_display`
-   items, 739 in the corpus) to `SHOW(expr);` and adds the include cell
-   where needed, both languages; (d) run it over CppCourses, corpus +
-   gate + differential check (now with values, since `SHOW` prints via
-   `std::cout`). A `SHOW` in a `global` cell is ill-formed (D3) — the
-   rewrite must skip those and the validator should flag them.
+0. **Display-macro rollout**: merge #940, then the CppCourses rewrite PR
+   (its build needs the header in the worker image — until the image is
+   rebuilt from #940's Dockerfile, a Docker-mode build of the rewritten
+   decks fails on `#include <clm/display.hpp>`; `:latest` is built by
+   CI on master). Direct-mode kernels (`clm provision kernel-env`) do not
+   get the header — add an include path there if Direct mode is ever used
+   for C++. A validator rule for `SHOW` in `global` cells is still open.
 1. **Merge order**: clm PR first (emitter + cache fixes), then the
    CppCourses PR — its master push triggers `code-export-compile.yml`,
    which installs clm from git master. Watch that run: it is the first
