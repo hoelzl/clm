@@ -15,7 +15,7 @@ leading comment lines and trailing line comment where they were, and the
 deck gains ``#include <clm/display.hpp>`` (appended to its first
 include-only cell, else a new ``keep`` cell before the first code cell).
 Cells tagged ``global`` are skipped and reported: a ``SHOW`` at namespace
-scope is ill-formed (the wrapper is a capture-default lambda), so such a
+scope is ill-formed (it expands to a statement), so such a
 cell needs the author's attention. Files are rewritten losslessly
 (:mod:`clm.core.slide_text.raw_cells`); a second run changes nothing.
 """

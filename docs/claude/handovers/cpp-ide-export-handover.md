@@ -88,9 +88,13 @@ after reviewing the first output. The
 issue's `SHOW` macro needs a header the *kernel* can see: no hidden-but-executed
 cell mechanism exists (`del` cells are dropped before execution; the kernel runs
 in a temp dir with only the topic's siblings copied in). That is a notebook-UX
-feature and is tracked as #930. Trap to keep: a capture-default lambda is
-ill-formed at namespace scope, so a display expression inside a `global` cell
-must be rejected (validate) or the wrapper must not be used there.
+feature and is tracked as #930 — resolved by PR #940: `SHOW` is the
+notebook macro, the header ships in the worker image. Trap to keep: the
+macro expands to a statement, ill-formed at namespace scope, so a display
+inside a `global` cell must be rejected (validate) or not wrapped. The
+helper must not use a lambda: xeus-cpp 0.8 crashes on the second
+lambda-wrapper instantiation after new globals (found by the SHOW rollout);
+the expression is passed through an overloaded comma operator instead.
 
 ### D4 — Structured emitter input carrying the *unblanked* source
 
