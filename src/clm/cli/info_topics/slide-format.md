@@ -24,6 +24,7 @@ All metadata is **optional and order-independent** on the marker line:
 | `tags=["t1", "t2"]` | list of tag names | Presentation and visibility control |
 | `slide_id="slug"` | kebab-case ASCII, ≤ 30 chars | Stable cross-reference key |
 | `for_slide="slug"` | bare slug | Voiceover companion back-reference |
+| `section_name="name"` | identifier-ish text | C++ code export only: names the slide's section function `slide_<name>` when the `slide_id` reads badly (since CLM {version}) |
 
 Cells without a `lang` attribute are **shared** — included in every language build.
 
