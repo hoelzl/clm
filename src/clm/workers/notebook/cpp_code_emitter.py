@@ -223,9 +223,16 @@ def _indent(text: str, prefix: str = "    ") -> str:
     return "\n".join(prefix + line if line.strip() else line for line in text.split("\n"))
 
 
+_CONSTINIT_RE = re.compile(r"\bconstinit\b")
+
+
 def _terminate(text: str) -> str:
-    """Append a missing ``;``, dodging a trailing line comment if present."""
-    if text.endswith((";", "}")):
+    """Append a missing ``;``, dodging a trailing line comment if present.
+
+    Preprocessor lines are never terminated: ``#define X;`` would put the
+    ``;`` into the macro body and ``#endif;`` is ill-formed.
+    """
+    if text.endswith((";", "}")) or text.lstrip().startswith("#"):
         return text
     last_line = text.rsplit("\n", 1)[-1]
     if "//" in last_line:
@@ -769,6 +776,11 @@ class _DeckEmitter:
         for slot in self.vars:
             name = slot.item.name
             assert name is not None
+            if _CONSTINIT_RE.search(slot.item.text):
+                # `constinit` requires static storage duration: a local
+                # in the section function is ill-formed.
+                slot.promoted = True
+                continue
             if _references(name, later_code[slot.section]):
                 slot.promoted = True
                 continue

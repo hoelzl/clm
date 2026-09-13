@@ -1,7 +1,7 @@
 # C++ IDE Export (#928) — Handover
 
-**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–2
-merged (#932, #933, #934, #935), Phase 3 in PR, Phase 4 next
+**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–3
+merged (#932–#936), Phase 4 in PR (clm) + CppCourses PR; owner review open
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -235,7 +235,7 @@ recursion, member access and operator tracking. Acceptance: no code-along
 or partial deck fails MSVC `/Zs` that the Completed view passes (met:
 0 / 357); `TestEmitCodeAlongTodos` rewritten.
 
-### Phase 3 — Multi-file output: header, workshop files, per-module CMake [IN PROGRESS — PR open]
+### Phase 3 — Multi-file output: header, workshop files, per-module CMake [DONE — PR #936, merged 2026-09-13]
 
 Branch `claude/issue-928-phase3-multifile`. `foo.hpp` (D8) and
 `foo_workshop_N.cpp` per **workshop block** (D6, see D10 below); worker
@@ -249,13 +249,16 @@ corpus forced on top (Current Status): merging back-to-back ranges, hoisting
 lecture `using` directives into the header, and a build warning naming the
 lecture definitions a workshop uses without a `global` tag.
 
-### Phase 4 — Verification tooling and rollout [TODO]
+### Phase 4 — Verification tooling and rollout [IN PROGRESS — clm PR + CppCourses PR open]
 
-Opt-in differential check (kernel output vs. compiled-executable output per
-deck; kernel side is `tools/execute_deck_kernel.py` in CppCourses); wire
-the code-along kind (workshop skeletons) into the CppCourses CI gate next to
-Completed; tag the 8 D10 decks `global` in CppCourses; `SHOW`-in-notebooks
-is #930.
+Branch `claude/issue-928-phase4-verification` (clm) and
+`claude/issue-928-global-tags` (CppCourses). Done: the D10 tagging pass
+(24 cells in 16 files, both languages), the code-along kind added to the
+CppCourses compile gate, the opt-in differential check
+(`tools/diff_deck_output.py` + `execute_deck_kernel.py --json`), five
+emitter fixes and one cache-key fix the verification surfaced (see Current
+Status). `SHOW`-in-notebooks stays #930. Open: the owner review (item 4 of
+Next Steps) — not something a session can fake.
 
 ## 4. Current Status
 
@@ -265,6 +268,71 @@ is #930.
   `claude/scan-section-export` — not merged there yet); Phase 0 merged (PR
   #932); `SHOW` split off as #930; this handover merged (PR #931); Phase 1
   merged (PR #933, header follow-up PR #934).
+- **Phase 4 implemented** (2026-09-13), two PRs:
+  - **CppCourses** (`claude/issue-928-global-tags`): `global` on the lecture
+    cells the 8 D10 workshops use (`variables`: `int i{1};`; `array_basics`:
+    `print_array`; `pointers_to_struct` / `reference_args`: `Point` + `print`;
+    `overloading`: `Point` + `Point3d`; `lifetime_observer`: `Obs` **and**
+    the `int Obs::next_id{0};` cell — a static member definition the name
+    scan cannot see, needed at link time; `std_library_overview`:
+    `numbers`; `my_vector_stl`: the `MyVector` template) in `.en` and `.de`;
+    `struct Vec` in `more_initialization` closed with `};` (deck defect);
+    `code-export-compile.yml` builds `Cpp/Completed` **and**
+    `Cpp/Code-Along` kind roots; `tools/execute_deck_kernel.py --json`
+    writes a structured transcript; new `tools/diff_deck_output.py`
+    (manifest → exported file → CMake target → executable; kernel stdout
+    concatenated as one stream, displays spliced as `=> value` lines,
+    banners cut out, `CLM_DISPLAY` labels consumed in source order,
+    workshop programs appended; `--streams-only`, `--strict`); AGENTS.md
+    bullet. The gate had **not run** against Phase 1–3 clm before this
+    (last run 2026-09-12 12:38 UTC, PR #933 merged 20:50): merge the
+    CppCourses PR **after** the clm PR, or `good_tests` / `observer` fail
+    on the stray-`;` defect below.
+  - **clm** (`claude/issue-928-phase4-verification`): `_terminate` leaves
+    preprocessor lines alone (`#define private public;` put the `;` in
+    the macro, `#endif;` is ill-formed — `good_tests`, `program_structure`,
+    `observer`); a `constinit` variable is always promoted
+    (`_CONSTINIT_RE` in `_decide_promotions`; a local is ill-formed —
+    `compile_time`); `new Vec(1)` classifies as an expression instead of a
+    variable `Vec` of type `new` (`more_initialization`); `thread_local`
+    joined `_SPECIFIERS`. **Cache key**: `NotebookPayload.content_hash`
+    covers the output stem for C++ code payloads
+    (`_output_stem_key`) — the result cache is keyed by input file, and a
+    second spec exporting `functions` as `02 Functions.cpp` replayed the
+    cpp-for-programmers text (`#include "07 Functions.hpp"`) and
+    companions `07 Functions.hpp` / `07 Functions_workshop_1.cpp` next to
+    it; the manifest and CMake then saw no companions at all. Found by the
+    differential check, fixed without a schema bump (only C++ code keys
+    change). `commands.md` (constinit sentence), `caching.md` (§2 bullet),
+    `changelog.d/928-phase4-verification.fixed.md`.
+- **Corpus run (Phase 4, 357 `.en.cpp` decks, three views, MSVC `cl /Zs`,
+  356 `###` markers per log)**: **0 new failures in any view**. Completed 6
+  (Phase 3: 19) — the 13 fixed are the 8 D10 decks plus the 5 emitter-defect
+  decks; the 6 left (`*_disabled` ×5, module-root `ws_100_employee`) are in
+  no course spec, so `clm: no-compile` was not needed anywhere. Code-along 4
+  (9), Partial 6 (14): same out-of-spec set. Scope warnings: only the two
+  advisory false positives. **Real gate, locally** (`clm build
+  cpp-for-programmers --no-html --no-diagrams`, then `cmake -G Ninja` +
+  `cmake --build` under `vcvars64`): Completed-en and Code-Along-en both
+  green, 146 targets each (link level, not just `/Zs`).
+- **Differential check, real transcript** (Docker
+  `mhoelzl/clm-notebook-processor:1.22.1`, four review decks, 104 cells, 0
+  kernel errors; scratch spec with `variables_core`, `functions`,
+  `const_constexpr`, `array_basics`): `--streams-only` matches 3 of 4. The
+  one diff is a **kernel-image finding, not an export defect**: in the
+  `1.22.1` and `full` images a bare-expression cell publishes *nothing* —
+  no `execute_result`/`display_data`, and not even the `std::cout` output
+  of a bare `print_prod(1, 10)` (nbconvert shows the same: `x` and `pp()`
+  cells have empty outputs, `std::cout << x << "\n";` streams). So the
+  transcript carries no display values, `const_constexpr` cell 20's
+  `prod(1, 10) = 3628800` exists only in the program, and every HTML
+  built with that image lacks those outputs. `:latest` was not probed
+  (not pulled here). Deck fix if intended: `print_prod(1, 10);`.
+- **Tests**: `TestEmitClassifierRegressions` (+5: preprocessor lines,
+  constinit promoted, blanked constinit TODO at namespace scope, `new`
+  display, `thread_local`), a compile smoke test for the three,
+  `test_cpp_code_content_hash_depends_on_output_stem` /
+  `test_other_outputs_content_hash_ignores_output_name`.
 - **Phase 3 implemented** on `claude/issue-928-phase3-multifile` (worktree
   `.claude/worktrees/issue-928-cpp-ide-export`):
   - `src/clm/core/cpp_export_files.py` (new): the naming rule
@@ -449,29 +517,32 @@ is #930.
   code cell takes its heading from a *following* markdown heading if any
   (rare, cosmetic).
 
-## 5. Next Steps (Phase 4 — verification tooling and rollout)
+## 5. Next Steps (Phase 4 close-out)
 
-Start on a **fresh branch off `origin/master`** once the Phase 3 PR has
-merged (`git fetch origin && git switch -C worktree-issue-928-cpp-ide-export
-origin/master && git switch -c claude/issue-928-phase4-verification`) — never
-switch a worktree to literal `master`.
-
-1. **CppCourses tagging pass (D10)**: tag the lecture cells the 8 decks'
-   workshops use `global` (the `cpp_export_workshop_scope` warnings of a
-   Completed build list deck, workshop and names); rerun the gate. Decide
-   `clm: no-compile` vs. emitter fixes for the 4 Completed baseline
-   failures (`program_structure`, `more_initialization`, `compile_time`,
-   `good_tests`) and the `*_disabled`/`observer`/`ws_100_employee` ones.
-2. **Gate the skeletons**: add the code-along kind's CMake projects to
-   `code-export-compile.yml` in CppCourses (the workshop skeletons compile
-   as shipped — corpus: 0 code-along failures outside the baseline).
-3. **Differential check** (opt-in): run each Completed deck executable and
-   diff its stdout against the kernel transcript
-   (`tools/execute_deck_kernel.py`); labeled `CLM_DISPLAY` output makes the
-   comparison line-based.
-4. **Owner review** of the three M1 decks as a student would (still the
-   open Phase 1 acceptance item), now including a workshop deck
-   (`functions` has none — take `array_basics` after tagging).
+1. **Merge order**: clm PR first (emitter + cache fixes), then the
+   CppCourses PR — its master push triggers `code-export-compile.yml`,
+   which installs clm from git master. Watch that run: it is the first
+   gate run on Phase 1–4 output, now with Code-Along included.
+2. **Owner review** of `variables_core`, `functions`, `const_constexpr`
+   and `array_basics` (workshop deck) as a student would — the open Phase
+   1 acceptance item. Ready-made material: a scratch spec with those four
+   topics (`course-specs/review-928.xml`, untracked — one section, four
+   `<topic>` lines, `<prog-lang>cpp</prog-lang>`), `clm build ... --no-html
+   --no-diagrams`, open `.../Slides/Cpp/Completed` (or `Code-Along`) as a
+   CMake project. Ask for the review; don't fake it.
+3. **Kernel image**: decide what to do about bare-expression cells
+   producing no output in the `1.22.1`/`full` images (probe recipe in §7).
+   If `:latest` behaves the same, the HTML output of every C++ course is
+   missing its displays and #930 (`SHOW`) becomes urgent; if not, pin the
+   image the differential check uses. Either way `const_constexpr` cell
+   20 should read `print_prod(1, 10);`.
+4. **Partial kind**: it compiles corpus-wide outside the out-of-spec set;
+   gating it costs one more glob in the workflow if wanted.
+5. **`variables` deck structure**: its mini-workshop range runs to EOF
+   (no `end-workshop`), so the workshop file carries the rest of the
+   lecture; `global` on `int i{1};` makes it compile, an `end-workshop`
+   closer after `display-auto-w2` would restore the intended split but
+   changes the Partial view — owner call.
 
 Phase 3 leftovers worth a look while there: (a) auto-hoisting referenced
 lecture definitions into the header instead of `global` tags (D10 — owner
@@ -512,6 +583,8 @@ place that validates names coming from the DB — keep it that way.
 | `src/clm/cli/info_topics/slide-format.md`, `commands.md` | Version-accurate docs downstream agents rely on; the C++ export is not documented there yet. |
 | `tests/workers/notebook/test_cpp_code_emitter.py` | Classifier + emitter + compile-smoke tests. |
 | CppCourses `tools/scan_section_export.py` | Corpus scan (`--mode slide|heading|both`); rerun after any grouping/promotion rule change. |
+| CppCourses `tools/execute_deck_kernel.py`, `tools/diff_deck_output.py` | Kernel transcript (`--json`) and the opt-in kernel-vs-program differential check (Phase 4). |
+| CppCourses `.github/workflows/code-export-compile.yml` | The compile gate: builds every spec, then the `Completed` and `Code-Along` kind roots. |
 
 Flow: `process_notebook` → `process_notebook_for_spec` →
 `_process_notebook_node` (filter, blank, strip; snapshot + full-list
@@ -547,7 +620,21 @@ rule.
   Phase 2 logs in `D:/tmp/clm-corpus-928/`. Run the `.bat` files through
   the PowerShell tool — the worktree guard refuses `cmd //c`. Rebuild from
   this description if needed.
-- Still needs tests: Phase 4.
+- Phase 4 real-gate check (link level): `clm build <spec> -o D:/tmp/... --no-html
+  --no-diagrams --workers direct --no-progress` from the CppCourses root with
+  the worktree's `clm.exe`, then a `.bat` that calls `vcvars64.bat` and runs
+  `cmake -S <kind root> -B <kind root>/.build -G Ninja -DCMAKE_BUILD_TYPE=Release`
+  + `cmake --build ... --parallel` per kind root (both on PATH here).
+- Kernel transcript: stage the decks under their topic-dir names (the tool
+  derives the topic id from the parent dir) plus `execute_deck_kernel.py`
+  in `D:/tmp/clm-kernel-928/`, then from PowerShell (MSYS mangles `/work`)
+  `docker run --rm -v "D:/tmp/clm-kernel-928:/work"
+  mhoelzl/clm-notebook-processor:1.22.1 bash -c "cd /work && python3
+  execute_deck_kernel.py --json transcript.json <topic_dir>/<deck>.en.cpp ..."`;
+  Docker Desktop may need starting first. A 6-cell probe through
+  `jupyter_client` / `nbconvert --execute` shows what the image publishes.
+- Phase 4 corpus logs: `D:/tmp/clm-corpus-928-p4/` (Phase 3 baseline in
+  `-p3/`); gate builds in `D:/tmp/clm-gate-928/`.
 
 ## 8. Session Notes
 
@@ -573,3 +660,12 @@ rule.
   were a harness artifact (a deck that failed template expansion, a deck
   whose output dir was renamed). A `_workshop_` substring count over deck
   names is wrong when a deck is *called* `..._workshop.cpp`.
+- Phase 4 (2026-09-13): the corpus harness (`NotebookProcessor` per deck,
+  no DB) cannot see cache defects — the stale-companion bug only showed up
+  in a real `clm build` of a second spec on the same DB. Keep one real
+  build in every verification round. The Bash tool collapses `\\` in
+  heredocs, so a Python patch script with `"\n"` in its anchors silently
+  mismatches: write patch scripts with the Write tool, then run them. The
+  exported deck names are the spec's display names (`02 Functions.cpp`),
+  not the source stems — anything mapping source → output goes through
+  the provenance manifest's `topic_id`.

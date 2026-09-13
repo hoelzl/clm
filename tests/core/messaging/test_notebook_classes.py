@@ -158,6 +158,39 @@ class TestNotebookPayload:
         # Hash should be SHA256 hex digest (64 chars)
         assert len(hash1) == 64
 
+    @staticmethod
+    def _payload(
+        output_file: str, *, format: str = "code", prog_lang: str = "cpp"
+    ) -> NotebookPayload:
+        return NotebookPayload(
+            correlation_id="test-stem",
+            input_file="/slides/topic_160_functions/slides_functions.en.cpp",
+            input_file_name="slides_functions.en.cpp",
+            output_file=output_file,
+            data="int add(int x, int y) { return x + y; }",
+            kind="completed",
+            prog_lang=prog_lang,
+            language="en",
+            format=format,
+        )
+
+    def test_cpp_code_content_hash_depends_on_output_stem(self):
+        """The C++ export embeds its stem (header include, companion names),
+        so the same deck exported under another name must not replay (#928)."""
+        first = self._payload("/out/02 Week 1/07 Functions.cpp")
+        second = self._payload("/out/01 Review/02 Functions.cpp")
+        same_stem = self._payload("/elsewhere/07 Functions.cpp")
+        assert first.content_hash() != second.content_hash()
+        assert first.content_hash() == same_stem.content_hash()
+
+    def test_other_outputs_content_hash_ignores_output_name(self):
+        html_a = self._payload("/out/07 Functions.html", format="html", prog_lang="cpp")
+        html_b = self._payload("/out/02 Functions.html", format="html", prog_lang="cpp")
+        assert html_a.content_hash() == html_b.content_hash()
+        py_a = self._payload("/out/07 Functions.py", prog_lang="python")
+        py_b = self._payload("/out/02 Functions.py", prog_lang="python")
+        assert py_a.content_hash() == py_b.content_hash()
+
     def test_content_hash_differs_with_metadata(self):
         """Different metadata should produce different hash."""
         payload1 = NotebookPayload(

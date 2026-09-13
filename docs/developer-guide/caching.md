@@ -68,6 +68,13 @@ probe) **must** be given the *same* `--cache-db-path` / `--jobs-db-path` /
   Consulted at the top of `execute_operation`.
 - **Trim policy:** newest `cache_versions_to_keep` per
   `(file_path, output_metadata)`, indefinitely
+- **C++ code exports (#928):** `content_hash` additionally covers the output
+  file *stem* (`NotebookPayload._output_stem_key`) because the exported text
+  embeds it — `<stem>.cpp` includes `"<stem>.hpp"` and the companion files
+  are named after it — while this key carries no output path. Without it a
+  second spec exporting the same deck under another name (`07 Functions` vs.
+  `02 Functions`) replayed the first spec's text and companions next to the
+  new output. Every other output stays output-name-independent.
   (`DatabaseManager.prune_old_versions`, build-end + `clm db cleanup`).
 
 ### 3. `executed_notebooks` — the execution cache

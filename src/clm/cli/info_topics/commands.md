@@ -508,7 +508,8 @@ would put statements and mid-file `#include`s at namespace scope) but a
   function. A variable that a *later* section or a namespace-scope definition
   references is **promoted to namespace scope automatically** (the emitter
   scans identifiers; a false positive only costs locality, a miss fails the
-  compile gate). Tag a code cell **`global`** to force it to namespace scope.
+  compile gate). A `constinit` variable is always promoted — it needs static
+  storage duration. Tag a code cell **`global`** to force it to namespace scope.
 - **Bare display expressions** (`i1` on its own line, relying on the
   kernel's auto-display) become `CLM_DISPLAY(i1);`, which prints
   `i1 = 10` — the expression text is the label — or `<unprintable value>`
