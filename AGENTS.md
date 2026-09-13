@@ -210,6 +210,7 @@ When you need information, go to its canonical home rather than guessing:
 | Known issues / bugs / TODOs | `docs/claude/TODO.md` |
 | Agent-facing design docs (decisions + rationale) | `docs/claude/design/` |
 | Cross-session handovers / investigations | `docs/claude/` (`*-handover*.md`, `*-investigation*.md`) |
+| Resumable discussions (conversational continuity, dropped threads, agent corrections) | `docs/claude/discussions/` — format in its `README.md`; save/resume via `.agents/skills/{save-discussion,save-knowledge,resume-discussion}` (`/save-discussion` etc. in Claude Code); `python scripts/audit_transcripts.py` lists sessions never saved |
 
 **Before proposing changes to code**, read the file first. **Before
 recommending a command or flag**, verify it exists in `clm info commands` —
@@ -230,6 +231,7 @@ prefer these homes for anything new.
 | Developer / contributor docs | `docs/developer-guide/` | kebab-case |
 | Agent design docs / decisions | `docs/claude/design/` | kebab-case `<topic>.md` |
 | Handover docs | `docs/claude/handovers/` | `<feature>-handover.md` (+ `<feature>-handover-archive.md`) |
+| Discussion threads (state + cleaned transcripts) | `docs/claude/discussions/<thread>/` | `state.md`, `transcripts/<YYYY-MM-DD>-s<N>.md`; single root `register.md`; status headers checked by `scripts/check_doc_currency.py` |
 | Investigations / analyses / cross-session notes | `docs/claude/` (deeper: `docs/claude/analysis/`, `docs/claude/requirements/`) | `<topic>-investigation.md` |
 | Proposals (pre-design exploration) | `docs/proposals/` | kebab-case |
 | Retired / historical docs | `docs/archive/` | under a topic subfolder |
@@ -240,6 +242,12 @@ prefer these homes for anything new.
 CLM uses `docs/claude/` (not the agent-neutral `docs/agent/` other repos use)
 because the path is referenced from source code and the version-accurate
 `info_topics`; renaming it is a separate, deliberate migration.
+
+A handover carries *task* state; a discussion thread carries the
+*conversation* (the argument for a decision, rejected alternatives, where an
+agent's prior was corrected). A session's conversation layer exists only if
+someone runs `/save-discussion` before the session ends — do it at the first
+natural boundary and again at the end; re-running extends the transcript.
 <!-- DOCS-LAYOUT:END -->
 
 ## Working in this Repo (Windows-first)
