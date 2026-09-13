@@ -19,6 +19,7 @@ def slides_group() -> None:
 from clm.cli.commands.slides.assign_ids import assign_ids_cmd  # noqa: E402
 from clm.cli.commands.slides.coverage import coverage_cmd  # noqa: E402
 from clm.cli.commands.slides.coverage_report import coverage_report_cmd  # noqa: E402
+from clm.cli.commands.slides.cpp_show import cpp_show_cmd  # noqa: E402
 from clm.cli.commands.slides.language_view import language_view_cmd  # noqa: E402
 from clm.cli.commands.slides.normalize import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.slides.reconcile_vo_ids import reconcile_vo_ids_cmd  # noqa: E402
@@ -53,6 +54,7 @@ slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")
 slides_group.add_command(slug_report_cmd, name="slug-report")
 slides_group.add_command(coverage_report_cmd, name="coverage-report")
+slides_group.add_command(cpp_show_cmd, name="cpp-show")
 slides_group.add_command(authoring_rules_cmd, name="rules")
 
 # `polish` needs the [summarize] extra (LLM client); skip when absent.

@@ -1,8 +1,9 @@
 # C++ IDE Export (#928) — Handover
 
 **Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–4
-merged (#932–#937, CppCourses #129); owner-review follow-ups in progress
-(#938 title slide, naming/HTML PR, display-macro rewrite next)
+merged (#932–#937, CppCourses #129); owner-review follow-ups #938 (title
+slide) and #939 (naming/HTML) merged, #940 (SHOW macro + `clm slides
+cpp-show`) and CppCourses rewrite PR open
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -87,9 +88,13 @@ after reviewing the first output. The
 issue's `SHOW` macro needs a header the *kernel* can see: no hidden-but-executed
 cell mechanism exists (`del` cells are dropped before execution; the kernel runs
 in a temp dir with only the topic's siblings copied in). That is a notebook-UX
-feature and is tracked as #930. Trap to keep: a capture-default lambda is
-ill-formed at namespace scope, so a display expression inside a `global` cell
-must be rejected (validate) or the wrapper must not be used there.
+feature and is tracked as #930 — resolved by PR #940: `SHOW` is the
+notebook macro, the header ships in the worker image. Trap to keep: the
+macro expands to a statement, ill-formed at namespace scope, so a display
+inside a `global` cell must be rejected (validate) or not wrapped. The
+helper must not use a lambda: xeus-cpp 0.8 crashes on the second
+lambda-wrapper instantiation after new globals (found by the SHOW rollout);
+the expression is passed through an overloaded comma operator instead.
 
 ### D4 — Structured emitter input carrying the *unblanked* source
 
@@ -277,8 +282,35 @@ Next Steps) — not something a session can fake.
     `f()` loses even its `std::cout` output. Decision: decks always
     terminate with `;` and use a display macro; the export's
     `CLM_DISPLAY` becomes the notebook's macro too (header shipped in
-    the worker image; `SHOW` alias). Rewrite tool + image change are
-    the next PR (see Next Steps).
+    the worker image; `SHOW` alias). Done in PR #940: `SHOW(...)` alias in
+    `clm/display.hpp`, `docker/notebook/Dockerfile` copies the header to
+    `/opt/conda/include/clm` (probed by mounting it into the `1.22.1`
+    image: `SHOW(x);` → `x = 42`, void call runs, unstreamable →
+    placeholder), `src/clm/slides/cpp_show.py` + `clm slides cpp-show`
+    (lossless `raw_cells` rewrite; classifier `expr_display` or `call_stmt`
+    without `;`/`}`; matches anchored at line boundaries — a bare `arg`
+    was first found inside `int arg{1};`; multi-line block comments stay
+    in front; backtick = prose → reported, not wrapped; `global` cells
+    reported, exit 1). CppCourses rewrite PR: 1458 displays in 156 decks;
+    left alone: two `!true` shell-escape cells, one prose paragraph in
+    `invoice_v6`, the disabled `adventure_v1_editscript` topic (CMake
+    text in code cells). With `SHOW` in the decks the export needs no
+    `CLM_DISPLAY` wrapping and the differential check compares values:
+    CppCourses PR #130; kernel run of the four review decks 104 cells /
+    0 errors, **`diff_deck_output.py` 4 of 4 decks match with values**
+    (the tool reads `SHOW` labels from the cell sources the transcript
+    now records, so both sides carry `=> value` lines). Corpus after the
+    rewrite: 0 new failures in any view. **Landmine**: the first
+    `display.hpp` wrapped the expression in a lambda; xeus-cpp 0.8
+    crashes on the *second* lambda wrapper once new globals were defined
+    in between (any lambda, capture or not — isolated with fresh-kernel
+    probes, `D:/tmp/clm-kernel-928/probe6.py`). The helper now passes
+    the value through an overloaded comma operator (`Displayed<T>` /
+    `DisplayEnd`), void via the built-in comma; MSVC `/W4` smoke program
+    and the crashing kernel sequences verified. `cpp-show` landmines: a
+    `TEST_P(...) { }` block is a call followed by a brace (not a display);
+    the slice search must be anchored at line boundaries (`arg` inside
+    `int arg{1};`); backticks mean prose.
   - PR #938: the `header*` macros render `# Title` + author for the code
     format (the Python macros never removed the title either — only the
     logo is gated on notebook/HTML).
@@ -549,17 +581,13 @@ Next Steps) — not something a session can fake.
 
 ## 5. Next Steps (Phase 4 close-out)
 
-0. **Display-macro rewrite** (owner request, next PR): (a) `clm/display.hpp`
-   gains `SHOW(...)` as the deck-facing alias of `CLM_DISPLAY`; (b) the
-   notebook worker image installs the header into its include path
-   (`docker/notebook/Dockerfile`, micromamba prefix `/opt/conda/include`)
-   so `#include <clm/display.hpp>` works in the kernel; (c) a `clm slides`
-   subcommand rewrites every bare display expression (`expr_display`
-   items, 739 in the corpus) to `SHOW(expr);` and adds the include cell
-   where needed, both languages; (d) run it over CppCourses, corpus +
-   gate + differential check (now with values, since `SHOW` prints via
-   `std::cout`). A `SHOW` in a `global` cell is ill-formed (D3) — the
-   rewrite must skip those and the validator should flag them.
+0. **Display-macro rollout**: merge #940, then the CppCourses rewrite PR
+   (its build needs the header in the worker image — until the image is
+   rebuilt from #940's Dockerfile, a Docker-mode build of the rewritten
+   decks fails on `#include <clm/display.hpp>`; `:latest` is built by
+   CI on master). Direct-mode kernels (`clm provision kernel-env`) do not
+   get the header — add an include path there if Direct mode is ever used
+   for C++. A validator rule for `SHOW` in `global` cells is still open.
 1. **Merge order**: clm PR first (emitter + cache fixes), then the
    CppCourses PR — its master push triggers `code-export-compile.yml`,
    which installs clm from git master. Watch that run: it is the first

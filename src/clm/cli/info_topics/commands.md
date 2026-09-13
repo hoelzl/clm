@@ -1960,6 +1960,32 @@ clm slides reconcile-vo-ids slides_pe_03b_few_shot.de.py --to ids
 clm slides reconcile-vo-ids slides/module_410_ai_dev/
 ```
 
+### `clm slides cpp-show`
+
+Rewrite the bare display expressions of C++ decks to `SHOW(expr);` (since
+CLM {version}). The xeus-cpp kernel prints nothing for a code cell that is
+not terminated by `;` — the value display xeus-cling did is gone, and a bare
+`f()` loses even its `std::cout` output — so C++ decks always terminate
+cells with `;` and show values through the `SHOW` macro of
+`clm/display.hpp` (installed in the notebook worker image and vendored by
+the code export), which prints `expr = value` in the notebook and in the
+exported program alike.
+
+```bash
+clm slides cpp-show PATH... [--dry-run] [--json] [-v]
+```
+
+For every `*.cpp` slide file under PATHS (files or directories,
+`.ipynb_checkpoints` skipped) each top-level bare expression or bare call
+becomes `SHOW(<expr>);` — leading comment lines and a trailing line comment
+stay where they were — and the deck gains `#include <clm/display.hpp>`
+(appended to its first include-only cell, else a new `keep` cell before the
+first code cell). Files are rewritten losslessly; a second run changes
+nothing. Cells tagged `global` are left alone and reported with exit code 1:
+`SHOW` at namespace scope is ill-formed, so such a display needs the author.
+`--dry-run` reports without writing, `--json` emits the report as JSON, `-v`
+lists every rewrite.
+
 ### `clm slides rename-id`
 
 *Added in CLM {version}.*
