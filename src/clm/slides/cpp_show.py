@@ -89,7 +89,9 @@ def _split_leading_comments(original: str) -> tuple[str, str]:
         stripped = lines[i].strip()
         if not stripped or stripped.startswith("//"):
             i += 1
-        elif stripped.startswith("/*") and "*/" in stripped:
+        elif stripped.startswith("/*"):
+            while i < len(lines) and "*/" not in lines[i]:
+                i += 1
             i += 1
         else:
             break
@@ -106,6 +108,32 @@ def wrap_in_show(original: str) -> str:
     return f"{prefix}\n{wrapped}" if prefix else wrapped
 
 
+def _find_item(body: str, original: str, pos: int) -> int:
+    """Position of ``original`` in ``body`` at or after ``pos``, or -1.
+
+    The slice must start a line (only whitespace before it on that line)
+    and end one (only whitespace or a comment after it): a bare ``arg``
+    display must not be found inside the ``int arg{1};`` above it.
+    """
+    while True:
+        at = body.find(original, pos)
+        if at < 0:
+            return -1
+        line_start = body.rfind("\n", 0, at) + 1
+        end = at + len(original)
+        line_end = body.find("\n", end)
+        line_end = len(body) if line_end < 0 else line_end
+        after = body[end:line_end].strip()
+        if not body[line_start:at].strip() and (not after or after.startswith(("//", "/*"))):
+            return at
+        pos = at + 1
+
+
+def looks_like_prose(expr: str) -> bool:
+    """A backtick never occurs in C++: the cell holds prose, not code."""
+    return "`" in expr
+
+
 def _rewrite_cell_body(body: str) -> tuple[str, list[tuple[str, str]], list[str]]:
     """Rewrite one code cell's body; returns ``(body, [(before, after)], unmatched)``."""
     items = classify_source_spans(body)
@@ -116,8 +144,8 @@ def _rewrite_cell_body(body: str) -> tuple[str, list[tuple[str, str]], list[str]
     for item in items:
         if not is_display_item(item) or not item.original:
             continue
-        at = body.find(item.original, pos)
-        if at < 0:
+        at = _find_item(body, item.original, pos)
+        if at < 0 or looks_like_prose(item.original):
             unmatched.append(item.original.strip())
             continue
         replacement = wrap_in_show(item.original)

@@ -89,6 +89,22 @@ class TestRewriteDeckText:
         assert [r.after for r in result.rewrites] == ["SHOW(RUN_ALL_TESTS());"]
         assert "TEST_P(Suite, Name)\n{\n    EXPECT_EQ(1, 1);\n}" in result.text
 
+    def test_display_is_matched_at_line_boundaries_not_inside_a_declaration(self):
+        result = rewrite_deck_text(deck(code("int arg{1};\narg", '// %% tags=["keep"]')))
+        assert [r.after for r in result.rewrites] == ["SHOW(arg);"]
+        assert '// %% tags=["keep"]\nint arg{1};\nSHOW(arg);\n' in result.text
+
+    def test_multi_line_block_comment_stays_in_front(self):
+        result = rewrite_deck_text(deck(code("int x{1};"), code("/*\n   two\n   lines\n*/\nx")))
+        assert "// %%\n/*\n   two\n   lines\n*/\nSHOW(x);\n" in result.text
+
+    def test_prose_in_a_code_cell_is_reported_not_wrapped(self):
+        text = deck(code("int x{1};"), code("Note that `x` is set above and used below."))
+        result = rewrite_deck_text(text)
+        assert result.rewrites == []
+        assert result.unmatched == [(7, "Note that `x` is set above and used below.")]
+        assert result.text == text
+
     def test_include_is_appended_to_the_first_include_only_cell(self):
         result = rewrite_deck_text(
             deck(
