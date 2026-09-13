@@ -295,7 +295,22 @@ Next Steps) — not something a session can fake.
     left alone: two `!true` shell-escape cells, one prose paragraph in
     `invoice_v6`, the disabled `adventure_v1_editscript` topic (CMake
     text in code cells). With `SHOW` in the decks the export needs no
-    `CLM_DISPLAY` wrapping and the differential check compares values.
+    `CLM_DISPLAY` wrapping and the differential check compares values:
+    CppCourses PR #130; kernel run of the four review decks 104 cells /
+    0 errors, **`diff_deck_output.py` 4 of 4 decks match with values**
+    (the tool reads `SHOW` labels from the cell sources the transcript
+    now records, so both sides carry `=> value` lines). Corpus after the
+    rewrite: 0 new failures in any view. **Landmine**: the first
+    `display.hpp` wrapped the expression in a lambda; xeus-cpp 0.8
+    crashes on the *second* lambda wrapper once new globals were defined
+    in between (any lambda, capture or not — isolated with fresh-kernel
+    probes, `D:/tmp/clm-kernel-928/probe6.py`). The helper now passes
+    the value through an overloaded comma operator (`Displayed<T>` /
+    `DisplayEnd`), void via the built-in comma; MSVC `/W4` smoke program
+    and the crashing kernel sequences verified. `cpp-show` landmines: a
+    `TEST_P(...) { }` block is a call followed by a brace (not a display);
+    the slice search must be anchored at line boundaries (`arg` inside
+    `int arg{1};`); backticks mean prose.
   - PR #938: the `header*` macros render `# Title` + author for the code
     format (the Python macros never removed the title either — only the
     logo is gated on notebook/HTML).
