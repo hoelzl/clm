@@ -1,7 +1,8 @@
 # C++ IDE Export (#928) — Handover
 
-**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–3
-merged (#932–#936), Phase 4 in PR (clm) + CppCourses PR; owner review open
+**Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–4
+merged (#932–#937, CppCourses #129); owner-review follow-ups in progress
+(#938 title slide, naming/HTML PR, display-macro rewrite next)
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
 
@@ -268,6 +269,35 @@ Next Steps) — not something a session can fake.
   `claude/scan-section-export` — not merged there yet); Phase 0 merged (PR
   #932); `SHOW` split off as #930; this handover merged (PR #931); Phase 1
   merged (PR #933, header follow-up PR #934).
+- **Owner review follow-ups (2026-09-13)**, after the owner reviewed the
+  Phase 4 output in an IDE and the HTML build:
+  - The kernel image (`1.22.1`, `full`, and the interactive image the
+    owner tried) prints **nothing** for a cell not terminated by `;`:
+    the new xeus-cpp dropped xeus-cling's value printing, and a bare
+    `f()` loses even its `std::cout` output. Decision: decks always
+    terminate with `;` and use a display macro; the export's
+    `CLM_DISPLAY` becomes the notebook's macro too (header shipped in
+    the worker image; `SHOW` alias). Rewrite tool + image change are
+    the next PR (see Next Steps).
+  - PR #938: the `header*` macros render `# Title` + author for the code
+    format (the Python macros never removed the title either — only the
+    logo is gated on notebook/HTML).
+  - Naming PR (`claude/issue-928-section-naming`): section functions are
+    `slide_<fragment>` (`SECTION_PREFIX`); the fragment is the opener's
+    new `section_name="…"` attribute, else the folded `slide_id`, else
+    the section number. `identifier_from_slide_id` lost its keyword /
+    leading-digit special cases (the prefix makes them moot); a deck
+    defining a `slide_…` name still gets `_section`. `section_name` is
+    snapshotted with `slide_id`, folded the same way, feeds the banner
+    when there is no heading, and is stripped from every output
+    (`_strip_internal_cell_metadata`). `html_to_markdown` approximates
+    the HTML of markdown cells in `_comment_block` and `_first_heading`
+    (img/a/h1-6/b/i/tt/code/strike/li/ul/table/br; div/span/p dropped;
+    code spans and fences untouched). Owner decisions: names come from
+    `slide_id`, and bad ones (`the_type_right_side_must`) are fixed by
+    authoring a `section_name`, not by an emitter heuristic; split
+    variable groups (`i1b`/`i2b`) are an authoring rule (tag the run
+    `global`), explicitly **not** a tool heuristic — do not add one.
 - **Phase 4 implemented** (2026-09-13), two PRs:
   - **CppCourses** (`claude/issue-928-global-tags`): `global` on the lecture
     cells the 8 D10 workshops use (`variables`: `int i{1};`; `array_basics`:
@@ -519,6 +549,17 @@ Next Steps) — not something a session can fake.
 
 ## 5. Next Steps (Phase 4 close-out)
 
+0. **Display-macro rewrite** (owner request, next PR): (a) `clm/display.hpp`
+   gains `SHOW(...)` as the deck-facing alias of `CLM_DISPLAY`; (b) the
+   notebook worker image installs the header into its include path
+   (`docker/notebook/Dockerfile`, micromamba prefix `/opt/conda/include`)
+   so `#include <clm/display.hpp>` works in the kernel; (c) a `clm slides`
+   subcommand rewrites every bare display expression (`expr_display`
+   items, 739 in the corpus) to `SHOW(expr);` and adds the include cell
+   where needed, both languages; (d) run it over CppCourses, corpus +
+   gate + differential check (now with values, since `SHOW` prints via
+   `std::cout`). A `SHOW` in a `global` cell is ill-formed (D3) — the
+   rewrite must skip those and the validator should flag them.
 1. **Merge order**: clm PR first (emitter + cache fixes), then the
    CppCourses PR — its master push triggers `code-export-compile.yml`,
    which installs clm from git master. Watch that run: it is the first
@@ -634,7 +675,7 @@ rule.
   Docker Desktop may need starting first. A 6-cell probe through
   `jupyter_client` / `nbconvert --execute` shows what the image publishes.
 - Phase 4 corpus logs: `D:/tmp/clm-corpus-928-p4/` (Phase 3 baseline in
-  `-p3/`); gate builds in `D:/tmp/clm-gate-928/`.
+  `-p3/`), naming PR run in `-p5/`; gate builds in `D:/tmp/clm-gate-928/`.
 
 ## 8. Session Notes
 

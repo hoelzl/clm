@@ -819,8 +819,8 @@ class TestOutputFormatCode:
         assert result.startswith("#include <iostream>")
         assert "// # A C++ Deck" in result
         assert "int x = 42;" in result
-        assert "void section_01() {" in result
-        assert "int main() {\n    section_01();\n}" in result
+        assert "void slide_01() {" in result
+        assert "int main() {\n    slide_01();\n}" in result
         # No jupytext percent-format cell markers in the output.
         assert "// %%" not in result
 
@@ -851,14 +851,14 @@ class TestOutputFormatCode:
         nb = await processor._process_notebook_node(notebook, payload)
         result = await processor.create_contents(nb, payload)
 
-        assert "void variables() {" in result
-        assert "void using_them() {" in result
+        assert "void slide_variables() {" in result
+        assert "void slide_using_them() {" in result
         assert "// ## Variables" in result
         # x is used by the later section, so it was promoted out of the
         # function; y stays local.
-        assert result.index("int x{42};") < result.index("void variables()")
+        assert result.index("int x{42};") < result.index("void slide_variables()")
         assert "    int y{x + 1};" in result
-        assert "int main() {\n    variables();\n    using_them();\n}" in result
+        assert "int main() {\n    slide_variables();\n    slide_using_them();\n}" in result
         # The output must not leak the internal metadata the snapshot used.
         assert all("slide_id" not in cell.get("metadata", {}) for cell in nb.cells)
 
@@ -886,7 +886,7 @@ class TestOutputFormatCode:
         result = await processor.create_contents(nb, payload)
 
         assert "#include <iostream>" in result
-        assert "void output() {\n" in result
+        assert "void slide_output() {\n" in result
         assert "    // TODO: Output\n}" in result
         assert 'std::cout << "x";' not in result
 
@@ -916,7 +916,7 @@ class TestOutputFormatCode:
         result = await processor.create_contents(nb, payload)
 
         assert "return 2 * x" not in result
-        assert result.index("// TODO: define twice") < result.index("void functions()")
+        assert result.index("// TODO: define twice") < result.index("void slide_functions()")
         assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(twice(21));" in result
         assert '    std::cout << "done\\n";' in result
 
@@ -1015,7 +1015,7 @@ class TestOutputFormatCode:
         ws = companions["notebook_workshop_1.cpp"]
         assert ws.startswith('#include "notebook.hpp"\n')
         assert ws.count("TODO") == 1
-        assert ws.index("// TODO: define solution") < ws.index("void workshop()")
+        assert ws.index("// TODO: define solution") < ws.index("void slide_workshop()")
         assert "return x + 1" not in ws
         assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(solution(demo_value));" in ws
         assert '    std::cout << "hint\\n";' in ws

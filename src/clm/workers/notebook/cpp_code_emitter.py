@@ -39,8 +39,10 @@ Rules (the design record is ``docs/claude/handovers/cpp-ide-export-handover.md``
 - A section opens at every cell tagged ``slide`` or ``subslide``, code cells
   included, and at every workshop-range boundary; cells before the first
   opener form a leading section.
-- The function name derives from the opener's ``slide_id`` (stable and
-  language-invariant), the banner from the section's first markdown heading.
+- The function name is ``slide_`` + the opener's authored ``section_name``
+  attribute, else its ``slide_id`` (stable and language-invariant); the
+  banner is the section's first markdown heading. Markdown cells become
+  ``//`` comments with their HTML approximated as Markdown.
 - Definitions, aliases, namespaces and preprocessor lines go to namespace
   scope in source order; statements and variable definitions stay local to
   the section function — unless a variable is referenced by a later section
@@ -158,6 +160,9 @@ class CppCell:
     original_source: str | None = None
     tags: tuple[str, ...] = ()
     slide_id: str | None = None
+    section_name: str | None = None
+    """Authored ``section_name=\"…\"`` header attribute: the function name
+    (before the ``slide_`` prefix) when the slide_id reads badly."""
     excluded: bool = False
 
     @property
@@ -252,9 +257,77 @@ def _wrap_display(expr: str) -> str:
 
 
 def _comment_block(markdown: str) -> str:
-    """Render a markdown cell as a ``//`` comment block."""
-    lines = [line.rstrip() for line in markdown.strip("\n").split("\n")]
+    """Render a markdown cell as a ``//`` comment block (HTML approximated)."""
+    lines = [line.rstrip() for line in html_to_markdown(markdown).strip("\n").split("\n")]
     return "\n".join(f"// {line}" if line else "//" for line in lines)
+
+
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+_HTML_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+_HTML_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"<br\s*/?>", re.I), "\n"),
+    (re.compile(r"</?(?:b|strong)\s*>", re.I), "**"),
+    (re.compile(r"</?(?:i|em)\s*>", re.I), "*"),
+    (re.compile(r"</?(?:tt|code)\s*>", re.I), "`"),
+    (re.compile(r"</?(?:strike|del|s)\s*>", re.I), "~~"),
+    (re.compile(r"<li\b[^>]*>", re.I), "\n- "),
+    (re.compile(r"</li\s*>", re.I), ""),
+    (re.compile(r"</?(?:ul|ol)\b[^>]*>", re.I), "\n"),
+    (re.compile(r"<tr\b[^>]*>", re.I), "\n|"),
+    (re.compile(r"</tr\s*>", re.I), "\n"),
+    (re.compile(r"<t[hd]\b[^>]*>", re.I), " "),
+    (re.compile(r"</t[hd]\s*>", re.I), " |"),
+    (re.compile(r"</?(?:table|thead|tbody)\b[^>]*>", re.I), "\n"),
+    (re.compile(r"</?(?:div|span|center|font)\b[^>]*>", re.I), ""),
+    (re.compile(r"</?p\b[^>]*>", re.I), "\n"),
+]
+
+
+def _html_heading(match: re.Match[str]) -> str:
+    return "\n" + "#" * int(match.group(1)) + " "
+
+
+def _html_img(match: re.Match[str]) -> str:
+    attrs = dict(_HTML_ATTR_RE.findall(match.group(0)))
+    return f"![{attrs.get('alt', '')}]({attrs.get('src', '')})"
+
+
+def _html_link(match: re.Match[str]) -> str:
+    attrs = dict(_HTML_ATTR_RE.findall(match.group(1)))
+    return f"[{match.group(2).strip()}]({attrs.get('href', '')})"
+
+
+def _html_segment_to_markdown(text: str) -> str:
+    text = re.sub(r"<img\b[^>]*>", _html_img, text, flags=re.I)
+    text = re.sub(r"<a\b([^>]*)>(.*?)</a\s*>", _html_link, text, flags=re.I | re.S)
+    text = re.sub(r"<h([1-6])\b[^>]*>", _html_heading, text, flags=re.I)
+    text = re.sub(r"</h[1-6]\s*>", "\n", text, flags=re.I)
+    for pattern, replacement in _HTML_RULES:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def html_to_markdown(text: str) -> str:
+    """Approximate the HTML a markdown cell may carry as Markdown.
+
+    Slide decks use a small HTML vocabulary (``<img>``, lists, ``<tt>``,
+    ``<b>``, ``<br>``, ``<div>`` wrappers, the odd table); each becomes its
+    Markdown counterpart or is dropped, so the ``//`` comments of the code
+    export read as prose. Code spans and fenced blocks are left untouched
+    (``std::vector<int>`` is not a tag), and unknown tags stay as they are.
+    """
+    if "<" not in text:
+        return text
+    out: list[str] = []
+    pos = 0
+    for match in _CODE_SPAN_RE.finditer(text):
+        out.append(_html_segment_to_markdown(text[pos : match.start()]))
+        out.append(match.group(0))
+        pos = match.end()
+    out.append(_html_segment_to_markdown(text[pos:]))
+    converted = "".join(out)
+    converted = "\n".join(line.rstrip() for line in converted.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", converted)
 
 
 def _references(name: str, text: str) -> bool:
@@ -378,25 +451,25 @@ def _cpp_string(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 
 
+SECTION_PREFIX = "slide_"
+"""Prefix of every section function, so the functions that stand for slides
+are told apart from the functions the deck itself defines."""
+
+
 def identifier_from_slide_id(slide_id: str | None) -> str | None:
-    """Fold a ``slide_id`` to a C++ identifier, or ``None`` if nothing is left.
+    """Fold a ``slide_id`` (or an authored ``section_name``) to an identifier
+    fragment, or ``None`` if nothing is left.
 
     ``brace-initialization`` → ``brace_initialization``; ``Einführung`` is
-    ASCII-folded; a leading digit gets an ``s_`` prefix; keywords (and
-    ``main``) get a ``_section`` suffix.
+    ASCII-folded. The fragment always follows :data:`SECTION_PREFIX`, so a
+    leading digit or a keyword needs no special casing.
     """
     if not slide_id:
         return None
     folded = unicodedata.normalize("NFKD", slide_id).encode("ascii", "ignore").decode("ascii")
     ident = re.sub(r"[^A-Za-z0-9_]+", "_", folded).strip("_")
     ident = re.sub(r"_+", "_", ident)
-    if not ident:
-        return None
-    if ident[0].isdigit():
-        ident = f"s_{ident}"
-    if ident in _CPP_KEYWORDS:
-        ident = f"{ident}_section"
-    return ident
+    return ident or None
 
 
 def _humanize(slide_id: str) -> str:
@@ -407,7 +480,7 @@ def _first_heading(cells: Sequence[CppCell]) -> str | None:
     for cell in cells:
         if not cell.is_markdown:
             continue
-        for line in cell.source.split("\n"):
+        for line in html_to_markdown(cell.source).split("\n"):
             m = _HEADING_RE.match(line)
             if m:
                 return m.group(1).strip()
@@ -502,14 +575,22 @@ def _split_sections(
 def _name_sections(sections: Sequence[_Section], reserved: frozenset[str] = frozenset()) -> None:
     """Assign function names and banner headings.
 
-    ``reserved`` holds the names the deck itself defines (functions, types,
-    variables): a section whose slide_id folds to one of them — code-derived
-    ids make this likely — gets a ``_section`` suffix rather than colliding.
+    The name is ``slide_`` + the opener's authored ``section_name``, else its
+    folded ``slide_id``, else the section number. ``reserved`` holds the
+    names the deck itself defines: the prefix keeps them apart, and the rare
+    deck that defines a ``slide_…`` name gets a ``_section`` suffix.
     """
     used: dict[str, int] = {}
     for section in sections:
-        slide_id = section.opener.slide_id if section.opener is not None else None
-        base = identifier_from_slide_id(slide_id) or f"section_{section.index + 1:02d}"
+        opener = section.opener
+        slide_id = opener.slide_id if opener is not None else None
+        explicit = opener.section_name if opener is not None else None
+        fragment = (
+            identifier_from_slide_id(explicit)
+            or identifier_from_slide_id(slide_id)
+            or f"{section.index + 1:02d}"
+        )
+        base = f"{SECTION_PREFIX}{fragment}"
         if base in reserved:
             base = f"{base}_section"
         count = used.get(base, 0)
@@ -517,7 +598,8 @@ def _name_sections(sections: Sequence[_Section], reserved: frozenset[str] = froz
         section.name = base if count == 0 else f"{base}_{count + 1}"
         heading = _first_heading(section.cells)
         if heading is None:
-            heading = _humanize(slide_id) if slide_id else section.name
+            label = explicit or slide_id
+            heading = _humanize(label) if label else section.name
         section.heading = heading
 
 
