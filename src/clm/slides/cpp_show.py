@@ -71,10 +71,14 @@ class DeckRewrite:
 
 
 def is_display_item(item: CppItem) -> bool:
-    """Whether the classifier saw a value the kernel used to display."""
+    """Whether the classifier saw a value the kernel used to display.
+
+    A call followed by a brace block (``TEST_P(Suite, Name) { … }``, a
+    macro-defined function) is a definition, not a display.
+    """
     if item.category == "expr_display":
         return True
-    return item.category == "call_stmt" and not item.text.endswith(";")
+    return item.category == "call_stmt" and not item.text.endswith((";", "}"))
 
 
 def _split_leading_comments(original: str) -> tuple[str, str]:

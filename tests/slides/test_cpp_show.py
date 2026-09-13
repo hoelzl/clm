@@ -78,6 +78,17 @@ class TestRewriteDeckText:
         assert not result.changed
         assert result.text == text
 
+    def test_macro_defined_test_body_is_not_a_display(self):
+        # gtest's TEST_P(...) { ... } is a call followed by a block: a definition.
+        text = deck(
+            code("#include <gtest/gtest.h>"),
+            code("TEST_P(Suite, Name)\n{\n    EXPECT_EQ(1, 1);\n}"),
+            code("RUN_ALL_TESTS()"),
+        )
+        result = rewrite_deck_text(text)
+        assert [r.after for r in result.rewrites] == ["SHOW(RUN_ALL_TESTS());"]
+        assert "TEST_P(Suite, Name)\n{\n    EXPECT_EQ(1, 1);\n}" in result.text
+
     def test_include_is_appended_to_the_first_include_only_cell(self):
         result = rewrite_deck_text(
             deck(
