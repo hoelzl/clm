@@ -487,6 +487,7 @@ class _CppSnapshotCell:
     cell_type: str
     tags: tuple[str, ...]
     slide_id: str | None
+    section_name: str | None
     source: str
     excluded: bool
 
@@ -510,7 +511,7 @@ def _translate_ranges(
 
 
 def _strip_internal_cell_metadata(cells: Iterable[Cell]) -> None:
-    """Strip ``slide_id``/``for_slide`` and the synthetic post-workshop tag.
+    """Strip ``slide_id``/``for_slide``/``section_name`` and the synthetic post-workshop tag.
 
     Internal CLM metadata that must never appear in an output artifact. Runs
     at the export boundaries: inside ``_process_notebook_node`` for
@@ -525,6 +526,7 @@ def _strip_internal_cell_metadata(cells: Iterable[Cell]) -> None:
             continue
         metadata.pop("slide_id", None)
         metadata.pop("for_slide", None)
+        metadata.pop("section_name", None)
         tags = metadata.get("tags")
         if tags and POST_WORKSHOP_TAG in tags:
             metadata["tags"] = [t for t in tags if t != POST_WORKSHOP_TAG]
@@ -1387,6 +1389,7 @@ class NotebookProcessor:
                     cell_type=get_cell_type(cell),
                     tags=tuple(get_tags(cell)),
                     slide_id=cell.get("metadata", {}).get("slide_id"),
+                    section_name=cell.get("metadata", {}).get("section_name"),
                     source=cell.get("source", ""),
                     excluded=index not in included_indices,
                 )
@@ -2492,6 +2495,7 @@ class NotebookProcessor:
                         original_source=entry.source,
                         tags=entry.tags,
                         slide_id=entry.slide_id,
+                        section_name=entry.section_name,
                         excluded=entry.excluded,
                     )
                 )
@@ -2508,6 +2512,7 @@ class NotebookProcessor:
                     source=cell.get("source", ""),
                     tags=tuple(get_tags(cell)),
                     slide_id=cell.get("metadata", {}).get("slide_id"),
+                    section_name=cell.get("metadata", {}).get("section_name"),
                 )
                 for cell in cells
             ]

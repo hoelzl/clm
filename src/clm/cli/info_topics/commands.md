@@ -492,18 +492,25 @@ would put statements and mid-file `#include`s at namespace scope) but a
 
 - `#include` lines are hoisted to the top and deduplicated.
 - **One section function per slide**: a new function opens at every cell
-  tagged `slide` or `subslide` (code cells included), named after that cell's
-  `slide_id` (`brace-initialization` → `void brace_initialization()`; decks
-  without `slide_id`s get `section_NN`). Cells before the first opener form
-  a leading section. Each function starts with a banner
+  tagged `slide` or `subslide` (code cells included). Its name is `slide_`
+  plus the cell's `section_name="…"` attribute if present, else its
+  `slide_id` (`brace-initialization` → `void slide_brace_initialization()`),
+  else the section number (`slide_03`). The prefix tells the functions that
+  stand for slides apart from the deck's own; `section_name` is the fix for
+  a code-derived `slide_id` that reads badly, without touching the id.
+  Cells before the first opener form a leading section. Each function
+  starts with a banner
   (`std::cout << "== Brace initialization ==\n";`) taken from the section's
   first markdown heading, and a generated `main()` calls the functions in
   order — unless the deck defines its own `main()`.
 - **Markdown cells become `//` comment blocks** at their source position:
   above the function while the section has produced no statement yet, inside
-  the body afterwards. The deck's `header` / `header_de` / `header_en`
-  macro renders as a plain `# Title` line plus the author for this format,
-  not as the HTML title slide the notebook and HTML outputs get.
+  the body afterwards. HTML in a markdown cell is approximated as Markdown
+  (`<img>` → `![alt](src)`, `<b>`/`<tt>`/`<li>`/`<br>`, tables, `<div>`
+  wrappers dropped; code spans untouched). The deck's `header` /
+  `header_de` / `header_en` macro renders as a plain `# Title` line plus
+  the author for this format, not as the HTML title slide the notebook
+  and HTML outputs get.
 - Definitions (functions, classes, templates, aliases, namespaces, `using`
   directives, other preprocessor lines) go to namespace scope in source
   order. **Statements and variable definitions stay local** to their section

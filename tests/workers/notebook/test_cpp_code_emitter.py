@@ -26,6 +26,7 @@ from clm.workers.notebook.cpp_code_emitter import (
     CppCell,
     CppDeckExport,
     emit_cpp_deck,
+    html_to_markdown,
     identifier_from_slide_id,
     merge_adjacent_workshop_ranges,
 )
@@ -219,15 +220,15 @@ class TestEmitBasicStructure:
         )
         assert tu.startswith("#include <iostream>")
         # No slide tags: everything is one leading section.
-        assert "void section_01() {" in tu
-        assert '    std::cout << "== section_01 ==\\n";' in tu
+        assert "void slide_01() {" in tu
+        assert '    std::cout << "== slide_01 ==\\n";' in tu
         # x is only used inside the section, so it stays a local.
         assert "    int x = 42;" in tu
         assert '    std::cout << add(x, 1) << "\\n";' in tu
-        assert "int main() {\n    section_01();\n}" in tu
+        assert "int main() {\n    slide_01();\n}" in tu
         assert tu.endswith("\n")
         # The definition precedes the function that uses it.
-        assert tu.index("int add") < tu.index("void section_01")
+        assert tu.index("int add") < tu.index("void slide_01")
 
     def test_includes_hoisted_and_deduped(self):
         tu = emit(
@@ -248,7 +249,7 @@ class TestEmitBasicStructure:
 
     def test_statement_cells_stay_in_order_within_a_section(self):
         tu = emit(code("f();"), code("g();"), code("h();"))
-        body = _function_body(tu, "section_01")
+        body = _function_body(tu, "slide_01")
         assert body.index("f();") < body.index("g();") < body.index("h();")
         # One cell per paragraph.
         assert "    f();\n\n    g();\n\n    h();" in body
@@ -259,14 +260,14 @@ class TestEmitBasicStructure:
 
     def test_definition_only_deck_gets_no_function(self):
         tu = emit(code("struct S { int a; };"), code("void f() {}"))
-        assert "void section_01" not in tu
+        assert "void slide_01" not in tu
         assert "int main() {}" in tu
 
     def test_empty_cells_are_skipped(self):
         tu = emit(code(""), code("   \n  "), code("struct S {};"))
         assert "struct S {};" in tu
         assert "TODO" not in tu
-        assert "void section_01" not in tu
+        assert "void slide_01" not in tu
 
     def test_empty_deck_still_has_main(self):
         assert "int main() {}" in emit()
@@ -296,7 +297,7 @@ class TestEmitBasicStructure:
     def test_using_directive_at_namespace_scope(self):
         tu = emit(code("using namespace std::literals;"))
         assert tu.startswith("using namespace std::literals;\n")
-        assert "void section_01" not in tu
+        assert "void slide_01" not in tu
 
     def test_define_emitted_in_place(self):
         tu = emit(code("#define ANSWER 42"), code("int x = ANSWER;"))
@@ -315,16 +316,16 @@ class TestSections:
             slide("Brace initialization", "brace-initialization", tag="subslide"),
             code("g();"),
         )
-        assert "void intro() {" in tu
-        assert "void brace_initialization() {" in tu
-        assert "    f();" in _function_body(tu, "intro")
-        assert "    g();" in _function_body(tu, "brace_initialization")
-        assert "int main() {\n    intro();\n    brace_initialization();\n}" in tu
+        assert "void slide_intro() {" in tu
+        assert "void slide_brace_initialization() {" in tu
+        assert "    f();" in _function_body(tu, "slide_intro")
+        assert "    g();" in _function_body(tu, "slide_brace_initialization")
+        assert "int main() {\n    slide_intro();\n    slide_brace_initialization();\n}" in tu
 
     def test_cells_before_the_first_opener_form_a_leading_section(self):
         tu = emit(code("setup();"), slide("Intro", "intro"), code("f();"))
-        assert "void section_01() {" in tu
-        assert "int main() {\n    section_01();\n    intro();\n}" in tu
+        assert "void slide_01() {" in tu
+        assert "int main() {\n    slide_01();\n    slide_intro();\n}" in tu
 
     def test_code_cell_opener_belongs_to_the_section_it_opens(self):
         tu = emit(
@@ -332,17 +333,17 @@ class TestSections:
             code("f();"),
             code("g();", tags=("subslide",), slide_id="demo"),
         )
-        assert "    g();" in _function_body(tu, "demo")
-        assert "g();" not in _function_body(tu, "intro")
+        assert "    g();" in _function_body(tu, "slide_demo")
+        assert "g();" not in _function_body(tu, "slide_intro")
 
     @pytest.mark.parametrize(
         "slide_id, expected",
         [
             ("brace-initialization", "brace_initialization"),
-            ("42-answer", "s_42_answer"),
+            ("42-answer", "42_answer"),
             ("Einführung", "Einfuhrung"),
-            ("main", "main_section"),
-            ("class", "class_section"),
+            ("main", "main"),
+            ("class", "class"),
             ("a--b__c", "a_b_c"),
             ("---", None),
             ("", None),
@@ -354,9 +355,9 @@ class TestSections:
 
     def test_duplicate_slide_ids_get_numeric_suffix(self):
         tu = emit(slide("A", "intro"), code("f();"), slide("B", "intro"), code("g();"))
-        assert "void intro() {" in tu
-        assert "void intro_2() {" in tu
-        assert "int main() {\n    intro();\n    intro_2();\n}" in tu
+        assert "void slide_intro() {" in tu
+        assert "void slide_intro_2() {" in tu
+        assert "int main() {\n    slide_intro();\n    slide_intro_2();\n}" in tu
 
     def test_section_name_avoids_names_the_deck_defines(self):
         # Code-derived slide_ids often equal the function the cell defines.
@@ -368,13 +369,13 @@ class TestSections:
             code("int counter{0};"),
             code("counter++;"),
         )
-        assert "void twice_section() {" in tu
-        assert "void counter_section() {" in tu
-        assert "int main() {\n    twice_section();\n    counter_section();\n}" in tu
+        assert "void slide_twice() {" in tu
+        assert "void slide_counter() {" in tu
+        assert "int main() {\n    slide_twice();\n    slide_counter();\n}" in tu
 
     def test_opener_without_slide_id_falls_back_to_section_number(self):
         tu = emit(slide("A", "a"), code("f();"), slide("B", None), code("g();"))
-        assert "void section_02() {" in tu
+        assert "void slide_02() {" in tu
 
     def test_banner_uses_the_first_heading(self):
         tu = emit(md("# Deck\n\n## Brace `init` 100%", tags=("slide",), slide_id="x"), code("f();"))
@@ -390,13 +391,13 @@ class TestSections:
 
     def test_banner_falls_back_to_function_name(self):
         tu = emit(code("f();"))
-        assert '    std::cout << "== section_01 ==\\n";' in tu
+        assert '    std::cout << "== slide_01 ==\\n";' in tu
 
     def test_markdown_only_section_emits_comments_but_no_function(self):
         tu = emit(slide("Title", "title"), md("Some prose."), slide("Code", "c"), code("f();"))
         assert "// ## Title\n\n// Some prose." in tu
-        assert "void title()" not in tu
-        assert "int main() {\n    c();\n}" in tu
+        assert "void slide_title()" not in tu
+        assert "int main() {\n    slide_c();\n}" in tu
 
     def test_markdown_before_first_statement_goes_above_the_function(self):
         tu = emit(
@@ -409,13 +410,13 @@ class TestSections:
         )
         assert (
             "// ## Intro\n\n// Explains the helper.\nint helper() { return 1; }\n\n"
-            "// Now use it.\nvoid intro() {"
+            "// Now use it.\nvoid slide_intro() {"
         ) in tu
-        assert "    helper();\n\n    // And that's it." in _function_body(tu, "intro")
+        assert "    helper();\n\n    // And that's it." in _function_body(tu, "slide_intro")
 
     def test_markdown_after_first_statement_goes_into_the_body(self):
         tu = emit(slide("Intro", "intro"), code("f();"), md("Then g."), code("g();"))
-        assert "    f();\n\n    // Then g.\n    g();" in _function_body(tu, "intro")
+        assert "    f();\n\n    // Then g.\n    g();" in _function_body(tu, "slide_intro")
 
     def test_multiline_markdown_becomes_a_comment_block(self):
         tu = emit(md("Line one\n\n- bullet"), code("f();"))
@@ -430,40 +431,133 @@ class TestSections:
         assert "#include <iostream>" not in tu
 
 
+class TestSectionNames:
+    def test_section_name_attribute_overrides_slide_id(self):
+        tu = emit(
+            md(
+                "## Intro",
+                tags=("slide",),
+                slide_id="the-type-right-side-must",
+                section_name="type_deduction",
+            ),
+            code("f();"),
+        )
+        assert "void slide_type_deduction() {" in tu
+        assert "the_type_right_side_must" not in tu
+        assert "    slide_type_deduction();" in tu
+
+    def test_section_name_is_folded_like_a_slide_id(self):
+        tu = emit(md("## A", tags=("slide",), section_name="Brace Init: Basics"), code("f();"))
+        assert "void slide_Brace_Init_Basics() {" in tu
+
+    def test_section_name_feeds_the_banner_when_no_heading(self):
+        tu = emit(md("prose only", tags=("slide",), section_name="type_deduction"), code("f();"))
+        assert 'std::cout << "== Type deduction ==\\n";' in tu
+
+    def test_prefix_keeps_sections_apart_from_deck_functions(self):
+        tu = emit(
+            md("## Twice", tags=("slide",), slide_id="twice"),
+            code("int twice(int x) { return 2 * x; }"),
+            code("twice(2);"),
+        )
+        assert "int twice(int x)" in tu
+        assert "void slide_twice() {" in tu
+
+    def test_deck_defined_slide_name_gets_suffix(self):
+        tu = emit(
+            md("## A", tags=("slide",), slide_id="a"), code("void slide_a() {}"), code("slide_a();")
+        )
+        assert "void slide_a() {}" in tu
+        assert "void slide_a_section() {" in tu
+
+    def test_keyword_and_digit_slide_ids_need_no_special_casing(self):
+        tu = emit(
+            md("## A", tags=("slide",), slide_id="class"),
+            code("f();"),
+            md("## B", tags=("slide",), slide_id="42-answer"),
+            code("g();"),
+        )
+        assert "void slide_class() {" in tu
+        assert "void slide_42_answer() {" in tu
+
+
+class TestHtmlInMarkdown:
+    def test_common_html_becomes_markdown(self):
+        tu = emit(
+            md(
+                '<div style="text-align:center">\n<b>Bold</b> and <tt>mono</tt> and <i>it</i>\n'
+                '<img src="img/a.png" alt="A"/><br/>\n<ul><li>one</li><li>two</li></ul>\n'
+                '<table><tr><td>x</td><td>y</td></tr></table>\n<a href="https://e.x/">link</a>\n</div>'
+            ),
+            code("f();"),
+        )
+        assert "// **Bold** and `mono` and *it*" in tu
+        assert "// ![A](img/a.png)" in tu
+        assert "// - one\n// - two" in tu
+        assert "// | x | y |" in tu
+        assert "// [link](https://e.x/)" in tu
+        assert "<div" not in tu and "<li" not in tu and "<br" not in tu
+
+    def test_code_spans_and_template_arguments_are_untouched(self):
+        tu = emit(
+            md("Use `std::vector<int>` and `<b>` literally; `std::pair<T, U>` too."), code("f();")
+        )
+        assert "// Use `std::vector<int>` and `<b>` literally; `std::pair<T, U>` too." in tu
+
+    def test_fenced_block_is_untouched(self):
+        tu = emit(
+            md("Before\n\n```cpp\nstd::map<K, V> m; // <b>\n```\n\nAfter <b>x</b>"), code("f();")
+        )
+        assert "// std::map<K, V> m; // <b>" in tu
+        assert "// After **x**" in tu
+
+    def test_html_heading_becomes_markdown_heading(self):
+        tu = emit(md("<h2>Title</h2>\nprose", tags=("slide",), slide_id="t"), code("f();"))
+        assert "// ## Title" in tu
+        assert 'std::cout << "== Title ==\\n";' in tu
+
+    def test_strikethrough_tags(self):
+        assert html_to_markdown("<strike>old</strike> <del>gone</del>") == "~~old~~ ~~gone~~"
+
+    def test_unknown_tags_and_plain_text_pass_through(self):
+        assert html_to_markdown("a < b and b > c") == "a < b and b > c"
+        assert html_to_markdown("<kbd>Ctrl</kbd>") == "<kbd>Ctrl</kbd>"
+
+
 class TestPromotion:
     def test_variable_used_by_a_later_section_is_promoted(self):
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("x++;"))
         assert "\nint x{1};\n" in tu
         assert "    int x{1};" not in tu
-        assert tu.index("int x{1};") < tu.index("void b()")
-        assert "    x++;" in _function_body(tu, "b")
+        assert tu.index("int x{1};") < tu.index("void slide_b()")
+        assert "    x++;" in _function_body(tu, "slide_b")
 
     def test_unreferenced_variable_stays_local(self):
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("f();"))
-        assert "    int x{1};" in _function_body(tu, "a")
+        assert "    int x{1};" in _function_body(tu, "slide_a")
 
     def test_variable_used_by_a_hoisted_definition_is_promoted(self):
         tu = emit(code("int counter{0};\nvoid bump() { ++counter; }"))
         assert tu.startswith("int counter{0};\nvoid bump() { ++counter; }\n")
-        assert "void section_01" not in tu
+        assert "void slide_01" not in tu
 
     def test_promotion_is_transitive_within_the_section(self):
         tu = emit(slide("A", "a"), code("int n{3};\nint total{n};"), slide("B", "b"), code("total"))
         assert "\nint n{3};\nint total{n};\n" in tu
-        assert tu.index("int total{n};") < tu.index("void b()")
-        assert "void a()" not in tu  # nothing was left for a body
+        assert tu.index("int total{n};") < tu.index("void slide_b()")
+        assert "void slide_a()" not in tu  # nothing was left for a body
 
     def test_reference_in_a_comment_does_not_promote(self):
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("f(); // x"))
-        assert "    int x{1};" in _function_body(tu, "a")
+        assert "    int x{1};" in _function_body(tu, "slide_a")
 
     def test_reference_in_a_string_does_not_promote(self):
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code('puts("x");'))
-        assert "    int x{1};" in _function_body(tu, "a")
+        assert "    int x{1};" in _function_body(tu, "slide_a")
 
     def test_partial_identifier_match_does_not_promote(self):
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("xs.clear();"))
-        assert "    int x{1};" in _function_body(tu, "a")
+        assert "    int x{1};" in _function_body(tu, "slide_a")
 
     def test_reference_in_a_blanked_later_cell_promotes(self):
         # Code-along: the later cell is blank in this view, but its original
@@ -475,12 +569,12 @@ class TestPromotion:
             code("", original_source="x++;"),
         )
         assert "    int x{1};" not in tu
-        assert tu.index("int x{1};") < tu.index("void b()")
-        assert "    // TODO: B" in _function_body(tu, "b")
+        assert tu.index("int x{1};") < tu.index("void slide_b()")
+        assert "    // TODO: B" in _function_body(tu, "slide_b")
 
     def test_member_access_does_not_promote(self):
         tu = emit(slide("A", "a"), code("int x{1};"), slide("B", "b"), code("p.x = 2;\nq->x = 3;"))
-        assert "    int x{1};" in _function_body(tu, "a")
+        assert "    int x{1};" in _function_body(tu, "slide_a")
 
     def test_global_tag_moves_the_cell_to_the_header(self):
         files = emit_files(slide("A", "a"), code("int cfg{1};", tags=("global",)), code("f();"))
@@ -497,7 +591,7 @@ class TestEmitCodeAlongTodos:
         tu = emit(
             slide("Calls", "calls"), code("#include <iostream>"), code("", original_source="f();")
         )
-        assert "    // TODO: Calls" in _function_body(tu, "calls")
+        assert "    // TODO: Calls" in _function_body(tu, "slide_calls")
         assert tu.count("TODO") == 1
 
     def test_todo_names_the_section_heading_not_the_slide_id(self):
@@ -506,11 +600,11 @@ class TestEmitCodeAlongTodos:
 
     def test_todo_falls_back_to_humanized_slide_id_without_heading(self):
         tu = emit(code("", original_source="f();", tags=("slide",), slide_id="brace-init"))
-        assert "// TODO: Brace init" in _function_body(tu, "brace_init")
+        assert "// TODO: Brace init" in _function_body(tu, "slide_brace_init")
 
     def test_empty_cell_counts_as_blanked_when_the_spec_blanks(self):
         tu = emit(code("#include <iostream>"), code(""), code("  \n "), blanks_code_cells=True)
-        assert tu.count("    // TODO: section_01") == 2
+        assert tu.count("    // TODO: slide_01") == 2
 
     def test_originally_empty_cell_is_not_a_todo_even_when_the_spec_blanks(self):
         # Partial blanks only its workshop range, so an empty pre-workshop
@@ -524,8 +618,8 @@ class TestEmitCodeAlongTodos:
 
     def test_kept_cells_emit_normally_between_todos(self):
         tu = emit(code("int x = 1;"), code("", original_source="g();"), code("f(x);"))
-        body = _function_body(tu, "section_01")
-        assert "    int x = 1;\n\n    // TODO: section_01\n\n    f(x);" in body
+        body = _function_body(tu, "slide_01")
+        assert "    int x = 1;\n\n    // TODO: slide_01\n\n    f(x);" in body
 
     def test_blanked_definition_leaves_a_todo_at_namespace_scope(self):
         tu = emit(
@@ -534,12 +628,12 @@ class TestEmitCodeAlongTodos:
             code('std::cout << "hi";', tags=("keep",)),
         )
         assert "// TODO: define twice" in tu
-        assert tu.index("// TODO: define twice") < tu.index("void functions()")
-        assert "TODO" not in _function_body(tu, "functions")
+        assert tu.index("// TODO: define twice") < tu.index("void slide_functions()")
+        assert "TODO" not in _function_body(tu, "slide_functions")
 
     def test_blanked_variable_names_the_variable_in_the_body(self):
         tu = emit(slide("Vars", "vars"), code("", original_source="int i1{10};"))
-        assert "    // TODO: define i1" in _function_body(tu, "vars")
+        assert "    // TODO: define i1" in _function_body(tu, "slide_vars")
 
     def test_blanked_cell_with_several_definitions_gets_one_todo(self):
         tu = emit(
@@ -557,9 +651,9 @@ class TestEmitCodeAlongTodos:
             slide("B", "b"),
             code("", original_source="x++;"),
         )
-        assert tu.index("// TODO: define x") < tu.index("void b()")
-        assert "void a()" not in tu  # the section body is empty
-        assert "    // TODO: B" in _function_body(tu, "b")
+        assert tu.index("// TODO: define x") < tu.index("void slide_b()")
+        assert "void slide_a()" not in tu  # the section body is empty
+        assert "    // TODO: B" in _function_body(tu, "slide_b")
 
     def test_blanked_global_cell_todo_goes_to_the_header(self):
         files = emit_files(
@@ -572,7 +666,7 @@ class TestEmitCodeAlongTodos:
     def test_mixed_definition_and_statement_cell_todo_goes_to_namespace_scope(self):
         tu = emit(slide("A", "a"), code("", original_source="int f() { return 1; }\nf();"))
         assert "// TODO: define f" in tu
-        assert "void a()" not in tu
+        assert "void slide_a()" not in tu
 
     def test_kept_variable_used_by_a_blanked_definition_is_promoted(self):
         tu = emit(
@@ -581,7 +675,7 @@ class TestEmitCodeAlongTodos:
             code("", original_source="void bump() { ++counter; }"),
         )
         assert tu.index("int counter{0};") < tu.index("// TODO: define bump")
-        assert "void a()" not in tu
+        assert "void slide_a()" not in tu
 
     def test_section_name_avoids_a_name_a_blanked_cell_defines(self):
         # Completed and code-along must name the sections identically.
@@ -590,7 +684,7 @@ class TestEmitCodeAlongTodos:
             code("", original_source="void include() {}"),
             code("include();", tags=("keep",)),
         )
-        assert "void include_section()" in tu
+        assert "void slide_include()" in tu
 
 
 class TestDanglingKeepCells:
@@ -602,7 +696,7 @@ class TestDanglingKeepCells:
             code("", original_source="int twice(int x) { return 2 * x; }"),
             code("twice(21)", tags=("keep",)),
         )
-        body = _function_body(tu, "a")
+        body = _function_body(tu, "slide_a")
         assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(twice(21));" in body
         assert "\n    CLM_DISPLAY" not in body
 
@@ -621,7 +715,7 @@ class TestDanglingKeepCells:
             slide("B", "b"),
             code("x++;", tags=("keep",)),
         )
-        assert "    // x++;" in _function_body(tu, "b")
+        assert "    // x++;" in _function_body(tu, "slide_b")
 
     def test_dependency_is_transitive(self):
         tu = emit(
@@ -643,7 +737,7 @@ class TestDanglingKeepCells:
         )
         assert DANGLING_NOTE not in tu
         assert "\nint result{1};\n" in tu
-        assert "    CLM_DISPLAY(result);" in _function_body(tu, "demo")
+        assert "    CLM_DISPLAY(result);" in _function_body(tu, "slide_demo")
 
     def test_keep_cell_defining_the_name_itself_is_not_dangling(self):
         tu = emit(
@@ -675,8 +769,8 @@ class TestDanglingKeepCells:
             code("f();", tags=("keep",)),
         )
         assert f"{DANGLING_NOTE}\n// Point origin() {{ return {{}}; }}" in tu
-        assert tu.index("// Point origin()") < tu.index("void a()")
-        assert "    f();" in _function_body(tu, "a")
+        assert tu.index("// Point origin()") < tu.index("void slide_a()")
+        assert "    f();" in _function_body(tu, "slide_a")
 
     def test_dangling_cell_with_both_scopes_gets_the_note_in_each(self):
         tu = emit(
@@ -777,7 +871,7 @@ class TestExcludedCells:
             code("h();"),
         )
         assert "void b()" not in tu
-        assert "    f();\n\n    h();" in _function_body(tu, "a")
+        assert "    f();\n\n    h();" in _function_body(tu, "slide_a")
 
     def test_start_completed_pair_stub_does_not_satisfy_dependents(self):
         # The kept ``start`` stub defines Point2 too, but the solution twin
@@ -826,7 +920,7 @@ class TestExcludedCells:
             code("", original_source="void include() {}", excluded=True),
             code("f();", tags=("keep",)),
         )
-        assert "void include_section()" in tu
+        assert "void slide_include()" in tu
 
 
 class TestEmitMain:
@@ -841,7 +935,7 @@ class TestEmitMain:
 
     def test_deck_defined_main_still_gets_section_functions(self):
         tu = emit(slide("A", "a"), code("f();"), code("int main() { a(); }"))
-        assert "void a() {" in tu
+        assert "void slide_a() {" in tu
         assert tu.count("int main()") == 1
 
 
@@ -890,7 +984,7 @@ class TestEmitDisplayExpressions:
             code("std::vector<int> xs{3, 1, 2};"),
             code("std::sort(xs.begin(), xs.end());"),
         )
-        assert "    std::sort(xs.begin(), xs.end());" in _function_body(tu, "section_01")
+        assert "    std::sort(xs.begin(), xs.end());" in _function_body(tu, "slide_01")
 
 
 # ---------------------------------------------------------------------------
@@ -1040,13 +1134,13 @@ class TestParenInitialization:
 
     def test_paren_initialized_variable_stays_local(self):
         tu = emit(code("int i2(20);"), code("i2"))
-        assert "    int i2(20);" in _function_body(tu, "section_01")
+        assert "    int i2(20);" in _function_body(tu, "slide_01")
 
 
 class TestEmitClassifierRegressions:
     def test_mixed_declaration_and_statement_cell_stays_in_the_body(self):
         tu = emit(code("void h(int, long) {}"), code(_MIXED_DECL_STMT_CELL))
-        assert "    long arg2{2'000'000'000};\n    h(1, arg2);" in _function_body(tu, "section_01")
+        assert "    long arg2{2'000'000'000};\n    h(1, arg2);" in _function_body(tu, "slide_01")
 
     def test_requires_clause_template_stays_at_namespace_scope(self):
         tu = emit(code(_REQUIRES_CLAUSE_TEMPLATE), code("ordered_min(1, 2)"))
@@ -1075,8 +1169,8 @@ class TestEmitClassifierRegressions:
             code("global_answer += 1;"),
         )
         assert "\nconstinit int global_answer{42};\n" in tu
-        assert "constinit int" not in _function_body(tu, "constinit_section")
-        assert "    global_answer += 1;" in _function_body(tu, "constinit_section")
+        assert "constinit int" not in _function_body(tu, "slide_constinit")
+        assert "    global_answer += 1;" in _function_body(tu, "slide_constinit")
 
     def test_blanked_constinit_variable_todo_goes_to_namespace_scope(self):
         tu = emit(
@@ -1085,7 +1179,7 @@ class TestEmitClassifierRegressions:
             code("global_answer += 1;", tags=("keep",)),
         )
         assert "\n// TODO: define global_answer\n" in tu
-        assert "TODO" not in _function_body(tu, "constinit_section")
+        assert "TODO" not in _function_body(tu, "slide_constinit")
 
     def test_new_expression_is_a_display_not_a_declaration(self):
         tu = emit(
@@ -1161,12 +1255,12 @@ class TestMultiFileExport:
         assert ordinal == 1
         assert ws.startswith('#include "deck.hpp"\n\n')
         assert "// ## Workshop\n\n// Write `sum`.\nint sum(int a, int b) { return a + b; }" in ws
-        assert "    CLM_DISPLAY(sum(1, 2));" in _function_body(ws, "workshop_sum")
-        assert ws.endswith("int main() {\n    workshop_sum();\n}\n")
+        assert "    CLM_DISPLAY(sum(1, 2));" in _function_body(ws, "slide_workshop_sum")
+        assert ws.endswith("int main() {\n    slide_workshop_sum();\n}\n")
         # Nothing of the workshop leaks into the lecture file, and vice versa.
         assert "sum" not in files.main
         assert "lecture_value" not in ws
-        assert files.main.endswith("int main() {\n    lecture();\n}\n")
+        assert files.main.endswith("int main() {\n    slide_lecture();\n}\n")
         assert set(files.companion_files("deck")) == {"deck.hpp", "deck_workshop_1.cpp"}
 
     def test_workshop_opener_without_slide_tag_still_opens_a_section(self):
@@ -1176,9 +1270,9 @@ class TestMultiFileExport:
             md("## Workshop", tags=("workshop",), slide_id="ws"),
             code("g();"),
         )
-        assert "    f();" in _function_body(files.main, "a")
+        assert "    f();" in _function_body(files.main, "slide_a")
         assert "g();" not in files.main
-        assert "    g();" in _function_body(files.workshops[0][1], "ws")
+        assert "    g();" in _function_body(files.workshops[0][1], "slide_ws")
 
     def test_end_workshop_returns_to_the_lecture_file(self):
         files = emit_files(
@@ -1193,9 +1287,11 @@ class TestMultiFileExport:
         ws = files.workshops[0][1]
         assert "g();" in ws and "h();" not in ws and "i();" not in ws
         # The closer opens a new lecture section (no slide tag: numbered).
-        assert "    h();" in _function_body(files.main, "section_03")
-        assert "    i();" in _function_body(files.main, "b")
-        assert files.main.endswith("int main() {\n    a();\n    section_03();\n    b();\n}\n")
+        assert "    h();" in _function_body(files.main, "slide_03")
+        assert "    i();" in _function_body(files.main, "slide_b")
+        assert files.main.endswith(
+            "int main() {\n    slide_a();\n    slide_03();\n    slide_b();\n}\n"
+        )
 
     def test_every_separated_workshop_gets_a_file_in_deck_order(self):
         files = emit_files(
@@ -1213,7 +1309,7 @@ class TestMultiFileExport:
         assert "g();" in first
         assert "// Only prose here." in second
         assert second.endswith("int main() {}\n")
-        assert "    h();" in _function_body(files.main, "between")
+        assert "    h();" in _function_body(files.main, "slide_between")
         assert set(files.companion_files("d")) == {"d.hpp", "d_workshop_1.cpp", "d_workshop_2.cpp"}
 
     def test_back_to_back_ranges_form_one_workshop_file(self):
@@ -1233,9 +1329,11 @@ class TestMultiFileExport:
         assert [ordinal for ordinal, _ in files.workshops] == [1]
         ws = files.workshops[0][1]
         assert "int check(double c)" in ws
-        assert "    CLM_DISPLAY(check(2.0));" in _function_body(ws, "workshop_task_1")
-        assert "    CLM_DISPLAY(check(0.5));" in _function_body(ws, "workshop_task_2")
-        assert ws.endswith("int main() {\n    workshop_task_1();\n    workshop_task_2();\n}\n")
+        assert "    CLM_DISPLAY(check(2.0));" in _function_body(ws, "slide_workshop_task_1")
+        assert "    CLM_DISPLAY(check(0.5));" in _function_body(ws, "slide_workshop_task_2")
+        assert ws.endswith(
+            "int main() {\n    slide_workshop_task_1();\n    slide_workshop_task_2();\n}\n"
+        )
         assert set(files.companion_files("d")) == {"d.hpp", "d_workshop_1.cpp"}
 
     def test_global_cell_inside_a_workshop_stays_in_the_workshop_file(self):
@@ -1250,7 +1348,7 @@ class TestMultiFileExport:
         assert "answer" not in files.header
         ws = files.workshops[0][1]
         assert "\nint answer{42};\n" in ws
-        assert ws.index("int answer{42};") < ws.index("void ws()")
+        assert ws.index("int answer{42};") < ws.index("void slide_ws()")
 
     def test_reference_from_a_workshop_does_not_promote_a_lecture_variable(self):
         files = emit_files(
@@ -1259,7 +1357,7 @@ class TestMultiFileExport:
             workshop("Workshop", "ws"),
             code("x"),
         )
-        assert "    int x{1};" in _function_body(files.main, "a")
+        assert "    int x{1};" in _function_body(files.main, "slide_a")
 
     def test_reference_from_a_later_lecture_section_promotes_across_a_workshop(self):
         files = emit_files(
@@ -1287,8 +1385,8 @@ class TestMultiFileExport:
         assert "return 2 * x" not in ws
         # Deck-global dangling scan: ``base`` is blanked in the lecture file.
         assert f"    {DANGLING_NOTE}\n    // CLM_DISPLAY(twice(base));" in ws
-        assert "    f();" in _function_body(ws, "ws")
-        assert "// TODO: define base" in _function_body(files.main, "a")
+        assert "    f();" in _function_body(ws, "slide_ws")
+        assert "// TODO: define base" in _function_body(files.main, "slide_a")
 
     def test_deck_defined_main_is_per_file(self):
         files = emit_files(
@@ -1301,7 +1399,7 @@ class TestMultiFileExport:
         assert "int main() { f(); }" in files.main
         assert files.main.count("int main()") == 1
         ws = files.workshops[0][1]
-        assert ws.endswith("int main() {\n    ws();\n}\n")
+        assert ws.endswith("int main() {\n    slide_ws();\n}\n")
 
     def test_workshop_defined_main_suppresses_its_generated_main(self):
         files = emit_files(
@@ -1312,7 +1410,7 @@ class TestMultiFileExport:
         )
         ws = files.workshops[0][1]
         assert ws.count("int main()") == 1
-        assert files.main.endswith("int main() {\n    a();\n}\n")
+        assert files.main.endswith("int main() {\n    slide_a();\n}\n")
 
     def test_explicit_workshop_ranges_override_detection(self):
         cells = [slide("A", "a"), code("f();"), slide("B", "b"), code("g();")]
@@ -1338,7 +1436,7 @@ class TestMultiFileExport:
 
     def test_using_directive_stays_in_place_without_a_header(self):
         tu = emit(slide("A", "a"), code("using namespace std;"), code("f();"))
-        assert tu.index("using namespace std;") < tu.index("void a()")
+        assert tu.index("using namespace std;") < tu.index("void slide_a()")
 
     def test_using_directive_inside_a_workshop_stays_there(self):
         files = emit_files(
@@ -1402,8 +1500,8 @@ class TestMultiFileExport:
             workshop("Workshop", "same"),
             code("g();"),
         )
-        assert "void same()" in files.main
-        assert "void same_2()" in files.workshops[0][1]
+        assert "void slide_same()" in files.main
+        assert "void slide_same_2()" in files.workshops[0][1]
 
 
 # ---------------------------------------------------------------------------
