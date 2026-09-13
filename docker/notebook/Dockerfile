@@ -465,6 +465,12 @@ FROM packages-${VARIANT} AS final
 # Copy clm repository (workers are now part of main package)
 COPY . ./clm
 
+# The C++ decks' display helper (`SHOW` / `CLM_DISPLAY`, #928): the same
+# header the code export vendors, installed where the xcpp kernel's clang
+# finds it (/opt/conda/include is on its default include path), so a deck
+# can `#include <clm/display.hpp>` in the notebook.
+COPY src/clm/data/cpp_export/include/clm /opt/conda/include/clm
+
 # Install clm with notebook worker dependencies
 # Note: We don't use [notebook] extra here because we've already installed
 # the dependencies above with specific versions via uv

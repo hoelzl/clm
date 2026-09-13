@@ -40,3 +40,8 @@ void display(const char* label, ExprThunk&& expr_thunk) {
 // #__VA_ARGS__ turns the expression tokens into the label.
 #define CLM_DISPLAY(...) \
     ::clm::display(#__VA_ARGS__, [&]() -> decltype(auto) { return (__VA_ARGS__); })
+
+// The deck-facing spelling: notebooks write `SHOW(expr);` (the xeus-cpp
+// kernel prints nothing for a bare expression, so this is how a deck
+// shows a value in the notebook and in the exported program alike).
+#define SHOW(...) CLM_DISPLAY(__VA_ARGS__)

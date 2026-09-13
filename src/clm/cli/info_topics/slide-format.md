@@ -27,6 +27,15 @@ All metadata is **optional and order-independent** on the marker line:
 
 Cells without a `lang` attribute are **shared** — included in every language build.
 
+**C++ decks show values with `SHOW(expr);`** (since CLM {version}): the
+xeus-cpp kernel prints nothing for a cell that is not terminated by `;`, so
+every code cell ends with `;` and a value is displayed by the `SHOW` macro
+of `clm/display.hpp` (`#include <clm/display.hpp>` once per deck; the header
+is installed in the notebook worker image and vendored by the C++ code
+export, where `SHOW(i1);` prints `i1 = 10`). `clm slides cpp-show` converts
+a deck that still relies on bare expressions. Never put a `SHOW` in a
+`global` cell — it is ill-formed at namespace scope.
+
 ## Jinja2 (j2) cells
 
 The file opens with a j2 import and a title macro call; these are not `# %%` cells:
