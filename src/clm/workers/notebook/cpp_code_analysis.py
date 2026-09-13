@@ -308,7 +308,7 @@ def split_top_level(src: str) -> list[str]:
 
 _SPECIFIERS = (
     r"(?:(?:const|constexpr|consteval|constinit|static|inline|virtual|extern"
-    r"|friend|unsigned|signed|long|short|mutable)\s+)*"
+    r"|friend|unsigned|signed|long|short|mutable|thread_local)\s+)*"
 )
 _TYPE_TOKEN = r"[\w:]+(?:<[^;{}]*>)?"
 _CONTROL_KW = (
@@ -454,6 +454,10 @@ def classify_item(item: str) -> CppItem:
         return CppItem("output_stmt", text=text)
     if text.startswith("delete"):
         return CppItem("expr_stmt", text=text)
+    if re.match(r"^new\b", text):
+        # `new Vec(1)` would otherwise read as a variable `Vec` of type
+        # `new`; a bare new-expression relied on the kernel's auto-display.
+        return CppItem("expr_stmt" if text.endswith(";") else "expr_display", text=text)
     if re.match(r"^,\s*\w+\s*(\{|=|\()", text):
         # Continuation declarator from `int i{},\n j{};` style splits.
         nm = re.match(r"^,\s*(\w+)", text)

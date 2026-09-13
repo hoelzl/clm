@@ -1054,6 +1054,54 @@ class TestEmitClassifierRegressions:
         assert "    CLM_DISPLAY(ordered_min(1, 2));" in tu
         assert tu.count("CLM_DISPLAY(") == 1  # the one call; the macro lives in the header
 
+    def test_preprocessor_lines_are_not_terminated(self):
+        # `#define private public;` puts the `;` into the macro body and
+        # `#endif;` is ill-formed (CppCourses good_tests / program_structure).
+        tu = emit(
+            code("#define private public"),
+            code("class Locked {\nprivate:\n    int secret{42};\n};"),
+            code("#undef private"),
+            code("#ifndef GUARD\n#define GUARD\nint guarded{1};\n#endif"),
+        )
+        assert "#define private public\n" in tu
+        assert "#undef private\n" in tu
+        assert "#endif\n" in tu
+        assert "public;" not in tu and "#endif;" not in tu and "GUARD;" not in tu
+
+    def test_constinit_variable_is_promoted_to_namespace_scope(self):
+        tu = emit(
+            slide("Constinit", "constinit"),
+            code("constinit int global_answer{42};"),
+            code("global_answer += 1;"),
+        )
+        assert "\nconstinit int global_answer{42};\n" in tu
+        assert "constinit int" not in _function_body(tu, "constinit_section")
+        assert "    global_answer += 1;" in _function_body(tu, "constinit_section")
+
+    def test_blanked_constinit_variable_todo_goes_to_namespace_scope(self):
+        tu = emit(
+            slide("Constinit", "constinit"),
+            code("", original_source="constinit int global_answer{42};"),
+            code("global_answer += 1;", tags=("keep",)),
+        )
+        assert "\n// TODO: define global_answer\n" in tu
+        assert "TODO" not in _function_body(tu, "constinit_section")
+
+    def test_new_expression_is_a_display_not_a_declaration(self):
+        tu = emit(
+            code("struct Vec { Vec(int) {} };"),
+            code("new Vec(1)           // new with non-empty initializer"),
+        )
+        assert (
+            "CLM_DISPLAY(\n        new Vec(1)           // new with non-empty initializer\n    );"
+            in tu
+        )
+        assert "\nnew Vec" not in tu
+
+    def test_thread_local_variable_classifies_as_var_decl(self):
+        [item] = classify_source("thread_local int counter{0};")
+        assert (item.category, item.name) == ("var_decl", "counter")
+
 
 def workshop(title: str, slide_id: str | None = None, *tags: str) -> CppCell:
     return md(f"## {title}", tags=("slide", "workshop", *tags), slide_id=slide_id)
@@ -1403,6 +1451,24 @@ class TestEmittedCodeCompiles:
             md("## Reuse", tags=("subslide",), slide_id="reuse"),
             code("numbers.push_back(p.x);"),
             code("sum(numbers)"),
+        )
+        self._check(tu, tmp_path)
+
+    def test_preprocessor_constinit_and_new_compile(self, tmp_path):
+        tu = emit(
+            slide("Guards", "guards"),
+            code("#define private public"),
+            code("class Locked {\nprivate:\n    int secret{42};\n};"),
+            code("#undef private"),
+            code("Locked l;"),
+            code("l.secret"),
+            slide("Constinit", "constinit"),
+            code("constinit int global_answer{42};"),
+            code("global_answer += 1;"),
+            code("global_answer"),
+            slide("New", "new_expr"),
+            code("struct Vec { Vec(int) {} };"),
+            code("new Vec(1)  // leaks on purpose"),
         )
         self._check(tu, tmp_path)
 

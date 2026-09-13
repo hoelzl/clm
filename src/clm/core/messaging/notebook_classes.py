@@ -1,5 +1,6 @@
 import hashlib
 from collections.abc import Mapping
+from pathlib import PurePath
 from typing import Any, Literal
 
 from clm.core.messaging.base_classes import Payload, ProcessingError, Result
@@ -186,9 +187,26 @@ class NotebookPayload(Payload):
     def content_hash(self) -> str:
         hash_data = (
             f"{CACHE_HASH_SCHEMA_VERSION}:{self.output_metadata()}:"
+            f"{self._output_stem_key()}:"
             f"{self._dependency_digest()}:{self.data}"
         ).encode()
         return hashlib.sha256(hash_data).hexdigest()
+
+    def _output_stem_key(self) -> str:
+        """The output file stem when the result text depends on it.
+
+        The C++ code export (#928) embeds its output stem in the result:
+        ``<stem>.cpp`` includes ``"<stem>.hpp"`` and the companion files are
+        named after it. The result cache is keyed by input file, not by
+        output file, so a deck exported under another name by a second
+        spec (``07 Functions`` vs. ``02 Functions``) would otherwise replay
+        the first spec's text and companions next to the new output —
+        seen in Phase 4's differential check. Every other output is
+        stem-independent and keeps its key.
+        """
+        if self.format == "code" and self.prog_lang == "cpp":
+            return PurePath(self.output_file).stem
+        return ""
 
     def execution_cache_hash(self) -> str:
         """Compute a kind-agnostic hash for execution caching.
