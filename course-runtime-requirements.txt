@@ -49,6 +49,7 @@ protobuf>=6.32.1
 # Data science
 numpy>=2.0.1
 pandas>=2.2.2
+openpyxl>=3.1.5  # pandas read_excel/to_excel engine (W12 data-loading deck)
 scipy>=1.14.0
 scikit-learn>=1.5.1
 skorch>=1.0.2
@@ -87,13 +88,17 @@ langchain-openai
 langchain-openrouter
 langchain-text-splitters
 langgraph>=1.1.2
-deepagents>=0.6.0  # AI-Agents-II deck (create_deep_agent on LangGraph)
+deepagents>=0.7.10  # AI-Agents-II deck (create_deep_agent on LangGraph; 0.7: TodoListMiddleware is opt-in)
+langgraph-checkpoint-sqlite  # agent-memory deep dive (persistent checkpointer)
 qdrant-client>=1.13.0
 langchain-qdrant
 fastembed>=0.6.0
 openai>=2.8.1
 tiktoken>=0.9.0
 langfuse>=4.0.0
+deepeval>=4.2.0,<4.3  # RAG-evaluation decks teach its current interface; the tight pin is the guard
+fastmcp>=2.12.5
+langchain-mcp-adapters>=0.2.2
 # Document processing (used with RAG)
 pypdf>=6.3.2
 pymediawiki>=0.7.5
