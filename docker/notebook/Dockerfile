@@ -293,148 +293,109 @@ WORKDIR /app
 # Lite variant: Core Jupyter + Scientific stack (no ML/GPU libraries)
 FROM common AS packages-lite
 
+# Python packages of the course runtime. The list mirrors the *course*
+# repository's declaration (PythonCourses `pyproject.toml`, the venv the
+# decks are authored and executed in for Direct-mode builds) plus the
+# modules its decks import transitively; keep the two in step — a deck that
+# runs in the course venv must run in this image. Floors are the course's
+# floors; the resolution date below stands in for the course's
+# `exclude-newer` (2026-07-12, with the LangChain family, deepeval and
+# deepagents exempted up to 2026-08-29): one cutoff for the whole image keeps
+# the build reproducible and the versions close to the course venv's.
+ENV UV_EXCLUDE_NEWER=2026-08-29
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python \
-        # Jupyter and notebook processing
-        'ipython~=8.26.0' \
-        'ipykernel~=6.29.5' \
-        'ipywidgets~=8.0.2' \
-        'jupyterlab~=4.0' \
-        'notebook~=7.0' \
-        'nbformat~=5.10.4' \
-        'nbconvert~=7.16.4' \
-        'jupytext~=1.16.4' \
+        # Jupyter and notebook processing (nbconvert/jupytext drive the build)
+        'ipython>=8.26.0' \
+        'ipykernel>=6.29.5' \
+        'ipywidgets>=8.0.2' \
+        'jupyterlab>=4.5.5' \
+        'notebook>=7.5.4' \
+        'nbformat>=5.10.4' \
+        'nbconvert>=7.16.4' \
+        'jupytext>=1.16.4' \
         'rise' \
-        # Scientific stack
-        'numpy~=2.0.1' \
-        'pandas~=2.2.2' \
-        'matplotlib~=3.9.2' \
-        'seaborn~=0.13.2' \
-        'scipy~=1.14.0' \
-        'scikit-learn~=1.5.1' \
-        # Utilities (commonly used in courses)
+        # Data science
+        'numpy>=2.0.1' \
+        'pandas>=2.2.2' \
+        'openpyxl>=3.1.5' \
+        'scipy>=1.14.0' \
+        'scikit-learn>=1.5.1' \
+        'joblib' \
+        'sqlalchemy>=2.0.32' \
+        'psycopg[binary]>=3.2' \
+        # Visualization
+        'matplotlib>=3.9.2' \
+        'seaborn>=0.13.2' \
+        'plotly>=6.4.0' \
+        'pillow>=11.2.1' \
+        # Utilities (incl. what basics/CLI/services decks import directly)
         'requests' \
-        'jinja2~=3.1.4' \
-        'aiofiles~=24.1.0' \
-        'tqdm~=4.66.5' \
-        'toolz~=0.12.1' \
-        'sqlalchemy~=2.0.32' \
-        'pydantic~=2.8.2' \
-        # HTTP client for REST API communication with CLM host
         'httpx' \
-        # Text cleaning libraries (for data preprocessing in notebooks)
-        "beautifulsoup4>=4.12.2" \
-        "inscriptis>=1.0.0" \
-        "ftfy>=6.1.1" \
-        "clean-text>=0.6.0" \
-        "trafilatura>=1.6.0" \
-        "newspaper4k>=0.2.8" \
-        # BM25 sparse retrieval (used in notebooks)
+        'jinja2>=3.1.4' \
+        'aiofiles>=24.1.0' \
+        'tqdm>=4.66.5' \
+        'toolz>=0.12.1' \
+        'packaging>=25.0' \
+        'icecream>=2.1.10' \
+        'cookiecutter' \
+        'PyGitHub>=2.0.0' \
+        'click' \
+        'python-dotenv' \
+        'pydantic>=2.8.2' \
+        'pydantic-settings' \
+        'appdirs' \
+        'loguru' \
+        'fastapi' \
+        'uvicorn' \
+        'cython' \
+        # Notebook testing
+        'ipytest' \
+        'pytest' \
+        # Text and web processing
+        'beautifulsoup4>=4.12.2' \
+        'inscriptis>=1.0.2' \
+        'ftfy>=6.1.1' \
+        'clean-text>=0.6.0' \
+        'trafilatura>=1.6.0' \
+        'newspaper4k>=0.2.8' \
         'bm25s[core]>=0.3.2.post1'
 
-# Full variant: Everything from lite + ML/GPU libraries
-FROM common AS packages-full
+# Full variant: everything from lite + the ML / LLM stack
+FROM packages-lite AS packages-full
 
 # Re-declare TARGETARCH so the arch-gated installs below resolve per platform.
 ARG TARGETARCH
 
-# Install Python packages using uv
-# Split into multiple steps for better caching and to handle large downloads
-
-# Step 1: PyTorch ecosystem (large downloads, needs longer timeout)
+# Step 1: PyTorch ecosystem (large downloads, needs longer timeout).
 # On amd64 we pull CUDA 12.6 wheels from the PyTorch index (GPU-accelerated).
 # On arm64 there is no CUDA wheel, so we install the CPU wheels from PyPI
-# (torch 2.8+ publishes aarch64 manylinux wheels). Same package names, no
-# extra index URL on arm64.
+# (torch 2.8+ publishes aarch64 manylinux wheels). The PyTorch index carries
+# no upload dates, so the resolution cutoff is lifted for this one step
+# (the course venv exempts torch the same way).
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eu && \
     if [ "${TARGETARCH}" = "arm64" ]; then \
-        UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python \
+        env -u UV_EXCLUDE_NEWER UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python \
             'torch>=2.8.0' \
             'torchvision>=0.21.0' \
             'torchaudio>=2.8.0'; \
     else \
-        UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu126 \
+        env -u UV_EXCLUDE_NEWER UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu126 \
             'torch>=2.8.0' \
             'torchvision>=0.21.0' \
             'torchaudio>=2.8.0'; \
     fi
 
-# Step 2: Jupyter and notebook processing
+# Step 2: Deep learning, transformers, image generation, tooling.
+# skorch comes from its git main like in the course venv (the PyPI release
+# lags the scikit-learn/numpy versions the floors above resolve to).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python \
-        'ipython~=8.26.0' \
-        'ipykernel~=6.29.5' \
-        'ipywidgets~=8.0.2' \
-        'jupyterlab~=4.0' \
-        'notebook~=7.0' \
-        'nbformat~=5.10.4' \
-        'nbconvert~=7.16.4' \
-        'jupytext~=1.16.4' \
-        'rise'
-
-# Step 3: Scientific stack
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
-        'numpy~=2.0.1' \
-        'pandas~=2.2.2' \
-        'matplotlib~=3.9.2' \
-        'seaborn~=0.13.2' \
-        'scipy~=1.14.0' \
-        'scikit-learn~=1.5.1' \
-        'numba~=0.60.0'
-
-# Step 4: Fast.ai and ML tools
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
-        'fastai>=2.8.0' \
-        'skorch~=1.0.0'
-
-# Step 5: Utilities
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
-        'requests' \
-        'jinja2~=3.1.4' \
-        'aiofiles~=24.1.0' \
-        'tqdm~=4.66.5' \
-        'toolz~=0.12.1' \
-        'sqlalchemy~=2.0.32' \
-        'pydantic~=2.8.2' \
-        'httpx'
-
-# Step 6: LLM/RAG
-# fastembed-gpu (which depends on onnxruntime-gpu) has no aarch64 wheel, so it
-# is installed in the arch-gated step below rather than here.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
-        'langchain>=1.2.7' \
-        'langsmith' \
-        'langchain-anthropic' \
-        'langchain-community>=0.3.0' \
-        'langchain-core' \
-        'langchain-openai' \
-        'langchain-text-splitters' \
-        'langgraph>=0.2.0' \
-        'qdrant-client>=1.13.0' \
-        'langchain-qdrant' \
-        'openai>=2.8.1' \
-        'tiktoken>=0.9.0' \
-        'ragas' \
-        'pypdf>=6.3.2' \
-        'pymediawiki>=0.7.5' \
-        'bm25s[core]>=0.3.2.post1'
-
-# Step 6b: GPU-only embedding backend (amd64 only).
-# fastembed-gpu -> onnxruntime-gpu, neither of which publishes aarch64 wheels.
-# Skipped on arm64; the CPU embedding stack from Step 6 remains available.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "${TARGETARCH}" != "arm64" ]; then \
-        uv pip install --python /opt/conda/bin/python 'fastembed-gpu>=0.6.0'; \
-    fi
-
-# Step 7: Additional ML packages (image generation, transformers, visualization)
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
+        'fastai>=2.7' \
+        'skorch @ git+https://github.com/skorch-dev/skorch.git' \
+        'numba>=0.60.0' \
         'transformers' \
         'diffusers>=0.35.1' \
         'accelerate>=1.11.0' \
@@ -443,18 +404,42 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'hf-xet>=1.1.10' \
         'protobuf>=6.32.1' \
         'gradio>=6.5.1' \
-        'plotly>=6.4.0' \
-        'pillow>=11.2.1'
+        'pytorch-model-summary'
 
-# Step 8: Text cleaning libraries (for data preprocessing in notebooks)
+# Step 3: LLM / RAG / agents (incl. the RAG-evaluation decks' deepeval and the
+# AI-Agents-II decks' deepagents, both pinned like the course venv)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python \
-        'beautifulsoup4>=4.12.2' \
-        'inscriptis>=1.0.0' \
-        'ftfy>=6.1.1' \
-        'clean-text>=0.6.0' \
-        'trafilatura>=1.6.0' \
-        'newspaper4k>=0.2.8'
+        'langchain>=1.2.7' \
+        'langsmith' \
+        'langchain-anthropic' \
+        'langchain-community>=0.3.0' \
+        'langchain-core' \
+        'langchain-openai' \
+        'langchain-openrouter' \
+        'langchain-text-splitters' \
+        'langgraph>=1.1.2' \
+        'langgraph-checkpoint-sqlite' \
+        'deepagents>=0.7.10' \
+        'qdrant-client>=1.13.0' \
+        'langchain-qdrant' \
+        'fastembed>=0.6.0' \
+        'openai>=2.8.1' \
+        'tiktoken>=0.9.0' \
+        'langfuse>=4.0.0' \
+        'deepeval>=4.2.0,<4.3' \
+        'fastmcp>=2.12.5' \
+        'langchain-mcp-adapters>=0.2.2' \
+        'pypdf>=6.3.2' \
+        'pymediawiki>=0.7.5'
+
+# Step 3b: GPU embedding backend (amd64 only).
+# fastembed-gpu -> onnxruntime-gpu, neither of which publishes aarch64 wheels.
+# Skipped on arm64, where the CPU fastembed from Step 3 stays in charge.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "${TARGETARCH}" != "arm64" ]; then \
+        uv pip install --python /opt/conda/bin/python 'fastembed-gpu>=0.6.0'; \
+    fi
 
 #=============================================================================
 # FINAL IMAGE - Select variant and install clm
