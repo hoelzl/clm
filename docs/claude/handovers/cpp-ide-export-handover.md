@@ -2,8 +2,9 @@
 
 **Created**: 2026-09-12 | **Updated**: 2026-09-13 | **Status**: Phases 0–4
 merged (#932–#937, CppCourses #129); owner-review follow-ups #938, #939,
-#940 and CppCourses #130 (SHOW rewrite) merged, gate green; open: the
-owner's student-view review, the published worker image rebuild.
+#940 and CppCourses #130 (SHOW rewrite) merged, gate green; worker image
+1.28.0 (= `latest`) published with the header 2026-09-14; open: the
+owner's student-view review.
 Conversation: `docs/claude/discussions/cpp-ide-export/`
 | **Issue**: https://github.com/hoelzl/clm/issues/928 (design + owner decisions in
 the 2026-09-12 evaluation comment) | **Predecessor**: #333 (current export)
@@ -583,13 +584,14 @@ Next Steps) — not something a session can fake.
 ## 5. Next Steps (Phase 4 close-out)
 
 0. **Display-macro rollout** — #940 and CppCourses #130 merged, compile
-   gate green for all ten courses. Left: until the published
-   `mhoelzl/clm-notebook-processor:latest` is rebuilt from a master that
-   has #940's Dockerfile, a Docker-mode HTML build of the rewritten decks
-   fails on `#include <clm/display.hpp>`. Direct-mode kernels
-   (`clm provision kernel-env`) do not get the header — add an include
-   path there if Direct mode is ever used for C++. A validator rule for
-   `SHOW` in `global` cells is still open.
+   gate green for all ten courses; `mhoelzl/clm-notebook-processor`
+   `1.28.0` / `1.28.0-lite` / `latest` / `lite` (digest `720ece47…`) built
+   from master with `clm docker build notebook:lite` and pushed
+   2026-09-14, `SHOW(x);` verified in its kernel without any mount. The
+   `full` variant was not rebuilt (ML-only image, never used for C++).
+   Direct-mode kernels (`clm provision kernel-env`) do not get the header
+   — add an include path there if Direct mode is ever used for C++. A
+   validator rule for `SHOW` in `global` cells is still open.
 1. **Merge order**: clm PR first (emitter + cache fixes), then the
    CppCourses PR — its master push triggers `code-export-compile.yml`,
    which installs clm from git master. Watch that run: it is the first

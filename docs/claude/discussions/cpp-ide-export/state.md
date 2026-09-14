@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-09-13
-review-by: 2027-03-13
+updated: 2026-09-14
+review-by: 2027-03-14
 ---
 
 # State: C++ IDE export (#928) — Phase 4 and the owner review
@@ -78,10 +78,8 @@ same session also produced the discussion stack itself (thread
   `const_constexpr` and `array_basics` in an IDE — the Phase 1 acceptance
   item is still open. The scratch spec `course-specs/review-928.xml`
   (untracked, CppCourses) builds exactly those four decks.
-- Whether the published `mhoelzl/clm-notebook-processor:latest` image has
-  been rebuilt from master with `clm/display.hpp`; until then a Docker-mode
-  HTML build of the rewritten decks fails on the include. Direct-mode
-  kernels never get the header.
+- Direct-mode kernels never get the header (`clm/display.hpp`); the
+  published `latest` image (1.28.0, 2026-09-14) has it.
 - The `variables` deck's mini-workshop range runs to EOF, so its workshop
   file carries the rest of the lecture; `global` on `int i{1};` makes it
   compile, an `end-workshop` closer would restore the split but changes the
