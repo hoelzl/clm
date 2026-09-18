@@ -36,6 +36,11 @@ from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.core.workshop_scope import is_in_workshop
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.workers.process_reaper import terminate_then_kill_procs
+from clm.workers.notebook.commented_installs import (
+    keep_commented_installs,
+    may_contain_commented_install,
+    verbatim_format,
+)
 
 from .output_spec import (
     POST_WORKSHOP_TAG,
@@ -1327,6 +1332,21 @@ class NotebookProcessor:
         )
         loop = asyncio.get_running_loop()
         nb = await loop.run_in_executor(None, jupytext.reads, expanded_nb, jupytext_format)
+        # jupytext reactivates commented magics/shell escapes on read. That
+        # is wanted for ``# %%time`` and friends but not for a commented
+        # ``# !pip install …`` hint, which would make the build run pip
+        # (#904). Compare against a verbatim read and pin those lines.
+        if may_contain_commented_install(expanded_nb):
+            verbatim = await loop.run_in_executor(
+                None, jupytext.reads, expanded_nb, verbatim_format(jupytext_format)
+            )
+            restored = keep_commented_installs(nb, verbatim)
+            if restored:
+                logger.info(
+                    f"{payload.correlation_id}:Kept {restored} commented-out package-install "
+                    f"line(s) in '{payload.input_file_name}' commented (jupytext would have "
+                    f"reactivated them)"
+                )
         _normalize_jupytext_metadata_filters(nb)
         processed_nb = await self._process_notebook_node(nb, payload)
         return processed_nb
