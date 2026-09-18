@@ -37,6 +37,27 @@ export, where `SHOW(i1);` prints `i1 = 10`). `clm slides cpp-show` converts
 a deck that still relies on bare expressions. Never put a `SHOW` in a
 `global` cell — it is ill-formed at namespace scope.
 
+## Magics, shell escapes, and install hints
+
+jupytext (the percent-format reader) **reactivates commented magics**: a
+code-cell line written as `# %%time`, `# %load_ext autoreload` or
+`# !python train.py` comes out of the build as an active `%%time` /
+`%load_ext` / `!python` line. That is how magics are meant to be written in
+a `.py` slide file, since the raw form is not valid Python.
+
+Two consequences (since CLM {version}):
+
+- **Commented-out package installs stay commented.** A line such as
+  `# !pip install "deepeval>=4.0.5,<4.1"` (also `# %pip install …`,
+  `# !python -m pip install …`, `# !uv pip install …`, `# !conda install …`)
+  is kept exactly as written in every built notebook and HTML. It is a hint
+  the trainer uncomments live; the build must never install packages — an
+  active install would run against whatever `pip` is first on PATH and leak
+  live network traffic past the HTTP-replay cassette. An install you write
+  **uncommented** (`!pip install foo`) is explicit intent and stays active.
+- **"Show but never run"** for any other magic or shell escape is a double
+  comment: `# # !echo hi` builds as the comment `# !echo hi`.
+
 ## Jinja2 (j2) cells
 
 The file opens with a j2 import and a title macro call; these are not `# %%` cells:
