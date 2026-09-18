@@ -1096,9 +1096,29 @@ def init(
 
         # Check if directory exists
         if not repo.path.exists():
-            click.echo("  Skipped: Directory does not exist (run 'clm build' first)")
-            click.echo()
-            continue
+            if repo.source == "channel":
+                # A channel destination is created by `clm release sync`,
+                # not by `clm build` -- and `release sync --push` in turn
+                # wants the repo to exist. Break that cycle here (issue
+                # #868): create the empty destination and initialize it,
+                # so a brand-new cohort can go `git init --channel` then
+                # `release sync --push` from its very first delivery.
+                sync_hint = f"clm release sync {spec_file} --channel {repo.target_name}"
+                if dry_run:
+                    click.echo(
+                        "  Would create the destination directory (empty; "
+                        f"`{sync_hint}` populates it) and initialize a repository in it"
+                    )
+                    click.echo()
+                    continue
+                repo.path.mkdir(parents=True)
+                click.echo(
+                    f"  Created the destination directory (empty; `{sync_hint}` populates it)"
+                )
+            else:
+                click.echo("  Skipped: Directory does not exist (run 'clm build' first)")
+                click.echo()
+                continue
 
         if repo.has_git:
             # Local repo already exists — check if we need to add a remote

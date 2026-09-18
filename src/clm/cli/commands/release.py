@@ -38,6 +38,7 @@ from clm.core.course_spec import (
 from clm.core.provenance_manifest import (
     MANIFEST_FILENAME,
     load_manifest,
+    manifest_files_by_topic,
     restrict_manifest_to_language,
 )
 from clm.release.frozen_manifest import FROZEN_FILENAME, load_frozen_manifest
@@ -422,16 +423,26 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
     grants group access, replacing the manual per-cohort UI step.
 
     Requires a GitLab token with ``api`` scope in ``CLM_GITLAB_TOKEN`` (or
-    ``GITLAB_TOKEN``). Channels without a parseable GitLab remote URL are
-    skipped with a note, so the command is a safe no-op for non-GitLab hosts.
+    ``GITLAB_TOKEN``). The project's ``.env`` (found by walking up from the
+    spec file, as ``clm build`` does) is loaded first, so a token kept there
+    counts; an exported value wins over the file. ``--dry-run`` previews the
+    shares **and reports whether a token is configured** without using it
+    (issue #870) -- the preview still exits 0, but it is no longer silent
+    about the half of the setup that fails for real. Channels without a
+    parseable GitLab remote URL are skipped with a note, so the command is a
+    safe no-op for non-GitLab hosts.
     """
+    from clm.cli.env_loading import load_env_files
     from clm.infrastructure.gitlab_api import (
+        TOKEN_ENV_VARS,
         GitLabApiError,
         gitlab_token,
+        gitlab_token_var,
         parse_gitlab_remote,
         share_project_with_group,
     )
 
+    load_env_files(spec_file.resolve().parent)
     spec = CourseSpec.from_file(spec_file)
     if not spec.release_channel_blocks:
         raise click.ClickException(f"{spec_file} has no <release-channels> block.")
@@ -502,13 +513,26 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         click.echo("[DRY RUN] Would apply the following group shares:")
         for ref, base_url, project_path, group, access in work:
             click.echo(f"  [{ref}] {base_url}/{project_path} -> {group} ({access})")
+        # Credential status, so the preview validates the whole setup and
+        # not just channel/group resolution (issue #870). Exit code stays
+        # 0: this is a plan check, and the line is what makes it honest.
+        token_var = gitlab_token_var()
+        if token_var is None:
+            click.echo(
+                f"credentials: MISSING -- the real run will fail. Set "
+                f"{TOKEN_ENV_VARS[0]} (or {TOKEN_ENV_VARS[1]}) to a token with "
+                f"'api' scope; the project's .env is read too."
+            )
+        else:
+            click.echo(f"credentials: {token_var} set ('api' scope not verified)")
         return
 
     token = gitlab_token()
     if token is None:
         raise click.ClickException(
             "No GitLab token configured. Set CLM_GITLAB_TOKEN (or GITLAB_TOKEN) "
-            "to a token with 'api' scope, or use --dry-run to preview."
+            "to a token with 'api' scope (exported, or in the project's .env), "
+            "or use --dry-run to preview."
         )
 
     errors = 0
@@ -793,6 +817,15 @@ def status_cmd(
 )
 @click.option("--refreeze-all", is_flag=True, help="Re-copy and re-freeze every released topic.")
 @click.option(
+    "--refreeze-skeleton",
+    "refreeze_skeleton",
+    multiple=True,
+    help="Glob pattern (destination-relative POSIX path) of frozen skeleton "
+    "files to re-copy from the current build (e.g. a setup doc shipped with a "
+    "wrong URL). One-shot: nothing is recorded, so the file is frozen again "
+    "afterwards. A file the cohort never received is copied too. Repeatable.",
+)
+@click.option(
     "--language",
     type=click.Choice(["de", "en"]),
     default=None,
@@ -814,7 +847,9 @@ def status_cmd(
     "--push",
     is_flag=True,
     help="After promoting, commit and push the cohort repo (via clm git's "
-    "commit/push). The repo must already exist — run `clm git init --channel` once.",
+    "commit/push). The repo must already exist — run `clm git init --channel` "
+    "once; on a brand-new cohort that also creates the empty destination, so "
+    "this flag works from the first sync.",
 )
 @click.option(
     "-m",
@@ -832,6 +867,7 @@ def sync_cmd(
     dest_path: Path | None,
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
+    refreeze_skeleton: tuple[str, ...],
     language: str | None,
     evergreen_patterns: tuple[str, ...],
     dry_run: bool,
@@ -862,6 +898,13 @@ def sync_cmd(
     time — regenerate the sources of evergreen files (exported outlines,
     schedules) before ``clm build``, or the sync reports ``up-to-date`` for
     the stale content the build baked in (issue #657).
+
+    Skeleton files that are *not* evergreen are frozen by the first sync,
+    and the first sync prints their list so that one-shot decision is
+    visible while it is still cheap (issue #869). ``--refreeze-skeleton
+    PATTERN`` re-copies frozen skeleton files later -- the escape hatch
+    ``--refreeze`` provides for topics -- without recording anything: the
+    file is frozen again after the run.
     """
     if channels or all_channels:
         if spec_file is None:
@@ -888,6 +931,7 @@ def sync_cmd(
                 stream=resolved.stream,
                 refreeze_ids=refreeze_ids,
                 refreeze_all=refreeze_all,
+                refreeze_skeleton=refreeze_skeleton,
                 language=language,
                 evergreen_patterns=evergreen_patterns,
                 dry_run=dry_run,
@@ -907,6 +951,7 @@ def sync_cmd(
         stream="",
         refreeze_ids=refreeze_ids,
         refreeze_all=refreeze_all,
+        refreeze_skeleton=refreeze_skeleton,
         language=language,
         evergreen_patterns=evergreen_patterns,
         dry_run=dry_run,
@@ -927,6 +972,7 @@ def _sync_one_channel(
     stream: str,
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
+    refreeze_skeleton: tuple[str, ...],
     language: str | None,
     evergreen_patterns: tuple[str, ...],
     dry_run: bool,
@@ -999,7 +1045,23 @@ def _sync_one_channel(
     # Channel patterns plus CLI additions; the scan runs against the
     # (possibly language-restricted) manifest, so patterns are matched on
     # destination-relative paths.
-    patterns = tuple(dict.fromkeys((*channel_evergreen, *evergreen_patterns)))
+    # A skeleton refreeze (issue #869) is a one-shot evergreen pass: the same
+    # stateless "destination differs from the build" comparison, run once
+    # for the patterns given on this command line and recorded nowhere, so
+    # the file is frozen again afterwards. Scanned separately so the plan
+    # can label it and an unmatched pattern can be reported.
+    refreeze_skeleton_paths: set[str] = set()
+    for pattern in dict.fromkeys(refreeze_skeleton):
+        one = scan_evergreen(manifest=manifest, patterns=(pattern,), dest_root=dest_path)
+        if not one.plans and not one.topic_owned_matches:
+            click.echo(
+                f"Note: --refreeze-skeleton {pattern!r} matched no skeleton file in "
+                f"the source manifest (patterns are destination-relative POSIX "
+                f"paths, e.g. 'Installation.md' or 'docs/*.md').",
+                err=True,
+            )
+        refreeze_skeleton_paths.update(p.path for p in one.plans)
+    patterns = tuple(dict.fromkeys((*channel_evergreen, *evergreen_patterns, *refreeze_skeleton)))
     scan = (
         scan_evergreen(manifest=manifest, patterns=patterns, dest_root=dest_path)
         if patterns
@@ -1047,6 +1109,22 @@ def _sync_one_channel(
     if plan.skeleton_present_count:
         skeleton_line += f", {plan.skeleton_present_count} already present (kept)"
     click.echo(skeleton_line)
+    if plan.copy_skeleton:
+        # The freeze is a one-shot, irreversible-by-default decision taken
+        # right here, so show what it covers while changing it is still
+        # cheap (issue #869): the onboarding surface -- READMEs, setup
+        # scripts -- is exactly what gets found wrong after delivery.
+        skeleton_paths = [e["path"] for e in manifest_files_by_topic(manifest).get(None, [])]
+        if plan.skeleton_to_copy is not None:
+            wanted = set(plan.skeleton_to_copy)
+            skeleton_paths = [p for p in skeleton_paths if p in wanted]
+        if skeleton_paths:
+            click.echo(
+                "  skeleton files -- frozen after this sync unless matched by "
+                "<evergreen>; re-copy one later with --refreeze-skeleton PATTERN:"
+            )
+            for rel in sorted(skeleton_paths):
+                click.echo(f"    {rel}")
     for topic_plan in plan.topics:
         click.echo(
             f"  {topic_plan.action:<11} {topic_plan.topic_id} ({topic_plan.file_count} files)"
@@ -1055,7 +1133,10 @@ def _sync_one_channel(
     # first sync that is none, so the lines only appear once the skeleton is
     # frozen (or kept via presence-as-frozen, issue #325).
     for evergreen_plan in plan.evergreen_refresh:
-        click.echo(f"  {REFRESH:<11} {evergreen_plan.path} (evergreen)")
+        label = (
+            "refreeze-skeleton" if evergreen_plan.path in refreeze_skeleton_paths else "evergreen"
+        )
+        click.echo(f"  {REFRESH:<11} {evergreen_plan.path} ({label})")
     if plan.evergreen and not plan.copy_skeleton:
         up_to_date = sum(1 for e in plan.evergreen if e.action != REFRESH)
         if up_to_date:
@@ -1088,10 +1169,17 @@ def _sync_one_channel(
         f"{len(result.refrozen_topics)} re-frozen, "
         f"{len(result.skipped_topics)} already frozen (skipped)."
     )
-    if result.refreshed_files:
+    refrozen_skeleton = [p for p in result.refreshed_files if p in refreeze_skeleton_paths]
+    refreshed_evergreen = [p for p in result.refreshed_files if p not in refreeze_skeleton_paths]
+    if refreshed_evergreen:
         click.echo(
-            f"Evergreen: refreshed {len(result.refreshed_files)} file(s): "
-            + ", ".join(result.refreshed_files)
+            f"Evergreen: refreshed {len(refreshed_evergreen)} file(s): "
+            + ", ".join(refreshed_evergreen)
+        )
+    if refrozen_skeleton:
+        click.echo(
+            f"Skeleton refreeze: re-copied {len(refrozen_skeleton)} file(s): "
+            + ", ".join(refrozen_skeleton)
         )
     if result.failed_topics:
         click.echo(

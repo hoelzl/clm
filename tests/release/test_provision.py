@@ -207,6 +207,60 @@ class TestProvisionCli:
         assert "-> students/azav-ml/ml-2026-04 (reporter)" in result.output
         assert "-> trainers (guest)" in result.output
 
+    def test_dry_run_reports_missing_credentials_without_failing(self, tmp_path, monkeypatch):
+        """#870: the preview must not be silent about the half that fails for real."""
+        for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        spec_file = _write_spec(tmp_path)
+        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "credentials: MISSING" in result.output
+        assert "CLM_GITLAB_TOKEN" in result.output
+
+    def test_dry_run_reports_which_token_variable_is_set(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLM_GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        spec_file = _write_spec(tmp_path)
+        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "credentials: GITLAB_TOKEN set" in result.output
+        assert "MISSING" not in result.output
+
+    def test_project_env_file_is_loaded(self, tmp_path, monkeypatch):
+        """#870: the token in the project's ``.env`` counts, as it does for ``clm build``."""
+        # Record the variable as absent so the value ``load_dotenv`` writes
+        # into ``os.environ`` is undone at teardown.
+        monkeypatch.setenv("CLM_GITLAB_TOKEN", "placeholder")
+        monkeypatch.delenv("CLM_GITLAB_TOKEN")
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        spec_file = _write_spec(tmp_path)
+        (tmp_path / ".env").write_text("CLM_GITLAB_TOKEN=from-dotenv\n", encoding="utf-8")
+
+        dry = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert dry.exit_code == 0, dry.output
+        assert "credentials: CLM_GITLAB_TOKEN set" in dry.output
+
+        with patch(
+            "clm.infrastructure.gitlab_api.share_project_with_group",
+            side_effect=["shared", "shared", "shared"],
+        ) as mock_share:
+            real = CliRunner().invoke(release_group, ["provision", str(spec_file)])
+        assert real.exit_code == 0, real.output
+        assert mock_share.call_args_list[0][0][4] == "from-dotenv"
+
+    def test_exported_token_wins_over_the_env_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLM_GITLAB_TOKEN", "exported")
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        spec_file = _write_spec(tmp_path)
+        (tmp_path / ".env").write_text("CLM_GITLAB_TOKEN=from-dotenv\n", encoding="utf-8")
+        with patch(
+            "clm.infrastructure.gitlab_api.share_project_with_group",
+            side_effect=["shared", "shared", "shared"],
+        ) as mock_share:
+            real = CliRunner().invoke(release_group, ["provision", str(spec_file)])
+        assert real.exit_code == 0, real.output
+        assert mock_share.call_args_list[0][0][4] == "exported"
+
     def test_missing_token_is_a_clear_error(self, tmp_path, monkeypatch):
         for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
             monkeypatch.delenv(var, raising=False)

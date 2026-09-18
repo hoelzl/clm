@@ -175,8 +175,23 @@ clm release sync SPEC --channel NAME [--dry-run] [--push] [-m MESSAGE]
 clm release sync SPEC --channel NAME --refreeze TOPIC_ID... [--push]
 clm release sync SPEC --channel NAME --refreeze-all [--push]
 clm release sync SPEC --channel NAME --evergreen PATTERN [--push]
+clm release sync SPEC --channel NAME --refreeze-skeleton PATTERN [--push]
 clm release sync SPEC --all-channels --push          # promote + push every channel
 ```
+
+**First delivery to a fresh cohort** (issue #868): the destination directory
+is created by `clm release sync`, not by `clm build`, and `clm git init
+--channel` creates it (empty) when it does not exist yet (CLM {version}+). So
+either order works:
+
+```
+clm git init SPEC --channel NAME            # repo + remote; creates the empty destination
+clm release sync SPEC --channel NAME --push # first promotion, committed and pushed
+```
+
+or `release sync` first (no `--push`), then `git init --channel`, then
+`git push --channel`. A remote project's `default_branch` may still need
+reconciling after the first push (issue #955).
 
 Sync actions per topic:
 
@@ -196,6 +211,25 @@ about and ignored (topic content changes only via `--refreeze`). The
 comparison is stateless (destination hash vs. manifest hash), so nothing is
 recorded in the frozen manifest and re-runs are idempotent.
 `--push` chains `clm git commit` + `clm git push` after promotion.
+
+**The skeleton freeze is a one-shot decision (issue #869).** The first sync
+prints the skeleton files it freezes, with a reminder that only `<evergreen>`
+matches stay updatable, so the decision is visible while it is cheap. Three
+things follow from the comparison being stateless:
+
+- **A frozen skeleton file has an escape hatch**: `--refreeze-skeleton
+  PATTERN` (CLM {version}+) re-copies matching skeleton files from the current
+  build — the topic `--refreeze` for the onboarding surface (a setup doc with a
+  stale clone URL, a README). Plan lines are labelled `refreeze-skeleton`,
+  the result line `Skeleton refreeze: re-copied …`; nothing is recorded, so
+  the file is frozen again afterwards. A pattern matching no skeleton file is
+  reported.
+- **Adding an `<evergreen>` pattern after the first sync works**: the check
+  is destination hash vs manifest hash, independent of `skeleton_frozen`.
+- **A skeleton file absent from the destination counts as differing**, so a
+  later `<evergreen>` match or `--refreeze-skeleton` delivers a file the
+  cohort never received. "Ship a placeholder now, replace it when ready" is
+  therefore a safe pattern.
 
 **Evergreen freshness is fixed at build time**: the sync compares the
 cohort's copy against the *built* content, so regenerate the sources of
@@ -264,11 +298,18 @@ standalone solutions repos simply stop receiving syncs.
 
 ### `clm release provision`
 
-Share channel repos with GitLab groups (requires `CLM_GITLAB_TOKEN`).
+Share channel repos with GitLab groups (requires `CLM_GITLAB_TOKEN` or
+`GITLAB_TOKEN` with `api` scope — exported, or in the project's `.env`, which
+is loaded first as `clm build` does; issue #870).
 
 ```
 clm release provision SPEC [--channel NAME] [--dry-run]
 ```
+
+`--dry-run` previews the shares and ends with a `credentials:` line — which
+token variable is set, or `MISSING — the real run will fail` — so the preview
+validates the whole setup, not just channel/group resolution. Its exit code
+stays 0 either way.
 
 ## `clm git` commands
 

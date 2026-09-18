@@ -953,6 +953,121 @@ def test_channel_evergreen_refreshes_news_across_syncs(tmp_path):
     assert "Evergreen: refreshed" not in third.output
 
 
+def test_first_sync_lists_the_skeleton_files_it_freezes(tmp_path):
+    """#869: the freeze is a one-shot decision, so it must be visible while cheap."""
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+
+    first = runner.invoke(release_group, args)
+    assert first.exit_code == 0, first.output
+    assert "shared/data.csv" in first.output
+    assert "--refreeze-skeleton" in first.output
+    assert "Sec/01 Intro.ipynb" not in first.output.split("skeleton")[1].split("copy")[0]
+
+    # Once frozen, the list is not repeated.
+    second = runner.invoke(release_group, args)
+    assert second.exit_code == 0, second.output
+    assert "shared/data.csv" not in second.output
+
+
+def test_refreeze_skeleton_updates_a_frozen_skeleton_file(tmp_path):
+    """#869: a frozen skeleton file gets a CLI escape hatch, symmetrical with --refreeze."""
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    _set_news(source, "setup v1", path="Installation.md")
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+
+    first = runner.invoke(release_group, args)
+    assert first.exit_code == 0, first.output
+    assert (dest / "Installation.md").read_text(encoding="utf-8") == "setup v1"
+
+    # The stale clone URL is found after delivery: without the flag the file
+    # is frozen (no evergreen pattern declared)...
+    _set_news(source, "setup v2", path="Installation.md")
+    plain = runner.invoke(release_group, args)
+    assert plain.exit_code == 0, plain.output
+    assert (dest / "Installation.md").read_text(encoding="utf-8") == "setup v1"
+
+    # ...and with it the file is re-copied, labelled as a skeleton refreeze,
+    # while the frozen topic stays untouched.
+    fixed = runner.invoke(release_group, [*args, "--refreeze-skeleton", "Installation.md"])
+    assert fixed.exit_code == 0, fixed.output
+    assert (dest / "Installation.md").read_text(encoding="utf-8") == "setup v2"
+    assert "refreeze-skeleton" in fixed.output
+    assert "skip-frozen" in fixed.output
+    assert "Skeleton refreeze: re-copied 1 file(s): Installation.md" in fixed.output
+    frozen = FrozenManifest.load(dest / FROZEN_FILENAME, channel="jan")
+    assert frozen.is_frozen("intro")
+
+    # Idempotent: nothing to re-copy the second time.
+    again = runner.invoke(release_group, [*args, "--refreeze-skeleton", "Installation.md"])
+    assert again.exit_code == 0, again.output
+    assert "Skeleton refreeze" not in again.output
+
+
+def test_refreeze_skeleton_delivers_a_withheld_skeleton_file(tmp_path):
+    """#869: a skeleton file absent from the cohort counts as differing, so it is copied."""
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+    first = runner.invoke(release_group, args)
+    assert first.exit_code == 0, first.output
+
+    _set_news(source, "late file", path="docs/Late.md")
+    result = runner.invoke(release_group, [*args, "--refreeze-skeleton", "docs/*.md"])
+    assert result.exit_code == 0, result.output
+    assert (dest / "docs" / "Late.md").read_text(encoding="utf-8") == "late file"
+
+
+def test_refreeze_skeleton_pattern_matching_nothing_is_reported(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+    runner.invoke(release_group, args)
+
+    result = runner.invoke(release_group, [*args, "--refreeze-skeleton", "Nope.md"])
+    assert result.exit_code == 0, result.output
+    assert "matched no skeleton file" in result.output
+    assert "Nope.md" in result.output
+
+
+def test_refreeze_skeleton_dry_run_copies_nothing(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    _set_news(source, "setup v1", path="Installation.md")
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+    runner.invoke(release_group, args)
+    _set_news(source, "setup v2", path="Installation.md")
+
+    dry = runner.invoke(
+        release_group, [*args, "--refreeze-skeleton", "Installation.md", "--dry-run"]
+    )
+    assert dry.exit_code == 0, dry.output
+    assert "refreeze-skeleton" in dry.output
+    assert (dest / "Installation.md").read_text(encoding="utf-8") == "setup v1"
+
+
 def test_evergreen_flag_in_explicit_paths_mode(tmp_path):
     runner = CliRunner()
     source = tmp_path / "src"
