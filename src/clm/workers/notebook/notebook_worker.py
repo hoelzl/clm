@@ -115,7 +115,12 @@ class NotebookWorker(Worker):
         if self.cache_db_path is None:
             return None
 
-        sqlite_cache = ExecutedNotebookCache(self.cache_db_path)
+        # Refresh the liveness heartbeat between retries of a locked store,
+        # so a worker stuck behind the cache lock for the full schedule is
+        # not swept as dead by another build (issue #945).
+        sqlite_cache = ExecutedNotebookCache(
+            self.cache_db_path, on_busy_retry=self._update_heartbeat
+        )
         sqlite_cache.__enter__()
         self._cache = sqlite_cache
         logger.info(f"Initialized executed notebook cache at {self.cache_db_path}")

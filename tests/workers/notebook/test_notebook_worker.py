@@ -154,7 +154,7 @@ class TestNotebookWorkerCache:
 
             result = worker._ensure_cache_initialized()
 
-            MockCache.assert_called_once_with(cache_db_path)
+            MockCache.assert_called_once_with(cache_db_path, on_busy_retry=worker._update_heartbeat)
             mock_cache.__enter__.assert_called_once()
             assert result == mock_cache
 

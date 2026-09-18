@@ -4,6 +4,7 @@ These routes allow Docker containers to communicate with the CLM job queue
 without requiring direct SQLite access, solving the WAL mode issues on Windows.
 """
 
+import asyncio
 import gzip
 import json
 import logging
@@ -164,7 +165,12 @@ async def update_job_status(request: Request, job_id: int, body: JobStatusUpdate
         # This is where a Docker/API-mode worker's terminal status write meets
         # SQLite, so the lock-contention retry lives here (issue #917); the
         # worker only sees an HTTP 500 and cannot tell a lock from a crash.
-        retry_on_busy(
+        # The retry can block for several busy_timeouts, so it runs on a
+        # thread: on the event loop it would stall every other worker's
+        # heartbeat/claim/status request for that long (#945 review).
+        # JobQueue connections are thread-local, so this is safe.
+        await asyncio.to_thread(
+            retry_on_busy,
             lambda: job_queue.update_job_status(
                 job_id=job_id,
                 status=body.status,
@@ -413,7 +419,11 @@ async def store_executed_notebook(
         ) from e
 
     cache_db_path = _get_cache_db_path(request)
-    try:
+
+    def _store() -> None:
+        # ``store`` retries lock contention with backoff (#945), which can
+        # block for several busy_timeouts — keep that off the event loop so
+        # the other workers' requests keep flowing meanwhile.
         with ExecutedNotebookCache(cache_db_path) as cache:
             cache.store(
                 input_file=input_file,
@@ -422,6 +432,9 @@ async def store_executed_notebook(
                 prog_lang=prog_lang,
                 executed_notebook=notebook,
             )
+
+    try:
+        await asyncio.to_thread(_store)
     except Exception as e:
         logger.error(f"Failed to store executed_notebook cache: {e}", exc_info=True)
         raise HTTPException(
