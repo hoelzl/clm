@@ -324,8 +324,15 @@ class NotebookFile(CourseFile):
 
         # Add implicit executions for cache population
         # These are needed when completed/trainer/partial HTML is requested
-        # but recording HTML (the cache producer) is not explicitly requested
-        if implicit_executions and stage == HTML_SPEAKER_STAGE:
+        # but recording HTML (the cache producer) is not explicitly requested.
+        #
+        # Never for an ``html="no"`` topic (issue #871): ``output_specs``
+        # above yields no HTML output at all for it, so there is no consumer
+        # the producer run could serve — and such a deck is never evaluated
+        # in a full build, so it has no HTTP-replay cassette by construction.
+        # Executing it here only because the target set was narrowed turned
+        # "never executed" into live network traffic.
+        if implicit_executions and stage == HTML_SPEAKER_STAGE and not self.skip_html:
             # Create operations for implicit executions that aren't already included
             existing_keys = {(op.language, op.format, op.kind) for op in operations}
             for lang, format_, kind in implicit_executions:
