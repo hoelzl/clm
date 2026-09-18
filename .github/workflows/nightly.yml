@@ -215,6 +215,53 @@ jobs:
   # so the decision to promote it to a required status check does not depend on
   # anyone remembering to look. Independent of whether tonight's suite passed —
   # it measures the *other* workflow — hence `if: always()`.
+  mcp-forward-compat:
+    # Issue #914: `clm.mcp.server` supports both `mcp` SDK majors, but
+    # `uv.lock` only ever pins one of them -- whichever the `exclude-newer`
+    # date admits. This job runs the MCP suite against the *newest* 2.x so
+    # the major the lock does not exercise is still tested daily, and a
+    # breaking 2.x release surfaces here rather than on the day the lock
+    # flips. Not a required PR check: it deliberately installs past the
+    # supply-chain pin, which PR CI must never do.
+    name: MCP SDK forward compatibility (mcp 2.x)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        lfs: false
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Install dependencies (locked), then the newest mcp 2.x on top
+      run: |
+        # Same extra set as the full job so the MCP tests see the modules
+        # they import; `--locked` keeps everything else exactly as PR CI has
+        # it. Then override the exclude-newer pin for this ONE package: the
+        # point is the newest 2.x, not the one the pin would admit. The SDK
+        # raises floors (pydantic, anyio) as needed; `--no-sync` below keeps
+        # uv from snapping the venv back to the lock.
+        uv sync --locked --python 3.12 --no-default-groups \
+          --extra all-workers --extra docker --extra watch --extra summarize \
+          --extra recordings --extra slides \
+          --extra mcp --extra replay --extra dev --extra tui --extra web
+        uv pip install "mcp>=2,<3" --exclude-newer 2999-01-01T00:00:00Z
+        uv run --no-sync python -c "from importlib.metadata import version; print('mcp', version('mcp'), 'pydantic', version('pydantic'))"
+
+    - name: Run the MCP suite and the agent-guide export tests
+      run: |
+        uv run --no-sync pytest -v tests/mcp tests/cli/test_export_agent_guide.py --timeout=300
+
   docker-promotion-tracker:
     name: Track Docker job stability
     runs-on: ubuntu-latest
@@ -242,7 +289,7 @@ jobs:
 
   report-failure:
     name: Report failure
-    needs: [full, docker]
+    needs: [full, docker, mcp-forward-compat]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -263,3 +310,6 @@ jobs:
             master. A failure here with no corresponding change on master means
             a **flaky test**, not a regression — check whether the same test
             failed on earlier nights before hunting for a cause in the code.
+            The exception is the `mcp-forward-compat` job, which installs the
+            newest `mcp` 2.x past the supply-chain pin on purpose (#914): a
+            failure there that repeats is a real SDK break, not a flake.

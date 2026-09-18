@@ -173,6 +173,8 @@ CLM has several optional dependency groups for different features:
 - **[mcp]**: mcp (plus `[slides]` dependencies)
   - MCP server for AI-assisted slide authoring
   - Install: `pip install -e ".[mcp]"`
+  - Either `mcp` SDK major works (1.x or 2.x, constraint `mcp>=1.0.0,<3`);
+    `clm.mcp.server` resolves the server class for whichever is installed
 
 **Cohort Calendars**:
 - **[gcal]**: google-api-python-client, google-auth, google-auth-oauthlib

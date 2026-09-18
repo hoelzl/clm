@@ -450,7 +450,13 @@ byte-compares everything. This harness underlies the golden e2e build suite
 Exposes the `clm.slides` tools over stdio MCP transport so AI agents can
 drive slide authoring. Entry points: `server.create_server(data_dir)` /
 `run_server(data_dir)` and the `tools.handle_*` async handlers. Started
-with `clm mcp`. Requires `[mcp]`.
+with `clm mcp`. Requires `[mcp]`. Both SDK majors are supported: mcp 2
+renamed `mcp.server.fastmcp.FastMCP` to `mcp.server.mcpserver.MCPServer`,
+and `server.py` resolves whichever is installed at import time (#914). The
+lock pins one major (whatever the `exclude-newer` date admits); the other
+is exercised by the nightly `mcp-forward-compat` job and by the stdio
+handshake test in `tests/mcp/test_server.py`, which starts the real
+`clm mcp` process.
 
 #### `clm.voiceover` (video → speaker notes)
 
