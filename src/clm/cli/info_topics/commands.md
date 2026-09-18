@@ -58,7 +58,7 @@ Key options:
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
 | `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. May be given multiple times; all occurrences accumulate. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
-| `--notebook-workers N` | Number of notebook workers |
+| `--notebook-workers N` | Number of notebook workers (default: `worker_management.default_worker_count`, which is 1). Notebook jobs — including the Recording/Speaker HTML renders that warm the executed-notebook cache — run serially per worker, so on a large course this is the single biggest wall-clock lever: the #711 investigation measured one rebuild of the AZAV ML course at 12.5 min with 8 workers against more than 29 min (unfinished) with 1. A build of more than 50 course files warns when only one notebook worker is configured. Each worker runs its own kernel; the count is clamped to the machine's CPU/RAM and `max_workers_cap`. |
 | `--plantuml-workers N` | Number of PlantUML workers |
 | `--drawio-workers N` | Number of Draw.io workers |
 | `--max-workers N` | Hard cap on effective worker count per type. Applied on top of automatic CPU/RAM-derived caps. Also settable via the `CLM_MAX_WORKERS` environment variable. Use to keep an oversized spec file (e.g. an 18-worker course override) from saturating a small dev laptop. |
