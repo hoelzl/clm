@@ -117,3 +117,48 @@ def expected_companion(slide_path: Path, *, layout: str | None = None) -> Path:
     if (parent / name).exists():
         return parent / name
     return parent / COMPANION_SUBDIR / name
+
+
+def is_voiceover_companion(path: Path) -> bool:
+    """True if *path* is named like a voiceover companion file.
+
+    ``voiceover_<stem>[.<lang>].<ext>`` with a supported slide extension —
+    the name :func:`companion_name` produces, in either layout (sibling or
+    ``voiceover/`` subdir). Name-based only; the file need not exist. Used
+    by ``clm validate`` to validate a companion *as a companion* instead of
+    running the deck-only rules on it (issue #946).
+    """
+    from clm.core.utils.path_utils import SUPPORTED_PROG_LANG_EXTENSIONS
+
+    return path.name.startswith("voiceover_") and path.suffix in SUPPORTED_PROG_LANG_EXTENSIONS
+
+
+def deck_for_companion(companion_path: Path) -> Path | None:
+    """Map a companion file back to the slide deck (half) it belongs to.
+
+    The companion may sit beside the deck or one directory up (a relocated
+    ``voiceover/`` companion), and its stem prefix (``slides_`` / ``topic_`` /
+    ``project_`` / none) is not recoverable from the companion name alone —
+    so every candidate deck path is generated and the one whose own
+    :func:`resolve_companion` round-trips back to this file is kept. ``None``
+    when no deck claims the companion (or *companion_path* is not a
+    companion name at all).
+    """
+    name = companion_path.name
+    prefix = "voiceover_"
+    if not name.startswith(prefix):
+        return None
+    rest = name[len(prefix) :]  # "<stem>[.<lang>].<ext>"
+    deck_dirs = [companion_path.parent]
+    if companion_path.parent.name == COMPANION_SUBDIR:
+        deck_dirs.append(companion_path.parent.parent)
+    resolved = companion_path.resolve()
+    for deck_dir in deck_dirs:
+        for deck_prefix in ("slides_", "topic_", "project_", ""):
+            candidate = deck_dir / f"{deck_prefix}{rest}"
+            if not candidate.exists():
+                continue
+            comp = resolve_companion(candidate)
+            if comp is not None and comp.resolve() == resolved:
+                return candidate
+    return None

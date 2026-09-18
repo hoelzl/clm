@@ -1631,6 +1631,22 @@ excluded from quick mode, as do the cell-spacing checks above (they would
 fire on an in-progress markdown cell before the author has typed the
 leading `#`).
 
+**Voiceover companion files** (since CLM {version}, #946). Naming a
+separated voiceover companion directly — `clm validate
+topic_x/voiceover/voiceover_foo.de.py` (or the sibling layout
+`topic_x/voiceover_foo.de.py`) — validates it *as a companion*, not as a
+deck: the `format`/`tags` checks apply to the file itself, and the
+`pairing` check resolves every narration cell's `for_slide` against the
+**owning deck** (found beside the companion, or one directory up for the
+`voiceover/` layout), reporting the same "matches no slide_id — the build
+drops this narration" error the deck-side check reports. Deck-structure
+rules (the slide_id anchor walk, DE/EN adjacency, workshop scope) do not
+run on a companion — its anchors live in the deck, so they used to produce
+one spurious "no preceding slide/subslide anchor" error per cell. When no
+owning deck can be found, a single `info` finding says so and the
+`for_slide` targets go unchecked; validate the topic directory or the deck
+instead. `--quick` on a companion runs the syntax-level checks only.
+
 Examples:
 
 ```bash
