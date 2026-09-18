@@ -164,9 +164,10 @@ re-record under `new-episodes`), never as wrong output.
 The audit's **form-encoded** reading was tightened to match the recorder
 exactly at the same time, in both directions. A parameter with no `=` (a bare
 `token`) is now reported, because the recorder strips it — that was a false
-all-clear. A percent-encoded *name* (`api%5Fkey=…`) is now **not** reported,
-because the recorder does not strip it — that was a finding no re-record could
-clear. And a non-UTF-8 byte in a *value* no longer hides the whole body from
+all-clear. A percent-encoded *name* (`api%5Fkey=…`) was at that point **not**
+reported, because the recorder did not strip it — that was a finding no
+re-record could clear; both sides decode such names now, see the next section
+(#881). And a non-UTF-8 byte in a *value* no longer hides the whole body from
 the audit: the recorder only decodes names, so it strips the secret next door
 regardless.
 
@@ -174,6 +175,35 @@ One consequence worth knowing even without a re-record: two requests that
 differ *only* in a filtered parameter now collapse to the same match key —
 paginating on a nested `token` cursor, say — and replay in recorded order.
 The top-level filter has always behaved that way; recursing widens it.
+
+## Percent-encoded form parameter names are filtered (#881, {version})
+
+**Breaking only for cassettes whose form-encoded request body spells a
+filtered name with a percent-escape or a `+`** — `api%5Fkey=…`,
+`passwor%64`. No HTTP client CLM talks to does this (`requests`, `httpx` and
+`urllib` encode values, not names), and the PythonCourses audit found zero
+such bodies across 204 cassettes, so expect none; this is the filter being
+exactly right, not a live leak.
+
+Until {version} the form-body filter compared a parameter *name* literally
+— everything before the first `=` — so `api%5Fkey=SECRET` did not match
+`api_key` and the secret recorded verbatim, while the URL-query filter, which
+reads through `parse_qsl`, decoded the same name and stripped it. Both now
+read names the same way: `%XX` escapes and `+` are decoded before the
+comparison, on the recorder and in `clm cassette scan`, through one shared
+reader so the two cannot drift. An unmatched field keeps its exact bytes, so
+a body with no such name records and replays exactly as before. A name that
+is not UTF-8 still makes the recorder leave the whole body alone; a
+percent-escape that merely *decodes* to non-UTF-8 (`api%FF`) does not — it
+falls back to its raw spelling, so the secret beside it is still stripped.
+
+**Do you need to re-record?** Only if `clm cassette scan` reports a `request
+body` finding on a form-encoded body — it reports these now. Same class as
+the S9 and #877 request widenings above: form bodies are part of the replay
+match key and the lookup filters the incoming request through this same code,
+so a cassette that recorded such a name will replay-miss loudly (a build
+failure under `replay`, a re-record under `new-episodes`), never as wrong
+output.
 
 ## Spec-driven writes are contained; destructive output ops need proof of ownership (#798, {version})
 

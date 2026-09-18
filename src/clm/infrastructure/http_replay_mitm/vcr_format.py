@@ -17,6 +17,14 @@ Behavioral quirks are therefore preserved deliberately — e.g.
 ``replace_post_data_parameters`` re-dumps a JSON *object* body via
 ``json.dumps`` (pretty separators) even when no key matched, because
 committed cassettes contain bodies recorded through exactly that code path.
+The secret *filters* diverge from vcrpy on purpose, each labelled where it
+happens: query-parameter names match case-insensitively
+(``replace_query_parameters``), a JSON content-type is a prefix match
+(``_is_json_content_type``), JSON bodies are filtered at any depth
+(``filter_json_parameters``, #877) and form-encoded parameter names are
+percent-decoded (``form_parameter_name``, #881). All four widen what is
+stripped; none changes how an unmatched body is written, which is what the
+differential check in ``scripts/differential_check_vcr_format.py`` covers.
 
 Like its consumers :mod:`cassette_format` and the mitmproxy addon, this
 module is importable two ways: as
@@ -35,7 +43,7 @@ from collections.abc import Mapping, MutableMapping
 from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote_to_bytes, urlencode, urlparse, urlunparse
 
 import yaml
 
@@ -445,19 +453,65 @@ def _is_json_content_type(value: object) -> bool:
     return str(value).strip().lower().startswith("application/json")
 
 
+def form_parameter_name(raw: bytes) -> str:
+    """Read a form-encoded parameter *name* the way ``parse_qsl`` reads one.
+
+    ``+`` becomes a space and ``%XX`` escapes are decoded before the UTF-8
+    decode, so ``api%5Fkey`` is compared against the filter list as
+    ``api_key``. Until issue #881 the recorder compared the literal
+    ``api%5Fkey`` and let the secret record verbatim, while the URL-query
+    filter — which reads through ``Request.query`` / ``parse_qsl`` — had
+    always decoded the same name. The two are one reading now, and
+    ``cassette_doctor._form_body_keys`` (the audit) calls this same
+    function, so the recorder and the audit cannot drift on it. A
+    deliberate divergence from vcrpy, whose ``replace_post_data_parameters``
+    compares the literal ``k.decode("utf-8")`` — like the case-insensitive
+    query filter and the prefix content-type match, it widens what is
+    *stripped*, never how an unmatched body is written, so byte
+    compatibility with committed cassettes is untouched.
+
+    Raises ``UnicodeDecodeError`` when the **raw** name is not UTF-8 —
+    unchanged, and the caller's "leave this body alone" signal. A
+    percent-escape that decodes to non-UTF-8 bytes (``api%FF``) is *not*
+    that case: the name falls back to its raw spelling, so an exotic name
+    beside a real secret cannot hide the secret by bailing the whole body.
+    Both halves are pinned by the parity table in
+    ``tests/infrastructure/test_cassette_scanner_recorder_parity.py`` —
+    rows ``form_percent_encoded_name`` / ``form_percent_encoded_case``
+    (direction-pinned: the plaintext is gone from what is recorded),
+    ``form_percent_escape_to_non_utf8_name`` (the secret next door is
+    still stripped) and ``form_non_utf8_name`` (a raw non-UTF-8 name still
+    bails the body) — plus
+    ``test_a_percent_encoded_valueless_name_is_stripped_and_reported``.
+    """
+    text = raw.decode("utf-8")
+    if b"%" not in raw and b"+" not in raw:
+        return text
+    try:
+        return unquote_to_bytes(raw.replace(b"+", b" ")).decode("utf-8")
+    except UnicodeDecodeError:
+        return text
+
+
 def _replace_form_parameters(request: Request, body: bytes, replacements: dict) -> bytes:
     """Filter an ``application/x-www-form-urlencoded`` body.
+
+    Names are read through :func:`form_parameter_name` (percent-decoded,
+    #881); an unmatched field keeps its exact bytes, so a body with no
+    filtered name is returned unchanged.
 
     Raises ``UnicodeDecodeError`` when the body is not UTF-8 text; the
     caller decides what that means (see the call site).
     """
+    # ``bytes.partition`` yields an empty separator, never ``None``, for a
+    # field with no ``=`` — so a bare ``token`` is a name like any other and
+    # is stripped (the audit relies on exactly that; see
+    # ``cassette_doctor._form_body_keys``). vcrpy carried a ``sep is None``
+    # branch here that could never run; it is gone.
     splits = [p.partition(b"=") for p in body.split(b"&")]
     new_splits = []
     for k, sep, ov in splits:
-        if sep is None:
-            new_splits.append((k, sep, ov))
-            continue
-        rk = k.decode("utf-8")
+        rk = form_parameter_name(k)
         if rk.lower() not in replacements:
             new_splits.append((k, sep, ov))
             continue
@@ -466,7 +520,7 @@ def _replace_form_parameters(request: Request, body: bytes, replacements: dict) 
             rv = rv(key=rk, value=ov.decode("utf-8"), request=request)
         if rv is not None:
             new_splits.append((k, sep, rv.encode("utf-8")))
-    return b"&".join(k if sep is None else b"".join([k, sep, v]) for k, sep, v in new_splits)
+    return b"&".join(b"".join([k, sep, v]) for k, sep, v in new_splits)
 
 
 def filter_json_parameters(

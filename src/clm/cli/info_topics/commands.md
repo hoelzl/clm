@@ -3462,8 +3462,10 @@ legitimately check out under another directory name.
 
 An **unreadable** cassette is not baselineable and keeps failing the gate, which
 is why `--write-baseline` exits non-zero (after writing) when it meets one. The
-two options are mutually exclusive. Note the walk does **not** follow symlinked
-directories (issue #886), so cassettes behind one are not scanned.
+two options are mutually exclusive. The walk follows symlinked directories
+(since {version}, issue #886 — it used not to, so a cassette behind one was
+silently unscanned) and is loop-safe: a link cycle terminates, and a directory
+reachable by two routes is walked once.
 
 With `--json`, a baselined run adds `accepted_count`, `new_count`,
 `stale_count`, `stale_cleared_count`, `stale_unreadable_count`,

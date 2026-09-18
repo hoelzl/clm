@@ -8,6 +8,8 @@ interaction's request body (a chain-opener whose closer was never recorded).
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -262,6 +264,83 @@ class TestIterCassettePaths:
 
         found = list(iter_cassette_paths(tmp_path))
         assert found == [canonical]
+
+    # --- symlinked directories (issue #886) --------------------------------
+    #
+    # ``Path.rglob`` does not follow directory symlinks (``recurse_symlinks``
+    # only exists on 3.13+), so a cassette behind one was invisible to both
+    # ``clm cassette doctor`` and ``clm cassette scan`` — a silent coverage
+    # hole once #883 made the scan a CI gate.  Skipped, not failed, where
+    # the process cannot create a symlink (unprivileged Windows).
+
+    @staticmethod
+    def _symlink_dir(target: Path, link: Path) -> None:
+        try:
+            os.symlink(target, link, target_is_directory=True)
+            return
+        except (OSError, NotImplementedError) as exc:
+            reason = str(exc)
+        if sys.platform == "win32":
+            # No symlink privilege: a junction needs none, is followed by
+            # ``is_dir`` and resolved by ``realpath`` just like a symlink,
+            # so the walk's link handling stays exercised on the platform
+            # CLM is developed on rather than skipping (review of #886).
+            import _winapi
+
+            try:
+                _winapi.CreateJunction(str(target), str(link))
+                return
+            except OSError as exc:
+                reason = f"{reason}; junction fallback failed too: {exc}"
+        pytest.skip(f"cannot create a directory link here: {reason}")
+
+    @staticmethod
+    def _cassette(path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("version: 1\n", encoding="utf-8")
+        return path
+
+    def test_follows_a_symlinked_directory(self, tmp_path):
+        """Regression test for #886: the walk must look behind a directory link."""
+        elsewhere = tmp_path / "elsewhere"
+        self._cassette(elsewhere / "leak.http-cassette.yaml")
+        root = tmp_path / "root"
+        root.mkdir()
+        self._symlink_dir(elsewhere, root / "linked")
+
+        found = list(iter_cassette_paths(root))
+        assert found == [root / "linked" / "leak.http-cassette.yaml"]
+
+    def test_a_symlink_cycle_terminates_and_yields_each_cassette_once(self, tmp_path):
+        """A link back up the tree must not recurse forever (#886)."""
+        root = tmp_path / "root"
+        cassette = self._cassette(root / "a" / "x.http-cassette.yaml")
+        self._symlink_dir(root, root / "a" / "loop")
+
+        found = list(iter_cassette_paths(root))
+        assert found == [cassette]
+
+    def test_a_directory_reachable_twice_is_walked_once(self, tmp_path):
+        """Two routes to one directory yield its cassettes once, by the first route (#886)."""
+        root = tmp_path / "root"
+        cassette = self._cassette(root / "a" / "x.http-cassette.yaml")
+        self._symlink_dir(root / "a", root / "b")
+
+        found = list(iter_cassette_paths(root))
+        assert found == [cassette]
+
+    def test_a_symlinked_cassette_file_is_still_found(self, tmp_path):
+        """File links were always followed; the directory fix must not regress that."""
+        real = self._cassette(tmp_path / "elsewhere" / "leak.http-cassette.yaml")
+        root = tmp_path / "root"
+        root.mkdir()
+        link = root / "leak.http-cassette.yaml"
+        try:
+            os.symlink(real, link)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"cannot create a file symlink here: {exc}")
+
+        assert list(iter_cassette_paths(root)) == [link]
 
 
 class TestJsonReportShape:
