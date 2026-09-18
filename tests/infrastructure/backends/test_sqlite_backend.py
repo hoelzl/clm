@@ -324,6 +324,47 @@ async def test_wait_for_completion_failed_job(temp_db, temp_workspace):
         await backend.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_failed_job_error_names_the_output_it_did_not_write(temp_db, temp_workspace):
+    """#923: the reported error carries ``details["output_file"]`` so the
+    stray-file sweep can protect exactly the failed job's output instead of
+    skipping wholesale. The stamp lives on the *reported* instance only."""
+    from clm.build.output_formatter import QuietOutputFormatter
+    from clm.build.reporter import BuildReporter
+
+    reporter = BuildReporter(QuietOutputFormatter())
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        skip_worker_check=True,
+        build_reporter=reporter,
+    )
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
+        job_id = list(backend.active_jobs.keys())[0]
+
+        async def fail_job():
+            await asyncio.sleep(0.1)
+            job_queue = JobQueue(temp_db)
+            try:
+                job_queue.update_job_status(job_id, "failed", error="Test error")
+            finally:
+                job_queue.close()
+
+        task = asyncio.create_task(fail_job())
+        assert await backend.wait_for_completion() is False
+        await task
+    finally:
+        await backend.shutdown()
+
+    (error,) = reporter.errors
+    assert error.job_id == job_id
+    assert error.details["output_file"] == "output/test.ipynb"
+
+
 class _FakeClock:
     """Deterministic clock for ``SqliteBackend(clock=...)``.
 

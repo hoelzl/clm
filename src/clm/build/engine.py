@@ -1145,12 +1145,24 @@ def _maybe_run_sweep(
       delete files for unselected sections.
     - Watch mode (``--watch``): event-driven rebuilds populate only the
       changed files; the sweep would delete everything else.
-    - The build recorded fatal errors: the registry is missing entries
-      for writes that never happened, so sweeping would remove valid
-      files from prior successful builds. This is the only skip reason
-      that also prints a user-facing notice: the strays it leaves
-      behind (e.g. notebooks of topics moved in a spec restructure)
-      otherwise look like a clm bug (#923).
+    - The build recorded errors the registry's gaps cannot be derived
+      from: a fatal ``build_aborted`` record, a timed-out or aborted
+      build, or any error that does not name the output it failed to
+      write (course-load, cross-reference, image-collision errors).
+      Sweeping would remove valid files from prior successful builds.
+      This is the only skip reason that also prints a user-facing
+      notice: the strays it leaves behind (e.g. notebooks of topics
+      moved in a spec restructure) otherwise look like a clm bug (#923).
+
+    Errors that are **job-scoped** — every one names its unwritten output
+    in ``details["output_file"]`` (stamped by the backend for failed and
+    orphaned jobs) and none is fatal — do NOT skip
+    the sweep (#923): the registry is missing exactly those writes, so
+    the sweep runs with them protected (see ``failed_outputs`` in
+    :func:`clm.build.output_sweep.sweep_stray_files`) and every other
+    stray is removed. Before, one failing notebook kept the previous
+    revision's decks duplicated across every output tier after a spec
+    restructure.
 
     ``ownership`` is the pre-build ownership snapshot (finding S11,
     #798); roots it could not prove are CLM's are refused by the sweep
@@ -1165,6 +1177,7 @@ def _maybe_run_sweep(
 
     skip_reason: str | None = None
     skipped_due_to_errors = False
+    failed_outputs: set[Path] = set()
     if config.clean:
         skip_reason = "--clean already regenerates the whole tree"
     elif only_sections_mode:
@@ -1172,13 +1185,27 @@ def _maybe_run_sweep(
     elif config.watch:
         skip_reason = "watch mode populates only changed files"
     elif build_reporter.errors:
-        skip_reason = (
-            f"build recorded {len(build_reporter.errors)} error(s); "
-            f"sweep skipped to avoid removing files from prior successful builds"
-        )
-        skipped_due_to_errors = True
+        scoped = _job_scoped_failed_outputs(build_reporter)
+        if scoped is None:
+            skip_reason = (
+                f"build recorded {len(build_reporter.errors)} error(s); "
+                f"sweep skipped to avoid removing files from prior successful builds"
+            )
+            skipped_due_to_errors = True
+        else:
+            failed_outputs = scoped
 
-    if skip_reason is None:
+    if skip_reason is None and failed_outputs:
+        # #923: every error is a per-job failure with a known output, so
+        # the registry's gaps are exactly those outputs. Sweep around
+        # them instead of leaving every stray in the tree.
+        build_reporter.formatter.show_startup_message(
+            f"Sweeping stale output files... The build recorded "
+            f"{len(build_reporter.errors)} error(s); the {len(failed_outputs)} output "
+            f"file(s) the failed jobs did not write are kept, together with everything "
+            f"below their directories."
+        )
+    elif skip_reason is None:
         # The sweep walks every output root; on big courses that is a
         # noticeable pause after the last stage, so tell the user.
         build_reporter.formatter.show_startup_message("Sweeping stale output files...")
@@ -1207,6 +1234,7 @@ def _maybe_run_sweep(
         image_registry=getattr(backend, "image_registry", None),
         skip_reason=skip_reason,
         unowned_roots=unowned_roots,
+        failed_outputs=sorted(failed_outputs),
     )
 
     if report.skipped:
@@ -1220,7 +1248,10 @@ def _maybe_run_sweep(
     # unexpected is accounted for by the write registries, which is the
     # evidence the snapshot could not offer. Narrow the list to the roots
     # actually refused, so only those lose their provenance manifest.
-    config.unowned_output_roots = tuple(report.refused_roots)
+    # A root the sweep could not fully see because a failed job's
+    # directory was skipped (#923) gave no evidence either way: it is not
+    # refused, but it stays unowned.
+    config.unowned_output_roots = tuple(report.refused_roots) + tuple(report.unverified_roots)
 
     if report.refused_roots and ownership is not None:
         from clm.build.output_ownership import describe_refusal
@@ -1244,6 +1275,14 @@ def _maybe_run_sweep(
         console.print(message, markup=False, highlight=False, soft_wrap=True)
         console.print()
 
+    if report.protected_dirs:
+        logger.info(
+            f"Stray-file sweep left {len(report.protected_dirs)} directory tree(s) holding "
+            f"failed jobs' outputs untouched (#923)"
+        )
+        for path in report.protected_dirs:
+            logger.debug(f"Sweep protected directory (failed job output): {path}")
+
     if report.deleted_files or report.removed_dirs:
         logger.info(
             f"Stray-file sweep removed {len(report.deleted_files)} file(s) "
@@ -1255,6 +1294,36 @@ def _maybe_run_sweep(
             logger.debug(f"Sweep removed empty dir: {path}")
     else:
         logger.debug("Stray-file sweep found no orphans")
+
+
+def _job_scoped_failed_outputs(build_reporter: BuildReporter) -> set[Path] | None:
+    """The unwritten outputs of this build's errors, or None if unknowable.
+
+    Returns a set when — and only when — the stray-file sweep may run
+    around the errors (#923): the build neither timed out nor aborted, no
+    error is fatal, and every error carries the output path it failed to
+    write in ``details["output_file"]``. The backend stamps that path on
+    failed jobs and on jobs orphaned at build give-up; errors from course
+    loading, cross-reference validation or image collisions carry none,
+    and neither does the fatal ``build_aborted`` record — any such error
+    means the registry's gaps cannot be enumerated, and the caller keeps
+    the wholesale skip.
+
+    A timed-out build is vetoed explicitly: it records only the orphaned
+    jobs (each with an output), but the stages after the timeout never
+    submitted anything, so their outputs would all look stray.
+    """
+    if build_reporter.timed_out or build_reporter.aborted:
+        return None
+    outputs: set[Path] = set()
+    for error in build_reporter.errors:
+        if error.severity == "fatal":
+            return None
+        output = error.details.get("output_file")
+        if not output:
+            return None
+        outputs.add(Path(output))
+    return outputs
 
 
 def _find_jobs_pending_timeout(exc: BaseException) -> JobsPendingTimeoutError | None:

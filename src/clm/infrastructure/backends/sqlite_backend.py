@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -1198,8 +1199,23 @@ class SqliteBackend(LocalOpsBackend):
                         self.build_reporter.report_file_completed(
                             job_info["input_file"], job_info["job_type"], job_id, success=False
                         )
-                        # Also report the categorized error
-                        self.build_reporter.report_error(categorized_error)
+                        # Also report the categorized error — stamped with the
+                        # output this job did not write, so the stray-file
+                        # sweep can protect exactly that (#923). On a copy: the
+                        # instance above is what the writer thread persists to
+                        # processing_issues, and the path must not be stored
+                        # (a replay stamps the *current* output instead).
+                        reported_error = categorized_error
+                        unwritten_output = payload_dict.get("output_file")
+                        if unwritten_output:
+                            reported_error = replace(
+                                categorized_error,
+                                details={
+                                    **categorized_error.details,
+                                    "output_file": str(unwritten_output),
+                                },
+                            )
+                        self.build_reporter.report_error(reported_error)
                     else:
                         # Fallback to logging if no build_reporter
                         logger.error(
@@ -1368,6 +1384,11 @@ class SqliteBackend(LocalOpsBackend):
                     "worker_management.default_worker_count). "
                     "See issue #851."
                 )
+            # ``output_file`` names the write this job never made, so the
+            # stray-file sweep can scope around it (#923). A timed-out
+            # build still vetoes the sweep at the orchestrator, because
+            # later stages never submitted at all.
+            output_file = job_info.get("output_file")
             self.build_reporter.report_error(
                 BuildError(
                     error_type="infrastructure",
@@ -1378,6 +1399,7 @@ class SqliteBackend(LocalOpsBackend):
                     actionable_guidance=guidance,
                     job_id=job_id,
                     correlation_id=job_info.get("correlation_id"),
+                    details={"output_file": str(output_file)} if output_file else {},
                 )
             )
 

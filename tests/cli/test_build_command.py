@@ -1879,8 +1879,21 @@ class TestMaybeRunSweepSkipReasons:
         )
 
     def _reporter(self, *, has_errors: bool = False):
+        from clm.core.build_data_classes import BuildError
+
         reporter = MagicMock()
-        reporter.errors = [object()] if has_errors else []
+        # An error that names no output (course-load / xref shape): the
+        # registry's gaps are unknowable, so the sweep skips wholesale
+        # (#923 scopes only around errors carrying ``output_file``).
+        unattributed = BuildError(
+            error_type="user",
+            category="course_loading",
+            severity="error",
+            file_path="course.xml",
+            message="boom",
+            actionable_guidance="",
+        )
+        reporter.errors = [unattributed] if has_errors else []
         return reporter
 
     def _spy_sweep(self, monkeypatch: pytest.MonkeyPatch) -> list[dict]:
@@ -2018,8 +2031,21 @@ class TestMaybeRunSweepUserNotice:
         )
 
     def _reporter(self, *, has_errors: bool = False):
+        from clm.core.build_data_classes import BuildError
+
         reporter = MagicMock()
-        reporter.errors = [object()] if has_errors else []
+        # An error that names no output (course-load / xref shape): the
+        # registry's gaps are unknowable, so the sweep skips wholesale
+        # (#923 scopes only around errors carrying ``output_file``).
+        unattributed = BuildError(
+            error_type="user",
+            category="course_loading",
+            severity="error",
+            file_path="course.xml",
+            message="boom",
+            actionable_guidance="",
+        )
+        reporter.errors = [unattributed] if has_errors else []
         return reporter
 
     def _run_sweep(self, monkeypatch: pytest.MonkeyPatch, config, reporter, tmp_path: Path):
