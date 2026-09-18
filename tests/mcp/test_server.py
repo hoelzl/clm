@@ -9,15 +9,23 @@ arguments.  Individual tool behavior is already covered by
 from __future__ import annotations
 
 import json
+import queue
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-# ``clm.mcp.server`` imports ``mcp.server.fastmcp`` at module level, so the
+# ``clm.mcp.server`` imports the SDK's server class at module level, so the
 # whole file is unimportable without the ``[mcp]`` extra.  Skip collection
 # cleanly in environments that don't install it (e.g. the Docker integration
-# CI job, which only installs the default extras).
-pytest.importorskip("mcp.server.fastmcp", reason="mcp SDK not installed (needs [mcp] extra)")
+# CI job, which only installs the default extras).  Skip on the *package*,
+# not on a submodule: the server-class import path differs between mcp 1
+# (``mcp.server.fastmcp``) and mcp 2 (``mcp.server.mcpserver``) and
+# ``clm.mcp.server`` resolves whichever is installed (#914).
+pytest.importorskip("mcp", reason="mcp SDK not installed (needs [mcp] extra)")
 
 from clm.mcp import server as server_module  # noqa: E402
 from clm.mcp.server import create_server, run_server  # noqa: E402
@@ -89,9 +97,9 @@ def course_tree(tmp_path: Path) -> Path:
 
 
 class TestCreateServer:
-    """create_server should return a configured FastMCP with every CLM tool."""
+    """create_server should return a configured server with every CLM tool."""
 
-    def test_returns_fastmcp_instance(self, tmp_data_dir: Path) -> None:
+    def test_returns_named_server_instance(self, tmp_data_dir: Path) -> None:
         server = create_server(tmp_data_dir)
         assert server.name == "clm"
 
@@ -141,11 +149,16 @@ class TestServerDispatch:
 
     This verifies that the closures created by ``create_server`` actually
     bind ``data_dir`` correctly and forward arguments to the handler.
+
+    Calls go through the server's public ``call_tool`` rather than the
+    private tool manager: mcp 2 made the manager's ``context`` argument
+    mandatory, while the public entry point takes ``(name, arguments)`` in
+    both majors (#914).
     """
 
     async def test_call_resolve_topic(self, course_tree: Path) -> None:
         server = create_server(course_tree)
-        result = await server._tool_manager.call_tool("topic_resolve", {"topic_id": "intro"})
+        result = await server.call_tool("topic_resolve", {"topic_id": "intro"})
         payload = _extract_text_payload(result)
         data = json.loads(payload)
         assert data["topic_id"] == "intro"
@@ -153,7 +166,7 @@ class TestServerDispatch:
 
     async def test_call_course_outline(self, course_tree: Path) -> None:
         server = create_server(course_tree)
-        result = await server._tool_manager.call_tool(
+        result = await server.call_tool(
             "course_outline",
             {"spec_file": "course-specs/course.xml", "language": "en"},
         )
@@ -164,9 +177,7 @@ class TestServerDispatch:
 
     async def test_call_search_slides_forwards_max_results(self, course_tree: Path) -> None:
         server = create_server(course_tree)
-        result = await server._tool_manager.call_tool(
-            "slides_search", {"query": "intro", "max_results": 1}
-        )
+        result = await server.call_tool("slides_search", {"query": "intro", "max_results": 1})
         payload = _extract_text_payload(result)
         data = json.loads(payload)
         assert "results" in data
@@ -199,6 +210,100 @@ class TestRunServer:
         assert calls[0]["kwargs"].get("transport") == "stdio"
 
 
+class TestStdioHandshake:
+    """A real ``clm mcp`` process speaks MCP over stdio (regression for #914).
+
+    The in-process tests above prove the tool wiring; this one proves the
+    *server can start* on the installed SDK -- the failure mode of #914 was
+    an ``ImportError`` at ``clm.mcp.server`` import time, which no in-process
+    test that already imported the module can see.  The handshake is driven
+    as raw JSON-RPC lines rather than through the SDK's client API, which
+    changed between mcp 1 and 2, so the same test covers both majors.
+    """
+
+    HANDSHAKE_TIMEOUT_S = 90.0  # generous: cold CLI start on a loaded box
+
+    def test_initialize_and_list_tools(self, tmp_data_dir: Path) -> None:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "clm", "mcp", "--data-dir", str(tmp_data_dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            cwd=str(tmp_data_dir),
+        )
+        lines: queue.Queue[str | None] = queue.Queue()
+
+        def pump() -> None:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        deadline = time.monotonic() + self.HANDSHAKE_TIMEOUT_S
+
+        def send(message: dict[str, object]) -> None:
+            assert proc.stdin is not None
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+
+        def await_response(wanted_id: int) -> dict[str, object]:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AssertionError(f"no response for id={wanted_id} in time")
+                try:
+                    line = lines.get(timeout=remaining)
+                except queue.Empty as exc:
+                    raise AssertionError(f"no response for id={wanted_id} in time") from exc
+                if line is None:
+                    raise AssertionError(f"server exited before answering id={wanted_id}")
+                if not line.strip():
+                    continue
+                message = json.loads(line)
+                if message.get("id") == wanted_id:
+                    return message
+
+        try:
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "clm-test", "version": "0"},
+                    },
+                }
+            )
+            init = await_response(1)
+            assert "result" in init, init
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+            listed = await_response(2)
+        except AssertionError:
+            proc.kill()
+            _, stderr = proc.communicate(timeout=30)
+            raise AssertionError(f"MCP stdio handshake failed; server stderr:\n{stderr}") from None
+        finally:
+            if proc.stdin is not None:
+                proc.stdin.close()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=30)
+
+        assert "result" in listed, listed
+        result = listed["result"]
+        assert isinstance(result, dict)
+        names = {tool["name"] for tool in result["tools"]}
+        assert names == EXPECTED_TOOLS
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -207,12 +312,16 @@ class TestRunServer:
 def _extract_text_payload(result: object) -> str:
     """Pull the ``.text`` payload out of an MCP tool-call result.
 
-    FastMCP's ``call_tool`` may return either a raw string, a list of
-    content objects, or a tuple ``(content, structured)`` depending on
-    version.  We accept all three and return the first text chunk.
+    The server's ``call_tool`` may return a raw string, a list of content
+    objects, a tuple ``(content, structured)`` (mcp 1) or a
+    ``CallToolResult`` carrying a ``.content`` list (mcp 2), depending on
+    the SDK version.  We accept all of them and return the first text chunk.
     """
     if isinstance(result, str):
         return result
+    content = getattr(result, "content", None)
+    if isinstance(content, list):
+        return _extract_text_payload(content)
     if isinstance(result, tuple) and result:
         return _extract_text_payload(result[0])
     if isinstance(result, list) and result:

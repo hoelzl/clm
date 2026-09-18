@@ -16,7 +16,7 @@ from click.testing import CliRunner
 
 # The MCP tool list is a core part of the guide, so the whole command (and these
 # tests) need the [mcp] extra.
-pytest.importorskip("mcp.server.fastmcp", reason="mcp SDK not installed (needs [mcp] extra)")
+pytest.importorskip("mcp", reason="mcp SDK not installed (needs [mcp] extra)")
 
 # Fetch the *module* via importlib: the ``export`` package's __init__ binds the
 # ``agent_guide`` command onto the package, shadowing the submodule attribute, so

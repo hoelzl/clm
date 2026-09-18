@@ -601,7 +601,11 @@ happens to trigger it.
 
 (Dependency drift, the other usual nightly justification, barely applies here:
 CI installs from `uv.lock` with `UV_EXCLUDE_NEWER` pinned, so nothing moves
-underneath us.)
+underneath us. The one deliberate exception is the `mcp-forward-compat` job:
+`clm.mcp.server` supports both `mcp` SDK majors but the lock can only pin one,
+so that job installs the newest 2.x *past* the pin and runs `tests/mcp` plus
+the agent-guide export tests against it — issue #914. A repeat failure there
+is a real SDK break, not a flake.)
 
 **Failures file a GitHub issue** labelled `nightly-failure` — or comment on the
 existing open one, so an outage produces one issue rather than one per night.

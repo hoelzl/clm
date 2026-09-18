@@ -5,6 +5,16 @@ CLI verb-group structure (``topic_resolve``, ``slides_search``,
 ``slides_normalize``, ``voiceover_extract``, ``validate``, …); the flat
 pre-1.8 names (``resolve_topic``, ``validate_slides``, …) were renamed in
 CLM 1.8.
+
+Works with both major versions of the SDK (issue #914): mcp 2 renamed
+``mcp.server.fastmcp.FastMCP`` to ``mcp.server.mcpserver.MCPServer`` and
+dropped the old import path. The server class is resolved once at import
+time by :data:`MCPServer`; everything this module uses from it (the
+``tool()`` decorator, ``run(transport="stdio")``, ``list_tools()``,
+``call_tool()``) has the same shape in both majors. The mcp-2 path is
+exercised by the nightly ``mcp-forward-compat`` job
+(``.github/workflows/nightly.yml``); the locked SDK is whatever ``uv.lock``
+resolves under the repo's ``exclude-newer`` pin.
 """
 
 from __future__ import annotations
@@ -12,7 +22,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+try:  # mcp >= 2
+    from mcp.server.mcpserver import MCPServer
+except ImportError:  # mcp 1.x: same class under its pre-2.0 name
+    from mcp.server import fastmcp as _mcp_v1  # type: ignore[attr-defined,unused-ignore]
+
+    MCPServer = _mcp_v1.FastMCP  # type: ignore[attr-defined,misc,unused-ignore]
 
 from clm.mcp.tools import (
     handle_course_authoring_rules,
@@ -41,7 +56,7 @@ from clm.mcp.tools import (
 logger = logging.getLogger(__name__)
 
 
-def create_server(data_dir: Path) -> FastMCP:
+def create_server(data_dir: Path) -> MCPServer:
     """Create and configure the CLM MCP server.
 
     Args:
@@ -49,9 +64,9 @@ def create_server(data_dir: Path) -> FastMCP:
             ``course-specs/``, etc.).
 
     Returns:
-        A configured :class:`FastMCP` instance ready to run.
+        A configured :data:`MCPServer` instance ready to run.
     """
-    mcp = FastMCP("clm")
+    mcp = MCPServer("clm")
 
     @mcp.tool()
     async def topic_resolve(
