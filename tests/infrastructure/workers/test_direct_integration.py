@@ -135,9 +135,12 @@ def _wait_for_registered_workers(
         if count >= expected_count:
             return count
         if time.monotonic() > deadline:
+            # #847: the count alone cannot tell "slow under xdist load" from
+            # "died on import"; the per-worker report can.
             raise TimeoutError(
                 f"Expected {expected_count} active workers within {timeout}s "
-                f"(worker_type={worker_type}); got {count}"
+                f"(worker_type={worker_type}); got {count}\n"
+                f"Worker state at timeout:\n{manager.describe_workers()}"
             )
         time.sleep(interval)
 
