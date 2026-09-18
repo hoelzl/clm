@@ -9,6 +9,7 @@ These tests verify the complete worker lifecycle including:
 
 import tempfile
 import time
+from collections.abc import Callable
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -28,6 +29,7 @@ def _wait_for_healthy_workers(
     worker_type: str | None = None,
     timeout: float = 15.0,
     interval: float = 0.1,
+    describe: Callable[[], str] | None = None,
 ) -> list[DiscoveredWorker]:
     """Poll ``WorkerDiscovery`` until at least *expected_count* workers are healthy.
 
@@ -54,10 +56,13 @@ def _wait_for_healthy_workers(
             return discovered
         if time.monotonic() > deadline:
             statuses = [(w.worker_type, w.status, w.is_healthy) for w in last]
+            # #847: when the caller can describe its workers (process alive?,
+            # db row, log tail), say so instead of a bare count.
+            detail = f"\nWorker state at timeout:\n{describe()}" if describe else ""
             raise TimeoutError(
                 f"Expected {expected_count} healthy workers within {timeout}s "
                 f"(worker_type={worker_type}); got {len(healthy)} healthy out of "
-                f"{len(last)} discovered: {statuses}"
+                f"{len(last)} discovered: {statuses}{detail}"
             )
         time.sleep(interval)
 

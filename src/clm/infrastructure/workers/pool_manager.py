@@ -1316,6 +1316,69 @@ class WorkerPoolManager:
         if hasattr(self, "job_queue") and self.job_queue is not None:
             self.job_queue.close()
 
+    def describe_workers(self, *, tail: int = 30) -> str:
+        """One human-readable block per started worker, for timeout diagnostics.
+
+        For each worker this pool started: its type/index, database id and
+        executor id, whether its process (or container) is still alive, the
+        ``workers`` row's status and last heartbeat, and the last *tail*
+        lines of its log. This is what a "expected N active workers, got M"
+        timeout needs to be actionable (issue #847): the count alone cannot
+        distinguish a worker that is slow to activate under load from one
+        that died on import, and the per-worker log is the only place the
+        latter says why. Cheap and side-effect free; safe to call from a
+        test's failure path or a stall report. Never raises — a worker whose
+        details cannot be read is reported with what is known.
+        """
+        blocks: list[str] = []
+        conn = self.job_queue._get_conn()
+        for worker_type, infos in self.workers.items():
+            for info in infos:
+                executor_id = str(info.get("executor_id", "?"))
+                db_id = info.get("db_worker_id", "?")
+                config = info.get("config")
+                mode = getattr(config, "execution_mode", "?")
+                header = (
+                    f"{worker_type} worker db_id={db_id} executor_id={executor_id[:12]} mode={mode}"
+                )
+                details: list[str] = []
+                try:
+                    row = conn.execute(
+                        "SELECT status, last_heartbeat FROM workers WHERE id = ?", (db_id,)
+                    ).fetchone()
+                    details.append(
+                        f"db row: status={row[0]} last_heartbeat={row[1]}"
+                        if row
+                        else "db row: MISSING"
+                    )
+                except Exception as exc:  # diagnostics must not fail the caller
+                    details.append(f"db row: unreadable ({exc})")
+                executor = self.executors.get(mode)
+                if executor is not None:
+                    try:
+                        stats = executor.get_worker_stats(executor_id)
+                    except Exception as exc:
+                        stats = None
+                        details.append(f"process: unreadable ({exc})")
+                    if stats is not None:
+                        details.append(
+                            f"process: pid={stats.get('pid')} alive={stats.get('is_alive')}"
+                        )
+                    try:
+                        log_tail = executor.get_container_logs(executor_id, tail=tail)
+                    except Exception as exc:
+                        log_tail = None
+                        details.append(f"log: unreadable ({exc})")
+                    if log_tail:
+                        indented = "\n".join(f"    {line}" for line in log_tail.splitlines())
+                        details.append(f"log tail ({tail} lines):\n{indented}")
+                    elif log_tail == "":
+                        details.append("log: empty")
+                blocks.append(header + "\n" + "\n".join(f"  {d}" for d in details))
+        if not blocks:
+            return "(no workers started by this pool)"
+        return "\n".join(blocks)
+
     def get_worker_stats(self) -> dict:
         """Get statistics about all workers.
 

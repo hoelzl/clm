@@ -1100,6 +1100,37 @@ class DirectWorkerExecutor(WorkerExecutor):
         self._liveness_scan_cache = (now, workers)
         return workers
 
+    def get_container_logs(self, worker_id: str, tail: int = 100) -> str | None:
+        """Return the last *tail* lines of a direct worker's log file.
+
+        A direct worker's stdout and stderr are merged into a per-worker log
+        file (``get_worker_log_path``) — the only place a worker that never
+        reached ``idle`` says why (an import error, a crashed kernel-env
+        probe, a DB it could not open). Named ``get_container_logs`` for
+        parity with the Docker executor so :meth:`WorkerPoolManager.
+        describe_workers` can read both without caring which mode a worker
+        runs in (issue #847). ``None`` for an unknown worker or an unreadable
+        file; the file handle is flushed first so lines the worker just
+        wrote are included.
+        """
+        info = self.worker_info.get(worker_id)
+        if info is None:
+            return None
+        log_file = info.get("log_file")
+        if log_file is not None:
+            try:
+                log_file.flush()
+            except (OSError, ValueError):  # closed handle
+                pass
+        log_path = info.get("log_path")
+        if not log_path:
+            return None
+        try:
+            lines = Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return None
+        return "\n".join(lines[-tail:]) if lines else ""
+
     def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get resource usage statistics for a direct process worker.
 
