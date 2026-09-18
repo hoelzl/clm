@@ -178,7 +178,7 @@ docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-pro
 - .NET SDK 10.0 (C# and F# kernels)
 - Deno (TypeScript/JavaScript kernel)
 - Java JDK (Java kernel)
-- IJava 1.28.0 (Java Jupyter kernel)
+- IJava 1.3.0 (Java Jupyter kernel)
 - micromamba + xeus-cpp (C++ kernel)
 
 **Jupyter Kernels:**

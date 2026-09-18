@@ -9,6 +9,343 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.29.0] - 2026-09-18
+
+### Added
+
+- **Worker-registration timeouts now say what each worker did (#847).**
+  `WorkerPoolManager.describe_workers()` reports, per worker the pool started,
+  its database row (status, last heartbeat), whether its process or container
+  is still alive, and the tail of its log; `DirectWorkerExecutor` gained
+  `get_container_logs()` (the per-worker log file tail, for parity with the
+  Docker executor) so the report works in both modes. The direct-worker
+  integration tests' registration wait attaches that report to its
+  `TimeoutError`, and the lifecycle tests' healthy-worker wait accepts a
+  describer — a "expected 2 active workers, got 0" under xdist load can now
+  be told apart from a worker that died on import, whose traceback lives only
+  in that log. This was the remaining item of the rotating-xdist-flake issue;
+  its timing shapes were fixed in PRs #848 and #925.
+
+- **`clm release sync --refreeze-skeleton PATTERN` re-copies frozen skeleton
+  files, and the first sync lists what it freezes (#869).** Skeleton files
+  (setup docs, READMEs) were frozen by the first sync with no CLI escape
+  hatch — `--refreeze` is topic-only and `<evergreen>` had to be declared up
+  front. The new repeatable option is the topic `--refreeze` for the
+  onboarding surface: a one-shot, stateless re-copy from the current build
+  (labelled `refreeze-skeleton` in the plan) that also delivers a skeleton
+  file the cohort never received. The first sync now prints the skeleton
+  files it is about to freeze, so the decision is visible while it is cheap.
+  `clm info releases` documents both, plus the two behaviours that follow
+  from the stateless evergreen check (a pattern added later works; an absent
+  evergreen file counts as differing).
+
+- Added: when a build records errors, the post-build stray-file sweep is still skipped (to protect outputs from prior successful builds), but the build now prints an explicit note that stale output files were deliberately left in place and that rerunning a clean build removes them — previously the sweep skipped silently, so leftover notebooks from a spec restructure read as a clm bug. (#923)
+
+- **C++ code export: the code-along skeleton is real study material**
+  (#928, phase 2). In `code-along` and `partial` code outputs a blanked
+  cell now leaves one descriptive marker where its code would have gone —
+  `// TODO: define twice` at namespace scope for a blanked definition or
+  promoted variable, `// TODO: <section heading>` in the section body for
+  statements — instead of a bare `// TODO` in the body. A `keep` cell that
+  depends on code the student has yet to type (a name defined by an
+  earlier blanked cell, by a `completed`/`alt` solution cell the view
+  drops, or by another such cell) is emitted commented out behind
+  `// depends on code you'll type above — uncomment after`, transitively,
+  so every code-along deck compiles as shipped; operator overloads are
+  tracked through their operand types. An originally empty cell is no
+  longer a TODO in partial output, and section names match the completed
+  output even when the section's slide_id collides with a blanked
+  definition.
+
+- **C++ code export: header, workshop files and per-module CMake projects**
+  (#928, phase 3). A C++ deck with workshop ranges or `global` cells is now
+  exported as a file set next to `<deck>.cpp`: `<deck>.hpp` carries the
+  hoisted includes and the lecture part's `global`-tagged cells (that is how
+  a workshop file sees a lecture definition), and every workshop range
+  becomes its own `<deck>_workshop_N.cpp` with the range's section
+  functions and its own `main()` — the code-along/partial skeleton of that
+  workshop, complete lecture file alongside. Workshop boundaries open
+  sections, variable promotion stays within one file, and the dangling-cell
+  scan stays deck-global. The generated CMake export is now one project per
+  module (`add_subdirectory` from the kind root; a module directory opens
+  standalone) with one executable target per deck **and per workshop
+  file**, so workshop code joins the compile gate; `clm: no-compile`
+  excludes a deck's workshop targets too. The extra files travel with the
+  main output across the worker/CLI boundary: the worker reports them with
+  the job result, the host registers them for the stray-file sweep, stores
+  them in the result cache and replays them on a cache hit, and the
+  provenance manifest lists them (`NotebookResult.companion_files`; the
+  notebook cache-hash schema is bumped to v5, so the first build after
+  upgrading re-executes every notebook). Decks without workshops or
+  `global` cells are unchanged single files.
+
+- **C++ code export: per-deck study material instead of a compile-gate
+  artifact** (#928, phase 1). The `format="code"` export for
+  `prog_lang="cpp"` now emits one **section function per slide** (a new
+  function opens at every `slide`/`subslide` cell, named after its
+  `slide_id`, e.g. `void brace_initialization()`, with a
+  `== Brace initialization ==` banner from the section's heading), keeps
+  the **markdown narrative as `//` comment blocks**, and labels displayed
+  expressions — `CLM_DISPLAY(i1)` now prints `i1 = 10`; the macro lives in
+  the vendored support header `clm/display.hpp` (copied into the code
+  output's `include/` by the CMake export) instead of an inline template
+  block at the top of every deck. Top-level variables
+  stay local to their section unless a later section or a namespace-scope
+  definition references them, in which case the emitter **promotes them to
+  namespace scope automatically**; the new code-cell tag **`global`** forces
+  a cell to namespace scope. Definitions, includes and preprocessor lines
+  land at namespace scope as before; blanked code-along cells leave a
+  `// TODO` in their section body. The per-cell `slide_NN()` functions of
+  the #333 export are gone. Header/workshop-file splitting and per-module
+  CMake projects follow in later phases; the handover is
+  `docs/claude/handovers/cpp-ide-export-handover.md`.
+
+- `clm slides cpp-show` rewrites the bare display expressions of C++ decks
+  to `SHOW(expr);` and adds `#include <clm/display.hpp>` (#928): the
+  xeus-cpp kernel prints nothing for a cell without a trailing `;`, so decks
+  show values through the `SHOW` macro (new alias of `CLM_DISPLAY` in
+  `clm/display.hpp`), which the notebook worker image now installs into the
+  kernel's include path. The exported program prints the same `expr = value`
+  lines.
+
+- Resumable discussions for agent sessions: `docs/claude/discussions/` (per-thread
+  `state.md` + cleaned transcripts, one append-only `register.md`), the
+  agent-neutral skills `.agents/skills/{save-discussion,save-knowledge,resume-discussion}`
+  with `.claude/skills/` adapters (`/save-discussion`, `/save-knowledge`,
+  `/resume-discussion`), and the tooling behind them in `scripts/`:
+  `clean_transcript.py` (Claude Code `.jsonl` or Hermes session → redacted
+  dialogue-only transcript), `audit_transcripts.py` (sessions no register
+  mentions, main checkout and worktree slugs alike), `stage_hermes_session.py`
+  (full-lineage Hermes staging into `~/.clm-transcripts/`) and
+  `check_doc_currency.py` (status headers of the discussions tree). Ported from
+  the CppCourses/Cenotaph discussion stack.
+
+### Changed
+
+- **`clm info commands` now carries the notebook-worker guidance from the
+  #711 cache-performance investigation.** The `--notebook-workers` row
+  explains that notebook jobs — including the Recording/Speaker HTML renders
+  that warm the executed-notebook cache — run serially per worker, that the
+  default is one worker (`worker_management.default_worker_count`), and that
+  on a large course this is the single biggest wall-clock lever (one measured
+  rebuild: 12.5 min with 8 workers vs more than 29 min, unfinished, with 1).
+  The investigation's remaining candidates — raising the default, and
+  per-file dependency hashing — are recorded in `docs/claude/TODO.md`.
+
+- **The MCP server runs on both `mcp` SDK majors (#914).** `clm.mcp.server`
+  now resolves mcp 2's `mcp.server.mcpserver.MCPServer` and falls back to the
+  pre-2.0 `mcp.server.fastmcp.FastMCP`, so `clm mcp` and
+  `clm export agent-guide` start on either. The `[mcp]` extra's temporary
+  `<2` cap (PR #915) is replaced by `mcp>=1.0.0,<3`; the lock keeps whichever
+  major the repo's `exclude-newer` pin admits (1.x today — mcp 2.0.0 shipped
+  after it), and flips to 2.x at the next pin bump without a code change. A
+  new stdio-handshake test starts the real `clm mcp` process and lists its
+  tools, and the nightly `mcp-forward-compat` job runs the MCP suite against
+  the newest 2.x so the path the lock does not exercise is still tested.
+
+- Changed: the pre-push gate is now a ~30s smoke tier (build-engine core tests plus the gate's own meta-tests) instead of the full fast suite (~8.5 min on every push, with rotating load flakes and xdist worker crashes rejecting healthy branches). Bigger local gates are explicit and on demand via `scripts/run_pytest_hook.py`: `--tier` runs the deterministic tier (fast suite minus the new `load_sensitive` families — heavyweight-process and wall-clock-timing suites, auto-tagged by directory in `tests/conftest.py`), `--full` the whole fast suite; the repo's push protocol (AGENTS.md) assigns the tier to merge-intended branches, CI runs everything on every PR, and required status checks on `master` make a green CI mechanical rather than conventional. The wrapper prints the tier it runs, and meta-tests pin the tier marker expression against pyproject addopts and the smoke path list against the filesystem. (#926)
+
+- C++ code export (#928): the deck header macros (`header`, `header_de`,
+  `header_en` in `templates_cpp/macros.j2`) emit a plain Markdown title
+  (`# Title` plus the author line) for the code format instead of the HTML
+  title slide, which showed up as a `<div>`/`<img>` comment block at the top
+  of every exported `.cpp`. Notebook and HTML outputs are unchanged.
+
+- C++ code export (#928): section functions carry a `slide_` prefix
+  (`void slide_brace_initialization()`, `slide_03` without a `slide_id`) so
+  they are told apart from the deck's own functions; a new optional
+  `section_name="…"` cell attribute overrides the `slide_id`-derived name
+  (stripped from every output like `slide_id`). HTML in markdown cells is
+  approximated as Markdown in the `//` comments (`<img>`, `<b>`, `<tt>`,
+  lists, tables, `<div>` wrappers).
+
+- Notebook worker image: the Python packages now mirror the PythonCourses
+  course venv (`pyproject.toml` floors plus the modules its decks import
+  directly). The full variant gains `deepeval` (RAG-evaluation decks),
+  `deepagents`, `langchain-openrouter`, `langgraph-checkpoint-sqlite`,
+  `langchain-mcp-adapters`, `fastmcp`, `langfuse`, CPU `fastembed` (arm64
+  had no embedding backend), `psycopg`, `pytorch-model-summary`, and skorch
+  from its git main; both variants gain `openpyxl`, `ipytest`, `pytest`,
+  `icecream`, `PyGitHub`, `cookiecutter`, `click`, `python-dotenv`,
+  `pydantic-settings`, `appdirs`, `loguru`, `fastapi`, `uvicorn`, `cython`,
+  `joblib`, `plotly`, `pillow`. The old `~=` pins that held numpy at 2.0,
+  pandas at 2.2 and scikit-learn at 1.5 are replaced by the course's floors
+  with a `UV_EXCLUDE_NEWER=2026-08-29` resolution cutoff (the PyTorch step
+  is exempt, like in the course venv); `ragas`, which no deck imports, is
+  gone. The full stage now builds on the lite stage instead of duplicating
+  its list. `course-runtime-requirements.txt` is synced with the same
+  additions.
+
+### Fixed
+
+- **`clm git init --channel` on a cohort that was never synced creates the
+  destination instead of sending you to `clm build` (#868).** The channel
+  destination is created by `clm release sync`, not by the build, and
+  `release sync --push` in turn wanted the repo to exist — a cycle neither
+  hint named. Init now creates the empty destination directory (dry-run says
+  so) and initializes the repo in it, so `git init --channel` then
+  `release sync --push` works from a cohort's very first delivery; `clm info
+  releases` documents the bootstrap order. The related `default_branch`
+  papercut is tracked as #955.
+
+- **`clm release provision --dry-run` reports credential status, and the
+  command reads the project `.env` (#870).** The preview passed with no
+  token configured and the real run then failed at once, so it validated
+  channel/group resolution but was silent about the half most likely to be
+  wrong. It now ends with a `credentials:` line naming the token variable
+  found, or `MISSING — the real run will fail` (exit code still 0). And,
+  matching `clm build`, the project's `.env` (found by walking up from the
+  spec file) is loaded first, so a `CLM_GITLAB_TOKEN` kept there counts; an
+  exported value wins.
+
+- **Narrowing `-T` no longer executes `html="no"` decks (#871).** A build whose
+  target set lacks the `recording` producer schedules an *implicit*
+  Recording-HTML execution per notebook to warm the executed-notebook cache
+  for the consumer HTML it did request. That block ignored the topic's
+  `html="no"` flag, while the explicit output list honours it — so a deck
+  with no HTML outputs at all, which never runs in a full build and therefore
+  has no HTTP-replay cassette by construction, was executed as soon as the
+  target list was narrowed (`-T shared`), and its unmatched requests went to
+  the network live. The failure then surfaced as a deterministic
+  `[User Error]` on a deck that had "been building fine". Implicit
+  cache-producer executions now skip `html="no"` topics; the deck behaves the
+  same under every `-T` selection and still produces its non-HTML outputs.
+
+- **A percent-encoded form parameter name is now filtered at record time
+  (#881).** `api%5Fkey=SECRET` in an `application/x-www-form-urlencoded`
+  request body was compared literally against the filter list and recorded
+  verbatim, while the URL-query filter decoded the same spelling. Names are now
+  read the way `parse_qsl` reads them — `%XX` and `+` decoded — by one shared
+  reader that both the recorder and `clm cassette scan` use, so the audit
+  reports these bodies and the two cannot drift. Unmatched fields keep their
+  exact bytes. Such a body is part of the replay match key, so an affected
+  cassette replay-misses loudly after upgrading; `clm info migration` has the
+  note. No HTTP client CLM talks to encodes a parameter *name*, and the
+  PythonCourses audit found none.
+
+- **`clm cassette scan` and `clm cassette doctor` follow symlinked
+  directories (#886).** The walk used `Path.rglob`, which does not recurse
+  into a directory link, so a cassette behind one was invisible to both
+  commands — and since the scan became a CI gate (#883) that was a green run
+  over a tree nobody looked at. The walk is now `os.walk(followlinks=True)`
+  with loop protection (a link cycle terminates; a directory reachable by two
+  routes is walked once), identical on every supported Python.
+
+- **Commented-out package installs no longer run during builds (#904).**
+  jupytext's percent reader reactivates commented magics and shell escapes
+  (`# %%time` → `%%time`), which is how magics are meant to be written in a
+  `.py` slide file — but it also turned the sanctioned `# !pip install …`
+  install *hint* into an active cell, so `clm build` executed pip during
+  notebook execution: against whatever `pip` was first on PATH (course
+  packages landed in unrelated venvs) and through the HTTP-replay proxy as
+  untagged, non-hermetic traffic. Students also received an active install
+  cell the trainer meant to uncomment live. The notebook processor now keeps a
+  commented **package-install command** exactly as written (`!pip`, `!pip3`,
+  `!python -m pip`, `!uv pip` / `!uv add`, `!conda` / `!mamba`, `!poetry add`,
+  `%pip` / `%conda`, plus `sudo`/`apt`/`brew`/`npm`-style system installs)
+  while every other magic keeps jupytext's semantics — `# %%time`,
+  `# %load_ext`, `# !python script.py` still run, `# # !echo` (double comment)
+  still builds as a comment, and an install written *uncommented* stays
+  active. Implemented by comparing against a `comment_magics=False` read, so
+  jupytext's own quote/string parsing stays authoritative; the second read
+  only happens when the source contains a candidate line. Documented in
+  `clm info slide-format` ("Magics, shell escapes, and install hints").
+
+- Fixed: pre-push fast-suite flakes in the backend/worker timing tests on loaded Windows machines (#910, and the sqlite-backend members of #847's rotating sets). `SqliteBackend` gains an injectable `clock` test hook for the `wait_for_completion` poll loop, so the stall-detector and completion-cap tests advance a deterministic fake clock instead of racing sub-second real-time sleeps against tight thresholds under xdist load; the worker shutdown tests poll `thread.is_alive()` with a generous ceiling instead of asserting after a fixed 2s join window; and the resilience tests' 5s completion cap — a hang guard, never an assertion target — is raised out of load's reach. Measured on the dev box: 2 of 3 family-loop runs failed before (3-4 rotating victims), 4 of 4 green after. (#910)
+
+- **C++ code export: function templates with a `requires` clause between the
+  template head and the declarator are emitted at namespace scope again**
+  instead of being display-wrapped inside a `slide_NN()` body, which MSVC
+  rejected (C2760/C3878) and left the call site with an unknown identifier
+  (#921). The classifier now skips the constraint — concept-ids,
+  parenthesized expressions, and `&&`/`||` conjunctions — before classifying
+  the declarator; the trailing `requires` form and the constrained-parameter
+  form were already recognized and are unchanged.
+
+- **C++ code export: cells using digit separators (`2'000'000'000`) are
+  classified correctly** (#922). The comment/string stripper treated the
+  `'` as a char-literal quote and swallowed the rest of the cell, so a
+  declaration followed by a statement was emitted as one namespace-scope
+  item that MSVC and g++ reject. A `'` between two digits of a numeric
+  literal is now kept as a separator (hex, binary, and fractional literals
+  included); the statement lands in its `slide_NN()` function as for any
+  other mixed cell. Prefixed char literals (`u8'a'`, `L'x'`) are unaffected.
+
+- **One failed notebook no longer disables the whole stray-file sweep
+  (#923).** A build that recorded any error skipped the post-build sweep
+  wholesale, so after a spec restructure a single failing deck left the
+  previous revision's notebooks duplicated (old section next to new) across
+  every output tier. The skip existed because the write registry is missing
+  the writes that never happened — but for a per-job failure those writes
+  are exactly the failed job's outputs. The backend now stamps the unwritten
+  output path on failed jobs and on jobs orphaned at build give-up; when
+  every error is such a job-scoped error (none fatal, build neither timed
+  out nor aborted) the sweep runs scoped around them: the directory holding
+  each failed output is left untouched together with everything below it (a
+  job may write companion files beside its output), while every other stale
+  file is removed — including a failed deck's previous copy at an old
+  location, which regenerates once the deck builds again. Errors whose
+  missing writes cannot be enumerated — a fatal abort, a timed-out build,
+  course-load / cross-reference / image-collision errors, replayed cached
+  errors — keep the wholesale skip and its "NOT swept" notice. An unowned
+  output root that merely contains a protected directory is kept unowned
+  without being reported as an ownership refusal. The startup notice says
+  what was kept; `clm info commands` documents the rule.
+
+- C++ code export (#928, Phase 4): the result cache keys a C++ code output on
+  its output stem, so a deck exported under another name by a second spec
+  (`07 Functions` in one course, `02 Functions` in another) no longer
+  replays the first spec's header include and companion files next to the
+  new output. Emitter fixes found by the CppCourses corpus: preprocessor
+  lines (`#define`, `#endif`, …) no longer get a stray `;`, a `constinit`
+  variable is emitted at namespace scope (a local is ill-formed), a bare
+  `new` expression is a display expression instead of a declaration, and
+  `thread_local` is recognised as a declaration specifier. Five previously
+  failing Completed decks (`program_structure`, `more_initialization`,
+  `compile_time`, `good_tests`, `observer`) compile again.
+
+- **Worker-side executed-notebook cache store retries lock contention (#945).**
+  `ExecutedNotebookCache.store()` — the write every notebook worker makes to
+  the shared cache DB after executing a deck — did a bare INSERT + commit with
+  no busy-retry (the residue of #917/#918, which hardened only the host-side
+  writes). With many parallel workers a starved writer failed with
+  `sqlite3.OperationalError: database is locked`, which the build reported as
+  a *user* error ("Check your notebook for errors") on a healthy notebook,
+  persisted that bogus failure to the issue cache, and left the notebook
+  uncached so the next build re-executed it. The store now runs under the
+  same bounded `retry_on_busy` schedule as the host-side writers, rolling back
+  between attempts and refreshing the worker's heartbeat so a worker stuck
+  behind the lock is not swept as dead; if the lock outlasts the schedule the
+  job still succeeds and logs a warning that the notebook was not cached
+  (matching Docker mode, where the API-backed store was already best-effort).
+  The Worker API's store and status routes run these retrying writes on a
+  thread so a long retry no longer stalls other Docker workers' requests.
+  Independently, the error categorizer now classifies a worker-side SQLite
+  lock error as an `infrastructure` / `database_locked` error with contention
+  guidance instead of the notebook-content default, so it is neither blamed
+  on the file nor persisted to the error cache. A *cell* that itself raises
+  "database is locked" (a notebook using sqlite3) still counts as the
+  notebook's own error.
+
+- **`clm validate` on a voiceover companion file no longer reports a
+  spurious anchor error per cell (#946).** A separated voiceover companion
+  (`voiceover_<stem>.<lang>.<ext>`, beside its deck or in the topic's
+  `voiceover/` subdirectory) holds only narration cells bound to their
+  slides by `for_slide`; the slide anchors live in the owning deck. Naming
+  the companion directly ran the deck-only slide_id anchor walk on it, so
+  every companion in the corpus reported one "voiceover/notes cell carries
+  slide_id but no preceding slide/subslide anchor" error per cell (13-22 per
+  file) while the topic directory validated clean — and an agent verifying
+  its own companion edit was steered toward "repairing" a valid file. The
+  companion is now validated *as a companion*: `format`/`tags` checks on the
+  file itself, and `pairing` resolves each `for_slide` against the owning
+  deck with the build-equivalent check the deck side already ran (an
+  unresolvable target is the "build drops this narration" error). No owning
+  deck → one `info` finding, no errors. `--quick` on a companion runs the
+  syntax checks only. The companion→deck mapping `clm slides sync` already
+  used moved to `clm.core.voiceover_companions.deck_for_companion` and is
+  shared.
+
 ## [1.28.0] - 2026-09-12
 
 ### Added
