@@ -7,6 +7,10 @@ This file tracks known issues and planned improvements for the CLM project.
 ### Uniform, per-purpose model configurability across CLM
 
 **Status**: 📋 Investigation — tracked in #167 (raised 2026-05-31 during #166 design). Outcome may be "no change".
+**2026-09-19 note**: the agent-toolkit umbrella #970 (Tier 1: #960–#964) moves the
+embedded-LLM paths listed below to emit-don't-invoke; once those land, only the
+`autopilot` verbs still choose a model, so most of this item dissolves. See
+`docs/claude/agent-toolkit-candidates-investigation.md` §3.
 
 **Context**: CLM selects LLMs ad hoc per feature, across two backends:
 

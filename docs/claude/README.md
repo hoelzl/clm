@@ -44,6 +44,7 @@ Implementation notes and technical details:
 
 ### `/analysis/`
 Technical analysis and investigation reports:
+- `agent-toolkit-candidates-investigation.md` - Which clm features should stop being stand-alone and become agent toolkits (umbrella #970)
 - `transaction-handling-investigation.md` - Transaction handling investigation
 - `wal-migration-final-results.md` - WAL migration results
 - `test-environment-setup-summary.md` - Test environment setup final summary
