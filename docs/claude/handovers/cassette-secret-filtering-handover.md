@@ -1,8 +1,9 @@
 # Cassette secret filtering — handover
 
-**Created**: 2026-08-18 | **Updated**: 2026-08-19 | **Status**: #875, #878,
-#877, #874 and #883 all CLOSED; **#881 and #886 open** | **Next**: either of
-those two — they are independent, and nothing else in this arc is outstanding
+**Created**: 2026-08-18 | **Updated**: 2026-09-18 | **Status**: #875, #878,
+#877, #874, #883, #881 and #886 all CLOSED — the clm side of this arc is
+complete | **Next**: nothing in clm; the one open item is in the course repo
+(wire `clm cassette scan --baseline` into PythonCourses' CI)
 
 Companion to `adversarial-review-remediation-handover.md` (Phase 4 item 6,
 which is where this arc started as finding S9). That document is the plan;
@@ -12,8 +13,8 @@ this one is the working state of the cassette follow-ups.
 
 | Issue | One line | Where the detail is |
 |---|---|---|
-| **#881** | The recorder does not percent-decode a form parameter *name*, so `api%5Fkey=SECRET` records verbatim. A recorder-side leak, not a parity bug — the audit correctly stays quiet. Fixing it moves the form-encoded replay match key, so it needs a migration note and both sides changed in one PR. | §4, "Three things it left behind" |
-| **#886** | `iter_cassette_paths` does not follow symlinked directories, so cassettes behind one are never scanned. Pre-existing; it matters now because #883 turned this command into a CI gate. Needs a version-aware walk (`recurse_symlinks` is 3.13+, CLM supports 3.12) with loop protection. | §4, end of the #883 block |
+| ~~#881~~ | **CLOSED 2026-09-18.** Form parameter names are percent-decoded on both sides through one shared reader, `vcr_format.form_parameter_name` (the audit's `_form_body_keys` calls it), so the pair cannot drift on it again. A raw non-UTF-8 name still bails the whole body; a percent-escape that *decodes* to non-UTF-8 falls back to the raw spelling instead, so it cannot hide a secret next door. Migration note in `clm info migration`. | §4, "Three things it left behind" |
+| ~~#886~~ | **CLOSED 2026-09-18.** `iter_cassette_paths` walks with `os.walk(followlinks=True)` plus a resolved-real-path set: uniform across 3.12–3.14, loop-safe, and a directory reachable twice is walked once. Symlink tests skip where the process cannot create one. | §4, end of the #883 block |
 | *(course repo)* | Wire `clm cassette scan --baseline` into PythonCourses' CI. Not a clm change; the last unticked item from #874. | §4, #883 |
 
 ---
@@ -179,11 +180,14 @@ What landed:
 
 Three things it left behind:
 
-- **#881** — the recorder does not percent-decode a form parameter *name*, so
-  `api%5Fkey=SECRET` records verbatim. The audit agreeing (not reporting it) is
-  now correct under the contract, so this is a **recorder-side leak**, not a
-  parity bug. Fixing it changes the form-encoded replay match key, hence its own
-  issue. The shape is a passing row in the parity table with a note above it.
+- **#881** (**CLOSED**) — the recorder did not percent-decode a form parameter
+  *name*, so `api%5Fkey=SECRET` recorded verbatim. Fixed by one shared reader
+  (`vcr_format.form_parameter_name`) used by the recorder and the audit; the
+  parity rows moved out of `REQUEST_BODIES_DELIBERATELY_UNFILTERED` and carry
+  markers, so direction is pinned. Lesson worth keeping: the *obvious* fix —
+  decode with `parse_qsl` semantics and let a decode failure bail — would have
+  let `api%FF=1&password=…` hide the password by bailing the whole body; the
+  reader falls back to the raw spelling for that case, and a row pins it.
 - The request-side parity predicate is **"the recorder removes a parameter"**,
   not "the bytes changed". A JSON *object* request body is re-dumped through
   `json.dumps` even when nothing matched, so byte inequality would call every
@@ -356,11 +360,12 @@ baselined run over an empty tree exit 0 again, in text mode only. Measured:
 
 So: not the historical cause, load-bearing now. Both halves matter.
 
-The hole this does **not** close is a **partially** symlinked tree —
-`iter_cassette_paths` does not follow directory symlinks, so those cassettes are
-silently unscanned. Pre-existing, tracked as **#886**, and newly worth fixing
-because this arc turns the command into a gate. Those entries now at least
-surface as `stale_missing`.
+The hole this did **not** close was a **partially** symlinked tree —
+`iter_cassette_paths` did not follow directory symlinks, so those cassettes were
+silently unscanned. Tracked as **#886** and **closed 2026-09-18**: the walk is
+`os.walk(followlinks=True)` with a resolved-real-path set for loop protection
+(uniform across the supported interpreters; `rglob(recurse_symlinks=True)` is
+3.13-only).
 
 ## 5. Test-suite flakiness on the Windows dev box (read before panicking)
 

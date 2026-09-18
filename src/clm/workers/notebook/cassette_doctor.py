@@ -29,6 +29,7 @@ guarantees the orphan is gone, not that the next recording is correct.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
@@ -127,10 +128,63 @@ def iter_cassette_paths(root: Path) -> Iterator[Path]:
     Staging (``.staging-*``) and partial (``.partial-*``) sibling files do
     not match the glob (they carry a suffix after ``.yaml``), so only
     canonical cassettes are walked.
+
+    The walk **follows symlinked directories** (issue #886; pinned by
+    ``TestIterCassettePaths.test_follows_a_symlinked_directory`` in
+    ``tests/workers/notebook/test_cassette_doctor.py``). ``Path.rglob``
+    does not — its ``recurse_symlinks`` switch only exists on Python 3.13+
+    and CLM supports 3.12 — so a cassette behind a directory link was
+    invisible to both ``clm cassette doctor`` and ``clm cassette scan``,
+    which since #883 is a CI gate: a green run over a tree nobody looked
+    at. Loop protection is a set of resolved real paths, claimed
+    depth-first as each directory is entered: a link cycle terminates
+    (``test_a_symlink_cycle_terminates_and_yields_each_cassette_once``) and
+    a directory reachable by two routes is walked once, by whichever route
+    the depth-first walk meets first in sorted order
+    (``test_a_directory_reachable_twice_is_walked_once``). Only a symlink
+    or junction costs a ``realpath`` call; an ordinary subdirectory's real
+    path is its parent's plus its name, so a course tree with tens of
+    thousands of directories still pays one ``scandir`` per directory, as
+    ``rglob`` did. Symlinked *files* were always found and still are
+    (``test_a_symlinked_cassette_file_is_still_found``). Sorted, as before,
+    so reports are deterministic.
     """
-    for path in sorted(root.rglob(CASSETTE_GLOB)):
-        if path.is_file():
-            yield path
+    found: list[Path] = []
+    real_root = os.path.realpath(root)
+    _walk_cassettes(str(root), real_root, {real_root}, found)
+    yield from sorted(found)
+
+
+def _walk_cassettes(directory: str, real: str, seen: set[str], found: list[Path]) -> None:
+    """Depth-first helper of :func:`iter_cassette_paths`; see its docstring.
+
+    *real* is the resolved path of *directory*; *seen* holds every resolved
+    directory already claimed. An unreadable directory contributes nothing,
+    as it did under ``rglob`` (which ignores permission errors).
+    """
+    try:
+        with os.scandir(directory) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            is_dir = entry.is_dir(follow_symlinks=True)
+        except OSError:
+            continue
+        if is_dir:
+            if entry.is_symlink() or entry.is_junction():
+                real_child = os.path.realpath(entry.path)
+            else:
+                real_child = os.path.join(real, entry.name)
+            if real_child in seen:
+                continue
+            seen.add(real_child)
+            _walk_cassettes(entry.path, real_child, seen, found)
+        elif fnmatch.fnmatch(entry.name, CASSETTE_GLOB):
+            path = Path(entry.path)
+            if path.is_file():
+                found.append(path)
 
 
 def _body_string(response: object) -> str | None:
@@ -581,15 +635,14 @@ def _form_body_keys(raw: object) -> list[str]:
     extraction **exactly**, rather than reaching for ``parse_qsl``, and
     every difference between the two mattered:
 
-    * ``parse_qsl`` **percent-decodes** names; the recorder's
-      ``partition(b"=")`` does not. So the audit read ``api%5Fkey=SECRET``
-      as ``api_key`` and reported a finding no re-record could ever clear.
-      That the recorder misses such a name is a real leak, but it is a
-      *recorder* bug (issue #881) — the audit's question is only "would
-      the recorder change this file today?".
-      (``parse_qsl`` also turns ``+`` into a space, but that one could never
-      diverge either way: no name on the filter list contains a space, so
-      plus-decoding can neither create a match nor destroy one.)
+    * Names go through the recorder's own :func:`vcr_format.form_parameter_name`
+      — percent-decoded, ``+`` as space — so ``api%5Fkey=…`` is read as
+      ``api_key`` on both sides (issue #881). Before that fix the recorder
+      compared the literal ``api%5Fkey`` and let the secret record verbatim,
+      and the audit had been tightened to agree; reading the name through
+      ``parse_qsl`` here while the recorder did not gave findings no
+      re-record could clear. Sharing the reader is what stops that pair
+      drifting again.
     * A field with **no ``=``** still counts: the recorder's ``partition``
       yields an empty separator, not ``None``, so a bare ``token`` is
       stripped like any other name. ``parse_qsl`` needed
@@ -616,10 +669,12 @@ def _form_body_keys(raw: object) -> list[str]:
     else:
         return []
 
+    from clm.infrastructure.http_replay_mitm.vcr_format import form_parameter_name
+
     names: list[str] = []
     for chunk in data.split(b"&"):
         try:
-            names.append(chunk.partition(b"=")[0].decode("utf-8"))
+            names.append(form_parameter_name(chunk.partition(b"=")[0]))
         except UnicodeDecodeError:
             return []
     return names
@@ -935,7 +990,9 @@ def _relative_posix(path: Path, root: Path) -> str:
     relation — in practice only across Windows drive letters; a same-drive
     path outside the root yields ``../…`` and does not raise, and on POSIX
     the raise is unreachable altogether. Unreachable through the CLI in any
-    case, since paths come from ``root.rglob``.
+    case, since :func:`iter_cassette_paths` builds every path by joining
+    entry names onto ``root`` as given (a followed link changes what is
+    *behind* a path, never its prefix), so ``relpath`` never crosses a drive.
 
     It raises rather than falling back to the file's *name* because that
     fallback would collapse every same-named cassette in the tree into one

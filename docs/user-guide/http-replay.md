@@ -292,10 +292,11 @@ here, unlike responses (below): `{"a": {"token": 5}}` loses the key too.
 The exemption exists to stop redaction corrupting what replayed code
 *reads*, and a request body is never handed back to the notebook.
 
-In a form-encoded body the name is taken **literally**: everything before
-the first `=`, not percent-decoded, with `+` left alone. So `api%5Fkey=…`
-is *not* stripped — worth knowing if you ever hand-encode a parameter
-name, though no HTTP client CLM talks to does.
+In a form-encoded body the name is read the way `parse_qsl` reads a
+query-string name: everything before the first `=`, percent-decoded, with
+`+` as a space. So `api%5Fkey=…` is stripped just like `api_key=…` (since
+issue #881 — before that the name was compared literally and such a
+spelling recorded verbatim). Unmatched fields keep their exact bytes.
 
 A body that is not text — a binary upload — is recorded untouched; there
 are no parameters to filter in it. So is a form body with a non-UTF-8

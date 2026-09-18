@@ -51,9 +51,13 @@ def _request_host(request: Any) -> str:
 
 
 def _iter_cassette_paths(root: Path) -> Iterable[Path]:
-    for path in root.rglob(_CASSETTE_GLOB):
-        if path.is_file():
-            yield path
+    # One walker for every cassette tool: this used to be a private
+    # ``rglob`` that did not follow symlinked directories, so a cassette
+    # ``clm cassette scan`` reported could be one this script never touched
+    # (#886 review).
+    from clm.workers.notebook.cassette_doctor import iter_cassette_paths
+
+    return iter_cassette_paths(root)
 
 
 def strip_cassette(

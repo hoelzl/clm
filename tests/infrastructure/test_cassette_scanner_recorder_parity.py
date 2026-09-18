@@ -404,31 +404,32 @@ REQUEST_BODIES: dict[str, tuple[bytes | str, str]] = {
     # decode raises and `replace_post_data_parameters` turns that into "leave
     # this body alone" — every field, not just the offending one.
     "form_non_utf8_name": ("naïve=1".encode("latin-1") + b"&password=x", FORM),
-    # ``parse_qsl`` percent-decodes names; the recorder's ``partition`` does
-    # not. Reading these as ``api_key`` / ``password`` gave the audit findings
-    # no re-record could clear. The recorder missing them is a genuine leak,
-    # but a *recorder* one — see the note under the table.
-    "form_percent_encoded_name": (b"api%5Fkey=SECRET", FORM),
+    # Names are read the way ``parse_qsl`` reads them — percent-decoded —
+    # on **both** sides since #881, through one shared reader
+    # (``vcr_format.form_parameter_name``). Before, the recorder compared
+    # the literal ``api%5Fkey`` and the secret recorded verbatim, while the
+    # audit — tightened to agree — called the file clean. The valueless row
+    # has nothing to carry a marker; parity alone pins it.
+    "form_percent_encoded_name": (b"api%5Fkey=sk-live-LEAK", FORM),
     "form_percent_encoded_valueless": (b"passwor%64", FORM),
-    # ``parse_qsl`` also turns ``+`` into a space. Unlike percent-decoding
-    # that could never diverge — no filter-list name contains a space, so it
-    # can neither create a match nor destroy one — so this row pins the
-    # shape, not a fixed bug. There is no ``+`` body that discriminates
-    # between the two readings, which is the proof.
-    "form_plus_in_name": (b"api+key=SECRET", FORM),
+    "form_percent_encoded_case": (b"API%5FKEY=sk-live-LEAK&keep=1", FORM),
+    # A percent-escape that decodes to non-UTF-8 bytes (``api%FF``) is read
+    # by its raw spelling instead of bailing the whole body — the secret
+    # next door is still stripped. Contrast ``form_non_utf8_name`` below,
+    # where the *raw* name is not UTF-8 and the recorder does bail.
+    "form_percent_escape_to_non_utf8_name": (b"api%FF=1&password=hunter2", FORM),
+    # ``parse_qsl`` also turns ``+`` into a space, and so does the shared
+    # reader. That can never create or destroy a match — no filter-list name
+    # contains a space — so this row pins the shape, not a fixed bug. There
+    # is no ``+`` body that discriminates between the two readings, which
+    # is the proof.
+    "form_plus_in_name": (b"api+key=sk-live-LEAK", FORM),
     # --- not filtered at all ----------------------------------------------
     # A JSON payload under a content-type the recorder does not read as
     # JSON goes down the form branch, which finds no ``&``/``=`` parameters
     # in it. Neither side may act.
     "json_under_text_plain": ('{"api_key":"sk-live-LEAK"}', "text/plain"),
 }
-
-# Issue #881, recorded here because the shape *is* in the table above and
-# passes: the recorder does not percent-decode a form parameter **name**, so
-# ``api%5Fkey=SECRET`` records verbatim. The audit agreeing is correct — its
-# question is "would the recorder change this file today?", and the answer is
-# no — so this is a leak to fix on the **recorder** side, which changes the
-# form-encoded replay match key and is therefore its own migration.
 
 #: Rows that carry a leak marker and which **neither** side may act on,
 #: with the reason. Explicit rather than inferred, and checked by its own
@@ -437,9 +438,7 @@ REQUEST_BODIES: dict[str, tuple[bytes | str, str]] = {
 REQUEST_BODIES_DELIBERATELY_UNFILTERED = {
     "req_response_only_key": "`secret` is on the response key list, not the request one",
     "json_under_text_plain": "the recorder does not read this content-type as JSON",
-    "form_percent_encoded_name": "the recorder does not percent-decode names (#881)",
-    "form_percent_encoded_valueless": "the recorder does not percent-decode names (#881)",
-    "form_plus_in_name": "`api+key` is not on the filter list under either reading",
+    "form_plus_in_name": "neither `api+key` nor `api key` (after `+` decoding) is on the filter list",
     "form_non_utf8_name": "an undecodable field name makes the recorder skip the whole body",
 }
 
@@ -628,6 +627,22 @@ def test_a_deliberately_unfiltered_row_really_is_unfiltered(name: str, tmp_path:
     reason = REQUEST_BODIES_DELIBERATELY_UNFILTERED[name]
     assert not _recorder_strips_request_param(body, content_type), reason
     assert not _scanner_request_findings(body, content_type, tmp_path, name), reason
+
+
+def test_a_percent_encoded_valueless_name_is_stripped_and_reported(tmp_path: Path) -> None:
+    """Direction pin for ``passwor%64`` (#881, review).
+
+    The row has no value to carry a plaintext marker, so it sits in neither
+    the direction-pinned set nor the deliberately-unfiltered one, and parity
+    alone would be satisfied by both sides *ignoring* it — a guard such as
+    "keep a field with no ``=``" added to both readers would regress it with
+    the suite green. So pin the outcome: the recorder drops the field and
+    the audit names it.
+    """
+    body = b"passwor%64"
+    assert _recorded_request_body(body, FORM) == b""
+    findings = _scanner_request_findings(body, FORM, tmp_path, "valueless-pct")
+    assert [f.key.lower() for f in findings] == ["password"]
 
 
 def test_a_bad_byte_in_a_form_value_does_not_blind_the_audit(tmp_path: Path) -> None:
