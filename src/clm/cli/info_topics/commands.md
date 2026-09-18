@@ -3740,7 +3740,10 @@ commit already tracked is purged on the next commit); the per-cohort frozen
 manifests (`.clm-released*.json`) are committed normally. The course must declare a
 `<release-channels>` block or these flags error. Populating these working trees
 is the job of `clm release sync`; `clm git --channel` then versions and
-distributes them (and `clm git init --channel` creates each cohort repo once).
+distributes them (and `clm git init --channel` creates each cohort repo once —
+including the empty destination directory when the cohort has never been synced,
+CLM {version}+, issue #868, so `git init --channel` and `release sync --push`
+work in either order on a fresh cohort).
 Channels of different streams sharing one destination path (issue #325) are one
 repo to `clm git`: `--all-channels` visits the shared working tree once, and
 `clm git reset` on it is repo-wide — it discards the other stream's uncommitted
@@ -3779,7 +3782,7 @@ channel name keeps working when it is unique across streams.
 | `release week SPEC_FILE SELECTORS… --channel NAME` | Append **every topic in the selected section(s)** to the ledger — a section-scoped `release add`. `SELECTORS` use the `build --only-sections` grammar (`id:`/`idx:`/`name:` prefixes, or a bare 1-based index / name substring). Section indices are disabled-inclusive; a selected-but-`enabled="false"` section is reported and skipped. |
 | `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. |
 | `release sync SPEC_FILE --channel NAME` | Promote released-but-not-frozen topics from the built source into the cohort repo and freeze them. |
-| `release provision SPEC_FILE [--channel NAME]` | Apply the spec's `<share-with>` declarations: share each channel repo into its GitLab access group(s) via the API (issue #294). Idempotent; needs `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN` with `api` scope; repos must already exist on the remote. `--dry-run` previews. Channels without a parseable GitLab remote are skipped with a note. |
+| `release provision SPEC_FILE [--channel NAME]` | Apply the spec's `<share-with>` declarations: share each channel repo into its GitLab access group(s) via the API (issue #294). Idempotent; needs `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN` with `api` scope — exported, or in the project's `.env` (found by walking up from the spec file, as `clm build` does; an exported value wins) — and repos must already exist on the remote. `--dry-run` previews the shares **and ends with a `credentials:` line** saying which token variable is set or `MISSING — the real run will fail` (exit code stays 0; issue #870). Channels without a parseable GitLab remote are skipped with a note. |
 
 A channel can be addressed two ways: `--channel NAME` (resolves the ledger, the
 frozen `--source` build root, and the `--dest` cohort repo from the spec's
@@ -3813,8 +3816,9 @@ Key options for `release sync`:
 | `--language de\|en` | Promote only this language's files, re-rooted at the language directory (issue #293). Overrides the channel's `lang` attribute; requires `SPEC_FILE`; `--source` must point at the output-target root. |
 | `--refreeze TOPIC` | Re-copy and re-freeze an already-frozen topic (e.g. a bug fix). Repeatable. |
 | `--refreeze-all` | Re-copy and re-freeze every released topic. |
+| `--refreeze-skeleton PATTERN` | Glob pattern (destination-relative POSIX path) of **frozen skeleton files to re-copy** from the current build — the escape hatch `--refreeze` provides for topics, for a setup doc or README found wrong after delivery (issue #869, CLM {version}+). One-shot and stateless (nothing is recorded; the file is frozen again afterwards); a matching file the cohort never received is copied too; a pattern matching nothing is reported. Repeatable. |
 | `--evergreen PATTERN` | Glob pattern (destination-relative POSIX path) of **skeleton files kept evergreen**: re-copied whenever the built content differs from the cohort's copy (e.g. `NEWS.md`). Repeatable; adds to the channel's `<evergreen>` spec patterns. Skeleton-only — a pattern matching topic-owned files is warned about and ignored (use `--refreeze`). |
-| `--push` | After promoting, commit and push the cohort repo (via `clm git`'s commit/push). The repo must already exist — run `clm git init … --channel` once first. |
+| `--push` | After promoting, commit and push the cohort repo (via `clm git`'s commit/push). The repo must already exist — run `clm git init … --channel` once first; on a brand-new cohort that also creates the empty destination directory (CLM {version}+, issue #868), so `--push` works from the very first sync. |
 | `-m, --message` | Commit message used by `--push` (default: a one-line summary of the sync). |
 | `--dry-run` | Print the promotion plan; copy nothing. |
 

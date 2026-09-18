@@ -80,7 +80,11 @@ clm git init course.xml --channel jan      # create the 'jan' cohort repository
 ```
 
 `clm git init` is idempotent — re-run it after creating the remote to wire up
-`origin`.
+`origin`. On a cohort that has never been synced it also creates the (empty)
+destination directory, so this step and the first `clm release sync --push`
+below work in either order (issue #868). If the remote project advertises a
+different default branch than the one pushed, fix that in the project settings
+after the first push (issue #955).
 
 ## 4. Release topics as their workshops wrap
 
@@ -186,6 +190,19 @@ correction to a topic a cohort already received, opt in explicitly:
 clm release sync course.xml --channel jan --refreeze functions --push -m "Fix functions solution"
 clm release sync course.xml --channel jan --refreeze-all       # re-freeze everything (rare)
 ```
+
+The same exists for a **frozen skeleton file** — the setup instructions,
+READMEs and `setup.*` scripts that are not owned by any topic and are frozen
+by the first sync (which prints their list). Found a stale clone URL after
+delivery? Re-copy the file from the current build:
+
+```bash
+clm release sync course.xml --channel jan --refreeze-skeleton Installation.md --push -m "Fix clone URL"
+```
+
+Patterns are destination-relative globs like `--evergreen`'s; the copy is
+one-shot (nothing is recorded, the file is frozen again afterwards), and a
+skeleton file the cohort never received is delivered by it too.
 
 ## Evergreen files (e.g. a NEWS file)
 

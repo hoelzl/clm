@@ -43,10 +43,19 @@ class GitLabApiError(Exception):
 
 def gitlab_token() -> str | None:
     """The configured GitLab API token, or ``None`` when not set."""
+    var = gitlab_token_var()
+    return os.environ[var].strip() if var is not None else None
+
+
+def gitlab_token_var() -> str | None:
+    """Name of the environment variable the token is read from, or ``None``.
+
+    Lets a preview (``clm release provision --dry-run``) say *which* variable
+    it found without printing the token (issue #870).
+    """
     for var in TOKEN_ENV_VARS:
-        token = os.environ.get(var, "").strip()
-        if token:
-            return token
+        if os.environ.get(var, "").strip():
+            return var
     return None
 
 

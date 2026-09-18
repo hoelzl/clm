@@ -463,6 +463,28 @@ def _init_bare_remote(path: Path) -> Path:
     return path
 
 
+class TestInitColdChannelDestination:
+    """Regression tests for #868: ``clm git init --channel`` before any sync.
+
+    The channel destination is created by ``clm release sync``, not by
+    ``clm build`` — so the old "run 'clm build' first" hint pointed at the
+    one command that could not help, and ``release sync --push``'s own hint
+    ("run ``clm git init --channel`` once") completed the cycle. Init now
+    creates the empty destination for a channel repo, so either order works.
+    """
+
+    def test_dry_run_would_create_the_destination_and_names_release_sync(self, tmp_path):
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        result = CliRunner().invoke(
+            git_group, ["init", str(spec_file), "--channel", "jan", "--dry-run"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "Would create the destination directory" in result.output
+        assert "clm release sync" in result.output
+        assert "clm build" not in result.output
+        assert not (tmp_path / "solutions" / "jan").exists()
+
+
 # Real-`git` end-to-end (init/commit/push); ~3-6s/test. Runs in CI's integration
 # step, excluded from the per-commit fast suite. See docs/developer-guide/testing.md.
 @pytest.mark.integration
@@ -480,6 +502,19 @@ class TestChannelGitEndToEnd:
             patch("clm.cli.commands.git.remote_has_commits", return_value=False),
         ):
             yield
+
+    def test_init_channel_creates_a_missing_destination(self, tmp_path: Path, git_identity):
+        """#868: a cold cohort gets an empty destination plus a repo, so
+        ``clm release sync --push`` works from the very first delivery."""
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        channel = tmp_path / "solutions" / "jan"
+        assert not channel.exists()
+
+        result = CliRunner().invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+        assert result.exit_code == 0, result.output
+        assert "Created the destination directory" in result.output
+        assert "clm build" not in result.output
+        assert (channel / ".git").is_dir()
 
     def test_init_channel_commits_content_but_not_private_manifest(
         self, tmp_path: Path, git_identity
