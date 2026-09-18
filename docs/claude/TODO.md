@@ -45,6 +45,24 @@ generalizes that choice rather than hardcoding more `DEFAULT_*` constants.
 
 ## Bugs / Technical Debt
 
+### Cache-performance residue (#711 close-out, 2026-09-18)
+
+The #711 investigation (`docs/claude/cache-performance-investigation.md`)
+ranked six candidates; 1-3 shipped in PR #713 (1.23.1), 5 was superseded by
+the #851 stall detector. Left deliberately open:
+
+- **Raise the default notebook worker count.** `default_worker_count = 1`
+  serializes every notebook job; the measured lever is 12.5 min vs >29 min
+  on the AZAV course. `compute_pool_size_cap` already clamps to CPU/RAM, so
+  a higher default is safe on small machines — but each worker is a kernel,
+  so this is a product decision, not a bug fix. Today the build warns above
+  50 course files and `clm info commands` carries the guidance.
+- **Per-file (not whole-topic) dependency hashing** to cut miss
+  amplification (investigation §"Miss amplification factor"). Needs care:
+  sibling files are genuine dependencies of a deck; the win is for topics
+  with many unrelated decks.
+
+
 ### Cache repopulation should never fall through to live network (#871 residue)
 
 PR for #871 stopped the sharp edge (an `html="no"` deck executed only because
