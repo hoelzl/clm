@@ -297,6 +297,16 @@ class BuildReporter:
         if self.formatter.should_show_error(error):
             self.formatter.show_error(error)
 
+    @property
+    def timed_out(self) -> bool:
+        """True once :meth:`mark_timed_out` ran — the output tree is incomplete."""
+        return self._timed_out
+
+    @property
+    def aborted(self) -> bool:
+        """True once :meth:`mark_aborted` ran — the output tree is incomplete."""
+        return self._aborted
+
     def mark_timed_out(self) -> None:
         """Flag the build as aborted by a worker-job timeout (issue #143).
 

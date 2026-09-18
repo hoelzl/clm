@@ -271,12 +271,30 @@ The sweep is skipped automatically under:
 - `--incremental` — incremental users explicitly trust the on-disk
   state, so a sweep would delete files cache replay decided not to
   re-emit.
-- After fatal stage errors — the registry is incomplete, so sweeping
-  could remove files from prior successful builds. The build prints an
-  explicit "Stale output files were NOT swept..." note in this case, so
-  leftover files from previous builds (e.g. notebooks of moved or
-  removed topics) are expected and not a clm bug; rerun the build after
-  fixing the errors to remove them.
+- After errors whose missing writes cannot be enumerated — a fatal
+  abort, a timed-out build, or errors that name no output (course
+  loading, cross-reference validation, image-name collisions). The
+  registry is incomplete in unknown places, so sweeping could remove
+  files from prior successful builds. The build prints an explicit
+  "Stale output files were NOT swept..." note in this case, so leftover
+  files from previous builds (e.g. notebooks of moved or removed topics)
+  are expected and not a clm bug; rerun the build after fixing the
+  errors to remove them.
+
+Since CLM {version}, **per-job failures no longer disable the sweep**
+(#923). When every recorded error is a failed (or orphaned) job — each
+names the output it did not write — the sweep still runs, scoped around
+those jobs: the directory holding each failed output is left untouched,
+**together with everything below it** (a job may write companion files
+beside its output, so the missing writes are not knowable file by file).
+Every other stale file is removed as usual — including a failed deck's
+previous copy at an *old* location after a move, which regenerates once
+the deck builds again — so one failing notebook after a spec restructure
+no longer leaves the previous revision's decks duplicated across the
+tree. The startup notice says what was kept. A root CLM cannot prove it
+owns (see "Output-root ownership") that merely contains such a protected
+directory is neither swept nor refused: it stays unowned until a build
+sweeps it in full.
 
 `--no-sweep` opts out manually (useful when iterating on a single
 section and you don't want orphans from other sections deleted).

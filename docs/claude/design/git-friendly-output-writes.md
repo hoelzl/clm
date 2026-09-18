@@ -241,6 +241,38 @@ entire section was renamed `01 Intro` → `01 Introduction`: every
 file under the old `01 Intro/` is stray and gets deleted, then the
 empty dir itself gets removed.
 
+**Amendment (#923, 2026-09-18) — sweep around failed jobs, not past
+them.** "Skip when stages have errored" was all-or-nothing: one failing
+notebook after a spec restructure left the previous revision's decks
+duplicated in every output tier, because the registry was missing that
+one job's write and the sweep treated the whole registry as untrustworthy.
+The registry's gaps ARE enumerable for *job-scoped* errors: the backend
+stamps ``details["output_file"]`` on the reported (never the persisted)
+error of a failed job and on jobs orphaned at build give-up.
+``_maybe_run_sweep`` runs the sweep with those outputs passed as
+``failed_outputs`` when every error carries one, none is fatal, and the
+reporter is neither timed out nor aborted; the sweeper then leaves each
+failed output's **directory tree** untouched (companion files beside the
+output are unknowable file by file). Deliberately no other rule: a
+same-file-name keep for the deck's old-location copy was tried and
+withdrawn in review — basename matching fails exactly when the restructure
+also renames the deck, never covers old-location companions, and
+over-protects common names — so that copy is an ordinary stray and the
+deck regenerates once it builds. Cached-issue replays are *not* stamped:
+both replay call sites are cache hits whose output is written, so a
+"replayed failure with no output" path does not exist; a replayed error
+therefore keeps the wholesale skip. A protected directory withholds the
+ownership evidence an empty plan would give an unowned root (S11): such a
+root is reported as ``unverified_roots`` — kept unowned, not refused, no
+refusal message. Any other error — course-load, cross-reference, image
+collision, the fatal ``build_aborted`` record, a timeout (which records
+only the orphans; later stages never submitted) — keeps the wholesale skip
+and its notice. Tests: the wired path (real backend failure → stamped
+reporter → ``_maybe_run_sweep`` → real sweep on disk) is
+``tests/infrastructure/backends/test_sweep_wired_to_failed_jobs.py``; the
+sweeper rules ``tests/cli/test_output_sweep_failed_jobs.py``; the gate's
+veto cases ``tests/cli/test_sweep_scoped_on_job_errors.py``.
+
 ### D3. Default behavior change
 
 In `build.py:802-806`, today's logic is:

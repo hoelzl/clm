@@ -77,6 +77,27 @@ class SweepReport:
     dry_run: bool = False
     """Set to ``True`` when no filesystem changes were performed."""
 
+    protected_dirs: list[Path] = Factory(list)
+    """Directories left untouched — with everything below them — because
+    they hold a failed job's output.
+
+    Populated from ``failed_outputs`` (issue #923): a job that failed this
+    build wrote nothing, and may have companion files next to its output,
+    so the exact set of missing writes is unknowable — the directory tree
+    is skipped instead. Only directories the walk actually reached are
+    listed.
+    """
+
+    unverified_roots: list[Path] = Factory(list)
+    """Unowned roots whose plan was empty only because a protected
+    directory was skipped (#923).
+
+    An empty plan is ownership evidence only when the walk saw the whole
+    tree. These roots are not *refused* — nothing would have been deleted
+    — but they yield no evidence either, so the caller keeps treating them
+    as unowned instead of clearing them.
+    """
+
     refused_roots: list[Path] = Factory(list)
     """Roots left completely untouched because CLM cannot prove it owns them.
 
@@ -96,6 +117,7 @@ class _SweepState:
     removed_dirs: list[Path] = field(factory=list)
     skipped_subtrees: list[Path] = field(factory=list)
     kept_due_to_pattern: int = 0
+    protected_dirs: list[Path] = field(factory=list)
 
 
 @define
@@ -115,6 +137,8 @@ class _SweepPlan:
 
     skipped_subtrees: list[Path] = field(factory=list)
     kept_due_to_pattern: int = 0
+    protected_dirs: list[Path] = field(factory=list)
+    """Directory trees skipped whole because a failed job's output lives there."""
 
     scan_failed: bool = False
     """Set when some directory in the walk could not be listed.
@@ -173,6 +197,7 @@ def sweep_stray_files(
     dry_run: bool = False,
     skip_reason: str | None = None,
     unowned_roots: Iterable[Path] = (),
+    failed_outputs: Iterable[Path] = (),
 ) -> SweepReport:
     """Walk each root and delete files not in the registries' tracked sets.
 
@@ -207,6 +232,18 @@ def sweep_stray_files(
             Otherwise the root is left untouched and listed in
             ``refused_roots``. Empty by default, so callers with no
             snapshot get the pre-gate behavior.
+        failed_outputs: Output paths of jobs that failed this build
+            (issue #923). The registry is missing exactly these writes,
+            so instead of skipping the whole sweep the caller passes them
+            here and the sweep protects them: the directory holding each
+            failed output is left untouched **with everything below it**
+            (a job may write companion files beside its output, so the
+            missing set is not knowable file-by-file). Nothing else is
+            special-cased — in particular a failed deck's previous copy
+            at an *old* location is an ordinary stray and is swept; the
+            deck regenerates there once it builds again. A protected
+            directory withholds the ownership evidence an empty plan would
+            otherwise give an unowned root (see ``unverified_roots``).
     """
     if skip_reason is not None:
         return SweepReport(skipped=True, skip_reason=skip_reason, dry_run=dry_run)
@@ -215,9 +252,12 @@ def sweep_stray_files(
     if image_registry is not None:
         expected.update(image_registry.tracked_paths)
 
+    protected_dirs = {Path(p).parent for p in failed_outputs}
+
     unowned = set(unowned_roots)
     state = _SweepState()
     refused: list[Path] = []
+    unverified: list[Path] = []
 
     # The caller's roots legitimately repeat: an explicit target whose
     # kinds span both the public and the private branch derives the same
@@ -238,9 +278,10 @@ def sweep_stray_files(
             expected,
             keep_patterns=tuple(keep_patterns),
             plan=plan,
+            protected_dirs=protected_dirs,
         )
 
-        if root in unowned and not (plan.is_empty and not plan.scan_failed):
+        if root in unowned and (not plan.is_empty or plan.scan_failed):
             # ``plan.scan_failed`` matters as much as a non-empty plan: an
             # empty plan is only ownership evidence when the walk actually
             # saw the tree. A directory the sweep could not read produces
@@ -258,9 +299,17 @@ def sweep_stray_files(
             )
             refused.append(root)
             continue
+        if root in unowned and plan.protected_dirs:
+            # Nothing to delete, but part of the tree was skipped for a
+            # failed job's output (#923), so the walk did not see all of
+            # it: no ownership evidence either way. Not a refusal — the
+            # sweep would have removed nothing — but the root must stay
+            # unowned rather than be cleared on an unseen tree.
+            unverified.append(root)
 
         state.kept_due_to_pattern += plan.kept_due_to_pattern
         state.skipped_subtrees.extend(plan.skipped_subtrees)
+        state.protected_dirs.extend(plan.protected_dirs)
         _execute_plan(plan, dry_run=dry_run, state=state)
 
     return SweepReport(
@@ -270,6 +319,8 @@ def sweep_stray_files(
         kept_due_to_pattern=state.kept_due_to_pattern,
         dry_run=dry_run,
         refused_roots=refused,
+        protected_dirs=state.protected_dirs,
+        unverified_roots=unverified,
     )
 
 
@@ -322,6 +373,7 @@ def _plan_directory(
     *,
     keep_patterns: tuple[str, ...],
     plan: _SweepPlan,
+    protected_dirs: set[Path] = frozenset(),  # type: ignore[assignment]
 ) -> bool:
     """Recursively plan the sweep of ``directory``. True iff it will empty.
 
@@ -330,8 +382,18 @@ def _plan_directory(
     plan its removal — appended after its children, so ``plan.dirs`` is
     in deepest-first order.
 
-    Subtrees containing a nested ``.git/`` are skipped entirely.
+    Subtrees containing a nested ``.git/`` are skipped entirely, and so is
+    a directory in ``protected_dirs`` (a failed job's output lives there,
+    issue #923) — recorded in ``plan.protected_dirs``, never emptied.
     """
+    if directory in protected_dirs:
+        # The registry is missing exactly this job's writes, and companion
+        # files may sit beside its output — leave the directory, and
+        # everything below it, exactly as it is.
+        logger.debug("Sweep: leaving %s untouched (failed job output)", directory)
+        plan.protected_dirs.append(directory)
+        return False
+
     try:
         entries = list(os.scandir(directory))
     except OSError as exc:
@@ -375,6 +437,7 @@ def _plan_directory(
                 expected,
                 keep_patterns=keep_patterns,
                 plan=plan,
+                protected_dirs=protected_dirs,
             )
             if child_empty:
                 plan.dirs.append(entry_path)
