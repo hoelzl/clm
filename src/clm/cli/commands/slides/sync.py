@@ -40,7 +40,10 @@ from clm.core.slide_text.pairing import (
     order_split_pair,
     split_lang_tag,
 )
-from clm.core.voiceover_companions import COMPANION_SUBDIR, resolve_companion
+from clm.core.voiceover_companions import (
+    COMPANION_SUBDIR,
+    deck_for_companion,
+)
 from clm.slides.sync_verify import VerifyResult, verify_pair
 
 
@@ -91,31 +94,10 @@ def _deck_for_companion(companion_path: Path) -> Path | None:
     """Map a ``voiceover_*`` companion argument back to its slide-deck half (#501).
 
     ``clm slides sync voiceover_x.de.py`` should reconcile the *deck* the companion
-    belongs to. The companion may sit beside the deck or one directory up (a
-    relocated ``voiceover/`` companion), and its stem prefix (``slides_`` / ``topic_``
-    / ``project_`` / none) is not recoverable from the companion name alone — so we
-    generate every candidate deck path and keep the one whose own
-    :func:`resolve_companion` round-trips back to this file. ``None`` when no deck
-    claims the companion.
+    belongs to. The resolution lives in :func:`clm.core.voiceover_companions.
+    deck_for_companion` (shared with ``clm validate``, #946).
     """
-    name = companion_path.name
-    prefix = "voiceover_"
-    if not name.startswith(prefix):
-        return None
-    rest = name[len(prefix) :]  # "<stem>.<lang>.<ext>"
-    deck_dirs = [companion_path.parent]
-    if companion_path.parent.name == COMPANION_SUBDIR:
-        deck_dirs.append(companion_path.parent.parent)
-    resolved = companion_path.resolve()
-    for deck_dir in deck_dirs:
-        for deck_prefix in ("slides_", "topic_", "project_", ""):
-            candidate = deck_dir / f"{deck_prefix}{rest}"
-            if not candidate.exists():
-                continue
-            comp = resolve_companion(candidate)
-            if comp is not None and comp.resolve() == resolved:
-                return candidate
-    return None
+    return deck_for_companion(companion_path)
 
 
 def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Path]:

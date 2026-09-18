@@ -35,6 +35,7 @@ from clm.core.topic_resolver import (
 )
 from clm.core.utils.path_utils import split_lang_suffix
 from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.core.voiceover_companions import is_voiceover_companion
 from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
@@ -2369,6 +2370,83 @@ def _check_code_export(
 # ---------------------------------------------------------------------------
 
 
+def _validate_companion(
+    path: Path,
+    text: str,
+    cells: list[Cell],
+    comment_token: str,
+    check_set: set[str],
+) -> list[Finding]:
+    """Validate a separated voiceover companion file *as a companion* (#946).
+
+    A companion holds only narration cells, each bound to its slide by
+    ``for_slide``; the slide anchors live in the owning deck. Running the
+    deck rules on it produced one spurious "voiceover/notes cell carries
+    slide_id but no preceding slide/subslide anchor" error per cell — on
+    every companion in the corpus — while the topic directory (which never
+    lists companions) validated clean, so an agent verifying its own
+    companion edit was pointed at file corruption that did not exist.
+
+    What applies to a companion:
+
+    - ``format`` / ``tags``: the file's own cell syntax, markers, spacing
+      and tag names — exactly as for a deck.
+    - ``pairing``: the companion's contract with its deck. The owning deck
+      is located with :func:`~clm.core.voiceover_companions.deck_for_companion`
+      (beside the companion or one directory up for the ``voiceover/``
+      layout) and the build-equivalent ``for_slide`` resolution the deck
+      side already runs (:func:`_check_companion_for_slide_resolves`) is
+      applied from the companion side, plus the both-layouts ambiguity
+      check. No owning deck → one ``info`` finding saying so; the
+      ``for_slide`` targets are then unverifiable, not wrong.
+
+    What does not apply: the DE/EN count/adjacency pairing, the slide_id
+    anchor walk and workshop-scope rules (deck structure), the cross-file
+    split-pair suite (run from the deck halves), code export, and the
+    review extractors (coverage is computed on the deck with the companion
+    merged in).
+    """
+    from clm.core.voiceover_companions import deck_for_companion
+
+    file_str = str(path)
+    findings: list[Finding] = []
+
+    if "format" in check_set:
+        findings.extend(_check_format(cells, file_str))
+        findings.extend(_check_malformed_markers(text, file_str, comment_token))
+        _, raw_cells = split_raw_cells(text, comment_token)
+        findings.extend(_check_cell_separation(raw_cells, file_str))
+        findings.extend(_check_markdown_blank_lead(raw_cells, file_str))
+        findings.extend(_check_preamble_code(raw_cells, file_str, comment_token))
+    if "tags" in check_set:
+        findings.extend(_check_tags(cells, file_str))
+    if "pairing" in check_set:
+        deck = deck_for_companion(path)
+        if deck is None:
+            findings.append(
+                Finding(
+                    severity="info",
+                    category="pairing",
+                    file=file_str,
+                    line=1,
+                    message=(
+                        f"voiceover companion {path.name} validated standalone: no owning "
+                        f"deck found (looked for slides_/topic_/project_<stem> beside it and, "
+                        f"for a voiceover/ companion, one directory up), so its for_slide "
+                        f"targets were not checked"
+                    ),
+                    suggestion=(
+                        "Validate the topic directory or the deck to check the narration "
+                        "against its slides."
+                    ),
+                )
+            )
+        else:
+            findings.extend(_check_companion_location_ambiguity(deck))
+            findings.extend(_check_companion_for_slide_resolves(deck))
+    return findings
+
+
 def validate_file(
     path: Path,
     checks: list[str] | None = None,
@@ -2425,6 +2503,15 @@ def validate_file(
             check_set.add("voiceover")
 
     findings: list[Finding] = []
+
+    if is_voiceover_companion(path):
+        # A separated voiceover companion is not a deck (#946): its cells
+        # are narration bound to slides by ``for_slide``, and the slide
+        # anchors live in the owning deck. Validate it *as a companion*.
+        return ValidationResult(
+            files_checked=1,
+            findings=_validate_companion(path, text, cells, comment_token, check_set),
+        )
 
     if "format" in check_set:
         findings.extend(_check_format(cells, file_str))
@@ -2541,6 +2628,17 @@ def validate_quick(path: Path) -> ValidationResult:
     file_str = str(path)
     text = path.read_text(encoding="utf-8")
     cells = parse_cells(text, comment_token_for_path(path))
+
+    if is_voiceover_companion(path):
+        # Companion (#946): the syntax-level checks apply, the deck-only
+        # slide_id anchor walk does not (its anchors live in the deck).
+        # Quick mode stays local — no deck lookup, no pairing rules.
+        return ValidationResult(
+            files_checked=1,
+            findings=_validate_companion(
+                path, text, cells, comment_token_for_path(path), {"format", "tags"}
+            ),
+        )
 
     findings: list[Finding] = []
     findings.extend(_check_format(cells, file_str))
