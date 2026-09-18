@@ -34,10 +34,13 @@ T = TypeVar("T")
 # Backoff between attempts, in seconds. ``len(delays) + 1`` attempts in total.
 # Tests shrink this via monkeypatch. Kept short on purpose: each attempt can
 # already block for the connection's full ``busy_timeout`` (30 s locally), so
-# the worst-case wall clock is ~(attempts x busy_timeout). Four attempts keep
-# a fully starved write under ~2 minutes — inside the 120 s heartbeat grace
-# another build's stale-row cleanup applies to a worker that is stuck in
-# this retry — while still giving a starved writer several fresh chances.
+# the worst-case wall clock is ~(attempts x busy_timeout): four attempts put
+# a fully starved write at ~2 minutes (4 x 30 s + 1.75 s backoff locally),
+# which brushes the 120 s heartbeat grace another build's stale-row cleanup
+# applies to a worker stuck in this retry. That is why worker-side callers
+# pass ``on_retry=<heartbeat refresh>`` — the grace is measured from the
+# last heartbeat, not from the start of the write — while a starved writer
+# still gets several fresh chances at the lock.
 DEFAULT_BUSY_RETRY_DELAYS: tuple[float, ...] = (0.25, 0.5, 1.0)
 
 _TRANSIENT_LOCK_MARKERS = (
@@ -46,6 +49,19 @@ _TRANSIENT_LOCK_MARKERS = (
     "database schema is locked",
     "database is busy",
 )
+
+
+def is_transient_lock_message(message: str) -> bool:
+    """True when *message* is the text of a SQLite lock/busy condition.
+
+    The string-level half of :func:`is_transient_lock_error`, for callers
+    that only hold a serialized error (the build's error categorizer sees a
+    worker's ``str(exc)``, never the exception). Sharing one marker list
+    keeps "what the worker retries" and "what the build classifies as
+    contention" from drifting apart (issue #945).
+    """
+    lowered = message.lower()
+    return any(marker in lowered for marker in _TRANSIENT_LOCK_MARKERS)
 
 
 def is_transient_lock_error(exc: BaseException) -> bool:
@@ -57,8 +73,7 @@ def is_transient_lock_error(exc: BaseException) -> bool:
     """
     if not isinstance(exc, sqlite3.OperationalError):
         return False
-    message = str(exc).lower()
-    return any(marker in message for marker in _TRANSIENT_LOCK_MARKERS)
+    return is_transient_lock_message(str(exc))
 
 
 def retry_on_busy(

@@ -10,7 +10,26 @@ import re
 from typing import Any, Literal, cast
 
 from clm.core.build_data_classes import BuildError
+from clm.infrastructure.database.busy_retry import is_transient_lock_message
 from clm.infrastructure.utils.text_utils import strip_ansi
+
+
+def _is_sqlite_lock_error(error_message: str, error_class: str) -> bool:
+    """True when the job error is SQLite lock contention (issue #945).
+
+    Uses the same marker list the worker's ``retry_on_busy`` retries on
+    (:func:`is_transient_lock_message`), so "what the worker retries" and
+    "what the build classifies as contention" cannot drift apart. Only the
+    error *message* is inspected — never the traceback, whose chained
+    "during handling of the above exception" frames can mention a lock
+    while the actual failure was a disk I/O error or a malformed file. When
+    the worker reported an exception class it must be SQLite's
+    ``OperationalError``; a bare message without a class is accepted because
+    pre-enhancement errors carry none.
+    """
+    if error_class and error_class != "OperationalError":
+        return False
+    return is_transient_lock_message(error_message)
 
 
 class ErrorCategorizer:
@@ -223,6 +242,39 @@ class ErrorCategorizer:
                     "run the build with Docker workers ('clm build --workers=docker'), "
                     "whose image ships the course kernels (e.g. xcpp20 for C++). "
                     "For a kernel-free build use 'clm build --no-html'."
+                ),
+                job_id=job_id,
+                correlation_id=correlation_id,
+                details=details,
+            )
+
+        # SQLite lock contention on the shared cache/jobs DB (issue #945):
+        # the worker-side executed-notebook cache store, or any other
+        # bookkeeping write, starved past busy_timeout and the bounded retry.
+        # That is infrastructure, never the notebook — and it must not fall
+        # through to the "user" default, which the backend persists to the
+        # processing_issues cache and replays on the next build.
+        #
+        # A *cell* that raises "database is locked" (a course notebook using
+        # sqlite3 itself) is still the notebook's error: it arrives enhanced,
+        # with a structured notebook error class / cell number, so those
+        # exclude this branch.
+        if (
+            not nb_error_class
+            and nb_cell_number is None
+            and _is_sqlite_lock_error(error_message, error_class)
+        ):
+            return BuildError(
+                error_type="infrastructure",
+                category="database_locked",
+                severity="error",
+                file_path=input_file,
+                message=error_message,
+                actionable_guidance=(
+                    "The shared CLM cache/jobs database stayed locked while this job "
+                    "wrote its results. This is contention between parallel workers, "
+                    "not a problem with the file: rebuild (the job is not cached as a "
+                    "failure), and reduce --notebook-workers if it recurs."
                 ),
                 job_id=job_id,
                 correlation_id=correlation_id,

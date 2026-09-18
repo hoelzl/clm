@@ -154,6 +154,53 @@ acted on). The resulting rules are part of the design, not afterthoughts:
   live workers of *other* sessions exist (persistent workers left by an
   earlier build), the error says so instead of pointing at worker logs.
 
+## Follow-up: the worker-side executed-notebook store (#945)
+
+The invariants above covered the host-side writers and the worker's
+*terminal status* write, but not the worker's other write to the shared
+cache DB: `ExecutedNotebookCache.store()`, which every notebook worker
+calls after executing a deck. It did a bare INSERT + commit, so under 8
+workers a starved store raised `database is locked` out of the processor
+— *outside* the execution error handling — into the generic job-failure
+path, where the categorizer's notebook default labelled it a **user**
+error ("Check your notebook for errors"), the backend persisted it to
+`processing_issues`, and the executed notebook was not cached (the silent
+re-execution called out in §3, now on the worker side).
+
+The fix lives in the cache itself, so Direct and Docker/API mode share
+it (`tests/infrastructure/database/test_executed_notebook_cache_busy_retry.py`,
+including one test where a second connection really holds the lock):
+
+- `store()` runs its INSERT + commit under `retry_on_busy`, rolling back
+  on *any* failure so neither a retry nor the caller continues inside a
+  half-open transaction on the worker-lifetime connection. A lock that
+  outlasts the schedule degrades to a warning and `False` — the outcome
+  `ApiExecutedNotebookCache.store` already had — instead of an exception
+  into the job. Any other database error still propagates.
+- The worker passes its heartbeat refresh as `on_busy_retry`, because the
+  worst-case schedule (4 × 30 s + backoff) brushes the 120 s heartbeat
+  grace; without it a worker stuck behind the lock is swept as dead by
+  another build (the same reason `_write_terminal_status` refreshes).
+- The API routes that run a retrying write (`store_executed_notebook`,
+  `update_job_status`) do so via `asyncio.to_thread`: a multi-minute
+  retry on the event loop would stall every other Docker worker's
+  heartbeat and status request (`tests/infrastructure/api/test_executed_notebook_cache_endpoints.py`
+  exercises the offloaded store route).
+- `ErrorCategorizer` classifies a worker-side SQLite lock error as
+  `infrastructure` / `database_locked` before the user default, so it is
+  neither blamed on the file nor persisted. It shares the retry module's
+  marker list (`is_transient_lock_message`) and inspects only the error
+  message — never the traceback, whose chained frames can mention a lock
+  when the real failure was I/O or corruption. A *cell* that raises
+  "database is locked" itself arrives enhanced (structured notebook error
+  class + cell number) and stays a user error
+  (`tests/cli/test_error_categorizer.py::TestNotebookErrorCategorization`).
+
+Invariant to add to the list above: **every** worker-side write to a
+shared DB — not only the terminal status — goes through `retry_on_busy`
+with a heartbeat refresh between attempts, and a *cache* write that still
+fails degrades to a warning, never to a persisted user error.
+
 ## What was deliberately not changed
 
 - `busy_timeout` (30 s local / 60 s network) and WAL settings in

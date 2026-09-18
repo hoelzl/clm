@@ -255,6 +255,120 @@ class TestNotebookErrorCategorization:
         assert error.error_type == "configuration"
         assert error.category == "missing_kernel"
 
+    def test_sqlite_lock_error_is_infrastructure_error(self):
+        """Regression test for #945: a worker-side ``database is locked``
+        (e.g. from the executed-notebook cache store under contention) is
+        contention on a shared DB, not a notebook bug. It must not be blamed
+        on the file, and must not be persisted to the error cache as a user
+        error (which would replay the bogus failure on the next build)."""
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_010_intro.en.py",
+            error_message="database is locked",
+            job_payload={},
+        )
+
+        assert error.error_type == "infrastructure"
+        assert error.category == "database_locked"
+        # Must not point the user at the (healthy) notebook's content.
+        assert "check your notebook" not in error.actionable_guidance.lower()
+        assert "not a problem with the file" in error.actionable_guidance
+
+    def test_sqlite_lock_error_structured_is_infrastructure_error(self):
+        """The same lock error arriving as the worker's structured JSON
+        error (``error_class`` = OperationalError) is categorized alike."""
+        import json
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_010_intro.en.py",
+            error_message=json.dumps(
+                {
+                    "error_message": "database is locked",
+                    "error_class": "OperationalError",
+                    "traceback": "sqlite3.OperationalError: database is locked\n",
+                }
+            ),
+            job_payload={},
+        )
+
+        assert error.error_type == "infrastructure"
+        assert error.category == "database_locked"
+
+    def test_cell_raising_sqlite_lock_error_stays_user_error(self):
+        """The neighbour case: a *cell* in a course notebook that itself uses
+        sqlite3 and hits 'database is locked' is the notebook's own error. It
+        arrives enhanced (structured notebook error class + cell number), so
+        it must not be reclassified as infrastructure contention."""
+        import json
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_030_sqlite.en.py",
+            error_message=json.dumps(
+                {
+                    "error_message": (
+                        "Notebook execution failed: slides_030_sqlite.en.py\n"
+                        "  Cell: #4\n"
+                        "  Error: OperationalError: database is locked"
+                    ),
+                    "error_class": "RuntimeError",
+                    "notebook_error_class": "OperationalError",
+                    "notebook_error_message": "database is locked",
+                    "notebook_cell_number": 4,
+                }
+            ),
+            job_payload={},
+        )
+
+        assert error.error_type == "user"
+        assert error.category != "database_locked"
+        assert error.details["cell_number"] == 4
+
+    def test_lock_mention_in_traceback_only_is_not_contention(self):
+        """Only the error *message* decides: a disk I/O error whose chained
+        traceback happens to mention 'database is locked' (from a rollback
+        attempt) must not be reported as harmless contention."""
+        import json
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_010_intro.en.py",
+            error_message=json.dumps(
+                {
+                    "error_message": "disk I/O error",
+                    "error_class": "OperationalError",
+                    "traceback": (
+                        "sqlite3.OperationalError: database is locked\n\n"
+                        "During handling of the above exception, another exception occurred:\n"
+                        "sqlite3.OperationalError: disk I/O error\n"
+                    ),
+                }
+            ),
+            job_payload={},
+        )
+
+        assert error.category != "database_locked"
+
+    def test_lock_message_with_non_sqlite_class_is_not_contention(self):
+        """A non-SQLite exception class carrying lock-like text is not the
+        retry module's transient condition and is not reclassified."""
+        import json
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_010_intro.en.py",
+            error_message=json.dumps(
+                {
+                    "error_message": "database is locked",
+                    "error_class": "RuntimeError",
+                }
+            ),
+            job_payload={},
+        )
+
+        assert error.category != "database_locked"
+
 
 class TestPlantumlErrorCategorization:
     """Tests for PlantUML error categorization."""

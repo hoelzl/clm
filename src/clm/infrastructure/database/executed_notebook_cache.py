@@ -22,9 +22,11 @@ accepted from the network. Rows written by those older versions carry
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.infrastructure.database.busy_retry import is_transient_lock_error, retry_on_busy
 from clm.infrastructure.database.journal_mode import configure_connection
 from clm.infrastructure.notebook_serialization import (
     NotebookSerializationError,
@@ -71,14 +73,25 @@ class ExecutedNotebookCache:
                 cache.store(input_file, content_hash, language, prog_lang, executed_nb)
     """
 
-    def __init__(self, db_path: Path | str):
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        on_busy_retry: Callable[[], None] | None = None,
+    ):
         """Initialize the cache manager.
 
         Args:
             db_path: Path to the SQLite database file (typically clm_cache.db)
+            on_busy_retry: Called before each backoff sleep when :meth:`store`
+                retries a locked write — a worker passes its heartbeat refresh
+                here so a store stuck behind the lock for the full retry
+                schedule (~2 min) never looks like a dead process to another
+                build's stale-row cleanup (issue #945).
         """
         self.db_path = Path(db_path)
         self.conn: sqlite3.Connection | None = None
+        self.on_busy_retry = on_busy_retry
 
     def __enter__(self) -> "ExecutedNotebookCache":
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
@@ -249,7 +262,7 @@ class ExecutedNotebookCache:
         language: str,
         prog_lang: str,
         executed_notebook: "NotebookNode",
-    ) -> None:
+    ) -> bool:
         """Store an executed notebook in the cache.
 
         Uses INSERT OR REPLACE to handle updates atomically.
@@ -261,13 +274,30 @@ class ExecutedNotebookCache:
             prog_lang: Programming language ("python", "cpp", etc.)
             executed_notebook: The NotebookNode with execution outputs
 
-        A notebook that cannot be serialized is logged and skipped rather than
-        raised: caching is best-effort, and the build has already produced its
-        output by the time this is called.
+        Returns:
+            True if the notebook is now cached, False if it was skipped.
+
+        Caching is best-effort: the build has already produced its output by
+        the time this is called, so nothing here may fail the job. A notebook
+        that cannot be serialized is logged and skipped. So is a write the
+        shared cache DB refuses for lock contention (issue #945): this is the
+        worker-side write, and with many workers committing multi-hundred-KB
+        payloads at once a single writer can be starved past ``busy_timeout``.
+        The write runs under :func:`retry_on_busy` (rolling back between
+        attempts so no retry starts inside a half-open transaction); a lock
+        that outlasts the schedule is logged as a warning and reported as
+        False — the same outcome Docker mode's ``ApiExecutedNotebookCache``
+        already has — instead of raising ``database is locked`` into the job,
+        which the build reported as a *user* error against a healthy
+        notebook and persisted to the issue cache. Every other database
+        error still propagates.
+
+        Raises:
+            sqlite3.Error: A non-transient database failure.
         """
         if not self.conn:
             logger.warning("ExecutedNotebookCache not initialized (use with statement)")
-            return
+            return False
 
         try:
             payload = serialize_notebook(executed_notebook)
@@ -275,26 +305,58 @@ class ExecutedNotebookCache:
             logger.warning(
                 f"Not caching executed notebook for {input_file} ({language}, {prog_lang}): {e}"
             )
-            return
+            return False
 
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO executed_notebooks
-            (input_file, content_hash, language, prog_lang, executed_notebook, payload_format)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(input_file),
-                content_hash,
-                language,
-                prog_lang,
-                payload,
-                PAYLOAD_FORMAT,
-            ),
-        )
-        self.conn.commit()
+        conn = self.conn
+
+        def _write() -> None:
+            try:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO executed_notebooks
+                    (input_file, content_hash, language, prog_lang, executed_notebook,
+                     payload_format)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(input_file),
+                        content_hash,
+                        language,
+                        prog_lang,
+                        payload,
+                        PAYLOAD_FORMAT,
+                    ),
+                )
+                conn.commit()
+            except BaseException:
+                # The INSERT or the COMMIT failed — lock, I/O error, malformed
+                # file, anything. Roll back so neither a retry nor the caller
+                # continues inside a half-open write transaction on this
+                # long-lived connection (which would hold the RESERVED lock
+                # against every other worker for the rest of the process).
+                try:
+                    conn.rollback()
+                except sqlite3.Error:  # pragma: no cover - best effort
+                    pass
+                raise
+
+        label = f"executed-notebook cache store for {input_file} ({language}, {prog_lang})"
+        try:
+            retry_on_busy(_write, label=label, on_retry=self.on_busy_retry)
+        except sqlite3.OperationalError as e:
+            if not is_transient_lock_error(e):
+                raise
+            logger.warning(
+                f"Executed notebook for {input_file} ({language}, {prog_lang}) was NOT "
+                f"cached: the cache database stayed locked through the retry schedule "
+                f"({e}). The job's own output is unaffected, but consumers of this "
+                f"execution — the Completed-HTML job of this build and the next build — "
+                f"will re-execute the notebook instead of replaying it. Fewer parallel "
+                f"notebook workers reduce contention on the cache database."
+            )
+            return False
         logger.debug(f"Cached executed notebook: {input_file} ({language}, {prog_lang})")
+        return True
 
     def clear(self, input_file: str | None = None) -> int:
         """Clear cached entries.

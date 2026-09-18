@@ -73,7 +73,7 @@ if TYPE_CHECKING:
             language: str,
             prog_lang: str,
             executed_notebook: "NotebookNode",
-        ) -> None: ...
+        ) -> bool | None: ...
 
 
 from clm.core.messaging.base_classes import ProcessingWarning
@@ -2198,6 +2198,13 @@ class NotebookProcessor:
 
         Speaker HTML caches its executed notebook so that Completed HTML can
         reuse it by simply filtering out the "notes" cells.
+
+        The store is best-effort in both cache implementations (issue #945):
+        the notebook has already been executed and its HTML produced, so a
+        cache write the shared DB refuses for lock contention is logged by
+        the cache and costs one extra execution downstream — it never fails
+        the job, which the build would have reported as a *user* error
+        against a healthy notebook. Any other error still propagates.
         """
         cid = payload.correlation_id
         cache_hash = payload.execution_cache_hash()
@@ -2216,7 +2223,7 @@ class NotebookProcessor:
             executed_notebook=executed_nb,
         )
 
-        logger.debug(f"{cid}:Successfully cached executed notebook")
+        logger.debug(f"{cid}:Executed notebook cache store finished")
 
     def _enhance_notebook_error(
         self,
