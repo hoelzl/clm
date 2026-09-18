@@ -45,6 +45,23 @@ generalizes that choice rather than hardcoding more `DEFAULT_*` constants.
 
 ## Bugs / Technical Debt
 
+### Cache repopulation should never fall through to live network (#871 residue)
+
+PR for #871 stopped the sharp edge (an `html="no"` deck executed only because
+`-T` was narrowed). Two hardening directions from the issue remain open:
+
+- **Replay-only repopulation.** When a Recording-HTML run exists solely to warm
+  a cold `executed_notebooks` cache (`_can_replay_from_cache` forced it, or it
+  is an `is_implicit_execution` op), an unmatched request under the
+  `new-episodes` replay mode should be reported as a miss rather than fetched
+  live. Today such a run behaves like any other execution.
+- **Warn when a narrowed `-T` will execute what the full set replays.** At
+  submit time the backend knows the execution cache is cold; a one-line summary
+  (`-T shared: recording-HTML cache cold for N deck(s); these will execute
+  (M have no cassette)`) would turn the misleading per-deck `[User Error]` into
+  a build-configuration hint.
+
+
 ### ~~Flaky Test: `test_heartbeat_round_trip_smoke`~~ (FIXED)
 
 **Status**: ✅ FIXED (2026-05-25)
