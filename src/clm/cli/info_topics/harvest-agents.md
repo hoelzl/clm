@@ -8,6 +8,10 @@ voiceover, and how the twin language follows. The engine emits; it never
 invokes a model. The one exception is `autopilot` (the legacy embedded-LLM
 one-shot for agent-less humans; never use it as an agent, never in CI).
 
+The shared rules every clm agent toolkit implements (envelope shape,
+freshness tokens, validator registry, exit codes) live in
+`clm info agent-tasks`; this topic is the harvest-specific half.
+
 ## The canonical loop
 
 ```

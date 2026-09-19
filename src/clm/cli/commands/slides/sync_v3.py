@@ -28,6 +28,7 @@ import click
 
 from clm.core.slide_text.pairing import find_split_slide_files_recursive, iter_split_pairs
 from clm.slides import doc_apply, doc_ledger
+from clm.slides.agent_task import EXIT_CLEAN, EXIT_ERROR, EXIT_WORK_PENDING, envelope
 from clm.slides.base_recovery import (
     BASE_DIFF_ACTIONS,
     MemberBaseDiff,
@@ -205,22 +206,24 @@ def run_report_v3(
                     payload["base_refusal"] = base_refusal
             payloads.append(payload)
         if not de_path.is_dir() and len(payloads) == 1 and not errors:
-            payloads[0]["exit_code"] = 0 if clean else 1
+            payloads[0]["exit_code"] = EXIT_CLEAN if clean else EXIT_WORK_PENDING
             _echo_json(payloads[0])
         else:
             _echo_json(
-                {
-                    "schema": WIRE_SCHEMA,
-                    "engine": "v3",
-                    "exit_code": 0 if clean else 1,
-                    "is_clean": clean,
-                    "needs_model": any(d.needs_model for _, d, _r, _l, _bd in results),
-                    "needs_agent": any(d.needs_agent for _, d, _r, _l, _bd in results)
-                    or bool(errors),
-                    "errors": errors,
-                    "skipped_solos": [str(p) for p in solos],
-                    "pairs": payloads,
-                }
+                envelope(
+                    WIRE_SCHEMA,
+                    engine="v3",
+                    body={
+                        "exit_code": EXIT_CLEAN if clean else EXIT_WORK_PENDING,
+                        "is_clean": clean,
+                        "needs_model": any(d.needs_model for _, d, _r, _l, _bd in results),
+                        "needs_agent": any(d.needs_agent for _, d, _r, _l, _bd in results)
+                        or bool(errors),
+                        "errors": errors,
+                        "skipped_solos": [str(p) for p in solos],
+                        "pairs": payloads,
+                    },
+                )
             )
     else:
         for bundle, diff, base_refusal, _ledger, base_diffs in results:
@@ -235,8 +238,8 @@ def run_report_v3(
         for error in errors:
             click.echo(f"ERROR: {error}", err=True)
     if errors and not results:
-        return 2
-    return 0 if clean else 1
+        return EXIT_ERROR
+    return EXIT_CLEAN if clean else EXIT_WORK_PENDING
 
 
 # ---------------------------------------------------------------------------
@@ -286,17 +289,19 @@ def run_apply_v3(
                 # consumer saw "no output" and could not tell a crash from a
                 # rejection.
                 _echo_json(
-                    {
-                        "schema": WIRE_SCHEMA,
-                        "engine": "v3",
-                        "exit_code": 2,
-                        "error": "; ".join(decision_errors),
-                        "decision_errors": decision_errors,
-                        "wrote": False,
-                        "items": [],
-                    }
+                    envelope(
+                        WIRE_SCHEMA,
+                        engine="v3",
+                        body={
+                            "exit_code": EXIT_ERROR,
+                            "error": "; ".join(decision_errors),
+                            "decision_errors": decision_errors,
+                            "wrote": False,
+                            "items": [],
+                        },
+                    )
                 )
-            return 2
+            return EXIT_ERROR
         decisions = document.decisions
         decision_rows = document.rows
 
@@ -305,18 +310,20 @@ def run_apply_v3(
         message = diff.refusal.render()
         if as_json:
             _echo_json(
-                {
-                    "schema": WIRE_SCHEMA,
-                    "engine": "v3",
-                    "exit_code": 2,
-                    "error": message,
-                    "wrote": False,
-                    "items": [],
-                }
+                envelope(
+                    WIRE_SCHEMA,
+                    engine="v3",
+                    body={
+                        "exit_code": EXIT_ERROR,
+                        "error": message,
+                        "wrote": False,
+                        "items": [],
+                    },
+                )
             )
         else:
             click.echo(message, err=True)
-        return 2
+        return EXIT_ERROR
     assert bundle.outcome.deck is not None
 
     ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
@@ -356,9 +363,9 @@ def run_apply_v3(
 
     rejected = [r for r in outcome.results if r.status == "rejected"]
     exit_code = (
-        2
+        EXIT_ERROR
         if outcome.error is not None
-        else (0 if outcome.all_applied and not verify_violations else 1)
+        else (EXIT_CLEAN if outcome.all_applied and not verify_violations else EXIT_WORK_PENDING)
     )
     if as_json:
         # M14/C7: the rejection block goes to stderr BEFORE the payload. It
@@ -516,21 +523,23 @@ def run_record_v3(
             _render_record_row(row)
     if as_json:
         _echo_json(
-            {
-                "schema": WIRE_SCHEMA,
-                "engine": "v3",
-                "recorded": sum(r.get("recorded", 0) for r in rows),
-                "unchanged": sum(
-                    1 for r in rows if "recorded" in r and not r.get("ledger_changed", True)
-                ),
-                "refused": refused,
-                "errors": errors,
-                "pairs": rows,
-            }
+            envelope(
+                WIRE_SCHEMA,
+                engine="v3",
+                body={
+                    "recorded": sum(r.get("recorded", 0) for r in rows),
+                    "unchanged": sum(
+                        1 for r in rows if "recorded" in r and not r.get("ledger_changed", True)
+                    ),
+                    "refused": refused,
+                    "errors": errors,
+                    "pairs": rows,
+                },
+            )
         )
     if errors:
-        return 2
-    return 1 if refused else 0
+        return EXIT_ERROR
+    return EXIT_WORK_PENDING if refused else EXIT_CLEAN
 
 
 def _record_one(

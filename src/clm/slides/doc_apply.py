@@ -41,10 +41,12 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from attrs import define, evolve, field, frozen
 
 from clm.core.slide_text.raw_cells import is_cell_boundary
+from clm.slides.agent_task import VALIDATORS, AnswerRejected
 from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, MemberKey, SideCell
 from clm.slides.doc_identity import (
     DeckBaseline,
@@ -85,6 +87,7 @@ from clm.slides.sync_wire import ACCEPTED_DECISION_SCHEMAS, WIRE_SCHEMA
 from clm.slides.sync_writeback import set_header_tags, swap_lang
 
 __all__ = [
+    "SYNC_DECISIONS_VALIDATOR",
     "ApplyOutcome",
     "Decision",
     "ItemResult",
@@ -408,6 +411,27 @@ def load_decision_document(text: str) -> tuple[DecisionDocument, list[str]]:
         DecisionDocument(decisions=decisions, rows=rows, report_id=report_id, schema=schema),
         errors,
     )
+
+
+def _validate_decision_payload(payload: Any) -> DecisionDocument:
+    """The ``sync-decisions`` registry validator: shape/schema validation
+    only — the freshness token (:attr:`DecisionDocument.report_id`) is
+    re-checked against the live bundle by the caller, like every toolkit's
+    accept path (shared kit, #959)."""
+    text = payload if isinstance(payload, str) else json.dumps(payload)
+    document, errors = load_decision_document(text)
+    if errors:
+        raise AnswerRejected("; ".join(errors))
+    return document
+
+
+#: The validator label a sync decision document answers to. Framed report
+#: items carry their decision vocabulary per action; the document-level
+#: validator is registered here so the shared kit's registry
+#: (:data:`clm.slides.agent_task.VALIDATORS`) knows it.
+SYNC_DECISIONS_VALIDATOR = "sync-decisions"
+
+VALIDATORS.register(SYNC_DECISIONS_VALIDATOR, _validate_decision_payload)
 
 
 def _validate_body(body: str, comment_token: str) -> str | None:

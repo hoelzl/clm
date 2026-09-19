@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 from attrs import define, evolve, field
 
 from clm.core.slide_text.raw_cells import is_cell_boundary
+from clm.slides.agent_task import VALIDATORS, AnswerRejected, envelope, freshness_mismatch
 from clm.slides.bilingual_doc import (
     BilingualDeck,
     Lang,
@@ -61,6 +62,7 @@ from clm.slides.doc_identity import (
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
 from clm.slides.doc_write import DeckEmitter, write_changed_files
+from clm.voiceover.harvest_task import ANSWER_VALIDATOR
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,7 +81,7 @@ _NARRATIVE_ROLES = ("voiceover", "notes")
 _BULLET_PREFIX = re.compile(r"^-\s+")
 
 
-class AcceptRejected(Exception):
+class AcceptRejected(AnswerRejected):
     """The answer was rejected; the message names the reason. Nothing was written."""
 
 
@@ -115,18 +117,20 @@ class AcceptOutcome:
     dry_run: bool = False
 
     def to_payload(self) -> dict[str, Any]:
-        return {
-            "schema": 1,
-            "tool": "harvest",
-            "verb": "accept",
-            "item": self.item,
-            "applied": self.applied,
-            "members": self.members,
-            "written": [str(p) for p in self.written_paths],
-            "recorded": self.recorded,
-            "record_refused": self.record_refused,
-            "dry_run": self.dry_run,
-        }
+        return envelope(
+            1,
+            tool="harvest",
+            verb="accept",
+            body={
+                "item": self.item,
+                "applied": self.applied,
+                "members": self.members,
+                "written": [str(p) for p in self.written_paths],
+                "recorded": self.recorded,
+                "record_refused": self.record_refused,
+                "dry_run": self.dry_run,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +284,7 @@ def _check_freshness(answer: Answer, members: list[Member]) -> None:
             side: content_fingerprint(cell) if (cell := member.side(side)) is not None else None
             for side in _SIDES
         }
-    if current != answer.baseline_fingerprints:
+    if freshness_mismatch(current, answer.baseline_fingerprints) is not None:
         raise AcceptRejected(
             "the slide's narrative cells changed since the task was framed "
             "(baseline_fingerprints mismatch) — re-run `harvest task` and re-judge"
@@ -684,3 +688,8 @@ def _detached_copy(member: Member) -> Member:
         de=member.de,
         en=member.en,
     )
+
+
+# The task documents' `validator` label names this module's parser: the
+# registry makes that convention a fact (shared kit, #959).
+VALIDATORS.register(ANSWER_VALIDATOR, parse_answer)

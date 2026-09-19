@@ -8,7 +8,9 @@ and **never calls a model**. **You** own the *judgment*: translations,
 conflict resolution, and confirming cold members. Every model-shaped task is
 framed as a decision item you answer in one JSON document. For the exhaustive
 field-by-field reference see `clm info commands` (the `clm slides sync`
-section); this topic is the *how*.
+section); this topic is the *how*. The shared rules every clm agent toolkit
+implements (envelope shape, freshness tokens, validator registry, exit codes)
+live in `clm info agent-tasks`.
 
 ## The mental model
 
