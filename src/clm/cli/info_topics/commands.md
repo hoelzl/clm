@@ -2517,15 +2517,15 @@ warning — so parallelize by deck, not within one.
 
 ### `clm slides translate`
 
-*Added in CLM {version}. Alias: `clm slides bootstrap`.*
+*Added in CLM {version}. Alias: `clm slides bootstrap`. Agent-toolkit verbs since CLM {version} (#961); the in-process model moved behind `autopilot`.*
 
 Cold-start translation of a **single-language** deck into its other-language
-split half. When an author has written only `slides_x.de.<ext>`, this synthesizes
-`slides_x.en.<ext>` (and vice-versa) as a complete translation of the whole deck —
-the one thing `clm slides sync` deliberately refuses to do (sync only fills
-per-cell gaps inside an *already-existing* pair). After the twin exists, keep the
-two halves in step with `clm slides sync`; run `clm slides unify` for a single
-bilingual file.
+split half. When an author has written only `slides_x.de.<ext>`, this
+synthesizes `slides_x.en.<ext>` (and vice-versa) as a complete translation of
+the whole deck — the one thing `clm slides sync` deliberately refuses to do
+(sync only fills per-cell gaps inside an *already-existing* pair). After the
+twin exists, keep the two halves in step with `clm slides sync`; run
+`clm slides unify` for a single bilingual file.
 
 **Code is mostly not translated — the `lang` tag decides.** A cell with **no**
 `lang` attribute is *shared* and copied **byte-for-byte** into both halves; only
@@ -2535,15 +2535,33 @@ the learner carries `lang=` and is translated through a prompt that keeps every
 identifier byte-identical. This is the same model `clm slides sync` and the
 validator already use — there is no new marker.
 
-**Dispatch (idempotent by design).** If the other-language half is **absent**,
-the deck is bootstrapped: the whole deck is translated, shared cells copied,
-EN-authority shared `slide_id`s minted onto **both** halves, and the pair is
-recorded in the committed sync ledger. If the twin is **already present**, the
-command runs the **read-only sync report** (it never re-translates the whole
-deck): a clean pair exits `0`, a pair with pending items exits `1` and points
-at the `clm slides sync` verbs. So running `clm slides translate` twice is
-safe — the second run is a clean no-op and the deck is never doubled. Use
-`--force` to re-bootstrap over an existing twin.
+**Verbs** (bare `translate SOURCE` is `report SOURCE`; see `clm info sync-agents`
+→ "Cold-starting a twin" for the agent loop):
+
+- `report SOURCE [--to] [--dry-run] [--json]` — read-only, no model, no key.
+  Twin **absent**: reports the translatable/copied counts and points at `task`
+  (exit `1`). Twin **present**: the read-only v3 sync diff (exit `0` clean /
+  `1` pending items / `2` unparseable) — the deck is never re-translated or
+  doubled.
+- `task SOURCE [--to] [--glossary]` — frame the whole-deck cold start as ONE
+  JSON task document: instructions, every cell with its translation role and
+  source body (shared cells as `copy` rows so you see the whole plan), the
+  role prompts (prose / identifier-preserving code / title), the glossary when
+  one resolves, `answer_schema`, and the freshness tokens
+  (`source_fingerprint`, `companion_fingerprint`) that `accept` re-checks. No
+  model, no API key. Exit `2` when the twin already exists or the source is not
+  a single split half.
+- `accept SOURCE [--to] --answer FILE|- [--force] [--dry-run] [--json]` —
+  validate the answer (shape + freshness + coverage of exactly the framed
+  cells) and write the twin and voiceover companion through the ordinary
+  bootstrap engine: EN-authority shared `slide_id`s minted onto **both**
+  halves, the pair recorded in the committed sync ledger — the same
+  post-conditions the autopilot bootstrap guarantees. Nothing is written on
+  any validation failure. Exit `0` written · `1` written but the ledger record
+  was withheld · `2` rejected / error.
+- `autopilot SOURCE [options]` — the in-process OpenRouter translation for the
+  agent-less human: same engine and post-conditions, judgment by the embedded
+  model instead of an answer document. Key-gated (see below); never in CI.
 
 **Direction** is inferred from the source half's `.de` / `.en` tag (`.de.py` →
 produces `.en`). Override with `--to en|de`. The source **must** be one split
@@ -2551,72 +2569,91 @@ half: a bilingual deck stem (no tag) is rejected with a hint to run
 `clm slides split` first.
 
 **Voiceover companion in lockstep.** If the source half has a `voiceover_*`
-companion, it is translated alongside the deck into the matching
-`voiceover_*.<lang>.py` (in the same `voiceover/` subdir or sibling location),
-preserving each cell's `for_slide` / `vo_anchor` anchors. An existing target
-companion is left untouched unless `--force`.
+companion, `task` frames its cells beside the deck's and `accept` writes the
+matching `voiceover_*.<lang>.py` (in the same `voiceover/` subdir or sibling
+location), preserving each cell's `for_slide` / `vo_anchor` anchors. An existing
+target companion is left untouched (framed as skipped); only
+`autopilot --force` regenerates one.
 
-**Key and `.env`.** Translation needs `$OPENROUTER_API_KEY` (or
-`$OPENAI_API_KEY`); the command walks up from the deck and loads the first `.env`
-it finds (skip with `--no-env-file`). On the **bootstrap** path a missing key is
-a hard stop — the command exits `1` and writes nothing (a whole untranslated deck
-is useless), unlike sync's per-cell defer. `--dry-run` uses no key and no LLM.
+**Key and `.env` (autopilot only).** `autopilot` needs
+`$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`); it walks up from the deck and
+loads the first `.env` it finds (skip with `--no-env-file`). On the bootstrap
+path a missing key is a hard stop — exit `1`, nothing written. `report`,
+`task`, and `accept` never consult a key.
 
 **Translation conventions (glossary).** Point `--glossary` at a Markdown file (a
 style note plus a term glossary) to pin a target-language register and keep or
-translate technical terms consistently across the deck; the text is appended to
-the translation system prompt. If `--glossary` is omitted, the command
-auto-discovers `clm-glossary.<target-lang>.md` walking up from the deck (the same
-walk-up as `.env`), so a course keeps its glossary next to its slides and needs
-no flag. The guidance is folded into the translation cache key: editing the
+translate technical terms consistently across the deck. If `--glossary` is
+omitted, the commands auto-discover `clm-glossary.<target-lang>.md` walking up
+from the deck (the same walk-up as `.env`), so a course keeps its glossary next
+to its slides and needs no flag. On `task` the glossary is folded into the
+framed prompts and carried in the payload; on `autopilot` it is appended to the
+translation system prompt and folded into the translation cache key: editing the
 glossary invalidates affected entries by cache miss, while decks translated
 without a glossary keep the bare key (no flag-day invalidation).
 
 ```
-clm slides translate [OPTIONS] SOURCE
-clm slides bootstrap [OPTIONS] SOURCE   # alias
+clm slides translate [OPTIONS] SOURCE            # = report (read-only)
+clm slides translate task SOURCE [--to] [--glossary]
+clm slides translate accept SOURCE --answer FILE|- [--to] [--force] [--dry-run] [--json]
+clm slides translate autopilot SOURCE [--to] [--force] [--translation-model TEXT]
+                                         [--glossary PATH] [--cache-dir PATH]
+                                         [--no-cache] [--no-env-file] [--json]
+clm slides bootstrap ...                         # alias of translate
 ```
 
-| Option | Description |
+| Option (verb) | Description |
 |--------|-------------|
-| `--to [en\|de]` | Target language. Default: the opposite of SOURCE's `.de`/`.en` tag. Override when a source mixes/omits `lang` tags. |
-| `--dry-run` | Preview only: show the target path and how many cells would be translated vs copied (and the companion), and write nothing. Uses no LLM and no API key. |
-| `--force` | Overwrite an existing twin (and its companion) by re-bootstrapping. Without it, an existing twin degrades to an incremental sync. |
-| `--translation-model TEXT` | OpenRouter model used to translate the deck (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`. |
-| `--glossary PATH` | Translation conventions file (Markdown: a style note + term glossary) appended to the translation prompt. Default: auto-discover `clm-glossary.<target-lang>.md` walking up from SOURCE's directory. |
-| `--cache-dir PATH` | Directory holding the translation cache. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<project-root>/.clm-cache/`. |
-| `--no-cache` | Do not read or write the translation cache. |
-| `--no-env-file` | Do not auto-load a `.env` file. |
-| `--json` | Emit a JSON report instead of human-readable lines. |
+| `--to [en\|de]` (all) | Target language. Default: the opposite of SOURCE's `.de`/`.en` tag. Override when a source mixes/omits lang tags. |
+| `--dry-run` (report) | Preview only: show the target path and how many cells would be translated vs copied (and the companion), and write nothing. |
+| `--dry-run` (accept) | Validate the answer fully (shape + freshness + coverage) and write nothing. |
+| `--answer FILE\|-` (accept) | The answer document framed by `task`: a file path, or `-` for stdin. |
+| `--force` (accept, autopilot) | Overwrite a twin (and companion) that exists now — for `accept`, one that appeared after framing. |
+| `--glossary PATH` (task, autopilot) | Translation conventions file (Markdown) folded into the prompts. Default: auto-discover `clm-glossary.<target-lang>.md` walking up from SOURCE's directory. |
+| `--translation-model TEXT` (autopilot) | OpenRouter model used to translate the deck (default: `anthropic/claude-sonnet-4-6`). |
+| `--cache-dir PATH` (autopilot) | Directory holding the translation cache. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<project-root>/.clm-cache/`. |
+| `--no-cache` (autopilot) | Do not read or write the translation cache. |
+| `--no-env-file` (autopilot) | Do not auto-load a `.env` file. |
+| `--json` (report, accept, autopilot) | Emit a JSON report / outcome envelope. |
 
-Exit codes: `0` wrote the new half (or the existing pair is in sync), `1` the
-existing pair has pending sync items **or** no API key was available on the
-bootstrap path (nothing written), `2` a hard error (the source is not a single
-split half, the pair cannot be parsed, or the deck could not be translated —
-nothing is written).
+Exit codes: `report` — `0` pair in sync, `1` cold start pending (twin absent)
+or pending sync items, `2` error; `task` — `0` emitted, `2` cannot frame;
+`accept` — `0` written, `1` written but the ledger record was withheld, `2`
+rejected / error (nothing written); `autopilot` — `0` wrote the new half (or
+the existing pair is in sync), `1` pending sync items **or** no API key
+(nothing written), `2` a hard error.
 
-The `--json` report carries `action` (`bootstrapped` / `synced`), `source`,
-`target`, `source_lang`, `target_lang`, the `companion` (`action`, `source`,
-`target`) or `null`, `ledger_recorded`, and — for a bootstrap —
-`cells_translated`, `cells_copied`, `ids_assigned`; for `synced`, a `sync`
-block with `is_clean` / `items` / `error`. `--dry-run --json` carries
-`mode: "dry-run"`, the `action` that *would* run, and `cells_translatable` /
-`cells_copied` counts.
+The `report --json` payload for a cold start carries `action: "cold-start"`,
+the translatable/copied counts, the companion name, and a `verbs` map with the
+exact `task` / `accept` / `autopilot` invocations. `accept --json` carries
+`applied`, `action`, `written` (the files written), `cells_translated` /
+`cells_copied` / `ids_assigned`, `ledger_recorded`, and the `companion`
+(`action`, `target`) or `null`; a rejection emits the shared rejection envelope
+(`applied: false`, `outcome: "rejected"`, `reason`). The `autopilot --json`
+report is unchanged (`action` `bootstrapped` / `synced`, `ledger_recorded`,
+per-action details); `report --dry-run --json` carries `mode: "dry-run"`, the
+`action` that *would* run, and the counts.
 
 Examples:
 
 ```bash
-# Author wrote only slides_x.de.py — create the English half.
-clm slides translate slides/topic/slides_x.de.py
+# Author wrote only slides_x.de.py — the agent loop (no API key):
+clm slides translate slides/topic/slides_x.de.py --json  # report: what to do
+clm slides translate task slides/topic/slides_x.de.py > task.json
+# … translate the framed cells, echo the fingerprints, cover every row …
+clm slides translate accept slides/topic/slides_x.de.py --answer answer.json
 
 # Preview without translating (no key needed).
 clm slides translate slides/topic/slides_x.de.py --dry-run
 
-# Force the direction (e.g. a source that mixes/omits lang tags).
-clm slides translate slides/topic/slides_x.de.py --to en
+# The human one-shot (needs $OPENROUTER_API_KEY / $OPENAI_API_KEY).
+clm slides translate autopilot slides/topic/slides_x.de.py
 
 # Re-bootstrap over an existing (e.g. stale) twin.
-clm slides translate slides/topic/slides_x.de.py --force
+clm slides translate autopilot slides/topic/slides_x.de.py --force
+
+# Force the direction (e.g. a source that mixes/omits lang tags).
+clm slides translate task slides/topic/slides_x.de.py --to en
 
 # After bootstrapping, keep the halves in step, or merge to a bilingual file.
 clm slides sync slides/topic/slides_x.de.py
