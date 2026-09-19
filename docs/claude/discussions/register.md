@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-09-19
-review-by: 2027-03-19
+updated: 2026-09-20
+review-by: 2027-03-20
 ---
 # Register: discussions index
 
@@ -17,7 +17,7 @@ the reasons behind it are in `README.md`; the save procedure is
 |--------|---------|-------------|--------|----------|
 | `cpp-ide-export` | Student-facing C++ IDE export (#928): Phase 4 verification and rollout, the owner's review of the generated output (kernel drops bare-expression output → `SHOW(expr);` everywhere; `slide_` prefix; `section_name` attribute; plain title; HTML→Markdown comments; no promotion heuristic), the lambda-crash landmine, differential check with values | Active — all follow-ups merged; owner's student-view review of four decks still open | clm #937, #938, #939, #940; CppCourses #129, #130; `docs/claude/handovers/cpp-ide-export-handover.md` | S1 |
 | `agent-discussion-continuity` | Porting the save/resume-discussion stack (skills, `docs/claude/discussions/`, transcript tooling) from CppCourses/Cenotaph to this repository | Active — stack landed and in use from this save; first saves of older sessions pending | clm #941 | S1 (last owner turn of the `cpp-ide-export` transcript) |
-| `agent-toolkit-candidates` | Which clm features should stop being stand-alone and become agent toolkits (the sync / release / harvest shape): survey of embedded-LLM paths, human-only output, and CLI-first affordances; three tiers filed as issues | Active — #959 and #960 complete; S4 settles removal without shims and export-at-rev, with retirement + backfill docs landed in #978; #961 next | umbrella clm #970, children #959–#969, `docs/claude/agent-toolkit-candidates-investigation.md` (PR #971); kit PR #973; #960 PRs #974, #975, #976, #978 | S2, S3, S4 |
+| `agent-toolkit-candidates` | Which clm features should stop being stand-alone and become agent toolkits (the sync / release / harvest shape): survey of embedded-LLM paths, human-only output, and CLI-first affordances; three tiers filed as issues | Active — #959, #960, #961 complete (translate landed as PR #980); S5 settles the #962 verb-pair placement, the #963 `language-coverage` rename (owner-ratified), and a surface-shaping rule (#970); #962 next | umbrella clm #970, children #959–#969 plus #981, `docs/claude/agent-toolkit-candidates-investigation.md` (PR #971); kit PR #973; #960 PRs #974, #975, #976, #978; #961 PR #980; narration map PR #982 | S2, S3, S4, S5 |
 
 ### Dropped threads / corrections worth keeping
 
@@ -25,6 +25,11 @@ the reasons behind it are in `README.md`; the save procedure is
   OpenCode's export does expose the public dialogue; a manually reviewed
   extraction now preserves it in `agent-toolkit-candidates/transcripts/2026-09-19-s4.md`.
   The cleaner still lacks a native OpenCode adapter. (S4 save extension)
+
+- `opencode export` without a session ID hangs (interactive). The reliable
+  OpenCode source is the storage SQLite (`~/.local/share/opencode/opencode.db`,
+  read-only; `message.data.role` + `part.data.type == "text"`); S5's
+  transcript was extracted from it directly. (S5)
 
 - The owner chose **removal without shims** and corrected the proposed
   retained `sync-at-rev` name to `export-at-rev`: exporting a historical
@@ -86,6 +91,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S3 | 2026-09-19 | *(none — opencode session; the transcript cleaner targets Claude/Hermes formats)* | — | — | opencode session in the main checkout (resumed S2 via the `resume-discussion` skill) | content through 2026-09-19 (owner confirmed tier ordering; #959 + #960 slices 1–4 landed as PRs #973–#976; the slice-5 shim-vs-removal question is the next boundary); this save is covered by the state file |
 | S4 | 2026-09-19 | *(none — opencode session; no supported cleaner source available)* | — | — | opencode session in the main checkout, branch `claude/issue-960-retire-history-verbs` | owner approves outright removal, proposes export-at-rev, then asks to continue; implementation and knowledge findings captured in state.md and #960's linked PR; state-only continuity update, not a complete transcript save |
 | S4 (save extension) | 2026-09-19 | `agent-toolkit-candidates/transcripts/2026-09-19-s4.md` | Public-text extraction; tool/reasoning payloads omitted | 4 / 10 | OpenCode session `ses_f46390f38ffe5pplYxGjjeYyH4`, `opencode export`, manually reviewed | through the owner's save request and the initial acknowledgement; supersedes the state-only limitation above. PR #978 subsequently verified merged; #961 next |
+| S5 | 2026-09-20 | `agent-toolkit-candidates/transcripts/2026-09-20-s5.md` | Public-text extraction from the storage DB; tool/reasoning payloads omitted (~20 kchar) | 8 / 55 | OpenCode session `ses_f44adfd80ffe59gdU9Pk47pW0o`, main checkout (resumed S4 via the `resume-discussion` skill), manually reviewed | content through the owner's save request and the knowledge-audit acknowledgement (the resume + #961 landing as PR #980, the polish-placement argument, the surface-orthogonality review, the three follow-ups: #963 note + ratification, #981, narration-map PR #982); the save itself is covered by the state file |
 
 ### Deliberately skipped
 
