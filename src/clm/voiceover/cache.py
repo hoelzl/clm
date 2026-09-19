@@ -600,6 +600,10 @@ def _encode_timeline(timeline) -> list[dict]:
             "end_time": e.end_time,
             "match_score": e.match_score,
             "is_header": e.is_header,
+            "runner_up_index": e.runner_up_index,
+            "runner_up_score": e.runner_up_score,
+            "raw_best_index": e.raw_best_index,
+            "overridden_by_sequential": e.overridden_by_sequential,
         }
         for e in timeline
     ]
@@ -615,9 +619,33 @@ def _decode_timeline(data: list[dict]):
             end_time=d["end_time"],
             match_score=d["match_score"],
             is_header=d.get("is_header", False),
+            runner_up_index=d.get("runner_up_index"),
+            runner_up_score=d.get("runner_up_score"),
+            raw_best_index=d.get("raw_best_index"),
+            overridden_by_sequential=d.get("overridden_by_sequential", False),
         )
         for d in data
     ]
+
+
+def _encode_segment(segment) -> dict:
+    return {
+        "start": segment.start,
+        "end": segment.end,
+        "text": segment.text,
+        "source_part_index": segment.source_part_index,
+    }
+
+
+def _encode_assignment(a) -> dict:
+    return {
+        "segment": _encode_segment(a.segment),
+        "slide_index": a.slide_index,
+        "reason": a.reason,
+        "overlap_fraction": a.overlap_fraction,
+        "runner_up_index": a.runner_up_index,
+        "runner_up_fraction": a.runner_up_fraction,
+    }
 
 
 def _encode_alignment(alignment) -> dict:
@@ -630,22 +658,30 @@ def _encode_alignment(alignment) -> dict:
             }
             for idx, notes in alignment.slide_notes.items()
         },
-        "unassigned_segments": [
-            {
-                "start": s.start,
-                "end": s.end,
-                "text": s.text,
-                "source_part_index": s.source_part_index,
-            }
-            for s in alignment.unassigned_segments
-        ],
+        "unassigned_segments": [_encode_segment(s) for s in alignment.unassigned_segments],
+        "assignments": [_encode_assignment(a) for a in alignment.assignments],
     }
 
 
-def decode_alignment(data: dict) -> AlignmentResult:
-    """Rebuild an :class:`AlignmentResult` from its cache/JSON encoding."""
-    from clm.voiceover.aligner import AlignmentResult, SlideNotes
+def _decode_segment(s: dict):
     from clm.voiceover.transcribe import TranscriptSegment
+
+    return TranscriptSegment(
+        start=s["start"],
+        end=s["end"],
+        text=s["text"],
+        source_part_index=s.get("source_part_index", 0),
+    )
+
+
+def decode_alignment(data: dict) -> AlignmentResult:
+    """Rebuild an :class:`AlignmentResult` from its cache/JSON encoding.
+
+    Entries written before the assignment trail existed (#960) decode with
+    an empty ``assignments`` list — ``harvest align report`` treats that as
+    "no confidence data; re-run with --refresh-cache".
+    """
+    from clm.voiceover.aligner import AlignmentResult, SegmentAssignment, SlideNotes
 
     slide_notes = {}
     for idx_str, payload in data.get("slide_notes", {}).items():
@@ -656,17 +692,25 @@ def decode_alignment(data: dict) -> AlignmentResult:
             revisited_segments=[list(r) for r in payload.get("revisited_segments", [])],
         )
 
-    unassigned = [
-        TranscriptSegment(
-            start=s["start"],
-            end=s["end"],
-            text=s["text"],
-            source_part_index=s.get("source_part_index", 0),
+    unassigned = [_decode_segment(s) for s in data.get("unassigned_segments", [])]
+
+    assignments = [
+        SegmentAssignment(
+            segment=_decode_segment(a["segment"]),
+            slide_index=a["slide_index"],
+            reason=a["reason"],
+            overlap_fraction=a.get("overlap_fraction"),
+            runner_up_index=a.get("runner_up_index"),
+            runner_up_fraction=a.get("runner_up_fraction"),
         )
-        for s in data.get("unassigned_segments", [])
+        for a in data.get("assignments", [])
     ]
 
-    return AlignmentResult(slide_notes=slide_notes, unassigned_segments=unassigned)
+    return AlignmentResult(
+        slide_notes=slide_notes,
+        unassigned_segments=unassigned,
+        assignments=assignments,
+    )
 
 
 # ---------------------------------------------------------------------------

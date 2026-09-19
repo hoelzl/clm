@@ -53,6 +53,13 @@ class TimelineEntry:
     end_time: float  # seconds
     match_score: float  # OCR match confidence (0–100)
     is_header: bool = False  # True for the title/header slide
+    # The evidence trail `harvest align report` frames (#960): the
+    # runner-up the match won against, the raw best the sequential
+    # constraint overruled (when it did), and whether it did.
+    runner_up_index: int | None = None
+    runner_up_score: float | None = None
+    raw_best_index: int | None = None
+    overridden_by_sequential: bool = False
 
 
 @dataclass
@@ -205,10 +212,23 @@ def _extract_event_frame(
     return get_frame_at(video_path, event.timestamp, offset=frame_offset)
 
 
+@dataclass
+class _AlignedEvent:
+    """One transition event's match decision plus its evidence trail."""
+
+    event: TransitionEvent
+    slide_index: int
+    score: float
+    runner_up_index: int | None = None
+    runner_up_score: float | None = None
+    raw_best_index: int | None = None
+    overridden: bool = False
+
+
 def _sequential_align(
     raw_matches: list[tuple[TransitionEvent, list[tuple[int, float]]]],
     slides: list[SlideGroup],
-) -> list[tuple[TransitionEvent, int, float]]:
+) -> list[_AlignedEvent]:
     """Apply sequential ordering constraint to resolve ambiguous matches.
 
     Given a sequence of OCR match results, find the best assignment of
@@ -220,7 +240,8 @@ def _sequential_align(
       maintains forward progress from the previous match
 
     Returns:
-        List of (event, slide_index, score) tuples.
+        One :class:`_AlignedEvent` per matched event, keeping the runner-up
+        and the raw best so a sequential override stays visible.
     """
     if not raw_matches:
         return []
@@ -228,7 +249,7 @@ def _sequential_align(
     has_header = any(s.slide_type == "header" for s in slides)
     first_content_idx = 1 if has_header else 0
 
-    aligned: list[tuple[TransitionEvent, int, float]] = []
+    aligned: list[_AlignedEvent] = []
     prev_slide_idx = -1
 
     for event, matches in raw_matches:
@@ -236,17 +257,28 @@ def _sequential_align(
             continue
 
         best_idx, best_score = matches[0]
-        runner_up_score = matches[1][1] if len(matches) > 1 else 0.0
+        runner_up_idx, runner_up_score = matches[1] if len(matches) > 1 else (None, None)
+        overridden = False
 
         # Special case: detect header slide at the beginning
         if prev_slide_idx == -1 and has_header and best_score < 70.0:
             # Low-confidence match at the start -> likely the header slide
-            aligned.append((event, 0, best_score))
+            aligned.append(
+                _AlignedEvent(
+                    event=event,
+                    slide_index=0,
+                    score=best_score,
+                    runner_up_index=runner_up_idx,
+                    runner_up_score=runner_up_score,
+                    raw_best_index=best_idx,
+                    overridden=best_idx != 0,
+                )
+            )
             prev_slide_idx = 0
             continue
 
         # If the best match is unambiguous (large gap to runner-up), use it
-        if best_score - runner_up_score > UNAMBIGUOUS_GAP:
+        if runner_up_score is None or best_score - runner_up_score > UNAMBIGUOUS_GAP:
             chosen_idx = best_idx
             chosen_score = best_score
         else:
@@ -265,7 +297,18 @@ def _sequential_align(
                     chosen_score = score
                     break
 
-        aligned.append((event, chosen_idx, chosen_score))
+        overridden = chosen_idx != best_idx
+        aligned.append(
+            _AlignedEvent(
+                event=event,
+                slide_index=chosen_idx,
+                score=chosen_score,
+                runner_up_index=runner_up_idx,
+                runner_up_score=runner_up_score,
+                raw_best_index=best_idx,
+                overridden=overridden,
+            )
+        )
 
         # Track progress (but don't let header reset progress)
         if chosen_idx > 0 or not has_header:
@@ -330,7 +373,7 @@ def _pick_best_sequential(
 
 
 def _build_timeline(
-    aligned: list[tuple[TransitionEvent, int, float]],
+    aligned: list[_AlignedEvent],
     video_duration: float,
     *,
     header_indices: set[int] | None = None,
@@ -339,7 +382,10 @@ def _build_timeline(
 
     Each entry covers the time from one transition to the next.
     Adjacent entries with the same slide_index are merged (these are
-    within-slide changes, not real transitions).
+    within-slide changes, not real transitions). A merged entry keeps the
+    *most uncertain* evidence of its constituents (the smallest
+    score/runner-up gap, any sequential override) — merging must hide a
+    doubtful match, never launder it into a confident one.
     """
     if not aligned:
         return []
@@ -348,21 +394,28 @@ def _build_timeline(
 
     # First, create raw entries
     raw_entries: list[TimelineEntry] = []
-    for i, (event, slide_idx, score) in enumerate(aligned):
-        start = event.timestamp
+    for i, match in enumerate(aligned):
+        start = match.event.timestamp
         if i + 1 < len(aligned):
-            end = aligned[i + 1][0].timestamp
+            end = aligned[i + 1].event.timestamp
         else:
             end = video_duration
         raw_entries.append(
             TimelineEntry(
-                slide_index=slide_idx,
+                slide_index=match.slide_index,
                 start_time=start,
                 end_time=end,
-                match_score=score,
-                is_header=slide_idx in header_indices,
+                match_score=match.score,
+                is_header=match.slide_index in header_indices,
+                runner_up_index=match.runner_up_index,
+                runner_up_score=match.runner_up_score,
+                raw_best_index=match.raw_best_index,
+                overridden_by_sequential=match.overridden,
             )
         )
+
+    def _gap(entry: TimelineEntry) -> float:
+        return entry.match_score - (entry.runner_up_score or 0.0)
 
     # Merge adjacent entries with the same slide
     merged: list[TimelineEntry] = [raw_entries[0]]
@@ -372,6 +425,14 @@ def _build_timeline(
             merged[-1].end_time = entry.end_time
             # Keep the higher match score
             merged[-1].match_score = max(merged[-1].match_score, entry.match_score)
+            # … but the weaker evidence (smaller gap, any override)
+            if _gap(entry) < _gap(merged[-1]):
+                merged[-1].runner_up_index = entry.runner_up_index
+                merged[-1].runner_up_score = entry.runner_up_score
+                merged[-1].raw_best_index = entry.raw_best_index
+            merged[-1].overridden_by_sequential = (
+                merged[-1].overridden_by_sequential or entry.overridden_by_sequential
+            )
         else:
             merged.append(entry)
 
