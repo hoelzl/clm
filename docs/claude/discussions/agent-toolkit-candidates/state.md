@@ -21,12 +21,13 @@ S3 (2026-09-19, opencode session, no cleaned transcript — the cleaner targets
 Claude/Hermes formats): the owner confirmed the tier ordering (kit first) and
 #959 plus #960 slices 1–4 **landed** (PRs #973–#976, all merged).
 
-S4 (2026-09-19, opencode session, no cleaned transcript): the owner chose
+S4 (2026-09-19, OpenCode session; dialogue in
+`transcripts/2026-09-19-s4.md`): the owner chose
 outright removal over top-level compatibility shims and corrected the
 artifact verb's name to **`export-at-rev`**: without a merge it no longer
-syncs anything. Slice 5 and its slice-6 documentation are implemented on
-`claude/issue-960-retire-history-verbs`; consult #960 for the linked PR and
-live landing status.
+syncs anything. Slice 5 and its slice-6 documentation **landed in PR #978**
+(merged 2026-09-19); #960 is complete. The S4 save extends the earlier
+state-only snapshot with exported, reviewed dialogue.
 
 ## Settled
 
@@ -42,7 +43,7 @@ live landing status.
 - **Premise correction (S2).** The owner recalled video transcription as
   "mostly stand-alone". It was already half-converted (#546); what remained
   was the revision-history family and the heuristic alignment decisions —
-  that was #960, now mostly landed (below).
+  that was #960, now landed (below).
 - **Three tiers**, as filed: Tier 1 = features that still invoke a model
   in-process (harvest history #960, `slides translate` #961, `slides polish`
   #962, `coverage` + `assign-ids --llm-suggest` #963, `export summary` #964);
@@ -121,6 +122,14 @@ live landing status.
 - **Knowledge audit:** durable behavior is in the regression tests, user guide,
   `commands` / `harvest-agents` / `migration` info topics, and #960 changelog
   fragments. The naming rationale and corrected MCP premise live here.
+- **Save-source correction:** OpenCode can export this session with
+  `opencode export ses_f46390f38ffe5pplYxGjjeYyH4`. The repository cleaner
+  has no native OpenCode adapter, but public text parts can be extracted
+  and reviewed without committing reasoning or tool payloads. Do not use
+  `--sanitize` for the dialogue extraction: in the installed version it
+  replaces even ordinary owner text with redaction placeholders. The S4
+  transcript documents its manual extraction and exact boundary; adding a
+  native cleaner adapter remains tooling follow-up, not part of #960.
 - **Still deferred:** an MCP mirror specifically for `align report` (harvest
   already has a read-only toolkit mirror); add it if callers need alignment
   review over MCP. It was not added as part of retirement. Discarded
@@ -134,7 +143,7 @@ live landing status.
 
 ## Next conversational boundary
 
-Check #960's linked PR/CI status, then continue the owner-approved Tier-1
-order with #961 (slides translate). Before #962, settle its verb-pair vs
-harvest-task placement question. Do not reopen shim-vs-removal or the
+Continue the owner-approved Tier-1 order with #961 (slides translate).
+Before #962, settle its verb-pair vs harvest-task placement question.
+Do not reopen shim-vs-removal or the
 `export-at-rev` naming decision.
