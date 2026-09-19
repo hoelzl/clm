@@ -1,9 +1,12 @@
-"""CLI tests for ``clm slides translate`` (alias ``bootstrap``) — Issue #232, Phase 4.
+"""CLI tests for ``clm slides translate`` (alias ``bootstrap``) — Issue #232, #961.
 
-The command wraps the bootstrap engine. These tests drive the Click surface with
-the translator factory patched to a static fake, so they exercise flag parsing,
-the bootstrap-vs-report dispatch (twin present → read-only v3 sync diff), file
-writes and exit codes without a live LLM or an API key.
+The in-process bootstrap lives behind the ``autopilot`` verb since #961; the
+bare command (the ``report`` default) is read-only and the agent loop is
+``task`` / ``accept`` (covered in ``test_slides_translate_task_accept.py``).
+These tests drive the Click surface with the translator factory patched to a
+static fake, so they exercise flag parsing, the report-vs-autopilot dispatch
+(twin present → read-only v3 sync diff), file writes and exit codes without a
+live LLM or an API key.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.slides import translate as cmd
-from clm.cli.commands.slides.translate import slides_translate_cmd
+from clm.cli.commands.slides.translate import slides_translate_group
 from clm.core.slide_text.raw_cells import split_cells
 from clm.slides.split import split_text, unify_texts
 from clm.slides.sync_translate import StaticSlideTranslator
@@ -104,23 +107,27 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _common(tmp_path: Path) -> list[str]:
-    """Flags every writing test wants: own cache dir, no .env walk."""
+    """Flags every writing (autopilot) test wants: own cache dir, no .env walk."""
     return ["--no-env-file", "--cache-dir", str(tmp_path / "cache")]
 
 
+def _autopilot(source: Path, *extra: str) -> list[str]:
+    return ["autopilot", str(source), *extra]
+
+
 # ---------------------------------------------------------------------------
-# Bootstrap path
+# Autopilot path (the in-process bootstrap, key-gated)
 # ---------------------------------------------------------------------------
 
 
-class TestBootstrap:
+class TestAutopilotBootstrap:
     def test_writes_twin_exit_0(self, cli_runner, tmp_path, monkeypatch):
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         _patch_key(monkeypatch)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
 
-        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
 
         assert result.exit_code == 0, result.output
         twin = tmp_path / "slides_x.en.py"
@@ -134,10 +141,12 @@ class TestBootstrap:
         _patch_key(monkeypatch, present=False)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
 
-        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
 
         assert result.exit_code == 1
         assert not (tmp_path / "slides_x.en.py").exists()
+        # The pointer at the model-free loop is part of the message.
+        assert "task" in result.stderr
 
     def test_json_output(self, cli_runner, tmp_path, monkeypatch):
         de, en = _split(_DECK)
@@ -146,7 +155,7 @@ class TestBootstrap:
         _patch_translator(monkeypatch, _mirror_translator(de, en))
 
         result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--json", *_common(tmp_path)]
+            slides_translate_group, _autopilot(de_path, "--json", *_common(tmp_path))
         )
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
@@ -167,14 +176,14 @@ class TestBootstrap:
         _patch_translator(monkeypatch, StaticSlideTranslator(mapping=rev))
 
         result = cli_runner.invoke(
-            slides_translate_cmd, [str(en_path), "--to", "de", *_common(tmp_path)]
+            slides_translate_group, _autopilot(en_path, "--to", "de", *_common(tmp_path))
         )
         assert result.exit_code == 0, result.output
         assert (tmp_path / "slides_x.de.py").read_text(encoding="utf-8") == de
 
 
 # ---------------------------------------------------------------------------
-# Dry run
+# Dry run (report --dry-run, side-effect-free preview)
 # ---------------------------------------------------------------------------
 
 
@@ -185,9 +194,7 @@ class TestDryRun:
         # No key, no translator patch — dry-run must not touch either.
         _patch_key(monkeypatch, present=False)
 
-        result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--dry-run", "--no-env-file"]
-        )
+        result = cli_runner.invoke(slides_translate_group, [str(de_path), "--dry-run"])
         assert result.exit_code == 0, result.output
         assert not (tmp_path / "slides_x.en.py").exists()
         assert "Would bootstrap slides_x.en.py" in result.output
@@ -195,15 +202,15 @@ class TestDryRun:
     def test_json(self, cli_runner, tmp_path, monkeypatch):
         de, _ = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
-        result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--dry-run", "--json", "--no-env-file"]
-        )
+        result = cli_runner.invoke(slides_translate_group, [str(de_path), "--dry-run", "--json"])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         assert payload["mode"] == "dry-run"
         assert payload["action"] == "bootstrap"
-        assert payload["cells_translatable"] == 1
-        assert payload["cells_copied"] >= 1  # header + shared code
+        # The markdown slide AND the header title are framed as work for the
+        # agent; the import directive and the shared code cell are copied.
+        assert payload["cells_translatable"] == 2
+        assert payload["cells_copied"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -218,14 +225,15 @@ class TestTwinPresentReport:
         _patch_key(monkeypatch)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
 
-        first = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        first = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
         assert first.exit_code == 0, first.output
         twin = tmp_path / "slides_x.en.py"
         before = twin.read_text(encoding="utf-8")
 
-        # The read-only report needs no API key at all.
+        # The read-only report needs no API key at all (and takes no
+        # autopilot-only flags).
         _patch_key(monkeypatch, present=False)
-        second = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        second = cli_runner.invoke(slides_translate_group, [str(de_path)])
         assert second.exit_code == 0, second.output
         assert "in sync" in second.output
         assert twin.read_text(encoding="utf-8") == before  # not doubled
@@ -235,7 +243,7 @@ class TestTwinPresentReport:
         de_path = _write(tmp_path / "slides_x.de.py", de)
         _patch_key(monkeypatch)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
-        first = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        first = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
         assert first.exit_code == 0, first.output
 
         # Drift the DE half after the ledger-recorded bootstrap.
@@ -247,7 +255,7 @@ class TestTwinPresentReport:
         twin = tmp_path / "slides_x.en.py"
         en_before = twin.read_text(encoding="utf-8")
 
-        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, [str(de_path)])
         assert result.exit_code == 1
         assert "pending sync item(s)" in result.output
         # Read-only: neither half was rewritten.
@@ -260,7 +268,9 @@ class TestTwinPresentReport:
         _patch_key(monkeypatch)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
         assert (
-            cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)]).exit_code
+            cli_runner.invoke(
+                slides_translate_group, _autopilot(de_path, *_common(tmp_path))
+            ).exit_code
             == 0
         )
         de_path.write_text(
@@ -268,9 +278,7 @@ class TestTwinPresentReport:
             encoding="utf-8",
         )
 
-        result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--json", *_common(tmp_path)]
-        )
+        result = cli_runner.invoke(slides_translate_group, [str(de_path), "--json"])
         assert result.exit_code == 1
         payload = json.loads(result.output)
         assert payload["action"] == "synced"
@@ -288,7 +296,7 @@ class TestTwinPresentReport:
         _patch_translator(monkeypatch, _mirror_translator(de, en))
 
         result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--force", *_common(tmp_path)]
+            slides_translate_group, _autopilot(de_path, "--force", *_common(tmp_path))
         )
         assert result.exit_code == 0, result.output
         assert "stale" not in (tmp_path / "slides_x.en.py").read_text(encoding="utf-8")
@@ -304,13 +312,11 @@ class TestErrors:
     def test_bilingual_stem_is_usage_error(self, cli_runner, tmp_path, monkeypatch):
         # No .de/.en tag on the source -> UsageError (exit 2).
         src = _write(tmp_path / "slides_x.py", _DECK)
-        result = cli_runner.invoke(slides_translate_cmd, [str(src), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, [str(src)])
         assert result.exit_code == 2
 
     def test_missing_source_is_error(self, cli_runner, tmp_path):
-        result = cli_runner.invoke(
-            slides_translate_cmd, [str(tmp_path / "nope.de.py"), *_common(tmp_path)]
-        )
+        result = cli_runner.invoke(slides_translate_group, [str(tmp_path / "nope.de.py")])
         assert result.exit_code == 2  # click.Path(exists=True)
 
 
@@ -332,7 +338,7 @@ class TestGlossary:
         # source is .de → target en → clm-glossary.en.md is discovered.
         (tmp_path / "clm-glossary.en.md").write_text("Use formal English.", encoding="utf-8")
 
-        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
 
         assert result.exit_code == 0, result.output
         assert captured["guidance"] == "Use formal English."  # single-direction bootstrap
@@ -348,7 +354,8 @@ class TestGlossary:
         explicit = _write(tmp_path / "custom.md", "explicit conventions")
 
         result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--glossary", str(explicit), *_common(tmp_path)]
+            slides_translate_group,
+            _autopilot(de_path, "--glossary", str(explicit), *_common(tmp_path)),
         )
 
         assert result.exit_code == 0, result.output
@@ -362,7 +369,7 @@ class TestGlossary:
         (tmp_path / "clm-glossary.en.md").write_text("conv", encoding="utf-8")
 
         result = cli_runner.invoke(
-            slides_translate_cmd, [str(de_path), "--json", *_common(tmp_path)]
+            slides_translate_group, _autopilot(de_path, "--json", *_common(tmp_path))
         )
 
         assert result.exit_code == 0, result.output
@@ -374,7 +381,7 @@ class TestGlossary:
         _patch_key(monkeypatch)
         captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
 
-        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
 
         assert result.exit_code == 0, result.output
         assert captured["guidance"] == ""
@@ -390,7 +397,7 @@ class TestGlossary:
         captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
         (tmp_path / "clm-glossary.en.md").write_text("EN conventions", encoding="utf-8")
 
-        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        result = cli_runner.invoke(slides_translate_group, [str(de_path)])
 
         # Exit 1: the pair has no ledger entry, so its members report cold.
         assert result.exit_code == 1, result.output
@@ -411,7 +418,9 @@ def test_bootstrap_alias_is_registered(cli_runner, tmp_path, monkeypatch):
     _patch_key(monkeypatch)
     _patch_translator(monkeypatch, _mirror_translator(de, en))
 
-    result = cli_runner.invoke(cli, ["slides", "bootstrap", str(de_path), *_common(tmp_path)])
+    result = cli_runner.invoke(
+        cli, ["slides", "bootstrap", *_autopilot(de_path, *_common(tmp_path))]
+    )
     assert result.exit_code == 0, result.output
     assert (tmp_path / "slides_x.en.py").exists()
 
@@ -434,7 +443,7 @@ def test_generated_deck_passes_validate_fail_on_warning(cli_runner, tmp_path, mo
     _patch_key(monkeypatch)
     _patch_translator(monkeypatch, _mirror_translator(de, en))
 
-    boot = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+    boot = cli_runner.invoke(slides_translate_group, _autopilot(de_path, *_common(tmp_path)))
     assert boot.exit_code == 0, boot.output
     assert (topic / "slides_intro.en.py").exists()
 

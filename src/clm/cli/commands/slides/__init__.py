@@ -32,7 +32,7 @@ from clm.cli.commands.slides.split import split_cmd  # noqa: E402
 from clm.cli.commands.slides.suggest_sync import suggest_sync_cmd  # noqa: E402
 from clm.cli.commands.slides.sync import slides_sync_group  # noqa: E402
 from clm.cli.commands.slides.tidy import tidy_cmd  # noqa: E402
-from clm.cli.commands.slides.translate import slides_translate_cmd  # noqa: E402
+from clm.cli.commands.slides.translate import slides_translate_group  # noqa: E402
 from clm.cli.commands.slides.unify import unify_cmd  # noqa: E402
 
 slides_group.add_command(normalize_slides_cmd, name="normalize")
@@ -45,10 +45,10 @@ slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(slides_sync_group, name="sync")
 slides_group.add_command(reconcile_vo_ids_cmd, name="reconcile-vo-ids")
 slides_group.add_command(rename_id_cmd, name="rename-id")
-slides_group.add_command(slides_translate_cmd, name="translate")
+slides_group.add_command(slides_translate_group, name="translate")
 # `bootstrap` is the cold-start direction of `translate`; keep it
 # invocable but list the command only once in --help.
-slides_group.add_command(hidden_alias(slides_translate_cmd, "bootstrap"))
+slides_group.add_command(hidden_alias(slides_translate_group, "bootstrap"))
 slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")

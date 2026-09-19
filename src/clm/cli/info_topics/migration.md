@@ -2,6 +2,25 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm slides translate` is an agent toolkit; the in-process model moved behind `autopilot` (#961, {version})
+
+**Breaking for scripts that bootstrap a deck in-process.** `clm slides
+translate SOURCE` no longer translates by itself: bare `translate` (the new
+default verb `report`) is read-only — twin absent it reports the task counts
+and points at `task` (exit `1`), twin present it runs the read-only sync
+report as before.
+
+| Previous invocation | Replacement |
+|---|---|
+| `clm slides translate SRC [--to L]` (bootstrap) | `clm slides translate autopilot SRC [--to L]` (same engine, still key-gated) — or the agent loop: `translate task SRC` → `translate accept SRC --answer …` (no API key) |
+| `clm slides translate SRC --force` | `clm slides translate autopilot SRC --force` |
+| `--translation-model` / `--cache-dir` / `--no-cache` / `--no-env-file` / `--glossary` on bare `translate` | Moved to `autopilot` (`--glossary` is also on `task`) |
+| `clm slides translate SRC --dry-run` | Unchanged — stays on the bare/report verb |
+
+The `bootstrap` alias follows `translate` verbatim. The write path's
+post-conditions are unchanged (twin + companion, EN-authority shared ids,
+ledger record), whether driven by `accept` or `autopilot`.
+
 ## Harvest history: explicit export and agent judgment (#960, {version})
 
 **Breaking for CLI and MCP callers.** Top-level `clm harvest port`,

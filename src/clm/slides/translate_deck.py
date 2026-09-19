@@ -45,9 +45,12 @@ from clm.slides.sync_writeback import CODE_ROLE, build_twin_cell, role_of
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CellPlan",
     "CellTranslation",
+    "PlanKind",
     "TranslateDeckError",
     "TranslateDeckResult",
+    "plan_cells",
     "translate_deck_text",
 ]
 
@@ -63,6 +66,79 @@ _HEADER_IMPORT_RE = {"de": split._HEADER_DE_IMPORT_RE, "en": split._HEADER_EN_IM
 
 
 CellKind = Literal["translated", "copied", "header", "import"]
+
+#: The plan vocabulary mirrors :data:`CellKind` (the engine's per-cell report
+#: kinds) so a framed task and an engine run describe one deck with the same
+#: words. ``header`` is the title-macro cell (role ``"title"``).
+PlanKind = CellKind
+
+
+@dataclass(frozen=True)
+class CellPlan:
+    """How ``plan_cells`` would treat one source cell (model-free framing).
+
+    The same classification :func:`translate_deck_text` applies, exposed so
+    the agent-facing ``translate task`` verb (#961) can frame the whole-deck
+    cold start without a translator: ``translated`` / ``header`` cells carry
+    the exact ``source_body`` the engine would send through the translator
+    (the title string for a ``header`` cell; ``None`` when the title is
+    empty — kept verbatim, nothing to answer). ``copied`` / ``import``
+    cells are engine-executed verbatim and carry no body.
+    """
+
+    index: int
+    kind: PlanKind
+    role: str | None  # the translation role for translated/header cells
+    slide_id: str | None
+    source_body: str | None  # None for copied/import cells
+
+
+def _classify_cell(
+    index: int, cell: RawCell, source_lang: str
+) -> tuple[PlanKind, str | None, str | None]:
+    """Classify one source cell: ``(kind, role, source_body)``.
+
+    The single classification both the engine loop and :func:`plan_cells`
+    apply — kept as one function so a framed task and a bootstrap can never
+    disagree about which cells are translated and with which body.
+    """
+    meta = cell.metadata
+    if meta.is_j2 and _HEADER_MACRO_RE[source_lang].search(cell.header):
+        match = _HEADER_MACRO_RE[source_lang].search(cell.header)
+        title = match.group(2)  # type: ignore[union-attr]
+        # An empty/whitespace title is kept verbatim by the engine (nothing
+        # to translate): still a ``header`` cell (the macro is rewritten),
+        # but with no body for an agent to answer.
+        return "header", "title", (title if title.strip() else None)
+    if meta.is_j2 and _HEADER_IMPORT_RE[source_lang].match(cell.header):
+        return "import", None, None
+    if meta.lang == source_lang:
+        return "translated", _translation_role(meta), cell.body.rstrip("\n")
+    return "copied", None, None
+
+
+def plan_cells(source_text: str, *, source_lang: str, comment_token: str = "#") -> list[CellPlan]:
+    """Frame every cell of a single-language half for translation (#961).
+
+    Read-only and model-free: returns one :class:`CellPlan` per cell in
+    document order, using the engine's own classification
+    (:func:`_classify_cell`) so the framed plan matches what a bootstrap
+    (or an ``autopilot`` run) would do exactly.
+    """
+    _, source_cells = split_cells(source_text, comment_token)
+    plans: list[CellPlan] = []
+    for index, cell in enumerate(source_cells):
+        kind, role, body = _classify_cell(index, cell, source_lang)
+        plans.append(
+            CellPlan(
+                index=index,
+                kind=kind,
+                role=role,
+                slide_id=cell.metadata.slide_id,
+                source_body=body,
+            )
+        )
+    return plans
 
 
 class TranslateDeckError(Exception):
@@ -140,38 +216,36 @@ def translate_deck_text(
 
     for index, cell in enumerate(source_cells):
         meta = cell.metadata
-
-        # 1. The title macro: rewrite header_<src> -> header_<tgt>, translating
-        #    only the title argument. Structural — never run through the cell
-        #    body translator.
-        if meta.is_j2 and _HEADER_MACRO_RE[source_lang].search(cell.header):
+        # The single classification (shared with ``plan_cells`` so a framed
+        # task and a bootstrap can never disagree about what is translated):
+        # 1. header — the title macro: rewrite header_<src> -> header_<tgt>,
+        #    translating only the title argument. Structural — never run
+        #    through the cell body translator.
+        # 2. import — the header import directive:
+        #    from ... import header_<src> -> header_<tgt>.
+        # 3. translated — a localized cell (carries lang=). Gate on lang, NOT
+        #    role_of: a localized id-less code cell has role_of() == None but
+        #    must still be translated.
+        # 4. copied — everything else (language-neutral / shared cells, other
+        #    j2 directives, stray foreign-language cells) goes verbatim.
+        #    Shared cells MUST stay byte-identical across the two halves or
+        #    unify/validation breaks.
+        kind, role, _body = _classify_cell(index, cell, source_lang)
+        if kind == "header":
             target_cells.append(_rewrite_header_macro(cell, source_lang, target_lang, translator))
             report.append(CellTranslation(index, "header", None, meta.slide_id, meta.lang))
-            continue
-
-        # 2. The header import directive: from ... import header_<src> -> header_<tgt>.
-        if meta.is_j2 and _HEADER_IMPORT_RE[source_lang].match(cell.header):
+        elif kind == "import":
             target_cells.append(_rewrite_header_import(cell, target_lang))
             report.append(CellTranslation(index, "import", None, meta.slide_id, meta.lang))
-            continue
-
-        # 3. A localized cell (carries lang=) — translate its body and swap the
-        #    language. Gate on lang, NOT role_of: a localized id-less code cell
-        #    has role_of() == None but must still be translated.
-        if meta.lang == source_lang:
-            role = _translation_role(meta)
+        elif kind == "translated":
+            assert role is not None  # _classify_cell always roles a translated cell
             target_cells.append(
                 _translate_localized_cell(cell, source_lang, target_lang, role, translator)
             )
             report.append(CellTranslation(index, "translated", role, meta.slide_id, meta.lang))
-            continue
-
-        # 4. Everything else — language-neutral / shared cells (no lang),
-        #    non-header j2 directives, and defensively any stray foreign-language
-        #    cell — is copied verbatim. Shared cells MUST stay byte-identical
-        #    across the two halves or unify/validation breaks.
-        target_cells.append(_clone_cell(cell))
-        report.append(CellTranslation(index, "copied", None, meta.slide_id, meta.lang))
+        else:
+            target_cells.append(_clone_cell(cell))
+            report.append(CellTranslation(index, "copied", None, meta.slide_id, meta.lang))
 
     target_text = reconstruct(preamble, target_cells)
     _assert_round_trips(source_text, target_text, source_lang, comment_token)

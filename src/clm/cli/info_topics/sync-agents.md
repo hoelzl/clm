@@ -703,6 +703,48 @@ the same trust; `record` is one command instead of a scripted
 report→build-JSON→apply pipeline. Reserve per-item `confirm` for the mixed
 case where cold items sit next to real work.
 
+## Cold-starting a twin (`clm slides translate task` / `accept`)
+
+When an author writes a deck in **one language only** (there is no twin to
+sync — the whole *other half* is missing), the sync verbs deliberately refuse
+to help: that cold start belongs to the `clm slides translate` toolkit (#961).
+It speaks the same contract as sync — envelope, freshness tokens, validator
+registry, exit codes (see `clm info agent-tasks`) — and no verb on its main
+path calls a model or needs an API key:
+
+```bash
+clm slides translate DECK.de.py --json        # report: counts + pointer (exit 1 = cold start)
+clm slides translate task DECK.de.py > task.json     # frame the whole deck (+ companion)
+# …translate the framed cells; echo the fingerprints; cover EXACTLY the framed rows…
+clm slides translate accept DECK.de.py --answer answer.json --json
+git diff                                            # review the new half
+```
+
+The task document lists every cell of the source half: `translated` and
+`header` rows carry the exact source body and their prompt role (prose /
+identifier-preserving code / the bare-phrase title rules — the same prompts
+the embedded model used, in `prompts`); `copied` and `import` rows are the
+engine-executed verbatim plan, answer nothing for them. The voiceover
+companion, when present and its target absent, is framed beside the deck under
+`companion.cells` and answered in `companion_translations`. The glossary that
+resolves for the target language is folded into the prompts and carried in the
+payload.
+
+The answer echoes `source_fingerprint` (and `companion_fingerprint`), the
+direction, and one `{"index", "body"}` row per framed translatable cell — full
+coverage, no extras; bodies are the cell content **without** the `# %%`
+delimiter line (the title row is a single bare phrase). `accept` re-checks the
+fingerprints against the live files, refuses anything stale wholesale, then
+writes through the ordinary bootstrap engine: twin and companion, EN-authority
+shared ids minted on **both** halves, and the pair recorded in the committed
+sync ledger — so the next `clm slides sync report` is clean, and the whole
+half never frames as cold members. `--force` re-bootstraps over a twin that
+appeared after framing; `--dry-run` validates without writing.
+
+The in-process OpenRouter translation survives behind
+`clm slides translate autopilot DECK` for the agent-less human (key-gated);
+agents and CI use `task`/`accept`.
+
 `clm slides split` and `clm slides translate` record freshly-created pairs
 automatically, so a normal authoring flow starts warm.
 
@@ -856,10 +898,10 @@ rejected decisions; the sessions that improvised did not):
   promise that the pass will record.
 - **Many `translate_new` bodies at once** (e.g. a whole deck authored in one
   language): answering each in JSON works but is heavy. The sanctioned bulk
-  alternative is `clm slides translate DECK.en.py` to bootstrap the missing
-  half wholesale (it records the ledger), then review and reconcile the
-  drifts through the normal loop (`keep_twin` for cells your review left
-  unchanged).
+  alternative is `clm slides translate task DECK.en.py` — frame the whole-deck
+  cold start, answer it in one document, `accept` writes the missing half
+  wholesale (it records the ledger), then review and reconcile the drifts
+  through the normal loop (`keep_twin` for cells your review left unchanged).
 - **Parallel sweeps**: `report --json` writes to stdout — in a fan-out,
   capture each deck's output under a deck-derived filename (generic names
   like `report1.json` collided and mixed decks up in real runs), and verify
