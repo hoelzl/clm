@@ -447,7 +447,7 @@ class AlignmentsCache(_JsonCache):
     def __init__(self, cache_root: Path):
         super().__init__(
             cache_root,
-            encoder=_encode_alignment,
+            encoder=encode_alignment,
             decoder=decode_alignment,
         )
 
@@ -648,7 +648,7 @@ def _encode_assignment(a) -> dict:
     }
 
 
-def _encode_alignment(alignment) -> dict:
+def encode_alignment(alignment) -> dict:
     return {
         "slide_notes": {
             str(idx): {

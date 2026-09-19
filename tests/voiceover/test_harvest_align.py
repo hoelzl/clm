@@ -109,7 +109,7 @@ class TestAssignmentTrail:
 
 class TestCacheRoundTrip:
     def test_alignment_with_assignments_round_trips(self):
-        from clm.voiceover.cache import _encode_alignment, decode_alignment
+        from clm.voiceover.cache import decode_alignment, encode_alignment
 
         original = _alignment(
             [
@@ -132,7 +132,7 @@ class TestCacheRoundTrip:
                 ),
             ]
         )
-        decoded = decode_alignment(_encode_alignment(original))
+        decoded = decode_alignment(encode_alignment(original))
         assert len(decoded.assignments) == 3
         a = decoded.assignments[1]
         assert a.slide_index == 1
@@ -181,7 +181,7 @@ class TestCacheRoundTrip:
         assert decoded.overridden_by_sequential is False
 
     def test_fingerprint_stable_across_round_trip(self):
-        from clm.voiceover.cache import _encode_alignment, decode_alignment
+        from clm.voiceover.cache import decode_alignment, encode_alignment
 
         alignment = _alignment(
             [
@@ -189,7 +189,7 @@ class TestCacheRoundTrip:
             ]
         )
         assert alignment_fingerprint(alignment) == alignment_fingerprint(
-            decode_alignment(_encode_alignment(alignment))
+            decode_alignment(encode_alignment(alignment))
         )
 
 

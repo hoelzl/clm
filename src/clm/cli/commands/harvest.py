@@ -811,10 +811,10 @@ def harvest_align_accept_cmd(
             "`--alignment` on the next report/task run"
         )
     if not dry_run:
-        from clm.voiceover.cache import _encode_alignment
+        from clm.voiceover.cache import encode_alignment
 
         out.write_text(
-            json.dumps(_encode_alignment(corrected), indent=2, ensure_ascii=False),
+            json.dumps(encode_alignment(corrected), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
     sys.exit(EXIT_CLEAN)

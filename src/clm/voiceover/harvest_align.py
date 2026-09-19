@@ -78,9 +78,9 @@ class AlignAnswer:
 
 def alignment_fingerprint(alignment: AlignmentResult) -> str:
     """The freshness token over the whole alignment (canonical encoding)."""
-    from clm.voiceover.cache import _encode_alignment
+    from clm.voiceover.cache import encode_alignment
 
-    canonical = json.dumps(_encode_alignment(alignment), sort_keys=True, ensure_ascii=False)
+    canonical = json.dumps(encode_alignment(alignment), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
