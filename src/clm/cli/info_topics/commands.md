@@ -29,6 +29,27 @@ in CLM 1.8 and the remaining single-command groups (`topic`, `spec`,
 `authoring`) were merged into `course`/`slides` after 1.11 — see
 `clm info migration` for the full rename tables.
 
+### The narration toolchain at a glance
+
+Slide narration (voiceover/notes text) has a lifecycle, and each stage has
+exactly one owning command. If you are touching narration, start here:
+
+| You want to … | Command |
+|---|---|
+| Recover narration from a recorded video onto the current deck | `clm harvest report → task → accept`, then the twin side lands through `clm slides sync` |
+| Create the missing other-language half of a deck — and its companion — from scratch | `clm slides translate report → task → accept` (or `translate autopilot` with an API key) |
+| Reconcile an existing split pair — deck halves **and** `voiceover_*` companions alike | `clm slides sync report → apply → verify → record` (companions are members of the same table and ledger) |
+| Move narration between a deck and a `voiceover_*` companion file | `clm voiceover extract / inline / inline-notes` (layout plumbing, no judgment) |
+| Check that each slide's bullets are actually narrated | `clm slides coverage` |
+| Repair mismatched voiceover/notes `slide_id`s across a pair | `clm slides reconcile-vo-ids` |
+| See which decks lack a language entirely (course-wide) | `clm slides coverage-report` |
+
+The judgment-bearing entries (`harvest`, `slides sync`, `slides translate`)
+are agent toolkits: read by default, framed tasks, load-bearing exit codes —
+see `clm info agent-tasks` for the shared contract and the per-toolkit
+topics (`clm info sync-agents`, `clm info harvest-agents`) for the loops.
+The rest are mechanical.
+
 ### `clm build`
 
 Build a course from a spec file.
