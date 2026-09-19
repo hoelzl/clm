@@ -63,8 +63,10 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
     Bare `clm harvest DECK VIDEO…` == `clm harvest report DECK VIDEO…`.
     Verbs:
       report        what did the recording say, slide by slide? (read-only)
-      task          frame one slide's curation/translation judgment (read-only)
+      task          frame one slide's judgment: curate/translate (video) or
+                    port/compare (--source, revision history) (read-only)
       accept        validate a bullet-list answer + write it (the agent write path)
+      compare-accept  validate a compare verdict + write the report artifact
       verify        structural post-check on the pair
       align         review/correct the pipeline's heuristic alignment (#960)
       autopilot     legacy all-in-one WITH embedded models (agent-less humans)
@@ -325,7 +327,7 @@ def harvest_report_cmd(
 
 @harvest_group.command("task")
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
-@click.argument("videos", nargs=-1, required=True, type=str)
+@click.argument("videos", nargs=-1, required=False, type=str)
 @_pipeline_options
 @click.option(
     "--slide",
@@ -334,10 +336,18 @@ def harvest_report_cmd(
 )
 @click.option(
     "--kind",
-    type=click.Choice(["curate", "translate"]),
+    type=click.Choice(["curate", "translate", "port", "compare"]),
     default="curate",
     show_default=True,
-    help="curate = merge the recorded language; translate = frame the twin side.",
+    help="curate = merge the recorded language; translate = frame the twin side; "
+    "port/compare = revision-history framing (need --source, no VIDEO).",
+)
+@click.option(
+    "--source",
+    "source_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="port/compare only: the older slide file (e.g. a sync-at-rev export).",
 )
 @click.pass_context
 def harvest_task_cmd(
@@ -347,6 +357,7 @@ def harvest_task_cmd(
     lang: str,
     slide: str | None,
     kind: str,
+    source_path: Path | None,
     transcript_override: Path | None,
     alignment_override: Path | None,
     whisper_model: str,
@@ -361,11 +372,26 @@ def harvest_task_cmd(
     content), the bullet-list `answer_schema`, and the freshness tokens
     (`baseline_fingerprint`, `video_fingerprint`) that `accept` re-checks.
 
+    With `--kind port`, frames the port of an older revision's voiceover
+    (`--source`) onto each matched slide of the current deck — answered
+    through the ordinary `harvest accept`. With `--kind compare`, frames
+    bullet-relation labeling for each matched pair — answered through
+    `harvest compare-accept`. Both need --source and no VIDEO arguments.
+
     \b
     Exit codes: 0 tasks emitted (possibly zero in the sweep) · 2 error /
     the named slide cannot be framed.
     """
     from clm.slides.agent_task import envelope
+
+    if kind in ("port", "compare"):
+        _emit_revision_tasks(ctx, slides, videos, lang, slide, kind, source_path)
+        return
+    if source_path is not None:
+        raise click.UsageError("--source only applies to --kind port/compare")
+    if not videos:
+        raise click.UsageError("curate/translate tasks need at least one VIDEO argument")
+
     from clm.voiceover.harvest_task import TaskUnavailable, build_tasks
 
     bundle = _load_bundle_or_exit(slides)
@@ -401,6 +427,194 @@ def harvest_task_cmd(
         )
     )
     sys.exit(0)
+
+
+def _emit_revision_tasks(
+    ctx,
+    slides: Path,
+    videos: tuple[str, ...],
+    lang: str,
+    slide: str | None,
+    kind: str,
+    source_path: Path | None,
+) -> None:
+    """The port/compare half of `harvest task` (#960) — file-pair framing."""
+    from clm.core.slide_text.slide_parser import parse_slides
+    from clm.slides.agent_task import envelope
+    from clm.voiceover.harvest_task import TaskUnavailable
+
+    if videos:
+        raise click.UsageError(f"--kind {kind} takes no VIDEO arguments (source is --source)")
+    if source_path is None:
+        raise click.UsageError(f"--kind {kind} needs --source (the older slide file)")
+
+    source_groups = parse_slides(source_path, lang, include_header=True)
+    target_groups = parse_slides(slides, lang, include_header=True)
+
+    if kind == "port":
+        from clm.voiceover.harvest_port import build_port_tasks
+
+        bundle = _load_bundle_or_exit(slides)
+        deck = bundle.outcome.deck
+        assert deck is not None
+        try:
+            tasks = build_port_tasks(deck, target_groups, source_groups, lang=lang, slide=slide)
+        except TaskUnavailable as exc:
+            click.echo(f"error: {exc}", err=True)
+            sys.exit(2)
+        body: dict = {"kind": "port", "source": str(source_path), "tasks": tasks}
+    else:
+        from clm.voiceover.harvest_compare import build_compare_tasks, file_fingerprint
+
+        tasks = build_compare_tasks(source_groups, target_groups, lang=lang)
+        if slide is not None:
+            handle = slide if slide.startswith(("id:", "title:")) else f"id:{slide}"
+            tasks = [t for t in tasks if t["item"] == handle]
+            if not tasks:
+                click.echo(f"error: no judged pair for {handle}", err=True)
+                sys.exit(2)
+        body = {
+            "kind": "compare",
+            "source_fingerprint": file_fingerprint(source_path),
+            "target_fingerprint": file_fingerprint(slides),
+            "tasks": tasks,
+        }
+    click.echo(
+        json.dumps(
+            envelope(1, tool="harvest", verb="task", body=body), indent=2, ensure_ascii=False
+        )
+    )
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# compare-accept — bank a compare verdict as the canonical report (#960)
+# ---------------------------------------------------------------------------
+
+
+@harvest_group.command("compare-accept")
+@click.argument("source", type=click.Path(exists=True, path_type=Path))
+@click.argument("target", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--lang",
+    required=True,
+    type=click.Choice(["de", "en"]),
+    help="The voiceover language both files are read in.",
+)
+@click.option(
+    "--answer",
+    "answer_src",
+    required=True,
+    help="The verdict document framed by `task --kind compare`: a file path, or '-' for stdin.",
+)
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where to write the canonical report JSON (default: stdout).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the JSON outcome envelope.")
+def harvest_compare_accept_cmd(
+    source: Path,
+    target: Path,
+    lang: str,
+    answer_src: str,
+    output_path: Path | None,
+    as_json: bool,
+):
+    """Validate a compare verdict document and write the report artifact.
+
+    The answer echoes the task envelope's freshness tokens
+    (`source_fingerprint`, `target_fingerprint` — file-content hashes) and
+    must answer every framed pair. Validation is shape + freshness +
+    coverage; the engine never judges the labels. Writes a report JSON in
+    the `harvest compare --json` shape (re-render it with
+    `harvest compare-report`). Compare is auditing: decks are never touched.
+
+    \b
+    Exit codes: 0 written · 2 rejected (stale fingerprints, missing/extra
+    verdicts, malformed document) / error.
+    """
+    from clm.core.slide_text.slide_parser import parse_slides
+    from clm.slides.agent_task import EXIT_CLEAN, EXIT_ERROR, VALIDATORS, rejection_payload
+    from clm.voiceover.harvest_compare import (
+        COMPARE_ANSWER_VALIDATOR,
+        CompareAnswer,
+        CompareRejected,
+        build_compare_report_payload,
+        file_fingerprint,
+    )
+
+    if answer_src == "-":
+        raw = click.get_text_stream("stdin").read()
+    else:
+        answer_path = Path(answer_src)
+        if not answer_path.exists():
+            raise click.UsageError(f"answer file not found: {answer_src}")
+        raw = answer_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise click.UsageError(f"the answer is not valid JSON: {exc}") from exc
+
+    try:
+        answer: CompareAnswer = VALIDATORS.get(COMPARE_ANSWER_VALIDATOR)(payload)
+        if answer.source_fingerprint != file_fingerprint(source):
+            raise CompareRejected(
+                "the source file changed since the tasks were framed "
+                "(source_fingerprint mismatch) — re-run `harvest task --kind compare`"
+            )
+        if answer.target_fingerprint != file_fingerprint(target):
+            raise CompareRejected(
+                "the target file changed since the tasks were framed "
+                "(target_fingerprint mismatch) — re-run `harvest task --kind compare`"
+            )
+        report = build_compare_report_payload(
+            source,
+            target,
+            parse_slides(source, lang, include_header=True),
+            parse_slides(target, lang, include_header=True),
+            answer,
+            lang=lang,
+        )
+    except CompareRejected as exc:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    rejection_payload(1, tool="harvest", verb="compare-accept", reason=str(exc)),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            click.echo(f"rejected: {exc}", err=True)
+        sys.exit(EXIT_ERROR)
+
+    rendered = json.dumps(report, indent=2, ensure_ascii=False)
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "tool": "harvest",
+                    "verb": "compare-accept",
+                    "applied": True,
+                    "verdicts": len(answer.verdicts),
+                    "written": str(output_path) if output_path else None,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    if output_path is not None:
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+        if not as_json:
+            click.echo(f"wrote {output_path} ({len(answer.verdicts)} verdict(s))")
+    elif not as_json:
+        click.echo(rendered)
+    sys.exit(EXIT_CLEAN)
 
 
 # ---------------------------------------------------------------------------

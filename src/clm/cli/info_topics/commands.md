@@ -4152,6 +4152,8 @@ Read-only; no model.
 
 ```
 clm harvest task SLIDES VIDEO... --lang {de|en} [--slide ID] [--kind curate|translate]
+clm harvest task SLIDES --lang {de|en} --kind port --source OLDER_FILE [--slide ID]
+clm harvest task SLIDES --lang {de|en} --kind compare --source OLDER_FILE [--slide ID]
 ```
 
 Takes the same pipeline/cache/injection options as `report`. Each task
@@ -4164,11 +4166,41 @@ filter recording noise into the `dropped` audit list), structured `inputs`
 answer must echo: per-side `baseline_fingerprint` plus `video_fingerprint`.
 `--kind curate` merges the recorded language; `--kind translate` frames the
 twin side from the already-curated source. Omitting `--slide` frames every
-actionable item. A slide with more than one narrative cell per side is
-refused (ambiguous — edit the files directly).
+actionable item.
+
+`--kind port`/`--kind compare` are the revision-history kinds (no VIDEO;
+`--source` is the older slide file, e.g. a `sync-at-rev` export). `port`
+frames each matched slide pair (`unchanged`/`modified`, source carries
+voiceover) with the target slide's baseline and the source's prior bullets;
+the answer is the same `harvest-bullets` document and lands through the
+ordinary `clm harvest accept` (id-keyed, companion-aware). `compare` frames
+bullet-relation labeling per matched pair (validator `harvest-compare`,
+file-content freshness tokens); the answer document (one `verdicts` entry
+per framed pair) is banked by `clm harvest compare-accept`, which writes
+the canonical report JSON.
 
 **Exit codes:** `0` tasks emitted (possibly zero in the sweep) · `2` error /
 the named slide cannot be framed.
+
+#### `clm harvest compare-accept` (CLM {version}+)
+
+Validate a compare verdict document (from `task --kind compare`) and write
+the canonical compare-report JSON — the same shape `clm harvest compare
+--json` emits and `clm harvest compare-report` re-renders. Compare is
+auditing: decks are never touched.
+
+```
+clm harvest compare-accept SOURCE TARGET --lang {de|en} --answer FILE|- [-o PATH] [--json]
+```
+
+The answer echoes the task envelope's `source_fingerprint` /
+`target_fingerprint` (file-content hashes) and must answer every framed
+pair (an empty `outcomes` list is a valid verdict). Deterministic buckets
+(`new_at_head` / `removed_at_head` / both-sides-empty) row in the report
+without a verdict, as before.
+
+**Exit codes:** `0` written · `2` rejected (stale fingerprints, missing or
+extra verdicts, malformed document) / error.
 
 #### `clm harvest accept` (CLM {version}+)
 

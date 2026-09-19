@@ -168,8 +168,8 @@ def parse_answer(payload: Any) -> Answer:
     if not isinstance(item, str) or not item.startswith("id:"):
         raise AcceptRejected("'item' must be the slide handle string, e.g. \"id:intro\"")
     kind = payload.get("kind")
-    if kind not in ("curate", "translate"):
-        raise AcceptRejected('\'kind\' must be "curate" or "translate"')
+    if kind not in ("curate", "translate", "port"):
+        raise AcceptRejected('\'kind\' must be "curate", "translate", or "port"')
     tokens = payload.get("baseline_fingerprints")
     if not isinstance(tokens, dict):
         raise AcceptRejected(
@@ -267,7 +267,7 @@ def _replace_body(cell: SideCell, body: str) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _narrative_members(deck: BilingualDeck, slide_id: str) -> list[Member] | None:
+def narrative_members(deck: BilingualDeck, slide_id: str) -> list[Member] | None:
     for group in deck.groups:
         if group.anchor_id == slide_id:
             return [m for m in group.members if m.role in _NARRATIVE_ROLES]
@@ -519,7 +519,7 @@ def accept_answer(
             "--record needs the answer's 'video_fingerprint' (echo it from the task document)"
         )
     slide_id = answer.item.split(":", 1)[1]
-    members = _narrative_members(deck, slide_id)
+    members = narrative_members(deck, slide_id)
     if members is None:
         raise AcceptRejected(f"no slide {answer.item} in the deck")
     by_key = {m.key.render(): m for m in members}
