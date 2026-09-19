@@ -129,7 +129,9 @@ report without needing a verdict. A pair the matcher flags
 
 The typical source file comes from `clm harvest sync-at-rev` (which still
 uses embedded models internally — quarantined legacy, being retired) or
-simply `git show <rev>:path > slides-at-<rev>.py`.
+simply `git show <rev>:path > slides-at-<rev>.py`. Over MCP, the framing
+half is mirrored: `harvest_task` accepts `kind="port"` / `kind="compare"`
+with a `source` argument (no videos); the answer/accept side stays CLI-only.
 
 ## verify — the structural post-check
 

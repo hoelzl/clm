@@ -3200,10 +3200,9 @@ harvest cutover (no aliases — see `clm info migration`).
 | `voiceover_inline` | Merge voiceover cells back from companion file |
 | `authoring_rules` | Look up merged authoring rules for a course |
 | `harvest_report` | Read-only harvest report for a deck + recording(s) — the same envelope as `clm harvest report --json` (accepting an answer is CLI-only: `clm harvest accept`) |
-| `harvest_task` | Frame a slide's curation/translation judgment as a JSON task — read-only twin of `clm harvest task` |
+| `harvest_task` | Frame a slide's judgment as a JSON task — read-only twin of `clm harvest task`; `kind="port"`/`kind="compare"` (with `source`) frame the revision-history kinds (CLM {version}+) |
 | `harvest_transcribe` | Transcribe a video through the harvest artifact cache |
 | `harvest_identify_rev` | Identify which historical revision a recording was made against |
-| `harvest_compare` | Compare voiceover content between two slide files |
 | `harvest_backfill_dry` | Preview a backfill (identify-rev → sync-at-rev → port) without writing |
 | `harvest_cache_list` | List entries in the harvest artifact cache |
 | `harvest_trace_show` | Read a merge-trace log and return entries as JSON |

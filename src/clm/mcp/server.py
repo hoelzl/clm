@@ -37,7 +37,6 @@ from clm.mcp.tools import (
     handle_get_language_view,
     handle_harvest_backfill_dry,
     handle_harvest_cache_list,
-    handle_harvest_compare,
     handle_harvest_identify_rev,
     handle_harvest_report,
     handle_harvest_task,
@@ -515,38 +514,6 @@ def create_server(data_dir: Path) -> MCPServer:
         )
 
     @mcp.tool()
-    async def harvest_compare(
-        source: str,
-        target: str,
-        lang: str,
-        model: str | None = None,
-        api_base: str | None = None,
-    ) -> str:
-        """Compare voiceover content between two slide files (read-only).
-
-        For each matched slide pair, the LLM labels every bullet as
-        ``covered`` / ``rewritten`` / ``added`` / ``dropped`` /
-        ``manual_review``.  Neither file is modified.  ``source`` is
-        usually produced by ``clm harvest sync-at-rev`` against the
-        recording's identified revision; ``target`` is the current HEAD.
-
-        Args:
-            source: Older slide file (usually from sync-at-rev).
-            target: Current slide file.
-            lang: "de" or "en".
-            model: Override the judge LLM model.
-            api_base: Override the LLM API base URL.
-        """
-        return await handle_harvest_compare(
-            source,
-            target,
-            data_dir,
-            lang=lang,
-            model=model,
-            api_base=api_base,
-        )
-
-    @mcp.tool()
     async def harvest_backfill_dry(
         slide_file: str,
         videos: list[str],
@@ -682,6 +649,7 @@ def create_server(data_dir: Path) -> MCPServer:
         lang: str,
         slide: str | None = None,
         kind: str = "curate",
+        source: str | None = None,
         transcript: str | None = None,
         alignment: str | None = None,
         whisper_model: str = "large-v3",
@@ -703,15 +671,22 @@ def create_server(data_dir: Path) -> MCPServer:
         ``clm harvest accept`` on the CLI — by design there is no MCP
         write path.
 
+        With ``kind="port"`` / ``kind="compare"`` this mirrors
+        ``clm harvest task --kind port|compare --source FILE``: no videos;
+        ``source`` is the older slide file. Compare verdicts are banked by
+        ``clm harvest compare-accept`` on the CLI.
+
         Args:
             slides: The recorded-language deck half (absolute or relative
                 to the data directory).
-            videos: Recording video file paths.
+            videos: Recording video file paths (curate/translate only).
             lang: The recorded (spoken) language ("de" or "en").
             slide: Frame one slide (bare id or ``id:...`` handle). Omit
                 to frame every actionable item.
-            kind: "curate" (merge the recorded language) or "translate"
-                (frame the twin side).
+            kind: "curate" (merge the recorded language), "translate"
+                (frame the twin side), "port" / "compare" (revision-history
+                framing; needs ``source``, no videos).
+            source: The older slide file (port/compare only).
             transcript / alignment: precomputed-input overrides (see
                 ``harvest_report``).
             whisper_model / backend / device: ASR knobs.
@@ -725,6 +700,7 @@ def create_server(data_dir: Path) -> MCPServer:
             lang=lang,
             slide=slide,
             kind=kind,
+            source=source,
             transcript=transcript,
             alignment=alignment,
             whisper_model=whisper_model,
