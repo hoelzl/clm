@@ -145,13 +145,13 @@ class TestExtractEventFrame:
 class TestMatcherTotalDuration:
     def test_total_duration_used_in_timeline(self):
         """When total_duration is provided, it sets the last entry's end_time."""
-        from clm.voiceover.matcher import _build_timeline
+        from clm.voiceover.matcher import _AlignedEvent, _build_timeline
 
         aligned = [
-            (
-                TransitionEvent(timestamp=5.0, peak_diff=0.5, confidence=3.0, num_frames=1),
-                1,
-                90.0,
+            _AlignedEvent(
+                event=TransitionEvent(timestamp=5.0, peak_diff=0.5, confidence=3.0, num_frames=1),
+                slide_index=1,
+                score=90.0,
             ),
         ]
         timeline = _build_timeline(aligned, video_duration=300.0)

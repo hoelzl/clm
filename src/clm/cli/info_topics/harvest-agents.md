@@ -109,6 +109,35 @@ produces). So a deck you have just harvested one language for will pass
 `harvest verify` and be refused by `sync record` until the twin exists — expected,
 and the sync loop is how you clear it.
 
+## align — reviewing the pipeline's guesses
+
+Before you curate, check **how confidently** the deterministic pipeline
+assigned speech to slides:
+
+```
+clm harvest align report DECK VIDEO… --lang de
+→ clm harvest align accept DECK VIDEO… --lang de --answer align-answer.json
+→ re-run report/task with --alignment <written-file>
+```
+
+`align report` frames every uncertain heuristic decision as an item with its
+evidence: boundary-straddling segments (`overlap_fraction` vs the runner-up
+slide and its fraction), unassigned segments with their reason
+(`no_overlap` / `header_slide`), and OCR slide matches that were weak or
+**overruled by the sequential constraint** (`overridden_by_sequential` —
+the raw best OCR match lost to forward-progress ordering). Exit codes:
+`0` nothing uncertain · `1` items framed · `2` error.
+
+`align accept` takes reassignments — `{"segment_index": N, "to_slide": M}`
+(`to_slide: null` unassigns) — validates them against the live alignment
+(echo both freshness tokens: `video_fingerprint`, `alignment_fingerprint`),
+rebuilds the per-slide notes (the `[Revisited]` grouping is re-derived,
+never hand-edited), and writes a **full alignment file**. Load it with
+`--alignment` on the next `report`/`task`; iteration works. A wrong
+`slide_match` item is fixed indirectly: reassign the segments in its window.
+An alignment cached before the assignment trail existed carries no records —
+re-run once with `--refresh-cache`.
+
 ## The `dropped` audit list
 
 Everything you filter out of the transcript (greetings, self-corrections,

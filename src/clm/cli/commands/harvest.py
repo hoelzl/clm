@@ -66,6 +66,7 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
       task          frame one slide's curation/translation judgment (read-only)
       accept        validate a bullet-list answer + write it (the agent write path)
       verify        structural post-check on the pair
+      align         review/correct the pipeline's heuristic alignment (#960)
       autopilot     legacy all-in-one WITH embedded models (agent-less humans)
       backfill      identify-rev → sync-at-rev → port over historical revisions
       port          transfer voiceover between slide files (LLM merge)
@@ -175,9 +176,8 @@ def _load_bundle_or_exit(slides: Path):
     return bundle
 
 
-def _build_report_data(
+def _run_pipeline_artifacts(
     ctx,
-    bundle,
     slides: Path,
     videos: tuple[str, ...],
     lang: str,
@@ -186,11 +186,12 @@ def _build_report_data(
     whisper_model: str,
     backend_name: str,
     device: str,
-) -> dict:
+):
+    """Run the cached deterministic tier; returns (slide_groups, artifacts)."""
     from clm.cli.commands._video_args import expand_video_args
     from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.cache import CachePolicy
-    from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline
+    from clm.voiceover.harvest import HarvestUsageError, run_pipeline
     from clm.voiceover.overrides import (
         OverrideError,
         load_alignment_override,
@@ -223,7 +224,34 @@ def _build_report_data(
         )
     except HarvestUsageError as exc:
         raise click.UsageError(str(exc)) from exc
+    return slide_groups, video_paths, artifacts
 
+
+def _build_report_data(
+    ctx,
+    bundle,
+    slides: Path,
+    videos: tuple[str, ...],
+    lang: str,
+    transcript_override: Path | None,
+    alignment_override: Path | None,
+    whisper_model: str,
+    backend_name: str,
+    device: str,
+) -> dict:
+    from clm.voiceover.harvest import build_report
+
+    slide_groups, video_paths, artifacts = _run_pipeline_artifacts(
+        ctx,
+        slides,
+        videos,
+        lang,
+        transcript_override,
+        alignment_override,
+        whisper_model,
+        backend_name,
+        device,
+    )
     return build_report(bundle, slide_groups, artifacts, lang=lang, video_paths=video_paths)
 
 
@@ -575,6 +603,221 @@ def harvest_verify_cmd(slides: Path, as_json: bool):
                 "translation (run the `clm slides sync` loop)"
             )
     sys.exit(0 if ok else 2)
+
+
+# ---------------------------------------------------------------------------
+# align — reviewable pipeline alignment (#960)
+# ---------------------------------------------------------------------------
+
+
+@harvest_group.group("align")
+def harvest_align_group():
+    """Review and correct the pipeline's heuristic alignment decisions.
+
+    \b
+    report   frame uncertain segment assignments / slide matches (read-only)
+    accept   apply segment reassignments; writes a full alignment file
+             for `--alignment` on the next report/task run
+    """
+
+
+@harvest_align_group.command("report")
+@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=str)
+@_pipeline_options
+@click.pass_context
+def harvest_align_report_cmd(
+    ctx,
+    slides: Path,
+    videos: tuple[str, ...],
+    lang: str,
+    transcript_override: Path | None,
+    alignment_override: Path | None,
+    whisper_model: str,
+    backend_name: str,
+    device: str,
+):
+    """Frame the pipeline's uncertain alignment decisions as items (read-only).
+
+    Surfaces what the heuristics hid: boundary-straddling transcript
+    segments (with overlap fractions and the runner-up slide), unassigned
+    segments with their reason, and OCR slide matches that were weak or
+    overruled by the sequential constraint. Each item carries the evidence;
+    answer segment assignments with `harvest align accept`.
+
+    \b
+    Exit codes: 0 no uncertain items · 1 items framed · 2 error.
+    """
+    from clm.slides.agent_task import EXIT_CLEAN, EXIT_WORK_PENDING
+    from clm.voiceover.harvest_align import build_align_report
+
+    slide_groups, video_paths, artifacts = _run_pipeline_artifacts(
+        ctx,
+        slides,
+        videos,
+        lang,
+        transcript_override,
+        alignment_override,
+        whisper_model,
+        backend_name,
+        device,
+    )
+    report = build_align_report(artifacts, slide_groups, video_paths)
+    click.echo(json.dumps(report, indent=2, ensure_ascii=False))
+    sys.exit(EXIT_WORK_PENDING if report["items"] else EXIT_CLEAN)
+
+
+@harvest_align_group.command("accept")
+@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=str)
+@_pipeline_options
+@click.option(
+    "--answer",
+    "answer_src",
+    required=True,
+    help="The align answer document: a file path, or '-' for stdin.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where to write the corrected alignment (default: "
+    "<SLIDES-stem>.alignment.json beside the deck). Load it with "
+    "`--alignment` on the next report/task run.",
+)
+@click.option("--dry-run", is_flag=True, help="Validate and report; write nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the JSON outcome envelope.")
+@click.pass_context
+def harvest_align_accept_cmd(
+    ctx,
+    slides: Path,
+    videos: tuple[str, ...],
+    lang: str,
+    answer_src: str,
+    output_path: Path | None,
+    dry_run: bool,
+    as_json: bool,
+    transcript_override: Path | None,
+    alignment_override: Path | None,
+    whisper_model: str,
+    backend_name: str,
+    device: str,
+):
+    """Validate segment reassignments and write a corrected alignment file.
+
+    The answer echoes the report's freshness tokens (`video_fingerprint`,
+    `alignment_fingerprint`) — a stale answer is rejected, never merged.
+    The result is a full alignment document: pass it via `--alignment` to
+    `report`/`task` to build on it (iteration works).
+
+    \b
+    Exit codes: 0 written (or dry-run valid) · 2 rejected / error.
+    """
+    from clm.slides.agent_task import (
+        EXIT_CLEAN,
+        EXIT_ERROR,
+        VALIDATORS,
+        rejection_payload,
+    )
+    from clm.voiceover.harvest_align import (
+        ALIGN_ANSWER_VALIDATOR,
+        AlignAnswer,
+        AlignRejected,
+        alignment_fingerprint,
+        apply_reassignments,
+    )
+
+    if answer_src == "-":
+        raw = click.get_text_stream("stdin").read()
+    else:
+        answer_path = Path(answer_src)
+        if not answer_path.exists():
+            raise click.UsageError(f"answer file not found: {answer_src}")
+        raw = answer_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise click.UsageError(f"the answer is not valid JSON: {exc}") from exc
+
+    slide_groups, video_paths, artifacts = _run_pipeline_artifacts(
+        ctx,
+        slides,
+        videos,
+        lang,
+        transcript_override,
+        alignment_override,
+        whisper_model,
+        backend_name,
+        device,
+    )
+    try:
+        answer: AlignAnswer = VALIDATORS.get(ALIGN_ANSWER_VALIDATOR)(payload)
+        from clm.voiceover.harvest import video_fingerprint
+
+        current_video_fp = video_fingerprint(video_paths)
+        if answer.video_fingerprint != current_video_fp:
+            raise AlignRejected(
+                f"the answer's video_fingerprint does not match the videos "
+                f"({current_video_fp}) — re-run `harvest align report`"
+            )
+        current_fp = alignment_fingerprint(artifacts.alignment)
+        if answer.alignment_fingerprint != current_fp:
+            raise AlignRejected(
+                "the alignment changed since the report was framed "
+                "(alignment_fingerprint mismatch) — re-run `harvest align report`"
+            )
+        header_indices = {sg.index for sg in slide_groups if sg.slide_type == "header"}
+        corrected = apply_reassignments(
+            artifacts.alignment,
+            answer,
+            valid_slides={sg.index for sg in slide_groups},
+            header_indices=header_indices,
+        )
+    except AlignRejected as exc:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    rejection_payload(1, tool="harvest", verb="align-accept", reason=str(exc)),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            click.echo(f"rejected: {exc}", err=True)
+        sys.exit(EXIT_ERROR)
+
+    out = output_path or slides.with_suffix(".alignment.json")
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "tool": "harvest",
+                    "verb": "align-accept",
+                    "applied": True,
+                    "reassignments": len(answer.reassignments),
+                    "written": None if dry_run else str(out),
+                    "dry_run": dry_run,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    else:
+        click.echo(
+            f"{'dry-run: would write' if dry_run else 'wrote'} {out} "
+            f"({len(answer.reassignments)} reassignment(s)) — load it with "
+            "`--alignment` on the next report/task run"
+        )
+    if not dry_run:
+        from clm.voiceover.cache import encode_alignment
+
+        out.write_text(
+            json.dumps(encode_alignment(corrected), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    sys.exit(EXIT_CLEAN)
 
 
 def _print_human_report(report: dict) -> None:

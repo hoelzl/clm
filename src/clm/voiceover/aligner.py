@@ -9,6 +9,11 @@ Key behaviors:
 - When a segment straddles a boundary, it biases towards the previous slide
 - Backtracking (revisiting an earlier slide) inserts a **[Revisited]** marker
 - Header slides (index 0 with is_header=True) receive no transcript text
+
+Every assignment decision is recorded as a :class:`SegmentAssignment` with
+its overlap fractions and runner-up, so `harvest align report` can frame the
+uncertain ones for agent review (#960) instead of letting the heuristic pick
+vanish.
 """
 
 from __future__ import annotations
@@ -51,11 +56,39 @@ class SlideNotes:
 
 
 @dataclass
+class SegmentAssignment:
+    """One segment's assignment decision, with the evidence behind it.
+
+    ``slide_index`` is ``None`` for unassigned segments (``reason`` says
+    why). ``overlap_fraction`` is the share of the segment's duration
+    overlapping the chosen slide's timeline entry; ``runner_up_*`` carry
+    the second-best candidate when one exists. ``reason``:
+
+    * ``clear`` — one overlapping entry, or a dominant one
+    * ``previous_slide_bias`` — straddle resolved by the bias rule
+    * ``largest_overlap`` — straddle resolved by raw overlap
+    * ``no_overlap`` — unassigned: outside every timeline entry
+    * ``header_slide`` — unassigned: overlapped only the header slide
+    """
+
+    segment: TranscriptSegment
+    slide_index: int | None
+    reason: str
+    overlap_fraction: float | None = None
+    runner_up_index: int | None = None
+    runner_up_fraction: float | None = None
+
+
+@dataclass
 class AlignmentResult:
     """Complete result of transcript-to-slide alignment."""
 
     slide_notes: dict[int, SlideNotes]
     unassigned_segments: list[TranscriptSegment] = field(default_factory=list)
+    #: Every assignment decision, in transcript order — the confidence
+    #: trail ``harvest align report`` frames (#960). Empty for alignments
+    #: decoded from older cache entries.
+    assignments: list[SegmentAssignment] = field(default_factory=list)
 
     def get_notes_text(self, slide_index: int) -> str | None:
         """Get formatted notes text for a slide, or None if no notes."""
@@ -77,6 +110,70 @@ def _compute_overlap(
     return max(0.0, overlap_end - overlap_start)
 
 
+def _assign_segment(
+    segment: TranscriptSegment,
+    timeline: list[TimelineEntry],
+) -> SegmentAssignment:
+    """Assign one segment to its slide, recording the evidence.
+
+    Same rule as :func:`_find_best_slide` (temporal overlap with
+    previous-slide bias), but returns the full decision record instead of
+    only the index.
+    """
+    if not timeline:
+        return SegmentAssignment(segment=segment, slide_index=None, reason="no_overlap")
+
+    overlaps: list[tuple[int, float, int]] = []  # (slide_index, overlap, position)
+    for i, entry in enumerate(timeline):
+        overlap = _compute_overlap(segment.start, segment.end, entry.start_time, entry.end_time)
+        if overlap > 0:
+            overlaps.append((entry.slide_index, overlap, i))
+
+    if not overlaps:
+        return SegmentAssignment(segment=segment, slide_index=None, reason="no_overlap")
+
+    seg_duration = segment.duration
+    if len(overlaps) == 1 or seg_duration <= 0:
+        idx = overlaps[0][0]
+        return SegmentAssignment(
+            segment=segment,
+            slide_index=idx,
+            reason="clear",
+            overlap_fraction=(overlaps[0][1] / seg_duration if seg_duration > 0 else None),
+        )
+
+    # Multiple overlapping entries: apply previous-slide bias
+    overlaps.sort(key=lambda x: x[2])
+    first_idx, first_overlap, _ = overlaps[0]
+    by_overlap = sorted(overlaps, key=lambda x: x[1], reverse=True)
+    runner_up_idx, runner_up_overlap = (
+        (by_overlap[1][0], by_overlap[1][1]) if len(by_overlap) > 1 else (None, None)
+    )
+
+    def _fraction(o: float | None) -> float | None:
+        return None if o is None else o / seg_duration
+
+    first_fraction = first_overlap / seg_duration
+    if first_fraction >= PREVIOUS_SLIDE_BIAS:
+        return SegmentAssignment(
+            segment=segment,
+            slide_index=first_idx,
+            reason="previous_slide_bias",
+            overlap_fraction=first_fraction,
+            runner_up_index=runner_up_idx,
+            runner_up_fraction=_fraction(runner_up_overlap),
+        )
+    best_idx, best_overlap = by_overlap[0][0], by_overlap[0][1]
+    return SegmentAssignment(
+        segment=segment,
+        slide_index=best_idx,
+        reason="largest_overlap",
+        overlap_fraction=_fraction(best_overlap),
+        runner_up_index=runner_up_idx,
+        runner_up_fraction=_fraction(runner_up_overlap),
+    )
+
+
 def _find_best_slide(
     segment: TranscriptSegment,
     timeline: list[TimelineEntry],
@@ -90,40 +187,7 @@ def _find_best_slide(
     Returns:
         Slide index, or None if the segment doesn't overlap any timeline entry.
     """
-    if not timeline:
-        return None
-
-    overlaps: list[tuple[int, float, int]] = []  # (slide_index, overlap, position)
-
-    for i, entry in enumerate(timeline):
-        overlap = _compute_overlap(segment.start, segment.end, entry.start_time, entry.end_time)
-        if overlap > 0:
-            overlaps.append((entry.slide_index, overlap, i))
-
-    if not overlaps:
-        return None
-
-    if len(overlaps) == 1:
-        return overlaps[0][0]
-
-    # Multiple overlapping entries: apply previous-slide bias
-    seg_duration = segment.duration
-    if seg_duration <= 0:
-        return overlaps[0][0]
-
-    # Sort by timeline position (earlier first)
-    overlaps.sort(key=lambda x: x[2])
-
-    # The earliest overlapping entry gets the bias
-    first_idx, first_overlap, _ = overlaps[0]
-    first_fraction = first_overlap / seg_duration
-
-    if first_fraction >= PREVIOUS_SLIDE_BIAS:
-        return first_idx
-
-    # Otherwise, pick the entry with the largest overlap
-    best = max(overlaps, key=lambda x: x[1])
-    return best[0]
+    return _assign_segment(segment, timeline).slide_index
 
 
 def align_transcript(
@@ -137,29 +201,60 @@ def align_transcript(
         timeline: Slide timeline from the matcher.
 
     Returns:
-        AlignmentResult with per-slide notes and any unassigned segments.
+        AlignmentResult with per-slide notes, any unassigned segments, and
+        the per-segment assignment records (the confidence trail).
     """
     if not timeline:
         return AlignmentResult(
             slide_notes={},
             unassigned_segments=list(transcript.segments),
+            assignments=[
+                SegmentAssignment(segment=s, slide_index=None, reason="no_overlap")
+                for s in transcript.segments
+            ],
         )
 
     # Track which slides are header slides
     header_indices = {e.slide_index for e in timeline if e.is_header}
 
     # Build initial assignment: segment -> slide_index
+    decisions: list[SegmentAssignment] = []
     assignments: list[tuple[TranscriptSegment, int]] = []
     unassigned: list[TranscriptSegment] = []
 
     for segment in transcript.segments:
-        slide_idx = _find_best_slide(segment, timeline)
-        if slide_idx is None or slide_idx in header_indices:
+        decision = _assign_segment(segment, timeline)
+        if decision.slide_index is not None and decision.slide_index in header_indices:
+            decision = SegmentAssignment(
+                segment=segment,
+                slide_index=None,
+                reason="header_slide",
+                overlap_fraction=decision.overlap_fraction,
+                runner_up_index=decision.runner_up_index,
+                runner_up_fraction=decision.runner_up_fraction,
+            )
+        decisions.append(decision)
+        if decision.slide_index is None:
             unassigned.append(segment)
         else:
-            assignments.append((segment, slide_idx))
+            assignments.append((segment, decision.slide_index))
 
-    # Build per-slide notes with backtracking detection
+    return AlignmentResult(
+        slide_notes=group_assignments(assignments),
+        unassigned_segments=unassigned,
+        assignments=decisions,
+    )
+
+
+def group_assignments(
+    assignments: list[tuple[TranscriptSegment, int]],
+) -> dict[int, SlideNotes]:
+    """Group assigned segments into per-slide notes with revisit markers.
+
+    Extracted from :func:`align_transcript` so ``harvest align accept``
+    (#960) can rebuild the notes after reassigning segments — the
+    ``[Revisited]`` grouping is derived, never hand-edited.
+    """
     slide_notes: dict[int, SlideNotes] = {}
     max_slide_seen = -1
 
@@ -191,7 +286,7 @@ def align_transcript(
         if slide_idx > max_slide_seen:
             max_slide_seen = slide_idx
 
-    return AlignmentResult(slide_notes=slide_notes, unassigned_segments=unassigned)
+    return slide_notes
 
 
 def _is_new_revisit_group(

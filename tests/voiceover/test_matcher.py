@@ -7,6 +7,7 @@ import pytest
 from clm.core.slide_text.slide_parser import SlideGroup
 from clm.voiceover.keyframes import TransitionEvent
 from clm.voiceover.matcher import (
+    _AlignedEvent,
     _build_timeline,
     _pick_best_sequential,
     _sequential_align,
@@ -146,7 +147,7 @@ class TestSequentialAlign:
             (self._make_event(50.0), [(3, 91.0), (2, 45.0)]),
         ]
         aligned = _sequential_align(raw_matches, slides)
-        indices = [idx for _, idx, _ in aligned]
+        indices = [m.slide_index for m in aligned]
         assert indices == [1, 2, 3]
 
     def test_duplicate_titles_resolved_by_sequence(self):
@@ -167,7 +168,7 @@ class TestSequentialAlign:
             (self._make_event(90.0), [(5, 93.0), (2, 93.0), (3, 48.0)]),
         ]
         aligned = _sequential_align(raw_matches, slides)
-        indices = [idx for _, idx, _ in aligned]
+        indices = [m.slide_index for m in aligned]
         assert indices == [1, 2, 3, 4, 5]
 
     def test_header_detected_at_start(self):
@@ -181,20 +182,24 @@ class TestSequentialAlign:
             (self._make_event(30.0), [(1, 95.0), (0, 30.0)]),
         ]
         aligned = _sequential_align(raw_matches, slides)
-        indices = [idx for _, idx, _ in aligned]
+        indices = [m.slide_index for m in aligned]
         assert indices[0] == 0  # header
         assert indices[1] == 1  # first real slide
 
 
 class TestBuildTimeline:
-    def _make_event(self, ts: float) -> TransitionEvent:
-        return TransitionEvent(timestamp=ts, peak_diff=0.02, confidence=3.0, num_frames=1)
+    def _aligned(self, ts: float, idx: int, score: float) -> _AlignedEvent:
+        return _AlignedEvent(
+            event=TransitionEvent(timestamp=ts, peak_diff=0.02, confidence=3.0, num_frames=1),
+            slide_index=idx,
+            score=score,
+        )
 
     def test_simple_timeline(self):
         aligned = [
-            (self._make_event(10.0), 1, 95.0),
-            (self._make_event(30.0), 2, 93.0),
-            (self._make_event(50.0), 3, 91.0),
+            self._aligned(10.0, 1, 95.0),
+            self._aligned(30.0, 2, 93.0),
+            self._aligned(50.0, 3, 91.0),
         ]
         timeline = _build_timeline(aligned, video_duration=70.0)
         assert len(timeline) == 3
@@ -208,9 +213,9 @@ class TestBuildTimeline:
     def test_merges_adjacent_same_slide(self):
         # Two events on the same slide (within-slide changes)
         aligned = [
-            (self._make_event(10.0), 1, 95.0),
-            (self._make_event(15.0), 1, 90.0),  # same slide
-            (self._make_event(30.0), 2, 93.0),
+            self._aligned(10.0, 1, 95.0),
+            self._aligned(15.0, 1, 90.0),  # same slide
+            self._aligned(30.0, 2, 93.0),
         ]
         timeline = _build_timeline(aligned, video_duration=50.0)
         assert len(timeline) == 2
@@ -223,7 +228,7 @@ class TestBuildTimeline:
         assert _build_timeline([], video_duration=100.0) == []
 
     def test_single_entry(self):
-        aligned = [(self._make_event(5.0), 1, 95.0)]
+        aligned = [self._aligned(5.0, 1, 95.0)]
         timeline = _build_timeline(aligned, video_duration=60.0)
         assert len(timeline) == 1
         assert timeline[0].start_time == 5.0
@@ -231,9 +236,9 @@ class TestBuildTimeline:
 
     def test_header_slides_marked(self):
         aligned = [
-            (self._make_event(0.0), 0, 80.0),
-            (self._make_event(10.0), 1, 95.0),
-            (self._make_event(30.0), 2, 93.0),
+            self._aligned(0.0, 0, 80.0),
+            self._aligned(10.0, 1, 95.0),
+            self._aligned(30.0, 2, 93.0),
         ]
         timeline = _build_timeline(aligned, video_duration=50.0, header_indices={0})
         assert timeline[0].is_header is True
@@ -242,8 +247,8 @@ class TestBuildTimeline:
 
     def test_no_header_indices(self):
         aligned = [
-            (self._make_event(0.0), 0, 80.0),
-            (self._make_event(10.0), 1, 95.0),
+            self._aligned(0.0, 0, 80.0),
+            self._aligned(10.0, 1, 95.0),
         ]
         timeline = _build_timeline(aligned, video_duration=30.0)
         assert timeline[0].is_header is False

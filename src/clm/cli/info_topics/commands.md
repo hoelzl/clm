@@ -4214,6 +4214,31 @@ clm harvest verify SLIDES [--json]
 
 **Exit codes:** `0` pass (pending twins allowed) · `2` structural errors.
 
+#### `clm harvest align` (CLM {version}+)
+
+Review and correct the deterministic pipeline's heuristic alignment
+decisions — the transcript→slide assignments (boundary straddles) and
+OCR→slide matches the sequential constraint overruled. See
+`clm info harvest-agents` ("align — reviewing the pipeline's guesses")
+for the loop.
+
+```
+clm harvest align report SLIDES VIDEO... --lang {de|en} [pipeline options]
+clm harvest align accept SLIDES VIDEO... --lang {de|en} --answer FILE|- [pipeline options] [--output PATH] [--dry-run] [--json]
+```
+
+`align report` is JSON-only and frames each uncertain decision as an item
+with its evidence (`overlap_fraction` / runner-up / reason codes).
+**Exit codes:** `0` nothing uncertain · `1` items framed · `2` error.
+
+`align accept` validates reassignments
+(`{"segment_index": N, "to_slide": M|null}`, echoing the report's
+`video_fingerprint` + `alignment_fingerprint`), rebuilds the per-slide
+notes, and writes a full alignment file (default `<SLIDES-stem>.alignment.json`)
+to load via `--alignment` on the next `report`/`task`.
+**Exit codes:** `0` written · `2` rejected (stale fingerprint, invalid
+target, header-slide target, or an alignment without assignment records).
+
 #### `clm harvest autopilot`
 
 The legacy all-in-one pipeline **with embedded models** — formerly
