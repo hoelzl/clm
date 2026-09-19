@@ -153,7 +153,16 @@ heavyweight-process spawners and wall-clock-timing suites; the directory set is
 `--full` runs the whole fast suite (~8.5 min). The repo's **push protocol**
 (AGENTS.md) assigns the tier to merge-intended branches touching
 build/worker/test infrastructure; CI runs everything on every PR and is
-*required* for merge to master. Both hooks install from one `pre-commit install` (`default_install_hook_types` in
+*required* for merge to master.
+
+> **Static guards are not in the smoke tier.** The smoke tier is the
+> build-engine core in `tests/build` plus gate meta-tests — the source-tree
+> guards at `tests/` root (e.g. `test_architecture_contracts.py`'s
+> cross-module private-import rule) run only in the deterministic tier and CI.
+> A push that adds a `from clm.x import _private` import passes the push gate
+> and fails CI (#960 hit exactly this, twice). When a change touches imports
+> across module boundaries, run `pytest tests/test_architecture_contracts.py`
+> before pushing. Both hooks install from one `pre-commit install` (`default_install_hook_types` in
 `.pre-commit-config.yaml`). Run the suite manually any time with `pytest`, or as
 the hook would with `uv run pre-commit run --hook-stage pre-push pytest`.
 

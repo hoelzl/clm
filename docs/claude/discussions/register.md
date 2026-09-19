@@ -4,7 +4,6 @@ owner: maintainers
 updated: 2026-09-19
 review-by: 2027-03-19
 ---
-
 # Register: discussions index
 
 One row per thread; sessions numbered S1… across the tree. Gaps mean a
@@ -18,9 +17,24 @@ the reasons behind it are in `README.md`; the save procedure is
 |--------|---------|-------------|--------|----------|
 | `cpp-ide-export` | Student-facing C++ IDE export (#928): Phase 4 verification and rollout, the owner's review of the generated output (kernel drops bare-expression output → `SHOW(expr);` everywhere; `slide_` prefix; `section_name` attribute; plain title; HTML→Markdown comments; no promotion heuristic), the lambda-crash landmine, differential check with values | Active — all follow-ups merged; owner's student-view review of four decks still open | clm #937, #938, #939, #940; CppCourses #129, #130; `docs/claude/handovers/cpp-ide-export-handover.md` | S1 |
 | `agent-discussion-continuity` | Porting the save/resume-discussion stack (skills, `docs/claude/discussions/`, transcript tooling) from CppCourses/Cenotaph to this repository | Active — stack landed and in use from this save; first saves of older sessions pending | clm #941 | S1 (last owner turn of the `cpp-ide-export` transcript) |
-| `agent-toolkit-candidates` | Which clm features should stop being stand-alone and become agent toolkits (the sync / release / harvest shape): survey of embedded-LLM paths, human-only output, and CLI-first affordances; three tiers filed as issues | Active — investigation and issues landed; work starts with the shared kit (#959) | umbrella clm #970, children #959–#969, `docs/claude/agent-toolkit-candidates-investigation.md` (PR #971) | S2 |
+| `agent-toolkit-candidates` | Which clm features should stop being stand-alone and become agent toolkits (the sync / release / harvest shape): survey of embedded-LLM paths, human-only output, and CLI-first affordances; three tiers filed as issues | Active — kit (#959) and #960 slices 1–4 merged; slice 5 (retire embedded-LLM verbs behind autopilot) is next, its shim-vs-removal question open | umbrella clm #970, children #959–#969, `docs/claude/agent-toolkit-candidates-investigation.md` (PR #971); kit PR #973; #960 slices PRs #974, #975, #976 | S2, S3 |
 
 ### Dropped threads / corrections worth keeping
+
+- Issue #960's text said compare answers would be "accepted through the
+  existing `harvest accept` write path"; the implementation found compare is
+  read-only auditing with no deck write to route, so `harvest
+  compare-accept` writes the canonical report JSON instead (the
+  `align accept` sidecar precedent). Do not re-litigate; the owner saw the
+  deviation in PR #975. (S3)
+- The S2-open question "MCP `harvest_compare`: model-free or dropped" was
+  answered as both — the model-invoking tool was dropped and the task mirror
+  extended (`harvest_task` kind=port/compare). (S3)
+- The cross-module private-import guard
+  (`tests/test_architecture_contracts.py`) is not in the pre-push smoke tier;
+  two #960 pushes passed the gate and failed CI. Documented in
+  `docs/developer-guide/testing.md` — run it explicitly when touching
+  cross-module imports. (S3)
 
 - The owner recalled video transcription as "mostly a stand-alone feature";
   the survey showed `clm harvest` is already agent-first (#546) and only its
@@ -54,6 +68,7 @@ the reasons behind it are in `README.md`; the save procedure is
 |---|------|-----------|------|--------------------|--------|----------|
 | S1 | 2026-09-13 | `cpp-ide-export/transcripts/2026-09-13-s1.md` | 5.91 MB → 48 kchar (122:1) | 4 / 26 | Claude Code session `a57d56f4-065d-49fc-852b-06051debb22c.jsonl` (ran in slug `C--Users-tc-Programming-Python-Projects-clm--claude-worktrees-issue-928-cpp-ide-export`, moved to slug `c--Users-tc-Programming-Python-Projects-clm` when the working directory changed) | content through 2026-09-13 23:01 (Phase 4, owner review + follow-ups incl. the SHOW rollout and gate, the discussion-stack port); this save itself is covered by the two state files |
 | S2 | 2026-09-19 | `agent-toolkit-candidates/transcripts/2026-09-19-s2.md` | 1.15 MB → 14 kchar (96:1, after removing two subagent hand-back rows from a temporary source copy) | 2 / 13 | Claude Code session `f666c194-70c2-4d3d-ab31-103a52e938ea.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, main checkout) | content through 2026-09-19 01:39 (the survey, the assessment, the doc, issues #959–#970, PR #971); this save itself is covered by the state file |
+| S3 | 2026-09-19 | *(none — opencode session; the transcript cleaner targets Claude/Hermes formats)* | — | — | opencode session in the main checkout (resumed S2 via the `resume-discussion` skill) | content through 2026-09-19 (owner confirmed tier ordering; #959 + #960 slices 1–4 landed as PRs #973–#976; the slice-5 shim-vs-removal question is the next boundary); this save is covered by the state file |
 
 ### Deliberately skipped
 
