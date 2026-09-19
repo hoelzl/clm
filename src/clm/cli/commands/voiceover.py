@@ -34,7 +34,7 @@ from clm.slides.voiceover_tools import (
 )
 
 if TYPE_CHECKING:
-    from clm.voiceover.compare import CompareReport
+    from clm.voiceover.compare_report import CompareReport
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -941,13 +941,13 @@ def sync_at_rev_cmd(
 
     \b
     1. ``clm harvest identify-rev`` suggests a SHA
-    2. ``clm harvest sync-at-rev --rev <sha> -o scratch.py`` produces
+    2. ``clm harvest autopilot sync-at-rev --rev <sha> -o scratch.py`` produces
        voiceover cells against the historical slides
-    3. ``clm harvest port scratch.py slide.py`` ports forward
+    3. ``clm harvest autopilot port scratch.py slide.py`` ports forward
 
     \b
     Examples:
-        clm harvest sync-at-rev slides.py video.mp4 --rev abc1234 \\
+        clm harvest autopilot sync-at-rev slides.py video.mp4 --rev abc1234 \\
             --lang de -o /tmp/slides-at-abc1234-with-voiceover.py
     """
     import warnings
@@ -1042,9 +1042,9 @@ def sync_at_rev_cmd(
 def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
     """Port voiceover from SOURCE slide file onto TARGET slide file.
 
-    File-to-file transfer with no git involvement — use `clm harvest
+    File-to-file transfer with no git involvement — use `clm harvest autopilot
     backfill` when you want history-aware extraction. SOURCE typically
-    comes from `clm harvest sync-at-rev` against an older revision;
+    comes from `clm harvest autopilot sync-at-rev` against an older revision;
     TARGET is the current HEAD version.
 
     Slide matching uses slide_id as the primary key, falling back to
@@ -1055,8 +1055,8 @@ def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
 
     \b
     Examples:
-        clm harvest port /tmp/slides-at-abc123.py slides.py --lang de
-        clm harvest port old.py new.py --lang en --dry-run
+        clm harvest autopilot port /tmp/slides-at-abc123.py slides.py --lang de
+        clm harvest autopilot port old.py new.py --lang en --dry-run
     """
     notes_map = _port_voiceover_notes(
         source=source,
@@ -1243,7 +1243,7 @@ def compare_cmd(source, target, lang, as_json, fmt, output, model, api_base):
     """Evaluate voiceover differences between SOURCE and TARGET slide files.
 
     Read-only sibling to ``port``. SOURCE typically comes
-    from ``clm harvest sync-at-rev`` against an older revision;
+    from ``clm harvest autopilot sync-at-rev`` against an older revision;
     TARGET is the current HEAD version. For each matched slide pair,
     the LLM labels every bullet as ``covered`` / ``rewritten`` /
     ``added`` / ``dropped`` / ``manual_review``. Neither file is
@@ -1251,8 +1251,8 @@ def compare_cmd(source, target, lang, as_json, fmt, output, model, api_base):
 
     \b
     Examples:
-        clm harvest compare /tmp/slides-at-abc123.py slides.py --lang de
-        clm harvest compare old.py new.py --lang en --json -o report.json
+        clm harvest autopilot compare /tmp/slides-at-abc123.py slides.py --lang de
+        clm harvest autopilot compare old.py new.py --lang en --json -o report.json
     """
     if as_json and fmt is not None and fmt != "json":
         raise click.UsageError(
@@ -1279,7 +1279,7 @@ def _emit_compare_report(
     output: Path | None,
 ) -> None:
     """Route a :class:`CompareReport` to stdout/output in the chosen format."""
-    from clm.voiceover.compare import render_markdown
+    from clm.voiceover.compare_report import render_markdown
 
     # Default: Rich table to stdout; plain-text to file. Explicit formats win.
     if fmt is None:
@@ -1329,19 +1329,18 @@ def _emit_compare_report(
     help="Write the rendered report to this path (default: stdout).",
 )
 def report_cmd(report_json, fmt, output):
-    """Re-render a saved ``clm harvest compare --json`` report.
+    """Re-render a saved ``clm harvest compare-accept`` report.
 
     The JSON report is the canonical artifact; this command renders it
     in whichever format is convenient (default: Markdown).  Use this
-    instead of re-running ``compare`` when all you want is to reshape
+    instead of re-running judgment when all you want is to reshape
     the output — no LLM calls are made.
 
     \b
     Examples:
-        clm harvest compare old.py new.py --lang de --json -o report.json
         clm harvest compare-report report.json -o report.md
     """
-    from clm.voiceover.compare import render_markdown
+    from clm.voiceover.compare_report import render_markdown
 
     payload = json.loads(report_json.read_text(encoding="utf-8"))
 
@@ -1365,7 +1364,7 @@ def report_cmd(report_json, fmt, output):
 
     # fmt == "table" — reconstruct a CompareReport for Rich rendering.
     from clm.voiceover.bullet_schema import BulletOutcome, BulletStatus
-    from clm.voiceover.compare import CompareReport, SlideComparison
+    from clm.voiceover.compare_report import CompareReport, SlideComparison
     from clm.voiceover.slide_matcher import MatchKind
 
     slides: list[SlideComparison] = []
@@ -1623,7 +1622,7 @@ def compare_from_inventory_cmd(
 
     \b
     Examples:
-        clm harvest compare-from-inventory \\
+        clm harvest autopilot compare-from-inventory \\
             slides/module_550_ml_azav/topic_016_web_services_intro_azav/slides_010v_web_services_intro.py \\
             --inventory ../PythonCourses/planning/video_to_slide_mapping.json \\
             --lang de --json -o report.json
@@ -1835,9 +1834,9 @@ def backfill_cmd(
 
     \b
     Examples:
-        clm harvest backfill slides.py video.mp4 --lang de --auto
-        clm harvest backfill slides.py video.mp4 --lang en --rev abc1234
-        clm harvest backfill slides.py "Teil 1.mp4" "Teil 2.mp4" \\
+        clm harvest autopilot backfill slides.py video.mp4 --lang de --auto
+        clm harvest autopilot backfill slides.py video.mp4 --lang en --rev abc1234
+        clm harvest autopilot backfill slides.py "Teil 1.mp4" "Teil 2.mp4" \\
             --lang de --auto --apply
     """
     import shutil

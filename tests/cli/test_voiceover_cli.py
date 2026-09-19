@@ -16,7 +16,7 @@ class TestVoiceoverGroup:
 
     def test_sync_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
         assert result.exit_code == 0
         assert "--lang" in result.output
         assert "--mode" in result.output
@@ -72,7 +72,7 @@ class TestVoiceoverGroup:
 
     def test_port_voiceover_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["port", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "port", "--help"])
         assert result.exit_code == 0
         assert "--lang" in result.output
         assert "--dry-run" in result.output
@@ -82,7 +82,7 @@ class TestVoiceoverGroup:
 
     def test_sync_at_rev_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["sync-at-rev", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "sync-at-rev", "--help"])
         assert result.exit_code == 0
         assert "--rev" in result.output
         assert "--output" in result.output
@@ -92,7 +92,7 @@ class TestVoiceoverGroup:
 
     def test_backfill_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["backfill", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "backfill", "--help"])
         assert result.exit_code == 0
         assert "--lang" in result.output
         assert "--rev" in result.output
@@ -104,7 +104,7 @@ class TestVoiceoverGroup:
 
     def test_compare_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["compare", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "compare", "--help"])
         assert result.exit_code == 0
         assert "--lang" in result.output
         assert "--json" in result.output

@@ -21,6 +21,13 @@ S3 (2026-09-19, opencode session, no cleaned transcript — the cleaner targets
 Claude/Hermes formats): the owner confirmed the tier ordering (kit first) and
 #959 plus #960 slices 1–4 **landed** (PRs #973–#976, all merged).
 
+S4 (2026-09-19, opencode session, no cleaned transcript): the owner chose
+outright removal over top-level compatibility shims and corrected the
+artifact verb's name to **`export-at-rev`**: without a merge it no longer
+syncs anything. Slice 5 and its slice-6 documentation are implemented on
+`claude/issue-960-retire-history-verbs`; consult #960 for the linked PR and
+live landing status.
+
 ## Settled
 
 - **The contract is already defined twice** (`clm info sync-agents`,
@@ -84,23 +91,41 @@ Claude/Hermes formats): the owner confirmed the tier ordering (kit first) and
   task error says to fix duplicate slide ids/titles. Surfacing the discarded
   candidates (align-style) is possible follow-up, not planned.
 
-## #960 remaining (next session's work)
+## #960 retirement decisions and findings (S4)
 
-- **Slice 5 — retire the embedded-LLM verbs behind `autopilot`**
-  (the acceptance criterion "no `clm harvest` verb other than `autopilot`
-  imports the LLM client"): `autopilot`, `sync-at-rev`, `backfill`, and the
-  CLI `port`/`compare` verbs still call `merge.py`/`port.py`/`compare.py`.
-  `backfill` should become a documented loop in `harvest-agents`
-  (`identify-rev --json` → sync-at-rev-equivalent → `task --kind port` →
-  `accept`) instead of a three-stage embedded pipeline; whether the CLI verbs
-  `port`/`compare`/`backfill`/`sync-at-rev` stay as thin autopilot-marked
-  shims or are removed outright is the design question to settle first.
-  Note `sync-at-rev` produces an *artifact* (the old-revision deck), not
-  judgment — it may legitimately stay, minus its embedded-model merge.
-- **Slice 6**: the backfill loop documentation (folds into slice 5's docs).
-- MCP mirror for `align report` was deferred (contract says every toolkit
-  has a read-only mirror; harvest has one, align is a sub-verb — decide in
-  slice 5/6 whether to add `harvest_align_report`).
+- **Remove the top-level verbs, no shims:** `port`, `compare`, `backfill`,
+  `compare-from-inventory`, and `sync-at-rev`. Legacy model execution is
+  explicitly nested under `autopilot`; its original bare one-shot spelling
+  still dispatches to `autopilot run`.
+- **Rename rather than silently weaken `sync-at-rev`.** The owner asked:
+  "should we not rename it, e.g., to `export-at-rev`, since it doesn't seem
+  to sync anymore?" The new command exports git blobs into a new directory,
+  preserving the historical deck/twin/companion names and layout. It takes
+  no videos or model options. This is artifact production, not judgment.
+- **Backfill includes curation:** export carries only narration already in
+  git. The documented loop is identify → export → report/curate/accept on
+  the old deck → task-port/accept on the current deck → verify. Tested by
+  `tests/cli/test_harvest_history_retirement.py::test_export_to_port_accept_loop_with_companions`
+  with embedded imports blocked. See `clm info harvest-agents` for the
+  actual procedure; migration and changelog fragments capture the break.
+- **Companion prerequisite found:** slice 2's target write was companion-aware,
+  but its revision readers ignored companions. Port/compare CLI and MCP now
+  read them; compare freshness includes their bytes. Regression coverage:
+  `test_compare_companion_freshness_and_model_free_accept` in that same file
+  and `tests/mcp/test_harvest_tools.py::TestHandleHarvestTaskPort::test_reads_companion_narration`.
+- **Correction to S3's MCP assessment:** `harvest_compare` was not the last
+  embedded-model entry point. `harvest_backfill_dry` spawned the old pipeline
+  with `--dry-run`, which still ran both model stages before suppressing the
+  final patch write. That tool is now removed too; the exact MCP tool set is
+  pinned in `tests/mcp/test_server.py::TestCreateServer`.
+- **Knowledge audit:** durable behavior is in the regression tests, user guide,
+  `commands` / `harvest-agents` / `migration` info topics, and #960 changelog
+  fragments. The naming rationale and corrected MCP premise live here.
+- **Still deferred:** an MCP mirror specifically for `align report` (harvest
+  already has a read-only toolkit mirror); add it if callers need alignment
+  review over MCP. It was not added as part of retirement. Discarded
+  `manual_review` match candidates and partial alignment patches remain
+  deferred as above.
 
 ## Open (unchanged, still owner decisions)
 
@@ -109,5 +134,7 @@ Claude/Hermes formats): the owner confirmed the tier ordering (kit first) and
 
 ## Next conversational boundary
 
-Slice 5's design question (shim vs removal for the legacy verbs). The
-kickoff prompt the owner holds names it.
+Check #960's linked PR/CI status, then continue the owner-approved Tier-1
+order with #961 (slides translate). Before #962, settle its verb-pair vs
+harvest-task placement question. Do not reopen shim-vs-removal or the
+`export-at-rev` naming decision.

@@ -256,7 +256,7 @@ class TestVoiceoverGroupHelp:
 
     def test_sync_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
         assert result.exit_code == 0
         assert "--mode" in result.output
         assert "--overwrite" in result.output

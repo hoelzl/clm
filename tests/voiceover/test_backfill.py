@@ -125,6 +125,7 @@ class TestSyncAtRevGuards:
         result = runner.invoke(
             harvest_group,
             [
+                "autopilot",
                 "sync-at-rev",
                 str(slides),
                 str(video),
@@ -153,6 +154,7 @@ class TestSyncAtRevGuards:
         result = runner.invoke(
             harvest_group,
             [
+                "autopilot",
                 "sync-at-rev",
                 str(slides),
                 str(video),
@@ -182,6 +184,7 @@ class TestBackfillGuards:
         result = runner.invoke(
             harvest_group,
             [
+                "autopilot",
                 "backfill",
                 str(slides),
                 str(video),
@@ -209,6 +212,7 @@ class TestBackfillGuards:
         result = runner.invoke(
             harvest_group,
             [
+                "autopilot",
                 "backfill",
                 str(slides),
                 str(video),

@@ -35,7 +35,6 @@ from clm.mcp.tools import (
     handle_course_outline,
     handle_extract_voiceover,
     handle_get_language_view,
-    handle_harvest_backfill_dry,
     handle_harvest_cache_list,
     handle_harvest_identify_rev,
     handle_harvest_report,
@@ -511,56 +510,6 @@ def create_server(data_dir: Path) -> MCPServer:
             no_cache=no_cache,
             refresh_cache=refresh_cache,
             cache_root=cache_root,
-        )
-
-    @mcp.tool()
-    async def harvest_backfill_dry(
-        slide_file: str,
-        videos: list[str],
-        lang: str,
-        rev: str | None = None,
-        auto: bool = True,
-        force_rev: bool = False,
-        top: int = 5,
-        tag: str = "voiceover",
-        whisper_model: str = "large-v3",
-        backend: str = "faster-whisper",
-        device: str = "auto",
-        model: str | None = None,
-        api_base: str | None = None,
-    ) -> str:
-        """Preview a backfill: identify-rev → sync-at-rev → port (no writes).
-
-        Runs ``clm harvest backfill --dry-run`` as a subprocess and
-        returns its stdout/stderr plus the unified-diff preview.  The
-        working-copy slide file is never mutated; ``--apply`` is
-        intentionally CLI-only.
-
-        Args:
-            slide_file: Slide file at HEAD.
-            videos: Recording video file paths.
-            lang: "de" or "en".
-            rev: Skip identify-rev and use this SHA directly.
-            auto: Pick the top-ranked rev automatically (default true).
-            force_rev: Accept the top rev below the confidence threshold.
-            top / tag / whisper_model / backend / device / model /
-                api_base: passed through to backfill.
-        """
-        return await handle_harvest_backfill_dry(
-            slide_file,
-            videos,
-            data_dir,
-            lang=lang,
-            rev=rev,
-            auto=auto,
-            force_rev=force_rev,
-            top=top,
-            tag=tag,
-            whisper_model=whisper_model,
-            backend=backend,
-            device=device,
-            model=model,
-            api_base=api_base,
         )
 
     @mcp.tool()

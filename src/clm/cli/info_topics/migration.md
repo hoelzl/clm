@@ -2,9 +2,43 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Harvest history: explicit export and agent judgment (#960, {version})
+
+**Breaking for CLI and MCP callers.** Top-level `clm harvest port`,
+`compare`, `backfill`, `compare-from-inventory`, and `sync-at-rev` are removed
+without aliases. All embedded-model execution now sits behind `autopilot`.
+
+| Previous operation | Agent-first replacement |
+|---|---|
+| `harvest port SOURCE TARGET` | `harvest task TARGET --lang LANG --kind port --source SOURCE` → `harvest accept` |
+| `harvest compare SOURCE TARGET` | `harvest task TARGET --lang LANG --kind compare --source SOURCE` → `harvest compare-accept` |
+| `harvest sync-at-rev DECK VIDEO… --rev SHA -o FILE` | `harvest export-at-rev DECK --rev SHA -o NEW_DIRECTORY`, then report/task/accept on the exported deck |
+| `harvest backfill` / `compare-from-inventory` | The explicit identify → export → curate → port/compare loop in `clm info harvest-agents` |
+| MCP `harvest_backfill_dry` | `harvest_identify_rev` / `harvest_report` / `harvest_task`, with export and acceptance through the CLI |
+
+`export-at-rev` is **not a sync**: it takes no videos, language, ASR, or model
+options. It exports the selected revision's deck, any split twin, and
+voiceover companions, retaining their names/layout under a new directory.
+`--json` returns the resolved revision and exported paths. It preserves
+existing narration but does not recover recording narration; that is the
+agent's curate/accept step. Existing destinations are refused. Renames are
+not followed; pass the path as it existed at the selected revision.
+
+For agent-less humans only, legacy execution remains available as
+`harvest autopilot port|compare|backfill|sync-at-rev|compare-from-inventory`.
+The original `harvest autopilot DECK VIDEO…` spelling still works; its
+explicit form is `harvest autopilot run DECK VIDEO…` (see `run --help`).
+Neither agents nor CI should use these embedded-model paths.
+
+Port/compare tasks now include companion narration. Compare freshness
+includes the selected companion's bytes, so re-frame outstanding comparison
+answers after upgrading. `compare-report` still renders saved report JSON
+without importing the embedded judge. MCP's removed `harvest_backfill_dry`
+was not model-free: `--dry-run` suppressed the final patch, not the LLM stages.
+
 ## MCP: `harvest_compare` removed; the task mirror frames compare/port (#960, {version})
 
-**Breaking for MCP clients.** `harvest_compare` was the one MCP tool that
+**Breaking for MCP clients.** `harvest_compare` was an MCP tool that
 invoked a model (the bullet-relation judge). The MCP surface is now uniformly
 read-only and model-free, so the tool is **gone** — there is no model behind
 it to call. Its replacement is the existing task mirror, extended with the
@@ -18,8 +52,8 @@ revision-history kinds:
 
 Agent configs that called `harvest_compare` now fail with an unknown-tool
 error — switch them to the framing call above and let the *calling agent* do
-the judging (that is the point: the agent is the model). The CLI's
-`clm harvest compare` is unchanged in this release.
+the judging (that is the point: the agent is the model). The CLI history
+verbs are also retired as described above.
 
 ## Docker workers run as a non-root user; /source is read-only for notebooks (#798, {version})
 
@@ -693,12 +727,12 @@ no deprecation aliases:
 | `clm voiceover detect …` | `clm harvest detect …` |
 | `clm voiceover identify …` | `clm harvest identify …` |
 | `clm voiceover identify-rev …` | `clm harvest identify-rev …` |
-| `clm voiceover sync-at-rev …` | `clm harvest sync-at-rev …` |
-| `clm voiceover port …` | `clm harvest port …` |
-| `clm voiceover compare …` | `clm harvest compare …` |
-| `clm voiceover compare-from-inventory …` | `clm harvest compare-from-inventory …` |
+| `clm voiceover sync-at-rev …` | `clm harvest autopilot sync-at-rev …` (agents: `export-at-rev` + curate loop) |
+| `clm voiceover port …` | `clm harvest autopilot port …` (agents: `task --kind port` → `accept`) |
+| `clm voiceover compare …` | `clm harvest autopilot compare …` (agents: `task --kind compare` → `compare-accept`) |
+| `clm voiceover compare-from-inventory …` | `clm harvest autopilot compare-from-inventory …` (agents: explicit history loop) |
 | `clm voiceover report …` | `clm harvest compare-report …` |
-| `clm voiceover backfill …` | `clm harvest backfill …` |
+| `clm voiceover backfill …` | `clm harvest autopilot backfill …` (agents: explicit history loop) |
 | `clm voiceover extract-training-data …` | `clm harvest extract-training-data …` |
 | `clm voiceover cache …` | `clm harvest cache …` |
 | `clm voiceover trace show …` | `clm harvest trace show …` |
@@ -707,8 +741,9 @@ Two verbs changed name in the move: `sync` became **`autopilot`** (it is the
 legacy all-in-one pipeline with embedded models — key-gated, never run in CI;
 agents should drive the model-free `clm harvest report → task → accept`
 loop instead), and `report` became **`compare-report`** (so it does not
-clash with the primary `clm harvest report` verb). Everything else kept its
-name and options.
+clash with the primary `clm harvest report` verb). The later #960 retirement
+moved the embedded-model history operations under `autopilot`; the table
+above shows their current homes.
 
 `clm voiceover` **remains**, holding only the written-narration text layer:
 `extract`, `inline`, and `inline-notes`. The group also lost its
@@ -724,6 +759,9 @@ The MCP tools were renamed in lockstep, likewise with no aliases:
 read-only tools, `harvest_report` and `harvest_task`, expose the agent loop
 (accepting an answer stays CLI-only via `clm harvest accept`). The
 text-layer tools `voiceover_extract` / `voiceover_inline` are unchanged.
+
+The later #960 retirement removed `harvest_compare` and
+`harvest_backfill_dry`; see the migration sections at the top of this guide.
 
 **Update course repos:** scripts, Makefiles, CI steps, agent prompts, and
 `<tasks>` blocks that call a removed `clm voiceover` video verb fail with
@@ -1020,7 +1058,7 @@ names are gone, with no deprecation aliases:
 | `clm polish …` | `clm slides polish …` |
 | `clm delete-database …` | `clm db delete …` |
 | `clm export calendar …` | `clm calendar generate …` |
-| `clm voiceover port-voiceover …` | `clm voiceover port …` (now `clm harvest port …`) |
+| `clm voiceover port-voiceover …` | `clm harvest autopilot port …` (agents: `harvest task --kind port` → `accept`) |
 
 `clm course gate` is unchanged. The whole cohort-calendar lifecycle now lives
 in one group: `clm calendar generate` → `check` → `status` → `push`.

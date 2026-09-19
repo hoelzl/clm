@@ -282,6 +282,7 @@ class TestCompareCLI:
             result = runner.invoke(
                 harvest_group,
                 [
+                    "autopilot",
                     "compare",
                     str(source),
                     str(target),
@@ -320,6 +321,7 @@ class TestCompareCLI:
             result = runner.invoke(
                 harvest_group,
                 [
+                    "autopilot",
                     "compare",
                     str(source),
                     str(target),

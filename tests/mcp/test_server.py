@@ -45,7 +45,6 @@ EXPECTED_TOOLS = {
     "authoring_rules",
     "harvest_transcribe",
     "harvest_identify_rev",
-    "harvest_backfill_dry",
     "harvest_cache_list",
     "harvest_trace_show",
     "harvest_report",

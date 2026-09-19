@@ -374,7 +374,7 @@ class TestSyncCliCompanionFlag:
         from clm.cli.commands.harvest import harvest_group
 
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
 
         assert "--companion" in result.output
         assert "--no-companion" in result.output

@@ -3203,7 +3203,6 @@ harvest cutover (no aliases — see `clm info migration`).
 | `harvest_task` | Frame a slide's judgment as a JSON task — read-only twin of `clm harvest task`; `kind="port"`/`kind="compare"` (with `source`) frame the revision-history kinds (CLM {version}+) |
 | `harvest_transcribe` | Transcribe a video through the harvest artifact cache |
 | `harvest_identify_rev` | Identify which historical revision a recording was made against |
-| `harvest_backfill_dry` | Preview a backfill (identify-rev → sync-at-rev → port) without writing |
 | `harvest_cache_list` | List entries in the harvest artifact cache |
 | `harvest_trace_show` | Read a merge-trace log and return entries as JSON |
 
@@ -4089,9 +4088,12 @@ Manage the cache with `clm harvest cache list/prune/clear`.
 Since the CLM {version} harvest cutover, the video-side verbs live **only**
 here: the one-shot `autopilot` (formerly `clm voiceover sync`), the
 diagnostics `transcribe`, `detect`, `identify`, `identify-rev`, `cache`, and
-`trace`, and the history tools `sync-at-rev`, `port`, `compare`,
-`compare-report` (formerly `clm voiceover report`), `compare-from-inventory`,
-`backfill`, and `extract-training-data`. The old `clm voiceover` names were
+`trace`, the historical bundle export `export-at-rev`,
+`compare-report` (formerly `clm voiceover report`), and
+`extract-training-data`. Embedded-model history execution is available only
+under `autopilot` (`port`, `compare`, `backfill`, `sync-at-rev`,
+`compare-from-inventory`); the former top-level history names are removed.
+The old `clm voiceover` names were
 deleted, not aliased — see `clm info migration`. `clm voiceover` keeps only
 the text-layer verbs `extract` / `inline` / `inline-notes`.
 
@@ -4168,7 +4170,7 @@ twin side from the already-curated source. Omitting `--slide` frames every
 actionable item.
 
 `--kind port`/`--kind compare` are the revision-history kinds (no VIDEO;
-`--source` is the older slide file, e.g. a `sync-at-rev` export). `port`
+`--source` is the older slide file, e.g. an `export-at-rev` artifact). `port`
 frames each matched slide pair (`unchanged`/`modified`, source carries
 voiceover) with the target slide's baseline and the source's prior bullets;
 the answer is the same `harvest-bullets` document and lands through the
@@ -4176,7 +4178,9 @@ ordinary `clm harvest accept` (id-keyed, companion-aware). `compare` frames
 bullet-relation labeling per matched pair (validator `harvest-compare`,
 file-content freshness tokens); the answer document (one `verdicts` entry
 per framed pair) is banked by `clm harvest compare-accept`, which writes
-the canonical report JSON.
+the canonical report JSON. Both kinds read inline and companion narration;
+unplaceable companion cells are refused. Comparison freshness includes the
+selected companion's bytes as well as the deck's bytes.
 
 **Exit codes:** `0` tasks emitted (possibly zero in the sweep) · `2` error /
 the named slide cannot be framed.
@@ -4184,7 +4188,7 @@ the named slide cannot be framed.
 #### `clm harvest compare-accept` (CLM {version}+)
 
 Validate a compare verdict document (from `task --kind compare`) and write
-the canonical compare-report JSON — the same shape `clm harvest compare
+the canonical compare-report JSON — the same shape `clm harvest autopilot compare
 --json` emits and `clm harvest compare-report` re-renders. Compare is
 auditing: decks are never touched.
 
@@ -4193,7 +4197,7 @@ clm harvest compare-accept SOURCE TARGET --lang {de|en} --answer FILE|- [-o PATH
 ```
 
 The answer echoes the task envelope's `source_fingerprint` /
-`target_fingerprint` (file-content hashes) and must answer every framed
+`target_fingerprint` (deck + selected companion content hashes) and must answer every framed
 pair (an empty `outcomes` list is a valid verdict). Deterministic buckets
 (`new_at_head` / `removed_at_head` / both-sides-empty) row in the report
 without a verdict, as before.
@@ -4204,7 +4208,8 @@ extra verdicts, malformed document) / error.
 #### `clm harvest accept` (CLM {version}+)
 
 Validate a bullet-list answer and write it through the v3 model — the
-**only** write path of the harvest toolkit.
+write path for narration in the current deck. Other explicit write verbs
+produce historical exports, comparison reports, or alignment sidecars.
 
 ```
 clm harvest accept SLIDES --answer FILE|- [--slide ID] [--record] [--dry-run] [--json]
@@ -4449,7 +4454,41 @@ warning suggesting you force a specific revision downstream. Re-using
 the transitions cache (written by `detect`/`autopilot`/`identify`) keeps
 repeated runs fast.
 
-#### `clm harvest sync-at-rev`
+#### `clm harvest export-at-rev`
+
+Export a historical deck bundle, without transcription, normalization or
+embedded-model judgment. This replaces the artifact-producing part of the
+removed top-level `sync-at-rev` verb. Recover narration from recordings on
+the exported deck through report/task/accept, then port through
+`task --kind port` and `accept` (see `clm info harvest-agents`).
+
+```
+clm harvest export-at-rev SLIDE_FILE --rev SHA -o NEW_DIRECTORY [--json]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--rev TEXT` | Git commit revision (SHA, tag, or branch), required |
+| `-o, --output DIRECTORY` | New destination directory; must not exist, required |
+| `--json` | Emit `schema`, `tool`, `verb`, resolved `revision`, exported `deck` and `files` paths |
+
+Exports the named path, its `.de`/`.en` twin when present, and each deck's
+voiceover companion at the selected revision. Preserves names and the
+historical companion layout (`voiceover/` takes precedence over a sibling).
+Working-copy contents and companion presence are irrelevant. Files are
+copied as git blob bytes; no executable assets or dependencies are collected.
+Renames are not followed; pass the historical path. Exit `0` exported,
+`2` invalid revision/path/destination or I/O error.
+
+#### Legacy history under `clm harvest autopilot`
+
+These subcommands are **embedded-model operations for agent-less humans**,
+not agent toolkit verbs. They have no top-level aliases. The original
+`autopilot DECK VIDEO...` invocation still means `autopilot run DECK VIDEO...`;
+use `autopilot run --help` for its one-shot options. Backfill is an explicit
+agent-driven loop in `clm info harvest-agents`.
+
+#### `clm harvest autopilot sync-at-rev`
 
 Middle step of the backfill pipeline. Exports SLIDE_FILE as it existed
 at `--rev` to a scratch location via `git show` (never touches the
@@ -4457,7 +4496,7 @@ working tree) and runs the full `autopilot` pipeline against that historical
 version plus the supplied VIDEO parts. Output is written to `--output`.
 
 ```
-clm harvest sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [OPTIONS]
+clm harvest autopilot sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4479,10 +4518,10 @@ clm harvest sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [OP
 | `--alignment PATH` | Skip ASR + detection + matching; load alignment JSON |
 | `--scratch-dir PATH` | Use this directory for the exported slide file (default: fresh `.clm/voiceover-backfill/<topic>-<ts>/`) |
 
-Use `clm harvest backfill` to chain Step 1 (identify-rev), this
+Use `clm harvest autopilot backfill` to chain Step 1 (identify-rev), this
 command (Step 2), and Step 3 (port) in one shot.
 
-#### `clm harvest backfill`
+#### `clm harvest autopilot backfill`
 
 One-shot wrapper that extracts voiceover content from old recordings
 onto the current SLIDE_FILE. Chains `identify-rev` → `sync-at-rev` →
@@ -4491,7 +4530,7 @@ onto the current SLIDE_FILE. Chains `identify-rev` → `sync-at-rev` →
 `--apply` is required to mutate the working-copy SLIDE_FILE.
 
 ```
-clm harvest backfill SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
+clm harvest autopilot backfill SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4501,7 +4540,7 @@ clm harvest backfill SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
 | `--top N` | How many top-ranked candidates to display (default: 5) |
 | `--auto` | Pick the top-ranked revision automatically (Step 1) |
 | `--force-rev` | Accept the identified rev even if its score is below the threshold |
-| `--dry-run` | Print the diff only; do not write `port.patch` |
+| `--dry-run` | Print the diff only; do not write `port.patch` (still invokes models and writes scratch files) |
 | `--apply` | Mutate SLIDE_FILE with the ported voiceover (default: patch-only) |
 | `--keep-scratch` | Retain `.clm/voiceover-backfill/<topic>-<ts>/` on exit |
 | `--tag TEXT` | Cell tag: `voiceover` (default) or `notes` |
@@ -4524,7 +4563,7 @@ also copied to
 above the timestamped scratch) so the "just show me the most recent
 diff" lookup is a predictable read.
 
-#### `clm harvest port`
+#### `clm harvest autopilot port`
 
 Port polished voiceover content from one slide file onto another,
 file-to-file. Typical use: after running `clm harvest autopilot` against
@@ -4539,7 +4578,7 @@ present on the target; baseline content is preserved unless directly
 contradicted.
 
 ```
-clm harvest port SOURCE TARGET --lang {de|en} [OPTIONS]
+clm harvest autopilot port SOURCE TARGET --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4550,11 +4589,11 @@ clm harvest port SOURCE TARGET --lang {de|en} [OPTIONS]
 | `--model TEXT` | Override the LLM model (default: `anthropic/claude-sonnet-4-6`) |
 | `--api-base TEXT` | Override the LLM API base URL |
 
-Prefer `clm harvest backfill` when you want one-shot extraction plus
+Prefer `clm harvest autopilot backfill` when you want one-shot extraction plus
 porting in a single command with automatic git-revision detection;
 `port` is the file-to-file primitive that `backfill` composes.
 
-#### `clm harvest compare`
+#### `clm harvest autopilot compare`
 
 Evaluate bullet-level differences between two slide-file revisions
 without modifying either one. Read-only sibling to `port`:
@@ -4565,7 +4604,7 @@ or for reviewing how voiceover drifted between two hand-edited
 revisions.
 
 ```
-clm harvest compare SOURCE TARGET --lang {de|en} [OPTIONS]
+clm harvest autopilot compare SOURCE TARGET --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4586,7 +4625,7 @@ with per-slide outcomes. `--format markdown` renders the same data
 as a human-readable report (summary table + per-bucket sections
 grouped by `dropped` / `added` / `rewritten` / `manual_review`).
 
-#### `clm harvest compare-from-inventory`
+#### `clm harvest autopilot compare-from-inventory`
 
 Compare a slide file against its historical recording, using a
 `video_to_slide_mapping.json` inventory to locate the video(s).
@@ -4594,7 +4633,7 @@ Composes `identify-rev` → `sync-at-rev` → `compare` into one call so
 per-topic shell wrappers are unnecessary.
 
 ```
-clm harvest compare-from-inventory SLIDE_FILE --inventory PATH --lang {de|en} [OPTIONS]
+clm harvest autopilot compare-from-inventory SLIDE_FILE --inventory PATH --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4622,8 +4661,8 @@ slide file) are passed to `sync-at-rev` in inventory order.
 
 #### `clm harvest compare-report`
 
-Re-render a saved `compare --json` report in a different format
-without re-running the LLM judge. The JSON is the canonical artifact;
+Re-render a saved `compare-accept` (or `autopilot compare --json`) report in
+a different format without invoking or importing the LLM judge. The JSON is the canonical artifact;
 this command just reshapes it. Renamed from `clm voiceover report` in the
 CLM {version} harvest cutover so it does not clash with the primary
 `clm harvest report` verb.
@@ -4703,15 +4742,17 @@ clm harvest detect video.mp4 -o transitions.txt
 clm harvest identify video.mp4 slides.py --lang de
 clm harvest identify-rev slides.py part1.mp4 part2.mp4 --lang de
 clm harvest identify-rev slides.py recording.mp4 --lang en --top 10 --json
-clm harvest port /tmp/slides-at-abc123.py slides.py --lang de --dry-run
-clm harvest port old.py new.py --lang en
-clm harvest sync-at-rev slides.py video.mp4 --rev abc1234 --lang de -o /tmp/synced.py
-clm harvest backfill slides.py video.mp4 --lang de --auto
-clm harvest backfill slides.py video.mp4 --lang en --rev abc1234 --apply
-clm harvest compare /tmp/slides-at-abc123.py slides.py --lang de
-clm harvest compare old.py new.py --lang en --json -o report.json
-clm harvest compare old.py new.py --lang en --format markdown -o report.md
-clm harvest compare-from-inventory slides/foo/slides.py \
+clm harvest export-at-rev slides_intro.de.py --rev abc1234 -o scratch/old --json
+clm harvest task slides_intro.de.py --lang de --kind port --source scratch/old/slides_intro.de.py
+clm harvest autopilot port /tmp/slides-at-abc123.py slides.py --lang de --dry-run
+clm harvest autopilot port old.py new.py --lang en
+clm harvest autopilot sync-at-rev slides.py video.mp4 --rev abc1234 --lang de -o /tmp/synced.py
+clm harvest autopilot backfill slides.py video.mp4 --lang de --auto
+clm harvest autopilot backfill slides.py video.mp4 --lang en --rev abc1234 --apply
+clm harvest autopilot compare /tmp/slides-at-abc123.py slides.py --lang de
+clm harvest autopilot compare old.py new.py --lang en --json -o report.json
+clm harvest autopilot compare old.py new.py --lang en --format markdown -o report.md
+clm harvest autopilot compare-from-inventory slides/foo/slides.py \
     --inventory planning/video_to_slide_mapping.json --lang de --json -o report.json
 clm harvest compare-report report.json -o report.md
 clm harvest cache list

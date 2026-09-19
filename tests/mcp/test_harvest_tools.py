@@ -17,7 +17,6 @@ from unittest.mock import patch
 import pytest
 
 from clm.mcp.tools import (
-    handle_harvest_backfill_dry,
     handle_harvest_cache_list,
     handle_harvest_identify_rev,
     handle_harvest_report,
@@ -235,6 +234,18 @@ class TestHandleHarvestTaskCompare:
 
 
 class TestHandleHarvestTaskPort:
+    async def test_reads_companion_narration(self, tmp_path: Path):
+        """#960: the MCP mirror sees the same companion inputs as the CLI."""
+        from tests.cli.test_harvest_cli import _write_fixture
+
+        deck, _ = _write_fixture(tmp_path)
+        out = await handle_harvest_task(
+            str(deck), [], tmp_path, lang="de", kind="port", source=str(deck)
+        )
+        tasks = json.loads(out)["tasks"]
+        assert [t["item"] for t in tasks] == ["id:s0", "id:s2"]
+        assert "Bestand Alpha." in tasks[0]["inputs"]["prior_bullets"]
+
     async def test_frames_port_tasks_on_the_bundle(self, tmp_path: Path):
         de_path, _ = _write_deck_fixture(tmp_path)
         source = tmp_path / "slides_at_rev.de.py"
@@ -257,88 +268,6 @@ class TestHandleHarvestTaskPort:
         assert task["item"] == "id:s0"
         assert task["validator"] == "harvest-bullets"
         assert task["inputs"]["prior_bullets"] == "- Alte Alpha-Notiz."
-
-
-# ---------------------------------------------------------------------------
-# harvest_backfill_dry
-# ---------------------------------------------------------------------------
-
-
-class TestHandleHarvestBackfillDry:
-    async def test_invokes_subprocess_with_dry_run(self, tmp_path: Path):
-        slide_file = tmp_path / "slides.py"
-        slide_file.write_text("# %%\n", encoding="utf-8")
-        video = tmp_path / "v.mp4"
-        video.write_bytes(b"")
-
-        captured: dict = {}
-
-        async def _fake_exec(*args, **_):
-            captured["args"] = args
-
-            class _Proc:
-                returncode = 0
-
-                async def communicate(self):
-                    return b"stdout here\n", b""
-
-            return _Proc()
-
-        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
-            out = await handle_harvest_backfill_dry(
-                str(slide_file),
-                [str(video)],
-                tmp_path,
-                lang="de",
-                auto=True,
-            )
-
-        data = json.loads(out)
-        assert data["returncode"] == 0
-        assert "stdout here" in data["stdout"]
-        # The CLI verb moved to the harvest group in this release:
-        # ``python -m clm.cli.main harvest backfill ...``.
-        main_idx = captured["args"].index("clm.cli.main")
-        assert captured["args"][main_idx + 1 : main_idx + 3] == ("harvest", "backfill")
-        # Confirm the subprocess argv includes --dry-run and --auto.
-        assert "--dry-run" in captured["args"]
-        assert "--auto" in captured["args"]
-        assert "--apply" not in captured["args"]
-
-    async def test_rev_overrides_auto(self, tmp_path: Path):
-        slide_file = tmp_path / "slides.py"
-        slide_file.write_text("# %%\n", encoding="utf-8")
-        video = tmp_path / "v.mp4"
-        video.write_bytes(b"")
-
-        captured: dict = {}
-
-        async def _fake_exec(*args, **_):
-            captured["args"] = args
-
-            class _Proc:
-                returncode = 0
-
-                async def communicate(self):
-                    return b"", b""
-
-            return _Proc()
-
-        with patch("asyncio.create_subprocess_exec", side_effect=_fake_exec):
-            await handle_harvest_backfill_dry(
-                str(slide_file),
-                [str(video)],
-                tmp_path,
-                lang="de",
-                rev="abc1234",
-                auto=True,
-            )
-
-        args = captured["args"]
-        # When --rev is set, --auto must not be passed.
-        assert "--rev" in args
-        assert "abc1234" in args
-        assert "--auto" not in args
 
 
 # ---------------------------------------------------------------------------

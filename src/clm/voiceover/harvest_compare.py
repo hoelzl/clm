@@ -70,8 +70,15 @@ class CompareAnswer:
 
 
 def file_fingerprint(path: Path) -> str:
-    """Freshness token over a slide file's bytes."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    """Freshness token over the deck and its selected companion's bytes."""
+    from clm.core.voiceover_companions import resolve_companion
+
+    companion = resolve_companion(path)
+    digest = hashlib.sha256(path.read_bytes())
+    if companion is not None:
+        digest.update(b"\0companion\0")
+        digest.update(companion.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def _compare_instructions(lang: str) -> str:
@@ -224,7 +231,7 @@ def build_compare_report_payload(
     verdicts fill the judged pairs. Raises :class:`CompareRejected` when a
     framed pair is unanswered or an answer names an unframed pair.
     """
-    from clm.voiceover.compare import CompareReport, SlideComparison
+    from clm.voiceover.compare_report import CompareReport, SlideComparison
 
     matches = match_slides(source_groups, target_groups)
     by_item = {v.item: v for v in answer.verdicts}

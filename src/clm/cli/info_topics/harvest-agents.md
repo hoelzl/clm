@@ -120,18 +120,60 @@ is refused: ledger provenance is keyed by video.)
 `--kind compare` is **auditing**: it frames bullet-relation labeling per
 matched pair and `compare-accept` writes the canonical report JSON (the
 shape `compare-report` re-renders). Freshness is by file content
-(`source_fingerprint` / `target_fingerprint` in the task envelope, echoed
-in the answer). Decks are never touched. Deterministic buckets
+of each deck and its selected voiceover companion (`source_fingerprint` /
+`target_fingerprint` in the task envelope, echoed in the answer). Decks are
+never touched. Deterministic buckets
 (`new_at_head` / `removed_at_head` / both-sides-empty pairs) row in the
 report without needing a verdict. A pair the matcher flags
 `manual_review` (duplicate titles too close to disambiguate) is not framed
 — fix the duplicate slide ids/titles first.
 
-The typical source file comes from `clm harvest sync-at-rev` (which still
-uses embedded models internally — quarantined legacy, being retired) or
-simply `git show <rev>:path > slides-at-<rev>.py`. Over MCP, the framing
-half is mirrored: `harvest_task` accepts `kind="port"` / `kind="compare"`
+The typical source file comes from `clm harvest export-at-rev`; both port
+and compare read its inline narration **and** selected voiceover companion.
+Unplaceable companion narration is an error, not silently discarded. Over
+MCP, the framing half is mirrored: `harvest_task` accepts `kind="port"` / `kind="compare"`
 with a `source` argument (no videos); the answer/accept side stays CLI-only.
+
+## Backfill — the agent-driven history loop
+
+There is no top-level `harvest backfill`, `port`, `compare`,
+`compare-from-inventory`, or `sync-at-rev`. The legacy model execution lives
+only under `harvest autopilot`; agents use this loop:
+
+1. **Identify:** `clm harvest identify-rev DECK VIDEO… --lang de --json`.
+   Inspect the scored candidates and select the recorded revision yourself;
+   a close score is evidence to review, not authority to choose automatically.
+2. **Export:** `clm harvest export-at-rev DECK --rev SHA -o SCRATCH --json`.
+   `SCRATCH` must be a new directory. The JSON supplies the full `revision`,
+   the exported `deck` path, and `files`. Original names are preserved; a
+   `.de`/`.en` twin and voiceover companions are read from that revision,
+   even if absent in the working copy. Companion lookup prefers the historical
+   `voiceover/` copy over its sibling, as ordinary reads do. No rename tracking,
+   transcription, polish, merge, or automatic normalization happens here.
+3. **Recover narration on the exported deck (`OLD`):** export preserves only
+   the narration already in git. When the recording contributes more, run
+   `clm harvest report OLD VIDEO… --lang de --json`, review uncertain
+   alignment through `align report`/`align accept`, then use
+   `task OLD VIDEO… --lang de --kind curate --slide ID` → judge →
+   `accept OLD --answer answer.json`. Reuse any accepted `--alignment` on
+   subsequent report/task calls. Normalize the scratch bundle first if the
+   v3 gate refuses it; a pre-split deck must be prepared as a normalized pair
+   before this curate/accept step. Verify `OLD` after accepting.
+4. **Port to the current deck:**
+   `clm harvest task DECK --lang de --kind port --source OLD` → judge each
+   framed pair → `clm harvest accept DECK --answer answer.json`.
+   Do not use `--record` on port answers. Inspect unmatched slides separately;
+   the matcher cannot decide where removed or ambiguous content belongs.
+5. **Verify and audit:** `clm harvest verify DECK`; optionally frame
+   `task --kind compare --source OLD` and bank verdicts via `compare-accept`.
+   Continue twin translation with `clm slides sync report DECK`.
+
+Repeat for the relevant historical recordings. Keep video parts in recording
+order. For inventory-driven work, resolve the inventory's video paths first,
+then run the same loop for each deck; there is no model-invoking inventory
+shortcut on the agent surface. `harvest_backfill_dry` was removed from MCP:
+its old dry run still called embedded models. Use `harvest_identify_rev`,
+`harvest_report`, and `harvest_task`; export and acceptance remain CLI writes.
 
 ## verify — the structural post-check
 

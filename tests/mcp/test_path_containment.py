@@ -33,7 +33,6 @@ import pytest
 from clm.mcp.tools import (
     handle_course_authoring_rules,
     handle_get_language_view,
-    handle_harvest_backfill_dry,
     handle_harvest_cache_list,
     handle_harvest_identify_rev,
     handle_harvest_report,
@@ -107,6 +106,23 @@ def _deck_needing_normalization(path: Path) -> None:
 
 
 class TestReadContainment:
+    @pytest.mark.parametrize("kind", ["port", "compare"])
+    async def test_revision_task_refuses_external_companion(self, tmp_path, kind):
+        """#960: newly companion-aware history reads retain the MCP boundary."""
+        data_dir = _data_tree(tmp_path)
+        outside, _ = _outside_sentinels(tmp_path)
+        deck = data_dir / "slides" / "module_100_basics" / "topic_010_intro" / "slides_intro.py"
+        companion = deck.with_name("voiceover_intro.py")
+        try:
+            companion.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        result = await handle_harvest_task(
+            str(deck), [], data_dir, lang="de", kind=kind, source=str(deck)
+        )
+        _err(result)
+        assert "Geheim" not in result
+
     async def test_language_view_refuses_absolute_outside(self, tmp_path):
         data_dir = _data_tree(tmp_path)
         deck, _ = _outside_sentinels(tmp_path)
@@ -229,17 +245,6 @@ class TestHarvestContainment:
             str(deck), ["../outside/video.mp4"], data_dir, lang="de"
         )
         _err(result)
-
-    async def test_backfill_dry_refuses_outside(self, tmp_path):
-        data_dir = _data_tree(tmp_path)
-        deck, _ = _outside_sentinels(tmp_path)
-        result = await handle_harvest_backfill_dry(
-            str(deck), ["../outside/video.mp4"], data_dir, lang="de"
-        )
-        # backfill returns {returncode,...} for subprocess failures; a refusal
-        # must be an error payload, not a spawned subprocess against outside paths
-        data = json.loads(result)
-        assert "error" in data or data.get("command", "").find("outside") == -1
 
     async def test_report_refuses_outside_slides_and_videos(self, tmp_path):
         data_dir = _data_tree(tmp_path)
