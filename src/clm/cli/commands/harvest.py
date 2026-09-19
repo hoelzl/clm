@@ -32,32 +32,10 @@ from pathlib import Path
 
 import click
 
-from clm.cli._lazy_group import LazyGroup
-
-_DEFAULT_VERB = "report"
+from clm.cli._default_verb_group import DefaultVerbLazyGroup
 
 
-class _DefaultVerbGroup(LazyGroup):
-    """A group whose bare ``clm harvest DECK VIDEO`` runs ``report``.
-
-    Unlike the ``slides sync`` variant this one resolves the default verb in
-    :meth:`resolve_command` (after group options are parsed), because the
-    harvest group carries the cache flags — a ``parse_args`` prepend would
-    fire on ``--no-cache`` before Click ever saw it as a group option.
-    """
-
-    def resolve_command(self, ctx: click.Context, args: list[str]):
-        try:
-            return super().resolve_command(ctx, args)
-        except click.UsageError:
-            if args and not args[0].startswith("-"):
-                cmd = self.get_command(ctx, _DEFAULT_VERB)
-                if cmd is not None:
-                    return _DEFAULT_VERB, cmd, args
-            raise
-
-
-@click.group("harvest", cls=_DefaultVerbGroup)
+@click.group("harvest", cls=DefaultVerbLazyGroup)
 @click.option(
     "--cache-root",
     type=click.Path(path_type=Path),
@@ -359,6 +337,7 @@ def harvest_task_cmd(
     Exit codes: 0 tasks emitted (possibly zero in the sweep) · 2 error /
     the named slide cannot be framed.
     """
+    from clm.slides.agent_task import envelope
     from clm.voiceover.harvest_task import TaskUnavailable, build_tasks
 
     bundle = _load_bundle_or_exit(slides)
@@ -383,13 +362,12 @@ def harvest_task_cmd(
         sys.exit(2)
     click.echo(
         json.dumps(
-            {
-                "schema": 1,
-                "tool": "harvest",
-                "verb": "task",
-                "video_fingerprint": report["video_fingerprint"],
-                "tasks": tasks,
-            },
+            envelope(
+                1,
+                tool="harvest",
+                verb="task",
+                body={"video_fingerprint": report["video_fingerprint"], "tasks": tasks},
+            ),
             indent=2,
             ensure_ascii=False,
         )
@@ -441,7 +419,15 @@ def harvest_accept_cmd(
     Exit codes: 0 applied (and recorded, if requested) · 1 applied but the
     ledger record was refused by the structural gate · 2 rejected / error.
     """
-    from clm.voiceover.harvest_accept import AcceptRejected, accept_answer, parse_answer
+    from clm.slides.agent_task import (
+        EXIT_CLEAN,
+        EXIT_ERROR,
+        EXIT_WORK_PENDING,
+        VALIDATORS,
+        rejection_payload,
+    )
+    from clm.voiceover.harvest_accept import AcceptRejected, Answer, accept_answer
+    from clm.voiceover.harvest_task import ANSWER_VALIDATOR
 
     if answer_src == "-":
         raw = click.get_text_stream("stdin").read()
@@ -457,7 +443,9 @@ def harvest_accept_cmd(
 
     bundle = _load_bundle_or_exit(slides)
     try:
-        parsed = parse_answer(payload)
+        # The validator label the task documents announce resolves through
+        # the shared kit's registry to the parser that judges the answer.
+        parsed: Answer = VALIDATORS.get(ANSWER_VALIDATOR)(payload)
         if slide is not None:
             handle = slide if slide.startswith("id:") else f"id:{slide}"
             if handle != parsed.item:
@@ -469,21 +457,14 @@ def harvest_accept_cmd(
         if as_json:
             click.echo(
                 json.dumps(
-                    {
-                        "schema": 1,
-                        "tool": "harvest",
-                        "verb": "accept",
-                        "applied": False,
-                        "outcome": "rejected",
-                        "reason": str(exc),
-                    },
+                    rejection_payload(1, tool="harvest", verb="accept", reason=str(exc)),
                     indent=2,
                     ensure_ascii=False,
                 )
             )
         else:
             click.echo(f"rejected: {exc}", err=True)
-        sys.exit(2)
+        sys.exit(EXIT_ERROR)
 
     if as_json:
         click.echo(json.dumps(outcome.to_payload(), indent=2, ensure_ascii=False))
@@ -499,7 +480,7 @@ def harvest_accept_cmd(
             click.echo("  ledger: recorded")
         for message in outcome.record_refused:
             click.echo(f"  ledger withheld: {message}", err=True)
-    sys.exit(1 if outcome.record_refused else 0)
+    sys.exit(EXIT_WORK_PENDING if outcome.record_refused else EXIT_CLEAN)
 
 
 # ---------------------------------------------------------------------------

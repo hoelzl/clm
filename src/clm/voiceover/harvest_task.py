@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ANSWER_SCHEMA",
+    "ANSWER_VALIDATOR",
     "TASK_KINDS",
     "TaskUnavailable",
     "build_tasks",
@@ -33,11 +34,17 @@ __all__ = [
 
 TASK_KINDS = ("curate", "translate")
 
+#: The validator label every harvest task document announces. Registered
+#: in the shared kit's registry (:data:`clm.slides.agent_task.VALIDATORS`)
+#: by :mod:`clm.voiceover.harvest_accept`, whose ``parse_answer`` is the
+#: function this label names.
+ANSWER_VALIDATOR = "harvest-bullets"
+
 #: The bullet-list answer contract (proposal §4/§8, extended for
 #: multi-narrative slides): a list of per-member updates, each carrying
 #: per-language ordered bullet strings, plus the `dropped` audit list,
 #: echoing the freshness tokens the task framed. Validated by
-#: `harvest accept` (validator "harvest-bullets").
+#: `harvest accept` (validator :data:`ANSWER_VALIDATOR`).
 ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["item", "kind", "baseline_fingerprints", "updates", "dropped"],
@@ -190,7 +197,7 @@ def _frame_one(
         "item": item["key"],
         "kind": kind,
         "class": item["class"],
-        "validator": "harvest-bullets",
+        "validator": ANSWER_VALIDATOR,
         "video_language": lang,
         "video_fingerprint": report["video_fingerprint"],
         "baseline_fingerprints": _baseline_fingerprints(item),

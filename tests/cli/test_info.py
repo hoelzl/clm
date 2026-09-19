@@ -156,4 +156,5 @@ class TestLoadTopicContent:
         assert "releases" in TOPICS
         assert "sync-agents" in TOPICS
         assert "harvest-agents" in TOPICS
-        assert len(TOPICS) == 9
+        assert "agent-tasks" in TOPICS
+        assert len(TOPICS) == 10

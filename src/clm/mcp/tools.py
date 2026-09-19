@@ -1619,13 +1619,14 @@ async def handle_harvest_task(
     except TaskUnavailable as exc:
         return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
 
-    payload = {
-        "schema": 1,
-        "tool": "harvest",
-        "verb": "task",
-        "video_fingerprint": report["video_fingerprint"],
-        "tasks": tasks,
-    }
+    from clm.slides.agent_task import envelope
+
+    payload = envelope(
+        1,
+        tool="harvest",
+        verb="task",
+        body={"video_fingerprint": report["video_fingerprint"], "tasks": tasks},
+    )
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 

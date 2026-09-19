@@ -32,6 +32,7 @@ import click
 from attrs import define
 from click.core import ParameterSource
 
+from clm.cli._default_verb_group import DefaultVerbGroup
 from clm.core.slide_text.pairing import (
     derive_split_pair_from_stem,
     derive_split_twin,
@@ -401,23 +402,7 @@ def _print_verify_human(results: list[VerifyResult], root: Path | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-class _DefaultVerbGroup(click.Group):
-    """A ``sync`` group whose bare ``clm slides sync DECK`` runs ``report``.
-
-    Click groups have no native default subcommand. When the first token is not a
-    known verb (and not a help flag), prepend ``report`` so a bare deck path is
-    treated as ``report DECK`` — the read-only default the redesign mandates.
-    """
-
-    _DEFAULT_VERB = "report"
-
-    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        if args and args[0] not in self.commands and args[0] not in ("--help", "-h"):
-            args = [self._DEFAULT_VERB, *args]
-        return super().parse_args(ctx, args)
-
-
-@click.group("sync", cls=_DefaultVerbGroup)
+@click.group("sync", cls=DefaultVerbGroup)
 def slides_sync_group() -> None:
     """Agent toolkit for syncing split DE/EN deck pairs.
 
