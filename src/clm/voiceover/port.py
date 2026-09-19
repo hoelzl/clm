@@ -1,14 +1,14 @@
-"""Port voiceover content from one slide revision onto another.
+"""Legacy embedded-model porting, reachable through harvest autopilot only.
 
 Sibling to :mod:`clm.voiceover.merge` with different invariants: the
 input is already clean (prior bullets were polished by an earlier sync),
 so there's no noise filtering to do — the job is integration, not
 cleanup. The module owns :func:`polish_and_port`, the primitive that
-runs one per-slide LLM call; the higher-level ``port`` CLI
+runs one per-slide LLM call; the higher-level ``harvest autopilot port`` CLI
 command composes it across an entire file.
 
 Shares the per-slide input packing and the structured response schema
-with the future ``clm voiceover compare`` judge via
+with the ``harvest autopilot compare`` judge via
 :mod:`clm.voiceover.bullet_schema`.
 """
 

@@ -126,10 +126,10 @@ class TestSyncHelpText:
 
     def test_help_mentions_merge(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
         assert "--overwrite" in result.output
 
     def test_help_mentions_overwrite(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
         assert "Overwrite" in result.output or "overwrite" in result.output

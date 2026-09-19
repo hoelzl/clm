@@ -14,14 +14,17 @@ module carries the group plus the Phase-2 surface:
 * ``accept`` — validate a bullet-list answer and write it through the v3
   model (id-keyed member edit, atomic ≤4-file write); ``--record`` banks
   it into the sync ledger under ``harvest:<video-fingerprint>``
-  provenance with the §6 one-sided-trust semantics. The only write path.
+  provenance with the §6 one-sided-trust semantics. The current-deck narrative
+  write path (other explicit writes produce sidecar/export artifacts).
 * ``verify`` — the structural post-check, delegating to the same engine
   as ``clm slides sync verify``.
 * the re-homed diagnostics ``transcribe`` / ``detect`` / ``identify`` /
   ``identify-rev`` / ``cache`` / ``trace`` (shared with ``clm voiceover``
   until the Phase-4 cutover deletes the old names).
 
-``autopilot`` (the embedded-model one-shot) arrives in Phase 4.
+``autopilot`` is the sole embedded-model entry point, including its legacy
+history subcommands. ``export-at-rev`` produces a historical bundle without
+invoking transcription or judgment (#960).
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from pathlib import Path
 
 import click
 
-from clm.cli._default_verb_group import DefaultVerbLazyGroup
+from clm.cli._default_verb_group import DefaultVerbGroup, DefaultVerbLazyGroup
 
 
 @click.group("harvest", cls=DefaultVerbLazyGroup)
@@ -70,14 +73,12 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
       verify        structural post-check on the pair
       align         review/correct the pipeline's heuristic alignment (#960)
       autopilot     legacy all-in-one WITH embedded models (agent-less humans)
-      backfill      identify-rev → sync-at-rev → port over historical revisions
-      port          transfer voiceover between slide files (LLM merge)
-      compare       LLM diff of voiceover between two slide files
+      export-at-rev  export a historical deck bundle (explicit write, no model)
+      compare-report  render an accepted comparison artifact
       transcribe    ASR only: dump the transcript (diagnostic)
       detect        slide-transition detection only (diagnostic)
       identify      which slides appear in a video? (diagnostic)
       identify-rev  which git revision of a deck was recorded? (diagnostic)
-      sync-at-rev   run autopilot against a historical revision (scratch output)
       cache         inspect/prune the artifact cache
       trace         inspect merge trace logs
 
@@ -347,7 +348,7 @@ def harvest_report_cmd(
     "source_path",
     type=click.Path(exists=True, path_type=Path),
     default=None,
-    help="port/compare only: the older slide file (e.g. a sync-at-rev export).",
+    help="port/compare only: the older slide file (e.g. an export-at-rev artifact).",
 )
 @click.pass_context
 def harvest_task_cmd(
@@ -439,17 +440,20 @@ def _emit_revision_tasks(
     source_path: Path | None,
 ) -> None:
     """The port/compare half of `harvest task` (#960) — file-pair framing."""
-    from clm.core.slide_text.slide_parser import parse_slides
     from clm.slides.agent_task import envelope
     from clm.voiceover.harvest_task import TaskUnavailable
+    from clm.voiceover.revision_slides import revision_slides
 
     if videos:
         raise click.UsageError(f"--kind {kind} takes no VIDEO arguments (source is --source)")
     if source_path is None:
         raise click.UsageError(f"--kind {kind} needs --source (the older slide file)")
 
-    source_groups = parse_slides(source_path, lang, include_header=True)
-    target_groups = parse_slides(slides, lang, include_header=True)
+    try:
+        source_groups = revision_slides(source_path, lang)
+        target_groups = revision_slides(slides, lang)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
 
     if kind == "port":
         from clm.voiceover.harvest_port import build_port_tasks
@@ -537,7 +541,6 @@ def harvest_compare_accept_cmd(
     Exit codes: 0 written · 2 rejected (stale fingerprints, missing/extra
     verdicts, malformed document) / error.
     """
-    from clm.core.slide_text.slide_parser import parse_slides
     from clm.slides.agent_task import EXIT_CLEAN, EXIT_ERROR, VALIDATORS, rejection_payload
     from clm.voiceover.harvest_compare import (
         COMPARE_ANSWER_VALIDATOR,
@@ -546,6 +549,7 @@ def harvest_compare_accept_cmd(
         build_compare_report_payload,
         file_fingerprint,
     )
+    from clm.voiceover.revision_slides import revision_slides
 
     if answer_src == "-":
         raw = click.get_text_stream("stdin").read()
@@ -574,12 +578,12 @@ def harvest_compare_accept_cmd(
         report = build_compare_report_payload(
             source,
             target,
-            parse_slides(source, lang, include_header=True),
-            parse_slides(target, lang, include_header=True),
+            revision_slides(source, lang),
+            revision_slides(target, lang),
             answer,
             lang=lang,
         )
-    except CompareRejected as exc:
+    except (CompareRejected, ValueError) as exc:
         if as_json:
             click.echo(
                 json.dumps(
@@ -1065,6 +1069,57 @@ def _print_human_report(report: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+class _AutopilotGroup(DefaultVerbGroup):
+    """Keep the original one-shot spelling while gating history under autopilot."""
+
+    default_verb = "run"
+
+
+@harvest_group.group("autopilot", cls=_AutopilotGroup)
+def autopilot_group() -> None:
+    """Legacy embedded-model execution for agent-less humans.
+
+    Bare `autopilot DECK VIDEO...` runs `autopilot run DECK VIDEO...`.
+    History workflows are explicit subcommands here; driving agents use
+    task/accept instead. See `autopilot run --help` for one-shot options.
+    """
+
+
+@harvest_group.command("export-at-rev")
+@click.argument("slide_file", type=click.Path(path_type=Path, dir_okay=False))
+@click.option("--rev", required=True, help="Git revision to export (SHA, tag, or branch).")
+@click.option(
+    "-o",
+    "--output",
+    required=True,
+    type=click.Path(path_type=Path, file_okay=False),
+    help="New output directory; preserves deck/twin/companion names. Must not exist.",
+)
+@click.option(
+    "--json", "as_json", is_flag=True, help="Emit the resolved revision and exported paths."
+)
+def export_at_rev_cmd(slide_file: Path, rev: str, output: Path, as_json: bool) -> None:
+    """Export a historical deck and its twin/companions, without processing video.
+
+    Reads the selected revision, not the working-copy contents. The deck path
+    must exist at that revision (renames are not followed). Narration already
+    present there is preserved; recover additional recording narration with
+    report/task/accept on the exported deck before porting to the current deck.
+    """
+    from clm.voiceover.history_export import export_at_rev
+
+    try:
+        result = export_at_rev(slide_file, rev, output)
+    except (ValueError, OSError) as exc:
+        raise click.UsageError(str(exc)) from exc
+    if as_json:
+        click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        click.echo(
+            f"Exported {result['revision']} to {result['deck']} ({len(result['files'])} files)"
+        )
+
+
 def _register_video_verbs() -> None:
     from clm.cli.commands.voiceover import (
         backfill_cmd,
@@ -1085,23 +1140,27 @@ def _register_video_verbs() -> None:
     )
 
     for command in (
-        sync,  # @click.command("autopilot") — the embedded-model one-shot
         transcribe,
         detect,
         identify,
         identify_rev_cmd,
-        sync_at_rev_cmd,
-        port_voiceover_cmd,
-        compare_cmd,
         report_cmd,  # @click.command("compare-report")
-        compare_from_inventory_cmd,
-        backfill_cmd,
         extract_training_data,
         cache_group,
         trace_group,
         debug_group,
     ):
         harvest_group.add_command(command)
+
+    autopilot_group.add_command(sync, name="run")
+    for command in (
+        sync_at_rev_cmd,
+        port_voiceover_cmd,
+        compare_cmd,
+        compare_from_inventory_cmd,
+        backfill_cmd,
+    ):
+        autopilot_group.add_command(command)
 
 
 _register_video_verbs()

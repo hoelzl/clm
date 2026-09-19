@@ -455,5 +455,5 @@ class TestPropagateCliValidation:
 
     def test_propagate_to_accepted_in_help(self):
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
         assert "--propagate-to" in result.output

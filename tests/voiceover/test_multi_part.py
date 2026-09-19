@@ -170,7 +170,7 @@ class TestSyncCliSignature:
         from clm.cli.commands.harvest import harvest_group
 
         runner = CliRunner()
-        result = runner.invoke(harvest_group, ["autopilot", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "run", "--help"])
         assert result.exit_code == 0
         # SLIDES should appear before VIDEOS in the usage line
         usage_line = result.output.split("\n")[0]

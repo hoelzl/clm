@@ -1,4 +1,4 @@
-"""Merge voiceover content using a single-pass LLM call.
+"""Legacy embedded-model merge, reachable through harvest autopilot only.
 
 This module implements the ``polish_and_merge`` function and the batching
 logic that packs multiple slides into a single LLM call for efficiency.

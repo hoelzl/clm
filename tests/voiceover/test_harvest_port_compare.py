@@ -279,7 +279,8 @@ class TestCompareAnswer:
     def test_valid(self, tmp_path: Path) -> None:
         envelope = self._envelope(tmp_path)
         answer = parse_compare_answer(_answer_for(envelope, _all_covered_verdicts(envelope)))
-        assert len(answer.verdicts) == 2
+        # s2's target-only companion narration also needs a verdict (#960).
+        assert [v.item for v in answer.verdicts] == ["id:s0", "id:s1", "id:s2"]
 
     def test_bad_status_rejected(self, tmp_path: Path) -> None:
         envelope = self._envelope(tmp_path)
@@ -368,9 +369,9 @@ class TestCompareAcceptCli:
             "kind_totals",
             "slides",
         }
-        assert report["status_totals"]["dropped"] == 2
+        assert report["status_totals"]["dropped"] == 3
         judged = {s["key"]: s for s in report["slides"] if s["outcomes"]}
-        assert set(judged) == {"id:s0", "id:s1"}
+        assert set(judged) == {"id:s0", "id:s1", "id:s2"}
         # Deterministic rows still appear: s2 (matched, no bullets anywhere)
         # and s3 (new_at_head — no source counterpart).
         assert any(s["key"] == "id:s2" for s in report["slides"])

@@ -995,7 +995,7 @@ async def handle_inline_voiceover(
 
 # ---------------------------------------------------------------------------
 # harvest_transcribe, harvest_identify_rev,
-# harvest_backfill_dry, harvest_cache_list, harvest_trace_show,
+# harvest_cache_list, harvest_trace_show,
 # harvest_report, harvest_task (incl. the port/compare revision framing)
 # ---------------------------------------------------------------------------
 
@@ -1175,105 +1175,6 @@ async def handle_harvest_identify_rev(
             }
             for r in scored
         ],
-    }
-    return json.dumps(payload, indent=2, ensure_ascii=False)
-
-
-async def handle_harvest_backfill_dry(
-    slide_file: str,
-    videos: list[str],
-    data_dir: Path,
-    *,
-    lang: str,
-    rev: str | None = None,
-    auto: bool = True,
-    force_rev: bool = False,
-    top: int = 5,
-    tag: str = "voiceover",
-    whisper_model: str = "large-v3",
-    backend: str = "faster-whisper",
-    device: str = "auto",
-    model: str | None = None,
-    api_base: str | None = None,
-) -> str:
-    """Run the backfill pipeline in dry-run mode and return the diff.
-
-    Invokes ``clm harvest backfill --dry-run`` as a subprocess so the
-    full three-step composition (identify-rev → sync-at-rev →
-    port) stays DRY. The working copy is never mutated.
-
-    Args:
-        slide_file: Path to the slide file at HEAD.
-        videos: Recording video file paths.
-        data_dir: Root data directory.
-        lang: ``"de"`` or ``"en"``.
-        rev: Skip identify-rev and use this SHA directly.
-        auto: When ``True`` (default), pick the top-ranked rev
-            automatically if ``rev`` is not supplied.
-        force_rev: Proceed when the top score is below the accept
-            threshold.
-        top / tag / whisper_model / backend / device / model / api_base:
-            Passed through to ``backfill``.
-
-    Returns:
-        JSON string with ``{returncode, stdout, stderr, command}``.
-        Apply is intentionally unreachable — this tool never mutates.
-    """
-    import asyncio
-    import shlex
-    import sys
-
-    try:
-        sf = _resolve_under(data_dir, slide_file, label="slide_file")
-        vids = [_resolve_under(data_dir, v, label="video") for v in videos]
-    except _PathOutsideDataDir as exc:
-        return _error_payload(exc)
-
-    cmd: list[str] = [
-        sys.executable,
-        "-m",
-        "clm.cli.main",
-        "harvest",
-        "backfill",
-        str(sf),
-        *[str(v) for v in vids],
-        "--lang",
-        lang,
-        "--dry-run",
-        "--top",
-        str(top),
-        "--tag",
-        tag,
-        "--whisper-model",
-        whisper_model,
-        "--backend",
-        backend,
-        "--device",
-        device,
-    ]
-    if rev is not None:
-        cmd += ["--rev", rev]
-    elif auto:
-        cmd.append("--auto")
-    if force_rev:
-        cmd.append("--force-rev")
-    if model:
-        cmd += ["--model", model]
-    if api_base:
-        cmd += ["--api-base", api_base]
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout_b, stderr_b = await proc.communicate()
-
-    payload = {
-        "command": shlex.join(cmd),
-        "returncode": proc.returncode,
-        "stdout": stdout_b.decode("utf-8", errors="replace"),
-        "stderr": stderr_b.decode("utf-8", errors="replace"),
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
@@ -1527,9 +1428,10 @@ def _frame_revision_tasks(
     pairing, no pipeline, no model — compare frames bullet-relation tasks,
     port frames porting tasks on the target's normalized v3 bundle.
     """
-    from clm.core.slide_text.slide_parser import parse_slides
+    from clm.core.voiceover_companions import resolve_companion
     from clm.slides.agent_task import envelope
     from clm.voiceover.harvest_task import TaskUnavailable
+    from clm.voiceover.revision_slides import revision_slides
 
     if videos:
         return json.dumps(
@@ -1546,11 +1448,18 @@ def _frame_revision_tasks(
     try:
         target_path = _resolve_under(data_dir, slides, label="slides")
         source_path = _resolve_under(data_dir, source, label="source")
+        for path in (source_path, target_path):
+            companion = resolve_companion(path)
+            if companion is not None:
+                _resolve_under(data_dir, str(companion), label="companion")
     except _PathOutsideDataDir as exc:
         return _error_payload(exc)
 
-    source_groups = parse_slides(source_path, lang, include_header=True)
-    target_groups = parse_slides(target_path, lang, include_header=True)
+    try:
+        source_groups = revision_slides(source_path, lang)
+        target_groups = revision_slides(target_path, lang)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
 
     if kind == "port":
         from clm.slides.doc_lenses import DocLensError, load_bundle

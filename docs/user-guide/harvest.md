@@ -222,34 +222,32 @@ apply to every `clm harvest` subcommand.
 
 ## History-aware harvest
 
-When a recording was made against an older revision of a slide file, these
-subcommands recover the voiceover and port it forward onto the current HEAD:
+When a recording was made against an older revision, the agent drives an
+explicit loop (full instructions: `clm info harvest-agents`):
 
-- `clm harvest backfill SLIDE_FILE VIDEOS...` — one-shot pipeline that
-  composes the three steps below (identify the recorded revision, run the
-  pipeline against it, port forward). Patch-by-default: writes a unified diff
-  under `.clm/voiceover-backfill/` and prints it; pass `--apply` to mutate
-  the file.
-- `clm harvest identify-rev SLIDE_FILE VIDEOS...` — find the git revision the
-  video was recorded against, scored by OCR fingerprint matching.
-- `clm harvest sync-at-rev SLIDE_FILE VIDEOS... --rev <sha> -o scratch.py` —
-  export `SLIDE_FILE` at `--rev` to scratch and run the autopilot pipeline
-  against it (the working tree is never touched).
-- `clm harvest port SOURCE TARGET` — file-to-file transfer of voiceover
-  cells from an older synced `SOURCE` onto the current `TARGET`.
-- `clm harvest compare SOURCE TARGET` — read-only sibling of `port`; the LLM
-  labels each bullet as covered/rewritten/added/dropped/manual_review.
-  Neither file is modified. Re-render a saved `--json` report with
-  `clm harvest compare-report REPORT.json`.
-- `clm harvest compare-from-inventory SLIDE_FILE --inventory <map.json>` —
-  look up the video(s) recorded against `SLIDE_FILE` in an inventory mapping,
-  then run identify-rev → sync-at-rev → compare automatically.
+1. `clm harvest identify-rev DECK VIDEO... --lang de --json` — inspect the
+   candidate scores and select the recorded revision.
+2. `clm harvest export-at-rev DECK --rev SHA -o NEW_DIRECTORY --json` — export
+   the historical deck, split twin and voiceover companions. Original names
+   and companion layout are retained; the destination must not exist. This
+   only exports git content, without transcribing or merging narration.
+3. Run `report` → curate `task` → judge → `accept` on the exported deck to
+   recover the recording's narration. Prepare a normalized split pair first
+   if the historical deck predates the current document model. Review uncertain
+   assignments with `align report`/`align accept` and verify the result.
+4. `clm harvest task DECK --lang de --kind port --source OLD` → judge →
+   `clm harvest accept DECK --answer answer.json` (without `--record`).
+   Port reads inline and companion narration from `OLD`.
+5. Verify the current deck and continue twin translation through slides sync.
+   To audit, use `task --kind compare --source OLD` → `compare-accept`;
+   render the saved report with `clm harvest compare-report REPORT.json`.
 
-**Typical backfill workflow:** run `clm harvest backfill slides.py
-video.mp4 --lang de` to get a patch, review the printed diff, then re-run
-with `--apply` to write the ported voiceover onto the current slide file.
-The intermediate `identify-rev` / `sync-at-rev` / `port` commands are
-available for running the steps manually when you need finer control.
+The former top-level `port`, `compare`, `backfill`, `sync-at-rev`, and
+`compare-from-inventory` commands have been removed without aliases.
+Agent-less humans can still opt into their legacy embedded-model behavior
+under `clm harvest autopilot`. The original `autopilot DECK VIDEO...`
+spelling still works; `autopilot run --help` lists its one-shot options.
+MCP's `harvest_backfill_dry` is also removed: its dry run still invoked models.
 
 ## Backends
 
