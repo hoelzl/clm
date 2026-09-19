@@ -2,6 +2,25 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## MCP: `harvest_compare` removed; the task mirror frames compare/port (#960, {version})
+
+**Breaking for MCP clients.** `harvest_compare` was the one MCP tool that
+invoked a model (the bullet-relation judge). The MCP surface is now uniformly
+read-only and model-free, so the tool is **gone** — there is no model behind
+it to call. Its replacement is the existing task mirror, extended with the
+revision-history kinds:
+
+- `harvest_task(slides=TARGET, videos=[], lang=…, kind="compare", source=OLDER)`
+  frames bullet-relation labeling tasks (the answer is banked CLI-side by
+  `clm harvest compare-accept`).
+- `harvest_task(…, kind="port", source=OLDER)` frames porting tasks
+  (answers land via `clm harvest accept`).
+
+Agent configs that called `harvest_compare` now fail with an unknown-tool
+error — switch them to the framing call above and let the *calling agent* do
+the judging (that is the point: the agent is the model). The CLI's
+`clm harvest compare` is unchanged in this release.
+
 ## Docker workers run as a non-root user; /source is read-only for notebooks (#798, {version})
 
 **Breaking for notebooks that write into the course tree, and for anyone who

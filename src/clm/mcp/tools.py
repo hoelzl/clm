@@ -994,9 +994,9 @@ async def handle_inline_voiceover(
 
 
 # ---------------------------------------------------------------------------
-# harvest_transcribe, harvest_identify_rev, harvest_compare,
+# harvest_transcribe, harvest_identify_rev,
 # harvest_backfill_dry, harvest_cache_list, harvest_trace_show,
-# harvest_report, harvest_task
+# harvest_report, harvest_task (incl. the port/compare revision framing)
 # ---------------------------------------------------------------------------
 
 
@@ -1177,41 +1177,6 @@ async def handle_harvest_identify_rev(
         ],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
-
-
-async def handle_harvest_compare(
-    source: str,
-    target: str,
-    data_dir: Path,
-    *,
-    lang: str,
-    model: str | None = None,
-    api_base: str | None = None,
-) -> str:
-    """Compare the voiceover of two slide files (read-only).
-
-    Args:
-        source: Older slide file (typically from ``sync-at-rev``).
-        target: Current slide file.
-        data_dir: Root data directory.
-        lang: ``"de"`` or ``"en"``.
-        model: Override the judge LLM model.
-        api_base: Override the LLM API base URL.
-
-    Returns:
-        JSON string matching ``CompareReport.to_json()``.
-    """
-    from clm.voiceover.compare import run_compare_async
-
-    try:
-        src = _resolve_under(data_dir, source, label="source")
-        tgt = _resolve_under(data_dir, target, label="target")
-    except _PathOutsideDataDir as exc:
-        return _error_payload(exc)
-    report = await run_compare_async(
-        source=src, target=tgt, lang=lang, model=model, api_base=api_base
-    )
-    return json.dumps(report.to_json(), indent=2, ensure_ascii=False)
 
 
 async def handle_harvest_backfill_dry(
@@ -1546,6 +1511,96 @@ async def handle_harvest_report(
     return json.dumps(report, indent=2, ensure_ascii=False)
 
 
+def _frame_revision_tasks(
+    slides: str,
+    source: str | None,
+    videos: list[str],
+    data_dir: Path,
+    *,
+    lang: str,
+    slide: str | None,
+    kind: str,
+) -> str:
+    """The port/compare branch of ``handle_harvest_task`` (#960).
+
+    Mirrors ``_emit_revision_tasks`` in ``clm.cli.commands.harvest``: file
+    pairing, no pipeline, no model — compare frames bullet-relation tasks,
+    port frames porting tasks on the target's normalized v3 bundle.
+    """
+    from clm.core.slide_text.slide_parser import parse_slides
+    from clm.slides.agent_task import envelope
+    from clm.voiceover.harvest_task import TaskUnavailable
+
+    if videos:
+        return json.dumps(
+            {"error": f"kind '{kind}' takes no videos (the older file is 'source')"},
+            indent=2,
+            ensure_ascii=False,
+        )
+    if source is None:
+        return json.dumps(
+            {"error": f"kind '{kind}' needs 'source' (the older slide file)"},
+            indent=2,
+            ensure_ascii=False,
+        )
+    try:
+        target_path = _resolve_under(data_dir, slides, label="slides")
+        source_path = _resolve_under(data_dir, source, label="source")
+    except _PathOutsideDataDir as exc:
+        return _error_payload(exc)
+
+    source_groups = parse_slides(source_path, lang, include_header=True)
+    target_groups = parse_slides(target_path, lang, include_header=True)
+
+    if kind == "port":
+        from clm.slides.doc_lenses import DocLensError, load_bundle
+        from clm.voiceover.harvest_port import build_port_tasks
+
+        try:
+            bundle = load_bundle(target_path)
+        except DocLensError as exc:
+            return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
+        deck = bundle.outcome.deck
+        if deck is None:
+            refusal = bundle.outcome.refusal
+            reasons = (
+                "; ".join(f"[{r.code}] {r.detail}" for r in refusal.reasons) if refusal else ""
+            )
+            return json.dumps(
+                {
+                    "error": "the deck bundle is not normalized"
+                    + (f": {reasons}" if reasons else "")
+                    + " — run `clm slides normalize` on the pair first"
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        try:
+            tasks = build_port_tasks(deck, target_groups, source_groups, lang=lang, slide=slide)
+        except TaskUnavailable as exc:
+            return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
+        body: dict = {"kind": "port", "source": str(source_path), "tasks": tasks}
+    else:
+        from clm.voiceover.harvest_compare import build_compare_tasks, file_fingerprint
+
+        tasks = build_compare_tasks(source_groups, target_groups, lang=lang)
+        if slide is not None:
+            handle = slide if slide.startswith(("id:", "title:")) else f"id:{slide}"
+            tasks = [t for t in tasks if t["item"] == handle]
+            if not tasks:
+                return json.dumps(
+                    {"error": f"no judged pair for {handle}"}, indent=2, ensure_ascii=False
+                )
+        body = {
+            "kind": "compare",
+            "source_fingerprint": file_fingerprint(source_path),
+            "target_fingerprint": file_fingerprint(target_path),
+            "tasks": tasks,
+        }
+    payload = envelope(1, tool="harvest", verb="task", body=body)
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
 async def handle_harvest_task(
     slides: str,
     videos: list[str],
@@ -1554,6 +1609,7 @@ async def handle_harvest_task(
     lang: str,
     slide: str | None = None,
     kind: str = "curate",
+    source: str | None = None,
     transcript: str | None = None,
     alignment: str | None = None,
     whisper_model: str = "large-v3",
@@ -1571,16 +1627,24 @@ async def handle_harvest_task(
     freshness tokens). Writes go through ``clm harvest accept`` on the
     CLI — by design there is no MCP write path.
 
+    With ``kind="port"`` / ``kind="compare"`` this mirrors
+    ``clm harvest task --kind port|compare --source FILE`` (#960): no
+    videos, ``source`` is the older slide file; compare answers are banked
+    by ``clm harvest compare-accept`` on the CLI.
+
     Args:
         slides: The recorded-language deck half (absolute or relative to
             ``data_dir``).
-        videos: Recording video file paths.
+        videos: Recording video file paths (curate/translate only).
         data_dir: Root data directory.
         lang: The recorded (spoken) language (``"de"`` or ``"en"``).
         slide: Frame one slide (bare id or ``id:...`` handle). Omit to
             frame every actionable item.
-        kind: ``"curate"`` (merge the recorded language) or
-            ``"translate"`` (frame the twin side).
+        kind: ``"curate"`` (merge the recorded language), ``"translate"``
+            (frame the twin side), ``"port"`` or ``"compare"``
+            (revision-history framing; needs ``source``).
+        source: The older slide file (port/compare only; absolute or
+            relative to ``data_dir``).
         transcript / alignment: precomputed-input overrides (see
             :func:`handle_harvest_report`).
         whisper_model / backend / device: ASR knobs.
@@ -1588,10 +1652,16 @@ async def handle_harvest_task(
             :func:`handle_harvest_transcribe`.
 
     Returns:
-        JSON string ``{schema, tool, verb, video_fingerprint, tasks}``,
+        JSON string ``{schema, tool, verb, video_fingerprint, tasks}``
+        (curate/translate) or the kind-specific envelope (port/compare),
         or an ``{"error": ...}`` object when the named slide cannot be
         framed.
     """
+    if kind in ("port", "compare"):
+        return _frame_revision_tasks(
+            slides, source, videos, data_dir, lang=lang, slide=slide, kind=kind
+        )
+
     from clm.voiceover.harvest_task import TaskUnavailable, build_tasks
 
     try:

@@ -35,9 +35,9 @@ from clm.mcp.tools import (
     handle_get_language_view,
     handle_harvest_backfill_dry,
     handle_harvest_cache_list,
-    handle_harvest_compare,
     handle_harvest_identify_rev,
     handle_harvest_report,
+    handle_harvest_task,
     handle_harvest_trace_show,
     handle_harvest_transcribe,
     handle_inline_voiceover,
@@ -198,21 +198,27 @@ class TestHarvestContainment:
         result = await handle_harvest_transcribe(str(outside_video), data_dir)
         _err(result)
 
-    async def test_compare_refuses_outside_source_and_target(self, tmp_path):
+    async def test_compare_task_refuses_outside_source_and_target(self, tmp_path):
+        # The model-free `harvest_task(kind="compare")` replaced the removed
+        # LLM-driven `harvest_compare` tool (#960); containment stays pinned.
         data_dir = _data_tree(tmp_path)
         deck, _ = _outside_sentinels(tmp_path)
-        result = await handle_harvest_compare(
+        result = await handle_harvest_task(
             str(deck),
-            "slides/module_100_basics/topic_010_intro/slides_intro.py",
+            [],
             data_dir,
             lang="de",
+            kind="compare",
+            source="slides/module_100_basics/topic_010_intro/slides_intro.py",
         )
         _err(result)
-        result = await handle_harvest_compare(
+        result = await handle_harvest_task(
             "slides/module_100_basics/topic_010_intro/slides_intro.py",
-            str(deck),
+            [],
             data_dir,
             lang="de",
+            kind="compare",
+            source=str(deck),
         )
         _err(result)
 

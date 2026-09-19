@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from clm.mcp.tools import (
     handle_harvest_backfill_dry,
     handle_harvest_cache_list,
-    handle_harvest_compare,
     handle_harvest_identify_rev,
     handle_harvest_report,
     handle_harvest_task,
@@ -178,7 +177,8 @@ class TestHandleHarvestIdentifyRev:
 
 
 # ---------------------------------------------------------------------------
-# harvest_compare
+# harvest_task kind=compare (the model-free replacement for harvest_compare,
+# removed in #960 — the MCP surface never invokes a model)
 # ---------------------------------------------------------------------------
 
 
@@ -192,49 +192,71 @@ Explain the goals.
 """
 
 
-def _mock_llm_response(content: str):
-    choice = MagicMock()
-    choice.message.content = content
-    resp = MagicMock()
-    resp.choices = [choice]
-    return resp
-
-
-class TestHandleHarvestCompare:
-    async def test_returns_compare_report_json(self, tmp_path: Path):
+class TestHandleHarvestTaskCompare:
+    async def test_frames_compare_tasks_without_a_model(self, tmp_path: Path):
         src = tmp_path / "old.py"
         tgt = tmp_path / "new.py"
         src.write_text(_MIN_SLIDES, encoding="utf-8")
         tgt.write_text(_MIN_SLIDES, encoding="utf-8")
 
-        llm_payload = json.dumps(
-            {
-                "bullets": "- talk about goals",
-                "outcomes": [
-                    {
-                        "status": "covered",
-                        "target": "- talk about goals",
-                        "source": "- talk about goals",
-                    }
-                ],
-            }
+        out = await handle_harvest_task(
+            str(tgt), [], tmp_path, lang="en", kind="compare", source=str(src)
         )
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=_mock_llm_response(llm_payload)
-        )
-
-        with patch(
-            "clm.infrastructure.llm.client.build_client",
-            return_value=mock_client,
-        ):
-            out = await handle_harvest_compare(str(src), str(tgt), tmp_path, lang="en")
 
         data = json.loads(out)
-        assert data["language"] == "en"
-        assert data["source"].endswith("old.py")
-        assert data["target"].endswith("new.py")
-        assert data["status_totals"]["covered"] == 1
+        assert data["schema"] == 1
+        assert data["tool"] == "harvest"
+        assert data["verb"] == "task"
+        assert data["kind"] == "compare"
+        assert data["source_fingerprint"]
+        assert data["target_fingerprint"]
+        (task,) = data["tasks"]
+        assert task["item"] == "id:intro"
+        assert task["validator"] == "harvest-compare"
+        assert task["inputs"]["prior_bullets"] == "- talk about goals"
+
+    async def test_compare_needs_source(self, tmp_path: Path):
+        tgt = tmp_path / "new.py"
+        tgt.write_text(_MIN_SLIDES, encoding="utf-8")
+        out = await handle_harvest_task(str(tgt), [], tmp_path, lang="en", kind="compare")
+        assert "source" in json.loads(out)["error"]
+
+    async def test_compare_rejects_videos(self, tmp_path: Path):
+        src = tmp_path / "old.py"
+        src.write_text(_MIN_SLIDES, encoding="utf-8")
+        tgt = tmp_path / "new.py"
+        tgt.write_text(_MIN_SLIDES, encoding="utf-8")
+        video = tmp_path / "v.mp4"
+        video.write_bytes(b"")
+        out = await handle_harvest_task(
+            str(tgt), [str(video)], tmp_path, lang="en", kind="compare", source=str(src)
+        )
+        assert "no videos" in json.loads(out)["error"]
+
+
+class TestHandleHarvestTaskPort:
+    async def test_frames_port_tasks_on_the_bundle(self, tmp_path: Path):
+        de_path, _ = _write_deck_fixture(tmp_path)
+        source = tmp_path / "slides_at_rev.de.py"
+        source.write_text(
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Alpha"),
+                '# %% [markdown] lang="de" tags=["notes"]\n#\n# - Alte Alpha-Notiz.\n\n',
+            ),
+            encoding="utf-8",
+        )
+
+        out = await handle_harvest_task(
+            str(de_path), [], tmp_path, lang="de", kind="port", source=str(source)
+        )
+
+        data = json.loads(out)
+        assert data["kind"] == "port"
+        (task,) = data["tasks"]
+        assert task["item"] == "id:s0"
+        assert task["validator"] == "harvest-bullets"
+        assert task["inputs"]["prior_bullets"] == "- Alte Alpha-Notiz."
 
 
 # ---------------------------------------------------------------------------
