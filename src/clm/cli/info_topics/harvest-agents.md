@@ -93,6 +93,44 @@ Exit codes: `0` applied · `1` applied but the ledger record was withheld by
 the structural gate (fix the pair, then `clm slides sync record`) · `2`
 rejected (nothing written).
 
+## port/compare — revision history without a video
+
+The revision-history half of the domain (carrying voiceover from an older
+git revision of a deck onto HEAD, auditing what changed) is agent-first too:
+
+```
+clm harvest task DECK --lang de --kind port --source slides-at-<rev>.py
+→ answer each framed slide pair (same harvest-bullets shape)
+→ clm harvest accept DECK --answer answer.json      # the ordinary write path
+
+clm harvest task DECK --lang de --kind compare --source slides-at-<rev>.py
+→ answer with verdicts (one per framed pair: covered|rewritten|added|dropped|manual_review)
+→ clm harvest compare-accept OLDER DECK --lang de --answer verdicts.json -o report.json
+```
+
+`--kind port` pairs the source's slides with the current deck by the
+deterministic matcher (`slide_id`, then title, then content similarity) and
+frames each pair whose source slide carries voiceover: the target slide's
+baseline (both sides, with the usual `baseline_fingerprints`), the source's
+`prior_bullets`, and both slide contents when the slide changed. The answer
+is the standard bullet document — `accept` writes it id-keyed and
+companion-aware. (A port answer has no `video_fingerprint`, so `--record`
+is refused: ledger provenance is keyed by video.)
+
+`--kind compare` is **auditing**: it frames bullet-relation labeling per
+matched pair and `compare-accept` writes the canonical report JSON (the
+shape `compare-report` re-renders). Freshness is by file content
+(`source_fingerprint` / `target_fingerprint` in the task envelope, echoed
+in the answer). Decks are never touched. Deterministic buckets
+(`new_at_head` / `removed_at_head` / both-sides-empty pairs) row in the
+report without needing a verdict. A pair the matcher flags
+`manual_review` (duplicate titles too close to disambiguate) is not framed
+— fix the duplicate slide ids/titles first.
+
+The typical source file comes from `clm harvest sync-at-rev` (which still
+uses embedded models internally — quarantined legacy, being retired) or
+simply `git show <rev>:path > slides-at-<rev>.py`.
+
 ## verify — the structural post-check
 
 `clm harvest verify DECK` runs the v3 lens gate plus the **deck-halves**

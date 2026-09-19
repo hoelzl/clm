@@ -32,7 +32,7 @@ __all__ = [
     "build_tasks",
 ]
 
-TASK_KINDS = ("curate", "translate")
+TASK_KINDS = ("curate", "translate", "port", "compare")
 
 #: The validator label every harvest task document announces. Registered
 #: in the shared kit's registry (:data:`clm.slides.agent_task.VALIDATORS`)
@@ -50,7 +50,7 @@ ANSWER_SCHEMA: dict[str, Any] = {
     "required": ["item", "kind", "baseline_fingerprints", "updates", "dropped"],
     "properties": {
         "item": {"type": "string", "description": "the slide handle, e.g. id:intro"},
-        "kind": {"enum": list(TASK_KINDS)},
+        "kind": {"enum": ["curate", "translate", "port"]},
         "video_fingerprint": {"type": "string"},
         "baseline_fingerprints": {
             "type": "object",
@@ -148,7 +148,7 @@ def _baseline_fingerprints(item: dict[str, Any]) -> dict[str, dict[str, str | No
     return tokens
 
 
-def _slide_content(deck: BilingualDeck, slide_id: str, lang: str) -> str:
+def slide_content(deck: BilingualDeck, slide_id: str, lang: str) -> str:
     for group in deck.groups:
         if group.anchor_id != slide_id:
             continue
@@ -179,7 +179,7 @@ def _frame_one(
             "language": lang,
             "baseline": cells,
             "transcript": item.get("transcript"),
-            "slide": {"title": item["title"], "content": _slide_content(deck, slide_id, lang)},
+            "slide": {"title": item["title"], "content": slide_content(deck, slide_id, lang)},
         }
     else:  # translate
         twin = "en" if lang == "de" else "de"
@@ -220,8 +220,12 @@ def build_tasks(
     :class:`TaskUnavailable` when the named slide cannot be framed; in the
     all-items sweep, unframeable items are skipped (report shows why).
     """
-    if kind not in TASK_KINDS:
-        raise TaskUnavailable(f"unknown task kind '{kind}' (choose from {', '.join(TASK_KINDS)})")
+    if kind not in ("curate", "translate"):
+        raise TaskUnavailable(
+            f"unknown or non-video task kind '{kind}' — this builder frames "
+            "curate/translate only; port/compare are framed from slide pairs "
+            "(`harvest task --kind port|compare --source FILE`)"
+        )
     items = report["items"]
     if slide is not None:
         handle = slide if slide.startswith(("id:", "pos:")) else f"id:{slide}"
