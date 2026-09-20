@@ -17,18 +17,18 @@ Task state lives in the tracker, not here: umbrella **#970**, children
 #959–#969 plus #981. The investigation itself is
 `docs/claude/agent-toolkit-candidates-investigation.md` (PR #971, merged).
 
-S5 (2026-09-19/20, opencode session): resumed the thread, landed **#961**
-(PR #980, merged), settled the #962 placement question, ran a
-command-surface orthogonality review whose outcomes are recorded on the
-tracker (#963 rename note + owner ratification, #970 shaping rule, #981
-filing) and in `clm info commands` (narration map, PR #982).
+S6 (2026-09-20, opencode session): resumed the thread at outcomes depth,
+confirmed the #962 placement once at implementation start (as S5 required),
+landed **#962** (PR #984, merged) and **#963** (PR #985, merged; both
+issues closed). **Tier 1 is complete: #959–#963 all landed.**
 
 ## Settled
 
 - **The contract** (`clm info agent-tasks`, kit `clm.slides.agent_task` +
   `clm.cli._default_verb_group`, #959): envelope identity, freshness-token
   echo, validator registry (`harvest-bullets`, `sync-decisions`,
-  `harvest-align`, `harvest-compare`, and since #961 `translate-deck`),
+  `harvest-align`, `harvest-compare`, `translate-deck`, and since #962
+  `polish-notes`, since #963 `coverage-verdicts` + `assign-ids-titles`),
   load-bearing exit codes, `<x>-agents` topics, autopilot quarantine.
 - **Three tiers + order** (owner-confirmed): kit → #960 → #961/#962/#963 →
   Tier 2 (#965–#967) → Tier 3 (#968–#969). **Not converting**: validate,
@@ -37,29 +37,40 @@ filing) and in `clm info commands` (narration map, PR #982).
 - **#960 landed** (PRs #973–#978): history verbs removed without shims,
   `export-at-rev`, MCP conversion, companion-aware readers.
 - **#961 landed** (PR #980): `clm slides translate` is a default-verb group
-  — `report` (bare, read-only; twin absent → counts + pointer, exit 1),
-  `task` (whole-deck cold-start framing; the engine's own classification
-  via `plan_cells`, the shared prose/code/title prompts, glossary,
-  fingerprints), `accept` (shape+freshness+coverage, then the public
-  `bootstrap_deck()` — byte-identical post-conditions to autopilot, pinned
-  by a differential test), `autopilot` (the in-process OpenRouter path).
-  Deferred: an MCP mirror of `task` (same posture as the deferred
-  `align report` mirror).
-- **#962 placement settled (S5)**: `slides polish` becomes **its own verb
-  pair** (`report`/`task`/`accept` + `autopilot` quarantine), NOT
-  `harvest task --kind polish` — discovery-first rationale (name match,
-  prefix pruning, `--kind` already carries two input shapes, slides-family
-  info routing, pattern reuse). Recorded on #962; the owner engaged with
-  the recommendation and did not countermand — confirm once at
-  implementation start.
+  — `report`/`task`/`accept`/`autopilot` per the established template.
+- **#962 landed** (PR #984): `clm slides polish` is a default-verb group —
+  `report` (bare, read-only; polishable-notes counts + pointer, exit 1),
+  `task` (per-slide notes rows with `id:`/`pos:` handles, both language
+  sides as context, the level prompt as `instructions`, source/twin
+  fingerprints), `accept` (shape + freshness + coverage → the ordinary
+  `update_narrative` splice, atomically, byte-identical to autopilot,
+  pinned by a differential test; sync ledger deliberately untouched so the
+  next sync report frames the twin's update), `autopilot` (in-process LLM,
+  key-gated; `verbatim` stays key-free). Placement (own verb pair, NOT
+  `harvest task --kind polish`) was confirmed once at implementation start
+  per the S5 note — do not re-litigate.
+- **#963 landed** (PR #985): `clm slides coverage` is a default-verb group
+  — `report` (framed judgment: pending pairs with bullets + voiceover +
+  content-hash freshness tokens, cached verdicts with gaps surfaced as
+  findings, duplicate-content pairs framed once as `duplicate`, `--dump`
+  stays, directories frame every deck), `accept` (validator
+  `coverage-verdicts`; banks into the same `CoverageCache` rows the Ollama
+  judge wrote — the cache is the trust store), `autopilot` (the in-process
+  judge). `clm slides assign-ids` became a hidden group: bare/`run` keeps
+  minting, new `accept` (validator `assign-ids-titles`) answers the
+  unchanged `--report-refusals --context --json` worklist with
+  `{file, line, title, body}` rows (body echo = freshness; engine
+  slugifier; ordered-sequence pair-consistency guard; atomic stamps);
+  `--llm-suggest` removed without a shim. `coverage-report` renamed to
+  **`language-coverage`** (no alias), as ratified on #963. Prompts, prompt
+  versions, and `CoverageVerdict` moved to the model-free
+  `infrastructure/llm/prompts.py` seam (re-exported); report/accept never
+  import the Ollama client (AST-pinned, #963 acceptance).
 - **Surface-shaping rule (S5, recorded on #970)**: conversions keep the
   feature's name and home, gain the standard verb set, and absorb or rename
   their report-ish siblings; superseded commands retire without shims; no
   big-bang regrouping of `slides`. The sync `apply` vs harvest/translate
   `accept` wording stays as the one accepted dialect bend.
-- **`coverage-report` → `language-coverage` (S5, owner-ratified on #963)**:
-  the rename lands in #963's own PR together with the `coverage` verbs —
-  no alias; four alternatives documented as rejected on the issue.
 
 ## Open (owner decisions)
 
@@ -68,8 +79,9 @@ filing) and in `clm info commands` (narration map, PR #982).
 
 ## Deferred / revisit conditions
 
-- MCP mirrors: `align report` (from S3) and `translate task` (from S5) —
-  add only if callers need them over MCP.
+- MCP mirrors: `align report` (from S3), `translate task` (from S5), and
+  now implicitly `polish task` / `coverage report` / `assign-ids accept`
+  (from S6) — add only if callers need them over MCP.
 - Discarded `manual_review` match candidates and partial alignment patches
   (from S3) — possible follow-ups, not planned.
 - #981 (`suggest-sync` + MCP `slides_suggest_sync`): retire if the
@@ -83,15 +95,24 @@ filing) and in `clm info commands` (narration map, PR #982).
   touching cross-module imports (documented in
   `docs/developer-guide/testing.md`).
 - Full-suite xdist runs can flake `TestMockWorkerBasics.
-  test_mock_worker_stops_and_marks_dead` under contention (passes
-  standalone); cap workers (`PYTEST_XDIST_AUTO_NUM_WORKERS=4`) — already
-  the ship-a-pr guidance.
+  test_mock_worker_processes_job` / `test_mock_worker_stops_and_marks_dead`
+  under contention (passes standalone); cap workers
+  (`PYTEST_XDIST_AUTO_NUM_WORKERS=4`) — already the ship-a-pr guidance.
+  Recurred in both S6 implementation sessions; still unrelated to any
+  slides/CLI diff.
+- `assign-ids accept`'s framing (`--report-refusals --context --json`)
+  carries no fingerprints; freshness is the body echo + id-less
+  precondition (recorded in `sync-agents` info topic). Adequate for the
+  current loop; revisit only if line-drift false accepts ever surface.
 
 ## Next conversational boundary
 
-Start **#962** (`slides polish` → `report`/`task`/`accept`/`autopilot`,
-per the #961 template and the placement decision on the issue; level
-prompts already live in `src/clm/notebooks/polish_levels/*.md`). Then
-**#963** with the `language-coverage` rename baked into the same PR.
-#981 opportunistically. Do not re-litigate placement, the rename, or the
-shaping rule.
+**Tier 1 is done.** Start Tier 2 when the owner picks it up: **#965**
+(exists-first decisions for slide deletions/moves — open question above),
+**#966**, **#967** (check their issue texts for current shape), or the
+deferred **#981** opportunistically. Do not re-litigate the shaping rule,
+the #962 placement, the #963 rename, or the Tier-1 designs. The
+implementation rhythm that worked for #962/#963: resume at outcomes depth,
+confirm any recorded "confirm once" notes, resolve-issue workflow
+(test-first), adversarial review above ~150 non-test lines, ship-a-pr with
+CI-gated auto-merge.
