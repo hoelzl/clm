@@ -699,32 +699,34 @@ class TestCoverageCli:
     def test_dump_empty_cache(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.slides.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_group
 
         runner = CliRunner()
-        result = runner.invoke(coverage_cmd, ["--dump", "--cache-dir", str(tmp_path)])
+        result = runner.invoke(coverage_group, ["report", "--dump", "--cache-dir", str(tmp_path)])
         assert result.exit_code == 0
         assert "no cached verdicts" in result.output
 
     def test_dump_json_empty_cache(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.slides.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_group
 
         runner = CliRunner()
-        result = runner.invoke(coverage_cmd, ["--dump", "--json", "--cache-dir", str(tmp_path)])
+        result = runner.invoke(
+            coverage_group, ["report", "--dump", "--json", "--cache-dir", str(tmp_path)]
+        )
         assert result.exit_code == 0
         assert result.output.strip() == "[]"
 
-    def test_runs_against_file_without_ollama(self, tmp_path: Path):
-        """With no Ollama daemon reachable, the command should still complete.
+    def test_autopilot_without_ollama_still_completes(self, tmp_path: Path):
+        """With no Ollama daemon reachable, the autopilot verb still completes.
 
         Pairs that lack voiceover surface as warnings (no LLM needed);
         pairs that need a verdict get skipped silently.
         """
         from click.testing import CliRunner
 
-        from clm.cli.commands.slides.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_group
 
         deck = tmp_path / "deck.py"
         deck.write_text(
@@ -740,8 +742,9 @@ class TestCoverageCli:
         )
         runner = CliRunner()
         result = runner.invoke(
-            coverage_cmd,
+            coverage_group,
             [
+                "autopilot",
                 str(deck),
                 "--cache-dir",
                 str(tmp_path / "cache"),
@@ -756,9 +759,9 @@ class TestCoverageCli:
     def test_requires_path_unless_dump(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.slides.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_group
 
         runner = CliRunner()
-        result = runner.invoke(coverage_cmd, ["--cache-dir", str(tmp_path)])
+        result = runner.invoke(coverage_group, ["report", "--cache-dir", str(tmp_path)])
         assert result.exit_code != 0
         assert "PATH is required" in result.output

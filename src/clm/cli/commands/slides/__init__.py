@@ -16,10 +16,10 @@ def slides_group() -> None:
     """Slide authoring: normalize, sync, search, language tools, etc."""
 
 
-from clm.cli.commands.slides.assign_ids import assign_ids_cmd  # noqa: E402
-from clm.cli.commands.slides.coverage import coverage_cmd  # noqa: E402
-from clm.cli.commands.slides.coverage_report import coverage_report_cmd  # noqa: E402
+from clm.cli.commands.slides.assign_ids import assign_ids_group  # noqa: E402
+from clm.cli.commands.slides.coverage import coverage_group  # noqa: E402
 from clm.cli.commands.slides.cpp_show import cpp_show_cmd  # noqa: E402
+from clm.cli.commands.slides.language_coverage import language_coverage_cmd  # noqa: E402
 from clm.cli.commands.slides.language_view import language_view_cmd  # noqa: E402
 from clm.cli.commands.slides.normalize import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.slides.reconcile_vo_ids import reconcile_vo_ids_cmd  # noqa: E402
@@ -36,8 +36,8 @@ from clm.cli.commands.slides.translate import slides_translate_group  # noqa: E4
 from clm.cli.commands.slides.unify import unify_cmd  # noqa: E402
 
 slides_group.add_command(normalize_slides_cmd, name="normalize")
-slides_group.add_command(assign_ids_cmd, name="assign-ids")
-slides_group.add_command(coverage_cmd, name="coverage")
+slides_group.add_command(assign_ids_group, name="assign-ids")
+slides_group.add_command(coverage_group, name="coverage")
 slides_group.add_command(split_cmd, name="split")
 slides_group.add_command(unify_cmd, name="unify")
 slides_group.add_command(language_view_cmd, name="language-view")
@@ -53,7 +53,7 @@ slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")
 slides_group.add_command(slug_report_cmd, name="slug-report")
-slides_group.add_command(coverage_report_cmd, name="coverage-report")
+slides_group.add_command(language_coverage_cmd, name="language-coverage")
 slides_group.add_command(cpp_show_cmd, name="cpp-show")
 slides_group.add_command(authoring_rules_cmd, name="rules")
 

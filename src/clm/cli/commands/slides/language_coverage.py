@@ -1,4 +1,4 @@
-"""``clm slides coverage-report`` — DE/EN completeness per deck (gap #8).
+"""``clm slides language-coverage`` — DE/EN completeness per deck (gap #8).
 
 Separates "deck exists in only one language (needs translation)" from
 "bilingual deck off by a cell or two (alignment fix)" among count-mismatch
@@ -43,7 +43,7 @@ def _decks_for_spec(spec_file: Path, data_dir: Path | None) -> list[Path]:
     return resolve_spec_decks(spec, slides_dir).deck_files
 
 
-@click.command("coverage-report")
+@click.command("language-coverage")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--only",
@@ -82,7 +82,7 @@ def _decks_for_spec(spec_file: Path, data_dir: Path | None) -> list[Path]:
     help="Show only decks with this status (de_only / en_only / imbalanced / balanced).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
-def coverage_report_cmd(
+def language_coverage_cmd(
     path: Path,
     only: str | None,
     exclude: tuple[str, ...],

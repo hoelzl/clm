@@ -47,7 +47,9 @@ __all__ = [
     "check_coverage_for_text",
     "check_coverage_in_directory",
     "check_coverage_in_file",
+    "content_hash",
     "extract_bullets",
+    "narrative_text",
 ]
 
 
@@ -324,6 +326,16 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+#: Public seam for the agent-toolkit framing (``clm.slides.coverage_task``):
+#: the freshness/cache keys are content hashes over the exact texts framed.
+content_hash = _content_hash
+
+#: Public seam for :func:`coverage_task.build_report` — the voiceover text
+#: framed for judgment is the same capped, prefix-stripped concatenation
+#: the embedded judge sees.
+narrative_text = _narrative_text
+
+
 # ---------------------------------------------------------------------------
 # Core algorithm
 # ---------------------------------------------------------------------------
@@ -434,7 +446,9 @@ def check_coverage_for_text(
 
 def _prompt_version(judge: CoverageJudge | None) -> str:
     if judge is None:
-        return "v1"
+        from clm.infrastructure.llm.prompts import COVERAGE_PROMPT_VERSION
+
+        return COVERAGE_PROMPT_VERSION
     return getattr(judge, "prompt_version", "v1")
 
 
@@ -449,7 +463,7 @@ def _lookup_or_judge(
     options: CoverageOptions,
     result: CoverageResult,
 ) -> CoverageVerdict | None:
-    from clm.infrastructure.llm.ollama_client import CoverageVerdict, OllamaError
+    from clm.infrastructure.llm.prompts import CoverageVerdict
 
     cache = options.cache
     if cache is not None:
@@ -472,6 +486,10 @@ def _lookup_or_judge(
     judge = options.judge
     if judge is None:
         return None
+
+    # The Ollama import fires only on the embedded-judge path — the
+    # model-free report/accept reads never pull the client in (#963).
+    from clm.infrastructure.llm.ollama_client import OllamaError
 
     try:
         verdict = judge.judge(bullets, voiceover_text, lang=pair.lang)

@@ -41,15 +41,15 @@ exactly one owning command. If you are touching narration, start here:
 | Clean up rough speaker notes already on a deck | `clm slides polish report → task → accept` (or `polish autopilot` with an API key) |
 | Reconcile an existing split pair — deck halves **and** `voiceover_*` companions alike | `clm slides sync report → apply → verify → record` (companions are members of the same table and ledger) |
 | Move narration between a deck and a `voiceover_*` companion file | `clm voiceover extract / inline / inline-notes` (layout plumbing, no judgment) |
-| Check that each slide's bullets are actually narrated | `clm slides coverage` |
+| Check that each slide's bullets are actually narrated | `clm slides coverage report → accept` (or `coverage autopilot` with a local Ollama) |
 | Repair mismatched voiceover/notes `slide_id`s across a pair | `clm slides reconcile-vo-ids` |
-| See which decks lack a language entirely (course-wide) | `clm slides coverage-report` |
+| See which decks lack a language entirely (course-wide) | `clm slides language-coverage` (renamed from `coverage-report`, #963) |
 
 The judgment-bearing entries (`harvest`, `slides sync`, `slides translate`,
-`slides polish`) are agent toolkits: read by default, framed tasks,
-load-bearing exit codes — see `clm info agent-tasks` for the shared contract
-and the per-toolkit topics (`clm info sync-agents`, `clm info
-harvest-agents`) for the loops. The rest are mechanical.
+`slides polish`, `slides coverage`) are agent toolkits: read by default,
+framed tasks, load-bearing exit codes — see `clm info agent-tasks` for the
+shared contract and the per-toolkit topics (`clm info sync-agents`, `clm
+info harvest-agents`) for the loops. The rest are mechanical.
 
 ### `clm build`
 
@@ -1861,8 +1861,8 @@ Three-category policy:
   - in a DE/EN pair: when the EN slug source has none of the above
     but the DE sibling does, the slug derives from the DE sibling
     (transliterated to ASCII).
-  **Refused by default**; opt in with `--accept-content-derived` or
-  `--llm-suggest`.
+  **Refused by default**; opt in with `--accept-content-derived`
+  (agent titles for refused cells land via `assign-ids accept`).
 - **code-derived** *(since CLM {version})* — a bare-expression code cell
   with no heading and none of the AST constructs above (e.g.
   `(1 + 1j) * (1 + 1j)`, `a == b`). **Refused by default**;
@@ -1878,7 +1878,7 @@ Three-category policy:
 - **no content** — cell where no extractor produces anything (empty
   cell, divider, pure-punctuation / `...` code, magic-only cells).
   **Hard refuse**; the author has to write `slide_id="…"` by hand, or
-  pass `--llm-suggest` to let the LLM propose a title as a last resort.
+  propose titles through the agent loop (`assign-ids accept`, #963).
 
 Special cases:
 
@@ -1905,28 +1905,27 @@ Special cases:
     reuse and leave the divergence for `clm validate`'s #162 detective.
 
 ```
-clm slides assign-ids [OPTIONS] PATH
+clm slides assign-ids [OPTIONS] PATH               # = run (the minting verb)
+clm slides assign-ids run PATH [options]
+clm slides assign-ids accept PATH --answers FILE|- [--dry-run] [--json]
 ```
 
-| Option | Description |
+| Option (verb) | Description |
 |--------|-------------|
-| `--force` | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
-| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM), including image-filename, loop, and display-expression proposals (#233). Bare-expression code cells with no salient name and hard-refusal cells still refuse. |
-| `--accept-code-derived` | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `a == b` → `a-b`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
-| `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title. Fires on both extractable cells (replacing the content-derived title when the LLM returns one) and on hard-refusal cells (last-resort fallback before refusing). Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
-| `--report-only`, `--dry-run` | List planned assignments and refusals without modifying any file. |
-| `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
-| `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
-| `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B model can exceed 60s). |
-| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`. |
-| `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. `--only bilingual` mints bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
-| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` dir). Repeatable. Underscore-prefixed dirs (`_archive/`, …) are skipped automatically (issue #318). |
-| `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
-| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
-| `--data-dir DIR` | Course data directory (contains `slides/`); used to resolve the `--shipping-only` scope. |
-| `--report-refusals` | (since CLM {version}) Emit a hand-authoring **worklist** of the refusals (hard ones first) instead of the assignment listing — the cells that still need a `slide_id`. |
-| `--context` | (since CLM {version}) With `--report-refusals`, include each refused cell's marker, body, and the nearest preceding `slide_id`/heading so you can author an id in place. Implies `--report-refusals`. |
-| `--json` | Emit a JSON report instead of human-readable lines. |
+| `--force` (run) | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
+| `--accept-content-derived` (run) | Auto-accept proposals for the extractable category (no LLM), including image-filename, loop, and display-expression proposals (#233). Bare-expression code cells with no salient name and hard-refusal cells still refuse. |
+| `--accept-code-derived` (run) | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `a == b` → `a-b`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
+| `--report-only`, `--dry-run` (run) | List planned assignments and refusals without modifying any file. |
+| `--only bilingual\|split` (run) | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. `--only bilingual` mints bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
+| `--exclude GLOB` (run) | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` dir). Repeatable. Underscore-prefixed dirs (`_archive/`, …) are skipped automatically (issue #318). |
+| `--shipping-only` (run) | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
+| `--specs-dir DIR` (run) | For `--shipping-only`: directory of *.xml specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` (run) | Course data directory (contains `slides/`); used to resolve the `--shipping-only` scope. |
+| `--report-refusals` (run) | (since CLM {version}) Emit a hand-authoring **worklist** of the refusals (hard ones first) instead of the assignment listing — the cells that still need a `slide_id`. |
+| `--context` (run) | (since CLM {version}) With `--report-refusals`, include each refused cell's marker, body, and the nearest preceding `slide_id`/heading so you can author an id in place. Implies `--report-refusals`. The `body` doubles as the freshness token for `accept`. |
+| `--json` (run, accept) | Emit a JSON report instead of human-readable lines. |
+| `--answers FILE\|-` (accept) | (since CLM {version}) The answer document: one `{file, line, title, body}` row per refused cell (body = the worklist's `context.body`, echoed verbatim). |
+| `--dry-run` (accept) | (since CLM {version}) Validate the answers fully (shape + freshness + slugs) and write nothing. |
 
 The scoping options (`--only` / `--exclude` / `--shipping-only`) apply only to a
 directory `PATH` and replace the old "run over everything, then `git checkout`
@@ -1945,7 +1944,19 @@ same scoping flags, and `--json` emits it as structured data. It replaces the
 throwaway "dry-run JSON → script that re-extracts cell bodies and surrounding
 context" step that course conversions repeatedly hand-rolled.
 
-Exit codes: `0` clean, `1` soft refusals (extractable cells awaiting
+**`assign-ids accept` (#963)** lands agent-proposed titles for those refused
+cells — the replacement for the removed `--llm-suggest` Ollama path. Frame the
+work with `run --report-only --report-refusals --context --json`, answer each
+row with a short English title (3-7 words, title case) plus the row's `body`
+echoed verbatim, and accept re-checks each row against the live file (the body
+must still match, the cell must still be id-less), slugs the titles through the
+engine's own slugifier, resolves collisions with existing ids (including the
+twin half's), and stamps the ids atomically. Split halves are pair-atomic:
+answer both cells of a refused pair with the **same** title — a family whose
+halves would receive different id sets is rejected. Uses no Ollama; nothing is
+written on any validation failure. Exit codes: `0` stamped, `2` rejected.
+
+Exit codes (run): `0` clean, `1` soft refusals (extractable cells awaiting
 author input), `2` at least one hard refusal.
 
 Examples:
@@ -1955,7 +1966,6 @@ clm slides assign-ids slides/module_010/topic_100/slides_intro.py --report-only
 clm slides assign-ids slides/module_010/ --accept-content-derived
 # Fully automatable bilingual→split prep: also id bare-expression code cells
 clm slides assign-ids slides/module_110_basics/ --accept-content-derived --accept-code-derived
-clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
 # Scope: mint only the bilingual decks, leaving split pairs for `clm slides sync`
 clm slides assign-ids slides/ --accept-content-derived --only bilingual
@@ -1963,6 +1973,8 @@ clm slides assign-ids slides/ --accept-content-derived --only bilingual
 clm slides assign-ids slides/ --accept-content-derived --shipping-only
 # Worklist of cells that still need a hand-authored id, with body + context
 clm slides assign-ids slides/ --report-only --report-refusals --context
+# …then land agent-proposed titles for the refused cells (no Ollama)
+clm slides assign-ids accept slides/ --answers answers.json
 ```
 
 ### `clm slides reconcile-vo-ids`
@@ -2141,9 +2153,9 @@ clm slides slug-report course-specs/python-course.xml --json    # only the decks
 clm slides slug-report slides/ --shipping-only
 ```
 
-### `clm slides coverage-report`
+### `clm slides language-coverage`
 
-*Added in CLM {version}.*
+*Added in CLM {version} as `coverage-report`; renamed to `language-coverage` in CLM {version} (#963, no alias).*
 
 Report **DE/EN completeness** per deck. Among count-mismatch validation errors,
 two very different situations hide — a deck that exists in only one language
@@ -2152,7 +2164,7 @@ small *alignment* fix). This separates them by counting `lang="de"` vs
 `lang="en"` slide cells per deck.
 
 ```
-clm slides coverage-report [OPTIONS] PATH
+clm slides language-coverage [OPTIONS] PATH
 ```
 
 `PATH` is a directory of slide files **or** a course spec `.xml` (resolved to
@@ -2183,10 +2195,10 @@ cells inherit their slide, so one-language speaker notes don't skew the result.
 The exit code is always `0` — this is a report. Examples:
 
 ```bash
-clm slides coverage-report slides/module_010/                   # everything not balanced
-clm slides coverage-report slides/ --status de_only             # just the untranslated decks
-clm slides coverage-report course-specs/python-course.xml --json
-clm slides coverage-report slides/ --shipping-only
+clm slides language-coverage slides/module_010/                   # everything not balanced
+clm slides language-coverage slides/ --status de_only             # just the untranslated decks
+clm slides language-coverage course-specs/python-course.xml --json
+clm slides language-coverage slides/ --shipping-only
 ```
 
 ### `clm slides sync`
@@ -2684,62 +2696,76 @@ clm slides unify slides/topic/slides_x.de.py
 
 ### `clm slides coverage`
 
-*Added in CLM {version}.*
+*Added in CLM {version}. Agent-toolkit verbs since CLM {version} (#963); the in-process Ollama judge moved behind `autopilot`.*
 
 Check whether each slide's bullets are covered by the voiceover that
-follows it. A local LLM (Ollama) is asked to judge per-language;
-verdicts are cached so re-runs over an unchanged deck cost nothing.
-Findings are emitted at `warning` severity (slated for promotion to
-`error` in a future release once the false-positive rate against
-real decks is known — same option-B rollout pattern Phase 3 uses for
-the missing-slide_id rule).
+follows it. The `report`/`accept` loop needs **no Ollama daemon and never
+imports the Ollama client** — only `autopilot` talks to a model. Verdicts
+are cached in the LLM cache database keyed by
+`(slide_hash, voiceover_hash, prompt_version, lang)` so re-runs are free
+when the deck hasn't changed. Findings are emitted at `warning` severity.
 
-Per-language: a paired DE/EN slide produces two independent checks
-(DE slide vs. DE voiceover, EN slide vs. EN voiceover) cached as
-separate rows. Bullets with no voiceover at all are reported as
-warnings without consulting the LLM. Non-bulleted slides (heading-
-only, image-only, code-only) are skipped silently — there is
-nothing to cover. Workshop slides (cells inside a `workshop` /
-`end-workshop` scope) are also skipped — workshop exercise slides
-intentionally have no voiceover, and flagging them drowns the
-report in known-OK findings. The run summary reports the count of
-excluded workshop slides so the skip is visible.
+Per-language: a paired DE/EN slide produces two independent checks (DE
+slide vs. DE voiceover, EN slide vs. EN voiceover) cached as separate
+rows. Bullets with no voiceover at all are reported as warnings without
+any judgment. Non-bulleted slides (heading-only, image-only, code-only)
+are skipped silently. Workshop slides (cells inside a `workshop` /
+`end-workshop` scope) are also skipped; the summary reports the count of
+excluded workshop slides.
+
+**Verbs** (bare `coverage PATH` is `report PATH`; see `clm info
+sync-agents` → "Judging voiceover coverage" for the agent loop):
+
+- `report PATH [--dump] [--json] [--cache-dir]` — read-only, no model.
+  Frames the judgment: one item per (slide, lang) pair — `pending` pairs
+  carry the bullets, the voiceover, and the `slide_hash` /
+  `voiceover_hash` freshness tokens an answer must echo; `cached` pairs
+  carry their banked verdict; `no-voiceover` pairs surface as findings
+  immediately. The judge's system prompt is embedded verbatim in
+  `instructions`, the `answer_schema` beside it. Exit `1` while findings
+  exist or pairs are pending, `0` when everything is covered. `--dump`
+  keeps its old behavior (print cached verdicts; PATH ignored).
+- `accept PATH --answer FILE|- [--cache-dir] [--dry-run] [--json]` —
+  validate the answer (shape + per-pair freshness + coverage of exactly
+  the pending pairs + verbatim bullet texts) and bank each verdict into
+  the same cache rows the embedded judge wrote, then re-emit the
+  findings. Nothing is banked on any validation failure. Exit `0` banked
+  and no findings · `1` banked but findings remain · `2` rejected.
+- `autopilot PATH [options]` — the legacy in-process Ollama judge for
+  the agent-less human: same cache keys and findings, judgment by the
+  embedded model. Falls back to cache-only mode when the daemon is
+  unreachable (cached verdicts surface, fresh pairs are skipped).
 
 ```
-clm slides coverage [OPTIONS] PATH
+clm slides coverage [OPTIONS] PATH            # = report (read-only)
+clm slides coverage report PATH [--dump] [--json] [--cache-dir DIR]
+clm slides coverage accept PATH --answer FILE|- [--cache-dir DIR] [--dry-run] [--json]
+clm slides coverage autopilot PATH [--llm-model TEXT] [--ollama-url URL]
+                                          [--llm-timeout SECONDS] [--cache-dir DIR]
+                                          [--report-only] [--json]
 ```
 
-| Option | Description |
+| Option (verb) | Description |
 |--------|-------------|
-| `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
-| `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
-| `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
-| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`. |
-| `--report-only` | Skip cache writes; reads still happen. Useful for measuring the current cache hit rate without persisting fresh verdicts. |
-| `--dump` | Print a readable text dump of cached verdicts instead of running a coverage check. PATH is ignored. Combine with `--json` for machine output. |
-| `--json` | Emit a JSON report. |
-
-Exit codes: `0` no findings, `1` at least one warning or error.
-
-When Ollama is not reachable the command still works in cache-only
-mode: cached verdicts surface, fresh pairs are reported as skipped,
-no LLM calls are made. This makes coverage safe to invoke from
-PostToolUse hooks even on machines where the local daemon is offline.
+| `--dump` (report) | Print a readable text dump of cached verdicts instead of framing. PATH is ignored. Combine with `--json` for machine output. |
+| `--answer FILE\|-` (accept) | The answer document framed by `report`: a file path, or `-` for stdin. |
+| `--dry-run` (accept) | Validate the answer fully and bank nothing. |
+| `--cache-dir PATH` (all) | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`. |
+| `--llm-model TEXT` (autopilot) | Ollama model name (default: `qwen3:30b`). |
+| `--ollama-url TEXT` (autopilot) | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
+| `--llm-timeout SECONDS` (autopilot) | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
+| `--report-only` (autopilot) | Skip cache writes; reads still happen. |
+| `--json` (report, accept, autopilot) | Emit a JSON report / outcome envelope. |
 
 Examples:
 
 ```bash
-clm slides coverage slides/module_010/topic_100/slides_intro.py
-clm slides coverage slides/module_010/                      # sweep a whole module
-clm slides coverage slides/module_010/ --report-only        # don't update the cache
-clm slides coverage --dump                                  # inspect cached verdicts
-clm slides coverage --dump --json | jq .                    # machine-readable dump
+clm slides coverage slides_x.de.py --json        # report: framing + cached verdicts
+clm slides coverage report slides/module_010/    # frame a whole module sweep
+clm slides coverage accept slides_x.de.py --answer answer.json
+clm slides coverage autopilot slides_x.de.py     # in-process sweep (needs Ollama)
+clm slides coverage report --dump --json | jq .  # machine-readable cache dump
 ```
-
-The first run on a fresh deck calls the LLM once per (slide, lang)
-pair; subsequent runs over the unchanged deck use the cache and make
-zero LLM calls. Editing one bullet's wording invalidates only that
-pair's cache entry — the rest of the deck stays cached.
 
 ### `clm slides split`
 

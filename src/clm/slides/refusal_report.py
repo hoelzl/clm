@@ -109,7 +109,11 @@ def _preceding_anchors(cells: list[RawCell], idx: int) -> tuple[str | None, str 
 
 def _context_for_file(refusals: list[Refusal], text: str) -> dict[int, RefusalContext]:
     """Map each refused line in one file to its recovered context."""
-    _, cells = split_cells(text)
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
+
+    # The deck's own comment token drives boundary detection — a `//` deck
+    # parses to zero cells under the "#" default (null contexts, #963).
+    _, cells = split_cells(text, comment_token_for_path(Path(refusals[0].file)))
     by_line: dict[int, int] = {cell.line_number: i for i, cell in enumerate(cells)}
     out: dict[int, RefusalContext] = {}
     for refusal in refusals:

@@ -1,4 +1,126 @@
-"""Prompt templates for LLM-powered course summarization."""
+"""Prompt templates for LLM-powered course summarization and slide judgement.
+
+This module is deliberately **model-free**: it holds prompts, prompt
+versions, and the verdict dataclasses shared by the embedded clients
+(:mod:`clm.infrastructure.llm.ollama_client`) and the agent-toolkit
+framing (``clm.slides.coverage_task``) — so a toolkit's read path can
+frame the exact prompt an embedded model would use without importing any
+client module (#963).
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+
+# ---------------------------------------------------------------------------
+# assign-ids title suggestions (Phase 2)
+# ---------------------------------------------------------------------------
+
+# Bumped whenever the prompt or system message changes in a way that
+# invalidates cached suggestions. Embedded into the cache key per §2.3.
+TITLE_PROMPT_VERSION = "v1"
+
+TITLE_SYSTEM_PROMPT = (
+    "You are helping an instructor pick a short title for a slide that "
+    "currently has no heading. The slide content will be given to you. "
+    "Reply with a single English title of 3-7 words, written in title "
+    "case. Do not include quotes, punctuation, or any other text — just "
+    "the bare title on one line."
+)
+
+# ---------------------------------------------------------------------------
+# Voiceover coverage judgement (Phase 4)
+# ---------------------------------------------------------------------------
+
+# Bumped whenever the coverage prompt changes in a way that invalidates
+# cached verdicts. Embedded into the cache key per §2.5.
+COVERAGE_PROMPT_VERSION = "v1"
+
+COVERAGE_SYSTEM_PROMPT = (
+    "You check whether a voiceover script covers all of the bullet points "
+    "from a slide. For each bullet, decide whether the voiceover already "
+    "mentions or explains it. Do not require word-for-word match — "
+    "semantic coverage is enough. A bullet is covered when a reasonable "
+    "listener of the voiceover would hear the idea behind it; a bullet "
+    "is uncovered when the voiceover never addresses it.\n\n"
+    "Reply with a single JSON object and no other text. The object has "
+    "two keys:\n"
+    '  "bullets": a list of objects, one per slide bullet, each with '
+    '"text" (the bullet, verbatim), "covered" (true or false), and '
+    '"reason" (one short sentence).\n'
+    '  "verdict": either "covered" (every bullet is covered) or "gaps" '
+    "(at least one bullet is uncovered)."
+)
+
+
+def build_coverage_user_prompt(bullets: list[str], voiceover: str, *, lang: str) -> str:
+    lines = [f"Language: {lang}", "", "Slide bullets:"]
+    for i, bullet in enumerate(bullets, start=1):
+        lines.append(f"{i}. {bullet}")
+    lines.append("")
+    lines.append("Voiceover:")
+    lines.append(voiceover.strip() or "(no voiceover)")
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class BulletVerdict:
+    """One bullet's coverage assessment."""
+
+    text: str
+    covered: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class CoverageVerdict:
+    """A judge's verdict for one (slide, voiceover) pair.
+
+    ``verdict`` is ``"covered"`` when every bullet is covered or
+    ``"gaps"`` when at least one is missing. ``bullets`` lists the
+    per-bullet decisions in slide order. ``raw`` is the verbatim
+    response from the LLM, retained for debugging / ``--dump``.
+    """
+
+    verdict: str
+    bullets: tuple[BulletVerdict, ...] = field(default_factory=tuple)
+    raw: str = ""
+
+    @property
+    def has_gaps(self) -> bool:
+        return self.verdict != "covered"
+
+    @property
+    def uncovered_bullets(self) -> tuple[BulletVerdict, ...]:
+        return tuple(b for b in self.bullets if not b.covered)
+
+    def to_json(self) -> str:
+        """Serialize for storage in the cache's ``gap_details`` column."""
+        return json.dumps(
+            {
+                "verdict": self.verdict,
+                "bullets": [
+                    {"text": b.text, "covered": b.covered, "reason": b.reason} for b in self.bullets
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, payload: str) -> CoverageVerdict:
+        """Reconstruct a verdict from cache JSON."""
+        data = json.loads(payload)
+        bullets = tuple(
+            BulletVerdict(
+                text=str(item.get("text", "")),
+                covered=bool(item.get("covered", False)),
+                reason=str(item.get("reason", "")),
+            )
+            for item in data.get("bullets", [])
+        )
+        return cls(verdict=str(data.get("verdict", "gaps")), bullets=bullets)
+
 
 # ---------------------------------------------------------------------------
 # English prompts
