@@ -57,11 +57,8 @@ slides_group.add_command(coverage_report_cmd, name="coverage-report")
 slides_group.add_command(cpp_show_cmd, name="cpp-show")
 slides_group.add_command(authoring_rules_cmd, name="rules")
 
-# `polish` needs the [summarize] extra (LLM client); skip when absent.
-try:
-    from clm.cli.commands.slides.polish import polish as polish_cmd  # noqa: E402
-except ImportError:
-    polish_cmd = None  # type: ignore[assignment]
+from clm.cli.commands.slides.polish import polish_group  # noqa: E402
 
-if polish_cmd is not None:
-    slides_group.add_command(polish_cmd, name="polish")
+# The polish toolkit is model-free on its task/accept path (#962), so it
+# registers unconditionally — only `polish autopilot` needs the LLM extra.
+slides_group.add_command(polish_group, name="polish")

@@ -10,10 +10,10 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.harvest import harvest_group
-from clm.cli.commands.slides.polish import polish
+from clm.cli.commands.slides.polish import polish_group
 
 # ---------------------------------------------------------------------------
-# clm polish --polish-level
+# clm slides polish autopilot --polish-level
 # ---------------------------------------------------------------------------
 
 
@@ -29,7 +29,8 @@ def _make_slide_group(index: int, has_notes: bool, notes_text: str = "", title: 
 
 class TestPolishCommandPolishLevel:
     def _setup_mocks(self, monkeypatch, groups, polish_mock, tmp_path):
-        """Wire up standard monkeypatches for the polish command."""
+        """Wire up standard monkeypatches for the polish autopilot verb."""
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setattr(
             "clm.core.slide_text.slide_parser.parse_slides", MagicMock(return_value=groups)
         )
@@ -49,7 +50,7 @@ class TestPolishCommandPolishLevel:
         self._setup_mocks(monkeypatch, groups, polish_mock, tmp_path)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de"])
+        result = runner.invoke(polish_group, ["autopilot", str(slides), "--lang", "de"])
 
         assert result.exit_code == 0, result.output
         call_kwargs = polish_mock.call_args.kwargs
@@ -69,7 +70,9 @@ class TestPolishCommandPolishLevel:
         from clm.notebooks.polish_levels import PolishLevel
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de", "--polish-level", "heavy"])
+        result = runner.invoke(
+            polish_group, ["autopilot", str(slides), "--lang", "de", "--polish-level", "heavy"]
+        )
 
         assert result.exit_code == 0, result.output
         call_kwargs = polish_mock.call_args.kwargs
@@ -85,7 +88,9 @@ class TestPolishCommandPolishLevel:
         from clm.notebooks.polish_levels import PolishLevel
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de", "--polish-level", "light"])
+        result = runner.invoke(
+            polish_group, ["autopilot", str(slides), "--lang", "de", "--polish-level", "light"]
+        )
 
         assert result.exit_code == 0, result.output
         call_kwargs = polish_mock.call_args.kwargs
@@ -96,7 +101,10 @@ class TestPolishCommandPolishLevel:
         slides.write_text("placeholder")
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de", "--polish-level", "nuclear"])
+        result = runner.invoke(
+            polish_group,
+            ["autopilot", str(slides), "--lang", "de", "--polish-level", "nuclear"],
+        )
 
         assert result.exit_code != 0
 

@@ -1,4 +1,9 @@
-"""Tests for the ``clm polish`` CLI command."""
+"""Tests for the ``clm slides polish autopilot`` verb (the in-process path).
+
+The bare command and the model-free ``task`` / ``accept`` loop are covered by
+``tests/cli/test_slides_polish_task_accept.py`` (#962); these tests pin the
+legacy LLM-driven behavior now living behind ``autopilot``.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.slides import polish as polish_module
-from clm.cli.commands.slides.polish import _parse_range, polish
+from clm.cli.commands.slides.polish import _parse_range, polish_group
 
 
 class TestParseRange:
@@ -21,6 +26,9 @@ class TestParseRange:
 
     def test_range_single_digit(self):
         assert _parse_range("1-2") == (1, 2)
+
+    def test_none_is_passthrough(self):
+        assert _parse_range(None) is None
 
 
 def _make_slide_group(index: int, has_notes: bool, notes_text: str = "", title: str = ""):
@@ -34,7 +42,13 @@ def _make_slide_group(index: int, has_notes: bool, notes_text: str = "", title: 
     return sg
 
 
-class TestPolishCommand:
+@pytest.fixture
+def api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The autopilot verb fail-fasts without a key (except `verbatim`)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+
+class TestPolishAutopilot:
     def test_no_notes_found_early_return(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         slides = tmp_path / "deck.py"
         slides.write_text('# %% [markdown] lang="de" tags=["slide"]\n# Hello\n')
@@ -49,14 +63,16 @@ class TestPolishCommand:
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de"])
+        result = runner.invoke(polish_group, ["autopilot", str(slides), "--lang", "de"])
 
         assert result.exit_code == 0, result.output
         assert "No notes found" in result.output
         fake_polish_text.assert_not_called()
         fake_write_narrative.assert_not_called()
 
-    def test_polishes_each_slide_with_notes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_polishes_each_slide_with_notes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
+    ):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
 
@@ -74,7 +90,7 @@ class TestPolishCommand:
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "en"])
+        result = runner.invoke(polish_group, ["autopilot", str(slides), "--lang", "en"])
 
         assert result.exit_code == 0, result.output
         # Only slides 1 and 3 have notes; slide 2 should not have been polished.
@@ -87,7 +103,9 @@ class TestPolishCommand:
             3: "polished(raw notes 3)",
         }
 
-    def test_slides_range_filters(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_slides_range_filters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
+    ):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
 
@@ -104,14 +122,18 @@ class TestPolishCommand:
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "en", "--slides-range", "3-5"])
+        result = runner.invoke(
+            polish_group, ["autopilot", str(slides), "--lang", "en", "--slides-range", "3-5"]
+        )
 
         assert result.exit_code == 0, result.output
         # Only slides 3 and 5 fall in range.
         polished_args = [call.args[0] for call in fake_polish_text.call_args_list]
         assert polished_args == ["notes 3", "notes 5"]
 
-    def test_single_number_range(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_single_number_range(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
+    ):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
 
@@ -126,13 +148,17 @@ class TestPolishCommand:
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "en", "--slides-range", "2"])
+        result = runner.invoke(
+            polish_group, ["autopilot", str(slides), "--lang", "en", "--slides-range", "2"]
+        )
 
         assert result.exit_code == 0, result.output
         polished_args = [call.args[0] for call in fake_polish_text.call_args_list]
         assert polished_args == ["notes 2"]
 
-    def test_dry_run_skips_write(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_dry_run_skips_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
+    ):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
 
@@ -147,40 +173,59 @@ class TestPolishCommand:
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de", "--dry-run"])
+        result = runner.invoke(
+            polish_group, ["autopilot", str(slides), "--lang", "de", "--dry-run"]
+        )
 
         assert result.exit_code == 0, result.output
         assert "Dry run" in result.output
         fake_write_narrative.assert_not_called()
         fake_polish_text.assert_awaited_once()
 
-    def test_model_option_passed_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_missing_key_fail_fast(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
         groups = [_make_slide_group(1, has_notes=True, notes_text="hello")]
         fake_polish_text = AsyncMock(return_value="polished")
-
         monkeypatch.setattr(
             "clm.core.slide_text.slide_parser.parse_slides", MagicMock(return_value=groups)
-        )
-        monkeypatch.setattr(
-            "clm.notebooks.slide_writer.write_narrative", MagicMock(return_value=slides)
         )
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
+        result = runner.invoke(polish_group, ["autopilot", str(slides), "--lang", "de"])
+
+        assert result.exit_code == 1, result.output
+        assert "OPENAI_API_KEY" in result.output
+        assert "task" in result.output  # points at the model-free loop
+        fake_polish_text.assert_not_called()
+
+    def test_verbatim_needs_no_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        slides = tmp_path / "deck.py"
+        slides.write_text("placeholder")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        groups = [_make_slide_group(1, has_notes=True, notes_text="hello")]
+        fake_polish_text = AsyncMock(side_effect=lambda notes, content, **_: notes)
+        fake_write_narrative = MagicMock(return_value=slides)
+        monkeypatch.setattr(
+            "clm.core.slide_text.slide_parser.parse_slides", MagicMock(return_value=groups)
+        )
+        monkeypatch.setattr("clm.notebooks.slide_writer.write_narrative", fake_write_narrative)
+        monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
+
+        runner = CliRunner()
         result = runner.invoke(
-            polish,
-            [str(slides), "--lang", "de", "--model", "gpt-fake"],
+            polish_group, ["autopilot", str(slides), "--lang", "de", "--polish-level", "verbatim"]
         )
 
         assert result.exit_code == 0, result.output
-        call_kwargs = fake_polish_text.call_args.kwargs
-        assert call_kwargs["model"] == "gpt-fake"
+        fake_polish_text.assert_awaited_once()  # the passthrough goes through the engine
 
-    def test_no_model_option_gives_empty_kwargs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_model_option_passed_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
     ):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
@@ -197,14 +242,43 @@ class TestPolishCommand:
         monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "de"])
+        result = runner.invoke(
+            polish_group,
+            ["autopilot", str(slides), "--lang", "de", "--model", "gpt-fake"],
+        )
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = fake_polish_text.call_args.kwargs
+        assert call_kwargs["model"] == "gpt-fake"
+
+    def test_no_model_option_gives_empty_kwargs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
+    ):
+        slides = tmp_path / "deck.py"
+        slides.write_text("placeholder")
+
+        groups = [_make_slide_group(1, has_notes=True, notes_text="hello")]
+        fake_polish_text = AsyncMock(return_value="polished")
+
+        monkeypatch.setattr(
+            "clm.core.slide_text.slide_parser.parse_slides", MagicMock(return_value=groups)
+        )
+        monkeypatch.setattr(
+            "clm.notebooks.slide_writer.write_narrative", MagicMock(return_value=slides)
+        )
+        monkeypatch.setattr("clm.notebooks.polish.polish_text", fake_polish_text)
+
+        runner = CliRunner()
+        result = runner.invoke(polish_group, ["autopilot", str(slides), "--lang", "de"])
 
         assert result.exit_code == 0, result.output
         # No --model flag → polish_text called without a "model" kwarg.
         call_kwargs = fake_polish_text.call_args.kwargs
         assert "model" not in call_kwargs
 
-    def test_output_path_forwarded_to_writer(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_output_path_forwarded_to_writer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: None
+    ):
         slides = tmp_path / "deck.py"
         slides.write_text("placeholder")
         output_path = tmp_path / "out.py"
@@ -221,8 +295,8 @@ class TestPolishCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            polish,
-            [str(slides), "--lang", "de", "-o", str(output_path)],
+            polish_group,
+            ["autopilot", str(slides), "--lang", "de", "-o", str(output_path)],
         )
 
         assert result.exit_code == 0, result.output
@@ -235,13 +309,15 @@ class TestPolishCommand:
         slides.write_text("placeholder")
 
         runner = CliRunner()
-        result = runner.invoke(polish, [str(slides), "--lang", "fr"])
+        result = runner.invoke(polish_group, ["autopilot", str(slides), "--lang", "fr"])
 
         assert result.exit_code != 0
 
     def test_missing_slides_path_errors(self, tmp_path: Path):
         runner = CliRunner()
-        result = runner.invoke(polish, [str(tmp_path / "missing.py"), "--lang", "en"])
+        result = runner.invoke(
+            polish_group, ["autopilot", str(tmp_path / "missing.py"), "--lang", "en"]
+        )
 
         assert result.exit_code != 0
 

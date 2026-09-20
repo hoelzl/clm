@@ -2,6 +2,25 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm slides polish` is an agent toolkit; the in-process model moved behind `autopilot` (#962, {version})
+
+**Breaking for scripts that polished notes in-process.** `clm slides polish
+SLIDES --lang L` no longer calls the LLM by itself: bare `polish` (the new
+default verb `report`) is read-only — it counts the notes a task would
+frame and points at `task` (exit `1`). The task/accept loop needs no API
+key and no `[summarize]` extra.
+
+| Previous invocation | Replacement |
+|---|---|
+| `clm slides polish SLIDES --lang L` (LLM cleanup + write) | `clm slides polish autopilot SLIDES --lang L` (same engine, key-gated) — or the agent loop: `polish task SLIDES --lang L` → `polish accept SLIDES --lang L --answer …` (no API key) |
+| `clm slides polish SLIDES --lang L --dry-run` | `clm slides polish autopilot SLIDES --lang L --dry-run` |
+| `-o` / `--model` on bare `polish` | Moved to `autopilot` (`-o` is also on `accept`) |
+| `--polish-level` / `--slides-range` on bare `polish` | Still on every verb (`task`, `accept`, `autopilot`) |
+
+The write path's post-conditions are unchanged (the same `tags=["notes"]`
+narrative cells through the same writer), whether driven by `accept` or
+`autopilot`.
+
 ## `clm slides translate` is an agent toolkit; the in-process model moved behind `autopilot` (#961, {version})
 
 **Breaking for scripts that bootstrap a deck in-process.** `clm slides
@@ -2588,7 +2607,7 @@ CMD ["python", "-m", "clm.workers.notebook"]
 | `[drawio]` | Draw.io diagram conversion |
 | `[all-workers]` | All workers |
 | ~~`[ml]`~~ | **Removed in {version}** — the course-runtime ML stack moved to a course venv (`course-runtime-requirements.txt` + `clm provision kernel-env`); see the {version} migration note above. |
-| `[summarize]` | LLM-powered summaries and polish (openai) |
+| `[summarize]` | LLM-powered summaries and the `polish autopilot` verb (openai; the polish `task`/`accept` loop needs no extra) |
 | `[voiceover]` | Video-to-speaker-notes pipeline |
 | `[recordings]` | Video recording management and audio processing |
 | `[slides]` | Slide authoring tools with fuzzy search |

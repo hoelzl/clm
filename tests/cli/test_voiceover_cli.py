@@ -248,14 +248,14 @@ class TestTraceSubgroup:
 
 
 class TestPolishCommand:
-    def test_help(self):
-        from clm.cli.commands.slides.polish import polish
+    def test_help_lists_verbs(self):
+        from clm.cli.commands.slides.polish import polish_group
 
         runner = CliRunner()
-        result = runner.invoke(polish, ["--help"])
+        result = runner.invoke(polish_group, ["--help"])
         assert result.exit_code == 0
-        assert "--lang" in result.output
-        assert "--dry-run" in result.output
+        for verb in ("report", "task", "accept", "autopilot"):
+            assert verb in result.output
 
 
 class TestMainCliRegistration:

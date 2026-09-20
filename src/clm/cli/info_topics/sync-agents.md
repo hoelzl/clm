@@ -745,6 +745,51 @@ The in-process OpenRouter translation survives behind
 `clm slides translate autopilot DECK` for the agent-less human (key-gated);
 agents and CI use `task`/`accept`.
 
+## Polishing speaker notes (`clm slides polish task` / `accept`)
+
+When a deck carries rough speaker notes (`tags=["notes"]` cells) that need
+cleanup — filler words removed, grammar fixed, technical terms preserved —
+the polish toolkit frames the whole judgment, level by level (#962). It
+speaks the same contract as sync — envelope, freshness tokens, validator
+registry, exit codes (see `clm info agent-tasks`) — and no verb on its main
+path calls a model or needs an API key:
+
+```bash
+clm slides polish DECK.de.py --lang de --json   # report: counts + pointer (exit 1 = notes pending)
+clm slides polish task DECK.de.py --lang de --polish-level standard > task.json
+# …apply the level prompt to each framed slide's notes; echo the fingerprints; cover EXACTLY the rows…
+clm slides polish accept DECK.de.py --polish-level standard --answer answer.json
+git diff                                         # review the polished notes
+```
+
+The task document lists one row per notes-carrying slide (narrowed by
+`--slides-range`): the slide's stable handle (`id:<slide_id>` when its
+slide-start cell has one, else `pos:<index>`), the current `notes`, and the
+slide's content in **both language sides** for context — `slide_context`
+from the deck itself and `twin_context` from the split twin when one exists
+(the split halves' terminology keeps the polished notes consistent). The
+level prompt (`light` / `standard` / `heavy` / `rewrite`; `verbatim` is the
+no-edit passthrough) is embedded verbatim in the `instructions` — the same
+prompt files the embedded model used.
+
+The answer echoes `lang`, `polish_level`, `source_fingerprint` (and
+`twin_fingerprint` when a twin was framed) and carries one
+`{"handle", "body"}` row per framed slide — full coverage, no extras; the
+body is plain text, one thought per line, never a cell delimiter line.
+`accept` reads `--lang` / `--polish-level` from that echo (an explicit
+contradicting flag is a rejection), re-checks the fingerprints against the
+live files, refuses
+anything stale wholesale, then writes through the ordinary narrative
+writer atomically — byte-identical to what `autopilot` writes. The sync
+ledger is deliberately untouched: polishing one side of a recorded pair
+leaves the ledger baseline alone, so the next `clm slides sync report`
+frames the twin's notes for their own update.
+
+The in-process LLM cleanup survives behind
+`clm slides polish autopilot DECK --lang de` for the agent-less human
+(key-gated on `$OPENAI_API_KEY`; the `verbatim` level needs no key); agents
+and CI use `task`/`accept`.
+
 `clm slides split` and `clm slides translate` record freshly-created pairs
 automatically, so a normal authoring flow starts warm.
 
