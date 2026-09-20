@@ -1,4 +1,4 @@
-"""Tests for ``clm slides coverage-report`` (gap #8)."""
+"""Tests for ``clm slides language-coverage`` (gap #8)."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def _spec(tmp_path: Path, *topics: str) -> Path:
 
 def test_directory_report(tmp_path):
     slides = _tree(tmp_path)
-    r = CliRunner().invoke(cli, ["slides", "coverage-report", str(slides)])
+    r = CliRunner().invoke(cli, ["slides", "language-coverage", str(slides)])
     assert r.exit_code == 0
     assert "slides_imb.py" in r.output  # imbalanced bilingual
     assert "slides_de.de.py" in r.output  # de-only split half
@@ -59,7 +59,7 @@ def test_directory_report(tmp_path):
 
 def test_json_by_status(tmp_path):
     slides = _tree(tmp_path)
-    r = CliRunner().invoke(cli, ["slides", "coverage-report", str(slides), "--json"])
+    r = CliRunner().invoke(cli, ["slides", "language-coverage", str(slides), "--json"])
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     assert data["by_status"]["de_only"] >= 1
     assert data["by_status"]["imbalanced"] >= 1
@@ -68,7 +68,7 @@ def test_json_by_status(tmp_path):
 def test_status_filter(tmp_path):
     slides = _tree(tmp_path)
     r = CliRunner().invoke(
-        cli, ["slides", "coverage-report", str(slides), "--status", "de_only", "--json"]
+        cli, ["slides", "language-coverage", str(slides), "--status", "de_only", "--json"]
     )
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     assert {d["status"] for d in data["decks"]} == {"de_only"}
@@ -77,7 +77,7 @@ def test_status_filter(tmp_path):
 def test_exclude_archive(tmp_path):
     slides = _tree(tmp_path)
     r = CliRunner().invoke(
-        cli, ["slides", "coverage-report", str(slides), "--exclude", "_archive", "--json"]
+        cli, ["slides", "language-coverage", str(slides), "--exclude", "_archive", "--json"]
     )
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     names = {Path(d["label"]).name for d in data["decks"]}
@@ -88,7 +88,7 @@ def test_shipping_only(tmp_path):
     slides = _tree(tmp_path)
     _spec(tmp_path, "a")  # only topic_010_a ships
     r = CliRunner().invoke(
-        cli, ["slides", "coverage-report", str(slides), "--shipping-only", "--json"]
+        cli, ["slides", "language-coverage", str(slides), "--shipping-only", "--json"]
     )
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     names = {Path(d["label"]).name for d in data["decks"]}
@@ -98,7 +98,7 @@ def test_shipping_only(tmp_path):
 def test_spec_path(tmp_path):
     _tree(tmp_path)
     spec = _spec(tmp_path, "a")
-    r = CliRunner().invoke(cli, ["slides", "coverage-report", str(spec)])
+    r = CliRunner().invoke(cli, ["slides", "language-coverage", str(spec)])
     assert r.exit_code == 0
     assert "slides_imb.py" in r.output
 
@@ -106,7 +106,7 @@ def test_spec_path(tmp_path):
 def test_scope_on_spec_errors(tmp_path):
     _tree(tmp_path)
     spec = _spec(tmp_path, "a")
-    r = CliRunner().invoke(cli, ["slides", "coverage-report", str(spec), "--exclude", "_archive"])
+    r = CliRunner().invoke(cli, ["slides", "language-coverage", str(spec), "--exclude", "_archive"])
     assert r.exit_code != 0
     assert "directory" in r.output
 
@@ -115,5 +115,5 @@ def test_all_balanced_message(tmp_path):
     s = tmp_path / "slides" / "topic_010_a"
     s.mkdir(parents=True)
     (s / "slides_ok.py").write_text(_bi(2, 2), encoding="utf-8")
-    r = CliRunner().invoke(cli, ["slides", "coverage-report", str(tmp_path / "slides")])
+    r = CliRunner().invoke(cli, ["slides", "language-coverage", str(tmp_path / "slides")])
     assert "balanced" in r.output

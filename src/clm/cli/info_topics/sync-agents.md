@@ -790,6 +790,55 @@ The in-process LLM cleanup survives behind
 (key-gated on `$OPENAI_API_KEY`; the `verbatim` level needs no key); agents
 and CI use `task`/`accept`.
 
+## Judging voiceover coverage (`clm slides coverage report` / `accept`)
+
+When a deck's voiceover should provably cover every bullet on its slides,
+the coverage toolkit frames the whole judgment (#963) — the same contract
+(envelope, freshness tokens, validator registry, exit codes — see `clm
+info agent-tasks`), with the **LLM cache as the trust store**: banked
+verdicts live in the same `(slide_hash, voiceover_hash, prompt_version,
+lang)` rows the embedded Ollama judge wrote. No verb on the report/accept
+path calls a model or imports the Ollama client:
+
+```bash
+clm slides coverage DECK.de.py --json        # report: pending pairs + cached verdicts (exit 1 = work pending)
+clm slides coverage report DECK.de.py --json > report.json
+# …for every item with status "pending": judge its bullets against its voiceover…
+clm slides coverage accept DECK.de.py --answer answer.json
+clm slides coverage report DECK.de.py --json # now: cached verdicts + findings
+```
+
+The report lists one item per (slide, lang) pair with bullets: `pending`
+pairs carry the bullets, the voiceover, and the `slide_hash` /
+`voiceover_hash` freshness tokens; `cached` pairs carry their banked
+verdict (not re-answerable — same content, same verdict); `no-voiceover`
+pairs surface as findings immediately. The judge's system prompt is
+embedded verbatim in `instructions`, so an agent judges with the exact
+same rules the embedded model used. A directory PATH frames every deck
+under it in one document.
+
+The answer echoes `prompt_version` and carries one `pairs` row per
+pending item: the pair's hash keys, one `{text, covered, reason}` bullet
+row per bullet **verbatim and in order**, and a `verdict` consistent
+with them. `accept` re-derives the live pairs, refuses anything stale
+(edited slide or voiceover → changed hashes → no longer the pending set)
+wholesale, banks the verdicts, and re-emits the findings.
+
+The in-process Ollama judge survives behind `clm slides coverage
+autopilot DECK` for the agent-less human (cache-only fallback when the
+daemon is unreachable); agents and CI use `report`/`accept`.
+
+**Refused `slide_id`s** (`clm slides assign-ids`): the refusal worklist
+(`assign-ids run PATH --report-only --report-refusals --context --json`)
+is the framing, and `assign-ids accept PATH --answers answers.json` lands
+agent-proposed titles — one `{file, line, title, body}` row per refused
+cell, `body` echoed verbatim from the worklist as the freshness token.
+Accept slugs the titles through the engine's own slugifier, resolves
+collisions against both halves of a split pair, and stamps atomically;
+a family whose halves would receive different id sets is rejected
+(answer both cells of a refused pair with the same title). The former
+`--llm-suggest` Ollama path is gone.
+
 `clm slides split` and `clm slides translate` record freshly-created pairs
 automatically, so a normal authoring flow starts warm.
 

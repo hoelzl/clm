@@ -2,6 +2,51 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm slides coverage` is an agent toolkit; the Ollama judge moved behind `autopilot` (#963, {version})
+
+**Breaking for scripts that relied on the in-process judge.** `clm slides
+coverage PATH` no longer calls Ollama by itself: bare `coverage` (the new
+default verb `report`) is read-only — it frames the judgment (pending pairs
+with bullets + voiceover + freshness tokens, cached verdicts, findings) and
+needs **no daemon and never imports the Ollama client**.
+
+| Previous invocation | Replacement |
+|---|---|
+| `clm slides coverage PATH` (in-process judge + cache) | `clm slides coverage autopilot PATH` (same judge, same cache keys) — or the agent loop: `coverage report PATH --json` → `coverage accept PATH --answer …` (no Ollama) |
+| `clm slides coverage PATH --llm-model/--ollama-url/--llm-timeout` | Moved to `autopilot` |
+| `clm slides coverage PATH --report-only` | Moved to `autopilot` (accept has its own `--dry-run`) |
+| `clm slides coverage --dump [--json]` | Unchanged — now `coverage report --dump [--json]` |
+
+The cache schema and `(slide_hash, voiceover_hash, prompt_version, lang)`
+keys are unchanged; `accept` banks the same rows the judge wrote.
+
+## `clm slides assign-ids --llm-suggest` removed; `accept` lands agent titles (#963, {version})
+
+**Breaking for scripts passing `--llm-suggest`.** The flag (and its
+`--llm-model` / `--ollama-url` / `--llm-timeout` / `--cache-dir` companions)
+is removed without an alias — the local-LLM title suggestions it fetched are
+now an agent loop over the unchanged refusal worklist, and no `assign-ids`
+verb imports the Ollama client.
+
+| Previous invocation | Replacement |
+|---|---|
+| `clm slides assign-ids PATH --llm-suggest` | `clm slides assign-ids run PATH --report-only --report-refusals --context --json` → propose titles → `clm slides assign-ids accept PATH --answers answers.json` |
+| `clm slides assign-ids PATH …` (minting) | Unchanged — bare `assign-ids PATH …` still mints (now the `run` verb) |
+
+The `--json` refusal report is unchanged (#963 acceptance); `context.body`
+doubles as the accept freshness token.
+
+## `clm slides coverage-report` renamed to `clm slides language-coverage` (#963, {version})
+
+**Breaking for scripts invoking `coverage-report`.** The course-wide DE/EN
+completeness sweep is renamed to join the `language-*` family and to clear
+the near-collision with `clm slides coverage`'s new `report` verb. No alias
+(#960 no-shim posture).
+
+| Previous invocation | Replacement |
+|---|---|
+| `clm slides coverage-report PATH [options]` | `clm slides language-coverage PATH [options]` (options unchanged) |
+
 ## `clm slides polish` is an agent toolkit; the in-process model moved behind `autopilot` (#962, {version})
 
 **Breaking for scripts that polished notes in-process.** `clm slides polish
@@ -1045,7 +1090,7 @@ Consequences for course repos:
   Rename the directory (drop the leading underscore) if you genuinely need to
   build from it.
 - `--exclude _archive` on `clm slides normalize` / `assign-ids` /
-  `slug-report` / `coverage-report` is now redundant for underscore-named
+  `slug-report` / `language-coverage` (then `coverage-report`) is now redundant for underscore-named
   dirs (but still works, and is still needed for non-underscore names).
 - The legacy `_cassettes/` sidecar inside a topic is unaffected: it is not a
   module/topic directory and stays in the course file map.

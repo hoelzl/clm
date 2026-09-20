@@ -190,6 +190,17 @@ def _strip_existing_slide_id(header: str) -> str:
     return _SLIDE_ID_RE.sub("", header)
 
 
+def header_with_slide_id(header: str, slide_id: str) -> str:
+    """The header line with ``slide_id="…"`` stamped onto it.
+
+    Public seam for the agent-toolkit accept path
+    (``clm.slides.assign_ids_accept``): the same header grammar the
+    engine's own writer uses — existing ids are replaced, everything
+    else preserved verbatim.
+    """
+    return f'{_strip_existing_slide_id(header).rstrip()} slide_id="{slide_id}"'
+
+
 def _write_slide_id(cell: _Cell, slide_id: str) -> None:
     """Rewrite the cell header to carry ``slide_id="…"``."""
     existing = cell.header

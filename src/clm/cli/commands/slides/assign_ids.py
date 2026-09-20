@@ -3,12 +3,18 @@
 Wraps :func:`clm.slides.assign_ids.assign_ids_in_file` /
 ``assign_ids_in_directory`` with the flag matrix specified in §2.3 of
 the redesign handover and prints a human-readable (or JSON) report.
+Since #963 it is a hidden verb group: ``run`` (the bare default) is the
+minting run; ``accept`` lands agent-proposed titles for refused cells
+(the framing is the ``run --report-only --report-refusals --context
+--json`` worklist). The former ``--llm-suggest`` Ollama path was removed
+— no verb here imports the Ollama client.
 
 Exit codes:
 
 - ``0`` — all visited cells assigned successfully, or no work to do
 - ``1`` — at least one soft refusal (extractable, needs author input)
-- ``2`` — at least one hard refusal (no-content cell, blocks the run)
+- ``2`` — at least one hard refusal (no-content cell, blocks the run);
+  for ``accept``: the answer was rejected (nothing written)
 """
 
 from __future__ import annotations
@@ -16,17 +22,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import click
 
+from clm.cli._default_verb_group import DefaultVerbGroup
 from clm.cli.commands.shared import has_deck_scope, resolve_scoped_files
-from clm.infrastructure.llm.cache import TitleSuggestionCache, resolve_cache_dir
-from clm.infrastructure.llm.ollama_client import (
-    DEFAULT_TITLE_MODEL,
-    OllamaTitleSuggester,
-    TitleSuggester,
-    is_available,
-)
 from clm.slides.assign_ids import (
     AssignOptions,
     AssignResult,
@@ -40,10 +41,26 @@ from clm.slides.refusal_report import (
     worklist_to_dict,
 )
 
-CACHE_DB_NAME = "clm-llm.sqlite"
+
+class _AssignIdsVerbGroup(DefaultVerbGroup):
+    """Bare ``assign-ids PATH …`` runs the minting verb (hidden plumbing)."""
+
+    default_verb = "run"
 
 
-@click.command("assign-ids", hidden=True)
+@click.group("assign-ids", cls=_AssignIdsVerbGroup, hidden=True)
+def assign_ids_group() -> None:
+    """Generate stable ``slide_id`` metadata for slide/subslide cells (plumbing).
+
+    \b
+    Bare `clm slides assign-ids PATH …` == `clm slides assign-ids run PATH …`.
+    Verbs:
+      run      the minting run (the Phase-2 flag matrix)
+      accept   land agent-proposed titles for refused cells (#963)
+    """
+
+
+@assign_ids_group.command("run", hidden=True)
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--force",
@@ -78,52 +95,11 @@ CACHE_DB_NAME = "clm-llm.sqlite"
     ),
 )
 @click.option(
-    "--llm-suggest",
-    is_flag=True,
-    help=(
-        "Use the local LLM (Ollama) to propose a short title for "
-        "headingless-but-extractable cells. Suggestions are cached in "
-        "the clm-llm.sqlite cache. Falls back silently when Ollama is "
-        "unreachable."
-    ),
-)
-@click.option(
     "--report-only",
     "--dry-run",
     "report_only",
     is_flag=True,
     help="List planned assignments and refusals without modifying any file.",
-)
-@click.option(
-    "--llm-model",
-    default=DEFAULT_TITLE_MODEL,
-    show_default=True,
-    help="Ollama model name used with --llm-suggest.",
-)
-@click.option(
-    "--ollama-url",
-    default=None,
-    help=("Base URL of the Ollama daemon. Defaults to $OLLAMA_URL or http://localhost:11434."),
-)
-@click.option(
-    "--llm-timeout",
-    type=float,
-    default=120.0,
-    show_default=True,
-    help=(
-        "Per-call timeout (seconds) for the LLM suggester. Cold-load on "
-        "a 30B local model can take a minute; bump this if you see "
-        "timeouts."
-    ),
-)
-@click.option(
-    "--cache-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help=(
-        "Directory for the LLM cache (default: --cache-dir > $CLM_CACHE_DIR > "
-        "tool.clm.cache_dir in pyproject.toml > <cwd>/.clm-cache/)."
-    ),
 )
 @click.option(
     "--only",
@@ -176,12 +152,7 @@ def assign_ids_cmd(
     force: bool,
     accept_content_derived: bool,
     accept_code_derived: bool,
-    llm_suggest: bool,
     report_only: bool,
-    llm_model: str,
-    ollama_url: str | None,
-    llm_timeout: float,
-    cache_dir: Path | None,
     only: str | None,
     exclude: tuple[str, ...],
     shipping_only: bool,
@@ -207,12 +178,13 @@ def assign_ids_cmd(
     \b
     Three-category policy:
       headed       Slug derived from the first markdown heading.
-      extractable  Refused by default; --accept-content-derived or
-                   --llm-suggest opt into auto-acceptance.
+      extractable  Refused by default; --accept-content-derived opts into
+                   auto-acceptance (agent titles land via `assign-ids accept`).
       code-derived Bare-expression code cells (no heading, no construct);
                    --accept-code-derived slugs the first code line.
       no content   Hard refuse; author must write slide_id="..." by hand
-                   (genuinely empty / pure-punctuation / magic-only cells).
+                   (genuinely empty / pure-punctuation / magic-only cells)
+                   — or propose titles via `assign-ids accept`.
 
     \b
     Special cases:
@@ -220,35 +192,11 @@ def assign_ids_cmd(
       * `!`-prefixed ids (preserve marker) are never regenerated.
       * Voiceover/notes cells inherit the slide_id of the slide they describe.
     """
-    suggester: TitleSuggester | None = None
-    cache: TitleSuggestionCache | None = None
-
-    if llm_suggest:
-        suggester = OllamaTitleSuggester(
-            model=llm_model,
-            base_url=ollama_url,
-            timeout=llm_timeout,
-        )
-        if not is_available(suggester):
-            click.echo(
-                "warning: --llm-suggest requested but Ollama is not "
-                f"reachable at {suggester.base_url}; falling back to "
-                "refusal for headingless slides.",
-                err=True,
-            )
-            suggester = None
-        else:
-            cache_root = resolve_cache_dir(cli_override=cache_dir)
-            cache = TitleSuggestionCache(cache_root / CACHE_DB_NAME)
-
     options = AssignOptions(
         force=force,
         accept_content_derived=accept_content_derived,
         accept_code_derived=accept_code_derived,
-        llm_suggest=llm_suggest and suggester is not None,
         report_only=report_only,
-        llm_suggester=suggester,
-        llm_cache=cache,
     )
 
     scoped = has_deck_scope(only, exclude, shipping_only)
@@ -257,26 +205,22 @@ def assign_ids_cmd(
             "--only / --exclude / --shipping-only apply to a directory, not a single file."
         )
 
-    try:
-        if scoped:
-            files = resolve_scoped_files(
-                path,
-                only=only,
-                exclude=exclude,
-                shipping_only=shipping_only,
-                specs_dir=specs_dir,
-                data_dir=data_dir,
-            )
-            result = assign_ids_in_files(files, options)
-        elif path.is_dir():
-            result = assign_ids_in_directory(path, options)
-        elif path.is_file():
-            result = assign_ids_in_file(path, options)
-        else:
-            raise click.ClickException(f"PATH must be a slide file or directory: {path}")
-    finally:
-        if cache is not None:
-            cache.close()
+    if scoped:
+        files = resolve_scoped_files(
+            path,
+            only=only,
+            exclude=exclude,
+            shipping_only=shipping_only,
+            specs_dir=specs_dir,
+            data_dir=data_dir,
+        )
+        result = assign_ids_in_files(files, options)
+    elif path.is_dir():
+        result = assign_ids_in_directory(path, options)
+    elif path.is_file():
+        result = assign_ids_in_file(path, options)
+    else:
+        raise click.ClickException(f"PATH must be a slide file or directory: {path}")
 
     # --context implies the refusal-worklist view.
     report_refusals = report_refusals or context
@@ -361,3 +305,103 @@ def _exit_code(result: AssignResult) -> int:
     if any(r.severity == "soft" for r in result.refusals):
         return 1
     return 0
+
+
+# ---------------------------------------------------------------------------
+# accept — land agent-proposed titles for refused cells (#963)
+# ---------------------------------------------------------------------------
+
+
+@assign_ids_group.command("accept", hidden=True)
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--answers",
+    "answers_src",
+    required=True,
+    help="The answer document: a file path, or '-' for stdin.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Validate the answers fully (shape + freshness + slugs) and write nothing.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the JSON outcome envelope.")
+def assign_ids_accept_cmd(path: Path, answers_src: str, dry_run: bool, as_json: bool) -> None:
+    """Land agent-proposed titles for refused cells (no LLM, no Ollama).
+
+    Frame the work with `assign-ids run PATH --report-only
+    --report-refusals --context --json`, propose a short English title for
+    each refused cell, and answer with one {file, line, title, body} row
+    per cell (body = the worklist's context.body, echoed verbatim).
+    Accept re-checks each row against the live file (body freshness, the
+    cell still id-less), slugs the titles through the engine's own
+    slugifier, keeps split halves consistent, and stamps the ids
+    atomically. Nothing is written on any validation failure.
+
+    \b
+    Exit codes: 0 stamped · 2 rejected / error (nothing written).
+    """
+    from clm.slides.agent_task import (
+        EXIT_CLEAN,
+        EXIT_ERROR,
+        VALIDATORS,
+        AnswerRejected,
+        rejection_payload,
+    )
+    from clm.slides.assign_ids_accept import ANSWER_VALIDATOR, apply_answers
+
+    if answers_src == "-":
+        raw = click.get_text_stream("stdin").read()
+    else:
+        answers_path = Path(answers_src)
+        if not answers_path.exists():
+            raise click.UsageError(f"answers file not found: {answers_src}")
+        raw = answers_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise click.UsageError(f"the answer is not valid JSON: {exc}") from exc
+
+    def _reject(reason: str) -> NoReturn:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    rejection_payload(1, tool="assign-ids", verb="accept", reason=reason),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            click.echo(f"rejected: {reason}", err=True)
+        sys.exit(EXIT_ERROR)
+
+    try:
+        answer = VALIDATORS.get(ANSWER_VALIDATOR)(payload)
+        scope = path.resolve()
+        for row in answer.rows:
+            row_path = Path(row.file).resolve()
+            in_scope = scope == row_path or scope in row_path.parents
+            if not in_scope:
+                raise AnswerRejected(
+                    f"{row.file}:{row.line}: the answer targets a file outside PATH "
+                    f"({path}) — scope the answer to the framed run"
+                )
+        outcome = apply_answers(answer, dry_run=dry_run)
+    except (AnswerRejected, KeyError, ValueError, TypeError, OSError) as exc:
+        _reject(str(exc))
+
+    payload_out = outcome.to_payload()
+    payload_out["dry_run"] = dry_run
+    if as_json:
+        click.echo(json.dumps(payload_out, indent=2, ensure_ascii=False))
+    else:
+        for entry in outcome.stamped:
+            click.echo(
+                f"{'[dry-run] ' if dry_run else ''}stamp {entry['file']}:{entry['line']} "
+                f'-> slide_id="{entry["slide_id"]}" (title="{entry["title"]}")'
+            )
+        verb = "validated (dry-run)" if dry_run else "stamped"
+        click.echo(
+            f"{verb} {len(outcome.stamped)} slide_id(s) across {len(outcome.written)} file(s)."
+        )
+    sys.exit(EXIT_CLEAN)

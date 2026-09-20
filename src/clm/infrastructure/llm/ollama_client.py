@@ -19,8 +19,36 @@ import logging
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
 from typing import Protocol
+
+from clm.infrastructure.llm.prompts import (
+    COVERAGE_PROMPT_VERSION,
+    COVERAGE_SYSTEM_PROMPT,
+    TITLE_PROMPT_VERSION,
+    TITLE_SYSTEM_PROMPT,
+    BulletVerdict,
+    CoverageVerdict,
+    build_coverage_user_prompt,
+)
+
+__all__ = [
+    "BulletVerdict",
+    "COVERAGE_PROMPT_VERSION",
+    "CoverageVerdict",
+    "DEFAULT_COVERAGE_MODEL",
+    "DEFAULT_TITLE_MODEL",
+    "TITLE_PROMPT_VERSION",
+    "CoverageJudge",
+    "OllamaCoverageJudge",
+    "OllamaError",
+    "OllamaTitleSuggester",
+    "StaticCoverageJudge",
+    "StaticTitleSuggester",
+    "TitleSuggester",
+    "coverage_key",
+    "is_available",
+    "parse_coverage_response",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +58,13 @@ DEFAULT_COVERAGE_MODEL = "qwen3:30b"
 # Cold-load on large local models can take a minute; warm calls are ~5s.
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
-# Bumped whenever the prompt or system message changes in a way that
-# invalidates cached suggestions. Embedded into the cache key per §2.3.
-TITLE_PROMPT_VERSION = "v1"
-
-# Bumped whenever the coverage prompt changes in a way that invalidates
-# cached verdicts. Embedded into the cache key per §2.5.
-COVERAGE_PROMPT_VERSION = "v1"
-
-_TITLE_SYSTEM_PROMPT = (
-    "You are helping an instructor pick a short title for a slide that "
-    "currently has no heading. The slide content will be given to you. "
-    "Reply with a single English title of 3-7 words, written in title "
-    "case. Do not include quotes, punctuation, or any other text — just "
-    "the bare title on one line."
-)
+# The prompt texts, versions, and verdict dataclasses live in the
+# model-free :mod:`clm.infrastructure.llm.prompts` so agent-toolkit read
+# paths can frame them without importing a client (#963). Re-exported
+# here for the existing call sites.
+_COVERAGE_SYSTEM_PROMPT = COVERAGE_SYSTEM_PROMPT
+_TITLE_SYSTEM_PROMPT = TITLE_SYSTEM_PROMPT
+_build_coverage_user_prompt = build_coverage_user_prompt
 
 
 class OllamaError(RuntimeError):
@@ -205,81 +225,6 @@ def is_available(client: object | None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-_COVERAGE_SYSTEM_PROMPT = (
-    "You check whether a voiceover script covers all of the bullet points "
-    "from a slide. For each bullet, decide whether the voiceover already "
-    "mentions or explains it. Do not require word-for-word match — "
-    "semantic coverage is enough. A bullet is covered when a reasonable "
-    "listener of the voiceover would hear the idea behind it; a bullet "
-    "is uncovered when the voiceover never addresses it.\n\n"
-    "Reply with a single JSON object and no other text. The object has "
-    "two keys:\n"
-    '  "bullets": a list of objects, one per slide bullet, each with '
-    '"text" (the bullet, verbatim), "covered" (true or false), and '
-    '"reason" (one short sentence).\n'
-    '  "verdict": either "covered" (every bullet is covered) or "gaps" '
-    "(at least one bullet is uncovered)."
-)
-
-
-@dataclass(frozen=True)
-class BulletVerdict:
-    """One bullet's coverage assessment."""
-
-    text: str
-    covered: bool
-    reason: str = ""
-
-
-@dataclass(frozen=True)
-class CoverageVerdict:
-    """A judge's verdict for one (slide, voiceover) pair.
-
-    ``verdict`` is ``"covered"`` when every bullet is covered or
-    ``"gaps"`` when at least one is missing. ``bullets`` lists the
-    per-bullet decisions in slide order. ``raw`` is the verbatim
-    response from the LLM, retained for debugging / ``--dump``.
-    """
-
-    verdict: str
-    bullets: tuple[BulletVerdict, ...] = field(default_factory=tuple)
-    raw: str = ""
-
-    @property
-    def has_gaps(self) -> bool:
-        return self.verdict != "covered"
-
-    @property
-    def uncovered_bullets(self) -> tuple[BulletVerdict, ...]:
-        return tuple(b for b in self.bullets if not b.covered)
-
-    def to_json(self) -> str:
-        """Serialize for storage in the cache's ``gap_details`` column."""
-        return json.dumps(
-            {
-                "verdict": self.verdict,
-                "bullets": [
-                    {"text": b.text, "covered": b.covered, "reason": b.reason} for b in self.bullets
-                ],
-            },
-            ensure_ascii=False,
-        )
-
-    @classmethod
-    def from_json(cls, payload: str) -> CoverageVerdict:
-        """Reconstruct a verdict from cache JSON."""
-        data = json.loads(payload)
-        bullets = tuple(
-            BulletVerdict(
-                text=str(item.get("text", "")),
-                covered=bool(item.get("covered", False)),
-                reason=str(item.get("reason", "")),
-            )
-            for item in data.get("bullets", [])
-        )
-        return cls(verdict=str(data.get("verdict", "gaps")), bullets=bullets)
-
-
 class CoverageJudge(Protocol):
     """Protocol for anything that can judge whether a voiceover covers slide bullets.
 
@@ -393,16 +338,6 @@ class OllamaCoverageJudge:
         if not text:
             raise OllamaError("Ollama returned empty coverage verdict")
         return parse_coverage_response(text, bullets)
-
-
-def _build_coverage_user_prompt(bullets: list[str], voiceover: str, *, lang: str) -> str:
-    lines = [f"Language: {lang}", "", "Slide bullets:"]
-    for i, bullet in enumerate(bullets, start=1):
-        lines.append(f"{i}. {bullet}")
-    lines.append("")
-    lines.append("Voiceover:")
-    lines.append(voiceover.strip() or "(no voiceover)")
-    return "\n".join(lines)
 
 
 def parse_coverage_response(text: str, bullets: list[str]) -> CoverageVerdict:

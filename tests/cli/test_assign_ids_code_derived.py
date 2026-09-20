@@ -88,5 +88,5 @@ def test_non_python_deck_minted_with_flag(tmp_path):
 
 
 def test_flag_appears_in_help():
-    r = CliRunner().invoke(cli, ["slides", "assign-ids", "--help"])
+    r = CliRunner().invoke(cli, ["slides", "assign-ids", "run", "--help"])
     assert "--accept-code-derived" in r.output

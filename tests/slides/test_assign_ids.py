@@ -966,7 +966,7 @@ class TestLLMSuggestOnHardRefusal:
         assert suggester.calls
 
     def test_llm_silent_on_hard_refusal_when_flag_off(self):
-        # Without --llm-suggest, behavior on hard refusals is unchanged.
+        # Without the suggester, behavior on hard refusals is unchanged.
         suggester = StaticTitleSuggester(default="Would Be Used If Asked")
         new_text, result = _run(
             self.HARD_REFUSAL_TEXT,
