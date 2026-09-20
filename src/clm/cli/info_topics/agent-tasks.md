@@ -1,7 +1,8 @@
 # The Agent-Task Contract (CLM {version})
 
 CLM's agent toolkits (`clm slides sync`, `clm harvest`, `clm slides
-translate`, and the conversions tracked in umbrella issue #970) share one
+translate`, `clm slides polish`, and the conversions tracked in umbrella
+issue #970) share one
 contract. This topic is its single canonical description; the per-toolkit
 guides (`clm info sync-agents`, `clm info harvest-agents`) describe each
 toolkit's verbs and payloads and point here for the shared rules. The

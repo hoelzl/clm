@@ -38,17 +38,18 @@ exactly one owning command. If you are touching narration, start here:
 |---|---|
 | Recover narration from a recorded video onto the current deck | `clm harvest report → task → accept`, then the twin side lands through `clm slides sync` |
 | Create the missing other-language half of a deck — and its companion — from scratch | `clm slides translate report → task → accept` (or `translate autopilot` with an API key) |
+| Clean up rough speaker notes already on a deck | `clm slides polish report → task → accept` (or `polish autopilot` with an API key) |
 | Reconcile an existing split pair — deck halves **and** `voiceover_*` companions alike | `clm slides sync report → apply → verify → record` (companions are members of the same table and ledger) |
 | Move narration between a deck and a `voiceover_*` companion file | `clm voiceover extract / inline / inline-notes` (layout plumbing, no judgment) |
 | Check that each slide's bullets are actually narrated | `clm slides coverage` |
 | Repair mismatched voiceover/notes `slide_id`s across a pair | `clm slides reconcile-vo-ids` |
 | See which decks lack a language entirely (course-wide) | `clm slides coverage-report` |
 
-The judgment-bearing entries (`harvest`, `slides sync`, `slides translate`)
-are agent toolkits: read by default, framed tasks, load-bearing exit codes —
-see `clm info agent-tasks` for the shared contract and the per-toolkit
-topics (`clm info sync-agents`, `clm info harvest-agents`) for the loops.
-The rest are mechanical.
+The judgment-bearing entries (`harvest`, `slides sync`, `slides translate`,
+`slides polish`) are agent toolkits: read by default, framed tasks,
+load-bearing exit codes — see `clm info agent-tasks` for the shared contract
+and the per-toolkit topics (`clm info sync-agents`, `clm info
+harvest-agents`) for the loops. The rest are mechanical.
 
 ### `clm build`
 
@@ -4821,29 +4822,82 @@ clm harvest trace show .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
 
 ### `clm slides polish`
 
-Polish existing speaker notes in slide files using an LLM. Removes filler words,
-fixes grammar, and preserves technical terms. Requires `clm[summarize]` extra (openai).
+*Agent-toolkit verbs since CLM {version} (#962); the in-process model moved behind `autopilot`.*
+
+Polish existing speaker notes in a slide file: removes filler words, fixes
+grammar, preserves technical terms. The `task`/`accept` loop needs **no API
+key and no `[summarize]` extra** — only `autopilot` calls a model.
+
+**Verbs** (bare `polish SLIDES --lang` is `report …`; see `clm info
+sync-agents` → "Polishing speaker notes" for the agent loop):
+
+- `report SLIDES --lang [--json]` — read-only, no model, no key. Counts the
+  slides whose notes a `task` would frame and points at the loop. Exit `1`
+  while polishable notes exist (work pending), `0` when there are none.
+- `task SLIDES --lang [--polish-level] [--slides-range]` — frame the notes
+  cleanup as ONE JSON task document: instructions with the level prompt, one
+  row per notes-carrying slide (its `id:`/`pos:` handle, the current notes,
+  and the slide's content in **both language sides** for context — the split
+  twin when one exists), `answer_schema`, and the freshness tokens
+  (`source_fingerprint`, `twin_fingerprint`) that `accept` re-checks. No
+  model, no API key. Exit `2` when no notes are found under `--lang` /
+  `--slides-range`.
+- `accept SLIDES --answer FILE|- [--lang] [--polish-level] [--slides-range]
+  [-o PATH] [--dry-run] [--json]` — validate the answer (shape + freshness +
+  coverage of exactly the framed slides) and write the polished notes
+  atomically through the ordinary narrative writer (`tags=["notes"]` cells) —
+  byte-identical to what `autopilot` writes. `--lang` and `--polish-level`
+  default to the answer's echo (an explicit contradiction is a rejection).
+  The sync ledger is deliberately
+  untouched: polishing one side of a recorded pair lets the next
+  `clm slides sync report` frame the twin's update. Nothing is written on any
+  validation failure. Exit `0` written · `2` rejected / error.
+- `autopilot SLIDES --lang [options]` — the in-process LLM cleanup for the
+  agent-less human: same write engine, judgment by the embedded model.
+  Key-gated ($OPENAI_API_KEY; the no-LLM `verbatim` level needs no key);
+  never in CI.
 
 ```
-clm slides polish SLIDES --lang {de|en} [OPTIONS]
+clm slides polish [OPTIONS] SLIDES --lang {de|en}   # = report (read-only)
+clm slides polish task SLIDES --lang [--polish-level L] [--slides-range R]
+clm slides polish accept SLIDES --answer FILE|- [--lang L] [--polish-level L]
+                                             [--slides-range R] [-o PATH]
+                                             [--dry-run] [--json]
+clm slides polish autopilot SLIDES --lang [--polish-level L] [--slides-range R]
+                                           [--dry-run] [-o PATH] [--model TEXT]
 ```
 
-| Option | Description |
+| Option (verb) | Description |
 |--------|-------------|
-| `--lang TEXT` | Language of notes (`de` or `en`) (required) |
-| `--polish-level [verbatim\|light\|standard\|heavy\|rewrite]` | How aggressively to edit notes (default: `standard`). `verbatim` returns notes unchanged without any LLM call. |
-| `--slides-range TEXT` | Slide range to polish (e.g. `5-10`) |
-| `--dry-run` | Show polished text without writing |
-| `-o, --output PATH` | Output file |
-| `--model TEXT` | LLM model identifier |
+| `--lang {de\|en}` (report, task, autopilot: required; accept: optional) | Language of the notes. On `accept` it defaults to the answer's echo — an explicit flag contradicting the answer is a rejection. |
+| `--polish-level [verbatim\|light\|standard\|heavy\|rewrite]` (task, accept, autopilot) | How aggressively to edit notes (default: `standard`). `verbatim` returns notes unchanged without any LLM call. Semantics: `docs/claude/design/voiceover-polish-levels.md`. |
+| `--slides-range TEXT` (task, accept, autopilot) | Slide range to polish (e.g. `5-10`); narrows both the framing and the coverage check. |
+| `--answer FILE\|-` (accept) | The answer document framed by `task`: a file path, or `-` for stdin. |
+| `-o, --output PATH` (accept, autopilot) | Write the polished deck here instead of modifying SLIDES in place. |
+| `--dry-run` (accept, autopilot) | Validate fully / show the polished text without writing. |
+| `--model TEXT` (autopilot) | LLM model identifier (default `gpt-4o-mini`). |
+| `--json` (report, accept) | Emit a JSON report / outcome envelope. |
+
+Exit codes: `report` — `0` no notes to polish, `1` polishable notes present;
+`task` — `0` emitted, `2` nothing to frame; `accept` — `0` written, `2`
+rejected / error (nothing written); `autopilot` — `0` wrote (or dry-run),
+`1` no API key (nothing written), `2` a hard error.
+
+The `report --json` payload carries the with/without-notes counts and a
+`verbs` map with the exact `task` / `accept` / `autopilot` invocations.
+`accept --json` carries `applied`, `slides_polished`, `written`, `lang`, and
+`polish_level`; a rejection emits the shared rejection envelope
+(`applied: false`, `outcome: "rejected"`, `reason`).
 
 Examples:
 
 ```bash
-clm slides polish slides.py --lang de
-clm slides polish slides.py --lang en --slides-range 5-10 --dry-run
-clm slides polish slides.py --lang de --polish-level heavy -o polished.py
-clm slides polish slides.py --lang de --model openai/gpt-4o -o polished.py
+clm slides polish slides_x.de.py --lang de             # report (read-only)
+clm slides polish task slides_x.de.py --lang de --polish-level heavy > task.json
+# …answer the framed rows; echo the fingerprints; cover EXACTLY them…
+clm slides polish accept slides_x.de.py --answer answer.json --polish-level heavy
+clm slides polish accept slides_x.de.py --answer answer.json --slides-range 5-10
+clm slides polish autopilot slides_x.de.py --lang de --model openai/gpt-4o
 ```
 
 ### `clm recordings`
