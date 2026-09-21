@@ -4951,7 +4951,7 @@ The output table header shows which backend was checked. The command exits
 non-zero if any required dependency is missing or the Auphonic check fails.
 
 ```
-clm recordings check [--offline]
+clm recordings check [--offline] [--json]
 ```
 
 Options:
@@ -4959,6 +4959,10 @@ Options:
 - `--offline`: For the `auphonic` backend, skip the API connectivity
   round-trip and only validate that an API key is configured. No effect for
   the `onnx`/`external` backends.
+- `--json`: Emit `{backend, ok, dependencies, [auphonic]}` instead of the
+  table. Each dependency is `{found, info}`; the `auphonic` section
+  (`{ok, status, info}`) appears only for the `auphonic` backend. The exit
+  code is still 1 when anything is missing.
 
 #### `clm recordings process`
 
@@ -4993,8 +4997,16 @@ clm recordings batch INPUT_DIR [OPTIONS]
 Show recording status for a course, including per-lecture recording state.
 
 ```
-clm recordings status COURSE_ID
+clm recordings status COURSE_ID [--json]
 ```
+
+Options:
+
+- `--json`: Emit `{course_id, recorded, total, continue_current_lecture,
+  next_lecture_index, lectures}` instead of the table. Each lecture row
+  carries `index`, `lecture_id`, `name`, `parts`, `part_statuses`,
+  `status` (`processed` / `failed` / `processing` / `pending` /
+  `unrecorded`), and `next`.
 
 #### `clm recordings drift`
 
@@ -5118,8 +5130,14 @@ Nothing changes for normal use. If you reach the dashboard under another name
 List available processing backends and their capabilities.
 
 ```
-clm recordings backends
+clm recordings backends [--json]
 ```
+
+Options:
+
+- `--json`: Emit `{active, backends}` where each backend row carries its
+  capability booleans (`synchronous`, `requires_internet`,
+  `requires_api_key`, `video_in_video_out`) and its `features` list.
 
 #### `clm recordings submit`
 
@@ -5151,6 +5169,12 @@ clm recordings jobs list [OPTIONS]
 | `--root DIR` | Recordings root (defaults to config) |
 | `--all` | Include terminal jobs (completed/failed) |
 | `-n / --limit` | Max number of jobs to show (default: 20) |
+| `--json` | Emit `{root, jobs}` with full, untruncated job rows |
+
+With `--json`, every job row carries `id` (full, not the table's 8-char
+prefix), `backend`, `state`, `progress` (0.0–1.0 float), `input` /
+`output` (full paths), `message`, `error`, and `last_poll_error` — none
+of the table's truncation. `--all` and `--limit` apply to both modes.
 
 #### `clm recordings jobs cancel`
 
@@ -5159,6 +5183,98 @@ Cancel an in-flight job by ID (prefix matches accepted).
 ```
 clm recordings jobs cancel JOB_ID [OPTIONS]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `--json` | Emit the updated job row |
+
+#### `clm recordings jobs fail`
+
+Manually mark a job FAILED without touching the backend — for rescuing
+stuck jobs where the remote production is actually fine but the local
+poll loop is wedged. Refuses already-terminal jobs (exit 1).
+
+```
+clm recordings jobs fail JOB_ID [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `--reason TEXT` | Error text stored on the job (default: "Manually marked failed by user") |
+| `--json` | Emit the updated job row |
+
+#### `clm recordings jobs poll`
+
+Run one or more poll cycles over in-flight (asynchronous-backend) jobs
+and print each job's state after every tick.
+
+```
+clm recordings jobs poll [JOB_ID] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `-w / --watch N` | Run N poll ticks back-to-back (default: 1) |
+| `-i / --interval SEC` | Seconds to sleep between ticks (default: 30) |
+| `--json` | Emit machine-readable JSON (see below) |
+
+With `--json`, output is JSON Lines — one compact document per tick, so
+a `--watch` stream parses tick by tick. With `JOB_ID` each tick emits
+that job's row as a single object (current state after the poll
+attempt — including an already-terminal job); without `JOB_ID` each
+tick emits an array of the polled jobs' rows (`[]` when nothing is in
+flight). `--watch` and `--interval` apply in both modes. Transient
+poll errors are recorded on `last_poll_error` and retried; permanent
+errors mark the job failed.
+
+#### `clm recordings jobs wait`
+
+Block until a job reaches a terminal state (completed / failed /
+cancelled), printing state transitions as they happen.
+
+```
+clm recordings jobs wait JOB_ID [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `--interval SEC` | Seconds between poll ticks (default: 30) |
+| `--timeout SEC` | Give up after this many seconds (default: wait forever) |
+| `--json` | Emit a single `{outcome, job}` document at the end |
+
+With `--json`, `outcome` is one of `completed` / `failed` / `cancelled` /
+`timeout` / `not-pollable` / `disappeared`; exit codes are 0 on success,
+1 on failure, 2 on timeout.
+
+#### `clm recordings jobs prune`
+
+Delete terminal jobs (default: failed + cancelled) from the on-disk
+store. In-flight jobs are never pruned — cancel them first.
+
+```
+clm recordings jobs prune [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--root DIR` | Recordings root (defaults to config) |
+| `--state STATE` | State(s) to prune, repeatable: `completed`, `failed`, `cancelled`, or `terminal` (default: failed+cancelled) |
+| `--id PREFIX` | Prune only the job with this id prefix (refuses in-flight) |
+| `-y / --yes` | Skip the confirmation prompt |
+| `--json` | Emit `{pruned, jobs}` with the deleted rows |
+
+`--json` without `--yes` is a usage error when there is anything to
+delete — the interactive prompt cannot be kept off stdout, so JSON mode
+demands explicit non-interactive confirmation.
+
+**JSON error convention:** on every `clm recordings ... --json`
+command, failure diagnostics (no state found, unknown/ambiguous job
+id, refusals) go to stderr and stdout carries either the JSON document
+or nothing; the exit code is the machine signal.
 
 #### `clm recordings auphonic preset sync`
 
@@ -5177,14 +5293,17 @@ clm recordings process raw.mkv
 clm recordings process raw.mkv -o final.mp4 --keep-temp
 clm recordings batch ~/Recordings -o ~/Processed -r
 clm recordings status python-basics
+clm recordings status python-basics --json
 clm recordings compare izotope.mp4 onnx.mp4 --label-a "iZotope RX" --label-b "DeepFilterNet3 ONNX"
 clm recordings assemble ~/Recordings
 clm recordings assemble ~/Recordings --dry-run
 clm recordings serve ~/Recordings --spec-file course.xml
 clm recordings backends
+clm recordings backends --json
 clm recordings submit topic--RAW.mp4 --root ~/Recordings
-clm recordings jobs list --root ~/Recordings --all
+clm recordings jobs list --root ~/Recordings --all --json
 clm recordings jobs cancel a3b4e56f --root ~/Recordings
+clm recordings jobs wait a3b4e56f --json --timeout 600
 clm recordings auphonic preset sync
 clm recordings auphonic preset list
 ```

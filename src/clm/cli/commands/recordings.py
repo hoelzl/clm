@@ -9,6 +9,7 @@ Requires the ``[recordings]`` extra (for the web UI server).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -19,6 +20,42 @@ from rich.table import Table
 
 logger = logging.getLogger(__name__)
 console = Console()
+err_console = Console(stderr=True)
+
+
+def _diagnostic(message: str, *, json_mode: bool = False) -> None:
+    """Print a failure diagnostic: stderr in JSON mode, stdout otherwise.
+
+    In --json mode stdout carries only JSON documents, so diagnostics
+    (no state found, unknown/ambiguous job id, refusals) go to stderr
+    and the exit code stays the machine signal.
+    """
+    (err_console if json_mode else console).print(message)
+
+
+def _emit_json(payload: object) -> None:
+    """Emit a pretty-printed machine-readable JSON document (#965 surface)."""
+    click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _emit_json_line(payload: object) -> None:
+    """Emit a single-line JSON document (JSON Lines, for streamed output)."""
+    click.echo(json.dumps(payload, ensure_ascii=False))
+
+
+def _job_row(job) -> dict:
+    """Full-fidelity JSON row for a processing job (no table truncation)."""
+    return {
+        "id": job.id,
+        "backend": job.backend_name,
+        "state": job.state.value,
+        "progress": job.progress,
+        "input": str(job.raw_path),
+        "output": str(job.final_path),
+        "message": job.message,
+        "error": job.error,
+        "last_poll_error": job.last_poll_error,
+    }
 
 
 @click.group("recordings")
@@ -39,7 +76,8 @@ def recordings_group():
         "an API key is configured. No effect for the onnx/external backends."
     ),
 )
-def check(offline: bool):
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def check(offline: bool, as_json: bool):
     """Check that the active processing backend's dependencies are available.
 
     The set of dependencies checked depends on
@@ -50,30 +88,55 @@ def check(offline: bool):
     - external : ffmpeg, ffprobe (CLM muxes the externally-produced .wav).
     - auphonic : a non-empty API key, plus a read-only API round-trip
                  (clm recordings auphonic preset list) unless --offline.
+
+    With --json, emits ``{backend, ok, dependencies, [auphonic]}`` where
+    each dependency is ``{found, info}``; the exit code is still 1 when
+    anything is missing.
     """
     from clm.recordings.processing.utils import check_dependencies_for_backend
 
     backend = _build_recordings_config().processing_backend
+
+    deps = check_dependencies_for_backend(backend)
+    all_ok = all(bool(value) for value in deps.values())
+
+    auphonic_check: tuple[bool, str, str] | None = None
+    if backend == "auphonic":
+        auphonic_check = _check_auphonic_backend(offline=offline)
+        all_ok = all_ok and auphonic_check[0]
+
+    if as_json:
+        payload: dict = {
+            "backend": backend,
+            "ok": all_ok,
+            "dependencies": {
+                name: {"found": bool(value), "info": str(value) if value else ""}
+                for name, value in deps.items()
+            },
+        }
+        if auphonic_check is not None:
+            a_ok, a_status, a_info = auphonic_check
+            payload["auphonic"] = {"ok": a_ok, "status": a_status, "info": a_info}
+        _emit_json(payload)
+        if not all_ok:
+            raise SystemExit(1)
+        return
 
     table = Table(title=f"Recording Dependencies ({backend} backend)")
     table.add_column("Check", style="cyan")
     table.add_column("Status")
     table.add_column("Info")
 
-    all_ok = True
-
-    deps = check_dependencies_for_backend(backend)
     for name, value in deps.items():
         if value:
             table.add_row(name, "[green]found[/green]", str(value))
         else:
             table.add_row(name, "[red]NOT FOUND[/red]", "")
-            all_ok = False
 
-    if backend == "auphonic":
-        ok, status_cell, info = _check_auphonic_backend(offline=offline)
-        table.add_row("auphonic api", status_cell, info)
-        all_ok = all_ok and ok
+    if auphonic_check is not None:
+        a_ok, a_status, a_info = auphonic_check
+        style = "green" if a_ok else "red"
+        table.add_row("auphonic api", f"[{style}]{a_status}[/{style}]", a_info)
 
     console.print(table)
 
@@ -92,19 +155,17 @@ def check(offline: bool):
 def _check_auphonic_backend(*, offline: bool) -> tuple[bool, str, str]:
     """Verify Auphonic credentials (and optionally connectivity).
 
-    Returns ``(ok, status_cell, info)`` where ``status_cell`` and ``info``
-    are pre-rendered rich markup strings for the dependencies table.
+    Returns ``(ok, status, info)`` with plain, unstyled status words
+    (``"key set"``, ``"reachable"``, ``"NOT CONFIGURED"``,
+    ``"UNREACHABLE"``) so both the Rich table and the --json payload
+    can consume the same result.
     """
     api_key, _preset = _get_auphonic_config()
     if not api_key:
-        return (
-            False,
-            "[red]NOT CONFIGURED[/red]",
-            "recordings.auphonic.api_key is empty",
-        )
+        return (False, "NOT CONFIGURED", "recordings.auphonic.api_key is empty")
 
     if offline:
-        return (True, "[green]key set[/green]", "connectivity not checked (--offline)")
+        return (True, "key set", "connectivity not checked (--offline)")
 
     from clm.recordings.workflow.backends.auphonic_client import AuphonicError
 
@@ -113,12 +174,12 @@ def _check_auphonic_backend(*, offline: bool) -> tuple[bool, str, str]:
         presets = client.list_presets()
     except AuphonicError as exc:
         logger.warning("Auphonic connectivity check failed: %s", exc)
-        return (False, "[red]UNREACHABLE[/red]", str(exc))
+        return (False, "UNREACHABLE", str(exc))
     except Exception as exc:  # network errors, missing key, etc.
         logger.warning("Auphonic connectivity check failed: %s", exc)
-        return (False, "[red]UNREACHABLE[/red]", str(exc))
+        return (False, "UNREACHABLE", str(exc))
 
-    return (True, "[green]reachable[/green]", f"key valid, {len(presets)} preset(s)")
+    return (True, "reachable", f"key valid, {len(presets)} preset(s)")
 
 
 @recordings_group.command()
@@ -231,23 +292,58 @@ def batch(input_dir: Path, output_dir: Path | None, config_file: Path | None, re
 
 @recordings_group.command()
 @click.argument("course_id")
-def status(course_id: str):
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def status(course_id: str, as_json: bool):
     """Show recording status for a course.
 
     Displays a table of lectures with their recording status,
     including file paths and part counts.
+
+    With --json, emits ``{course_id, recorded, total,
+    continue_current_lecture, next_lecture_index, lectures}`` where each
+    lecture row carries ``index, lecture_id, name, parts, part_statuses,
+    status, next``.
     """
     from clm.recordings.state import load_state
 
     state = load_state(course_id)
     if state is None:
-        console.print(f"[yellow]No recording state found for course '{course_id}'.[/yellow]")
-        console.print(
-            "Initialize recording state first via the web UI or by importing a spec file."
+        _diagnostic(
+            f"[yellow]No recording state found for course '{course_id}'.[/yellow]",
+            json_mode=as_json,
+        )
+        _diagnostic(
+            "Initialize recording state first via the web UI or by importing a spec file.",
+            json_mode=as_json,
         )
         raise SystemExit(1)
 
     recorded, total = state.progress
+
+    if as_json:
+        _emit_json(
+            {
+                "course_id": course_id,
+                "recorded": recorded,
+                "total": total,
+                "continue_current_lecture": bool(state.continue_current_lecture),
+                "next_lecture_index": state.next_lecture_index,
+                "lectures": [
+                    {
+                        "index": i + 1,
+                        "lecture_id": lecture.lecture_id,
+                        "name": lecture.display_name,
+                        "parts": len(lecture.parts),
+                        "part_statuses": [p.status for p in lecture.parts],
+                        "status": _lecture_status(lecture),
+                        "next": i == state.next_lecture_index,
+                    }
+                    for i, lecture in enumerate(state.lectures)
+                ],
+            }
+        )
+        return
+
     console.print(f"[bold]Course:[/bold] {course_id}")
     console.print(f"[bold]Progress:[/bold] {recorded}/{total} lectures recorded")
     console.print(
@@ -263,19 +359,15 @@ def status(course_id: str):
     table.add_column("Status")
 
     for i, lecture in enumerate(state.lectures):
-        status_str = ""
-        if lecture.parts:
-            statuses = [p.status for p in lecture.parts]
-            if all(s == "processed" for s in statuses):
-                status_str = "[green]processed[/green]"
-            elif any(s == "failed" for s in statuses):
-                status_str = "[red]failed[/red]"
-            elif any(s == "processing" for s in statuses):
-                status_str = "[yellow]processing[/yellow]"
-            else:
-                status_str = "[blue]pending[/blue]"
-        else:
-            status_str = "[dim]unrecorded[/dim]"
+        status_word = _lecture_status(lecture)
+        style = {
+            "processed": "green",
+            "failed": "red",
+            "processing": "yellow",
+            "pending": "blue",
+            "unrecorded": "dim",
+        }[status_word]
+        status_str = f"[{style}]{status_word}[/{style}]"
 
         marker = ""
         if i == state.next_lecture_index:
@@ -291,6 +383,20 @@ def status(course_id: str):
 
     console.print(table)
     console.print("[dim]* = next lecture to record[/dim]")
+
+
+def _lecture_status(lecture) -> str:
+    """Roll up a lecture's part statuses the table and JSON payload share."""
+    if not lecture.parts:
+        return "unrecorded"
+    statuses = [p.status for p in lecture.parts]
+    if all(s == "processed" for s in statuses):
+        return "processed"
+    if any(s == "failed" for s in statuses):
+        return "failed"
+    if any(s == "processing" for s in statuses):
+        return "processing"
+    return "pending"
 
 
 @recordings_group.command()
@@ -971,8 +1077,15 @@ def _make_job_manager_for_root(root_dir: Path):
 
 
 @recordings_group.command("backends")
-def list_backends():
-    """List available processing backends and their capabilities."""
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def list_backends(as_json: bool):
+    """List available processing backends and their capabilities.
+
+    With --json, emits ``{active, backends}`` where each backend row
+    carries its capability booleans (``synchronous``, ``requires_internet``,
+    ``requires_api_key``, ``video_in_video_out``) and its ``features``
+    list, all untruncated.
+    """
     from clm.recordings.workflow.backends.auphonic import AuphonicBackend
     from clm.recordings.workflow.backends.external import ExternalAudioFirstBackend
     from clm.recordings.workflow.backends.onnx import OnnxAudioFirstBackend
@@ -985,25 +1098,8 @@ def list_backends():
 
     active = _build_recordings_config().processing_backend
 
-    table = Table(title="Recording Processing Backends")
-    table.add_column("Name", style="cyan")
-    table.add_column("Active", style="green")
-    table.add_column("Display name")
-    table.add_column("Model")
-    table.add_column("Features")
-
+    records = []
     for name, caps in entries:
-        model_bits = []
-        if caps.video_in_video_out:
-            model_bits.append("video-in/video-out")
-        else:
-            model_bits.append("audio-first")
-        model_bits.append("async" if not caps.is_synchronous else "sync")
-        if caps.requires_internet:
-            model_bits.append("internet")
-        if caps.requires_api_key:
-            model_bits.append("api-key")
-
         features = []
         if caps.supports_cut_lists:
             features.append("cut lists")
@@ -1015,13 +1111,48 @@ def list_backends():
             features.append("transcript")
         if caps.supports_chapter_detection:
             features.append("chapters")
+        records.append(
+            {
+                "name": name,
+                "active": name == active,
+                "display_name": caps.display_name,
+                "video_in_video_out": caps.video_in_video_out,
+                "synchronous": caps.is_synchronous,
+                "requires_internet": caps.requires_internet,
+                "requires_api_key": caps.requires_api_key,
+                "features": features,
+            }
+        )
+
+    if as_json:
+        _emit_json({"active": active, "backends": records})
+        return
+
+    table = Table(title="Recording Processing Backends")
+    table.add_column("Name", style="cyan")
+    table.add_column("Active", style="green")
+    table.add_column("Display name")
+    table.add_column("Model")
+    table.add_column("Features")
+
+    for (_name, caps), record in zip(entries, records, strict=True):
+        model_bits = []
+        if caps.video_in_video_out:
+            model_bits.append("video-in/video-out")
+        else:
+            model_bits.append("audio-first")
+        model_bits.append("async" if not caps.is_synchronous else "sync")
+        if caps.requires_internet:
+            model_bits.append("internet")
+        if caps.requires_api_key:
+            model_bits.append("api-key")
 
         table.add_row(
-            name,
-            "[bold green]✓[/bold green]" if name == active else "",
-            caps.display_name,
+            record["name"],
+            "[bold green]✓[/bold green]" if record["active"] else "",
+            record["display_name"],
             ", ".join(model_bits),
-            ", ".join(features) or "[dim]—[/dim]",
+            ", ".join(record["features"]) or "[dim]—[/dim]",
         )
 
     console.print(table)
@@ -1112,8 +1243,14 @@ def jobs_group():
 )
 @click.option("--all", "show_all", is_flag=True, help="Include terminal jobs (completed/failed).")
 @click.option("-n", "--limit", type=int, default=20, help="Max number of jobs to show.")
-def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
-    """List recording processing jobs from the on-disk store."""
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def list_jobs(cli_root: Path | None, show_all: bool, limit: int, as_json: bool):
+    """List recording processing jobs from the on-disk store.
+
+    With --json, emits ``{root, jobs}`` with full, untruncated job rows
+    (full ids, full messages, full input/output paths); ``--all`` and
+    ``--limit`` apply to both output modes.
+    """
     root = _resolve_recordings_root(cli_root)
     manager = _make_job_manager_for_root(root)
 
@@ -1122,6 +1259,10 @@ def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
         if not show_all:
             jobs = [j for j in jobs if not j.is_terminal]
         jobs = jobs[:limit]
+
+        if as_json:
+            _emit_json({"root": str(root), "jobs": [_job_row(j) for j in jobs]})
+            return
 
         if not jobs:
             console.print("[yellow]No jobs found.[/yellow] Use 'clm recordings submit' to add one.")
@@ -1165,20 +1306,25 @@ def list_jobs(cli_root: Path | None, show_all: bool, limit: int):
         manager.shutdown()
 
 
-def _resolve_job_by_prefix(manager, job_id: str):
+def _resolve_job_by_prefix(manager, job_id: str, *, json_mode: bool = False):
     """Resolve *job_id* against the manager's jobs, allowing a prefix.
 
     Exits with a helpful message on no-match or ambiguous-match so
-    every CLI subcommand that takes a job id behaves identically.
+    every CLI subcommand that takes a job id behaves identically. In
+    JSON mode the diagnostic goes to stderr so stdout stays parseable
+    (the non-zero exit code is the machine signal).
     """
     candidates = [j for j in manager.list_jobs() if j.id.startswith(job_id)]
     if not candidates:
-        console.print(f"[red]No job matching id prefix {job_id!r}.[/red]")
+        _diagnostic(f"[red]No job matching id prefix {job_id!r}.[/red]", json_mode=json_mode)
         raise SystemExit(1)
     if len(candidates) > 1:
-        console.print(f"[red]Ambiguous prefix {job_id!r} matches {len(candidates)} jobs:[/red]")
+        _diagnostic(
+            f"[red]Ambiguous prefix {job_id!r} matches {len(candidates)} jobs:[/red]",
+            json_mode=json_mode,
+        )
         for job in candidates:
-            console.print(f"  {job.id}  {job.state.value}  {job.raw_path.name}")
+            _diagnostic(f"  {job.id}  {job.state.value}  {job.raw_path.name}", json_mode=json_mode)
         raise SystemExit(1)
     return candidates[0]
 
@@ -1192,17 +1338,24 @@ def _resolve_job_by_prefix(manager, job_id: str):
     default=None,
     help="Recordings root (defaults to recordings.root_dir from config).",
 )
-def cancel_job(job_id: str, cli_root: Path | None):
-    """Cancel an in-flight job by id (prefix matches are accepted)."""
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def cancel_job(job_id: str, cli_root: Path | None, as_json: bool):
+    """Cancel an in-flight job by id (prefix matches are accepted).
+
+    With --json, emits the updated job row.
+    """
     root = _resolve_recordings_root(cli_root)
     manager = _make_job_manager_for_root(root)
 
     try:
-        target = _resolve_job_by_prefix(manager, job_id)
+        target = _resolve_job_by_prefix(manager, job_id, json_mode=as_json)
         job = manager.cancel(target.id)
         if job is None:
-            console.print(f"[red]Unknown job id {job_id!r}.[/red]")
+            _diagnostic(f"[red]Unknown job id {job_id!r}.[/red]", json_mode=as_json)
             raise SystemExit(1)
+        if as_json:
+            _emit_json(_job_row(job))
+            return
         console.print(f"[green]Cancelled[/green] job {job.id} (state={job.state.value})")
     finally:
         manager.shutdown()
@@ -1247,7 +1400,8 @@ def _render_poll_result_table(polled, *, title: str) -> Table:
     show_default=True,
     help="Error text stored on the job (shown by 'jobs list').",
 )
-def fail_job(job_id: str, cli_root: Path | None, reason: str):
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def fail_job(job_id: str, cli_root: Path | None, reason: str, as_json: bool):
     """Manually mark JOB_ID as FAILED without touching the backend.
 
     Unlike ``jobs cancel`` — which deletes the remote production so
@@ -1258,16 +1412,19 @@ def fail_job(job_id: str, cli_root: Path | None, reason: str):
 
     Refuses already-terminal jobs (completed/failed/cancelled) so you
     can't accidentally overwrite a real completion.
+
+    With --json, emits the updated job row.
     """
     root = _resolve_recordings_root(cli_root)
     manager = _make_job_manager_for_root(root)
 
     try:
-        target = _resolve_job_by_prefix(manager, job_id)
+        target = _resolve_job_by_prefix(manager, job_id, json_mode=as_json)
         if target.is_terminal:
-            console.print(
+            _diagnostic(
                 f"[yellow]Job {target.id[:8]} is already {target.state.value}; "
-                "refusing to overwrite.[/yellow]"
+                "refusing to overwrite.[/yellow]",
+                json_mode=as_json,
             )
             raise SystemExit(1)
 
@@ -1275,11 +1432,15 @@ def fail_job(job_id: str, cli_root: Path | None, reason: str):
         if updated is None:
             # Race: something else changed the job between the prefix
             # resolve and the mark_failed call. Rare, but surface it.
-            console.print(
+            _diagnostic(
                 f"[red]Could not mark job {target.id[:8]} as failed "
-                "(state changed concurrently?).[/red]"
+                "(state changed concurrently?).[/red]",
+                json_mode=as_json,
             )
             raise SystemExit(1)
+        if as_json:
+            _emit_json(_job_row(updated))
+            return
         console.print(
             f"[red]Marked failed[/red] job {updated.id[:8]} "
             f"(reason: {updated.error}). The backend production was "
@@ -1316,11 +1477,13 @@ def fail_job(job_id: str, cli_root: Path | None, reason: str):
     show_default=True,
     help="Seconds to sleep between ticks when --watch > 1.",
 )
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 def poll_jobs(
     job_id: str | None,
     cli_root: Path | None,
     watch: int,
     interval: float,
+    as_json: bool,
 ):
     """Run one or more poll cycles and print job state after each tick.
 
@@ -1336,6 +1499,13 @@ def poll_jobs(
     failed; the next poll tick will retry. Permanent errors (HTTP
     401/403/404/410, explicit Auphonic ERROR status) mark the job
     failed immediately.
+
+    With --json: output is JSON Lines (one compact document per tick,
+    parseable tick by tick). With JOB_ID each tick emits that job's row
+    as a single object (current state after the poll attempt —
+    including an already-terminal job); without JOB_ID each tick emits
+    an array of the polled jobs' rows (``[]`` when nothing is in
+    flight). ``--watch``/``--interval`` apply in both modes.
     """
     import time as _time
 
@@ -1346,9 +1516,26 @@ def poll_jobs(
     manager = _make_job_manager_for_root(root)
 
     try:
+        if as_json and job_id is not None:
+            target = _resolve_job_by_prefix(manager, job_id, json_mode=True)
+            if target.is_terminal:
+                _emit_json_line(_job_row(target))
+                return
+            for tick in range(1, watch + 1):
+                manager.poll_once(job_id=target.id)
+                current = manager.get(target.id)
+                if current is None:
+                    current = target
+                _emit_json_line(_job_row(current))
+                if current.is_terminal:
+                    return
+                if tick < watch:
+                    _time.sleep(interval)
+            return
+
         target_id: str | None = None
         if job_id is not None:
-            target = _resolve_job_by_prefix(manager, job_id)
+            target = _resolve_job_by_prefix(manager, job_id, json_mode=as_json)
             if target.is_terminal:
                 console.print(
                     f"[yellow]Job {target.id[:8]} is already {target.state.value}; "
@@ -1360,6 +1547,9 @@ def poll_jobs(
         for tick in range(1, watch + 1):
             polled = manager.poll_once(job_id=target_id)
             if not polled:
+                if as_json:
+                    _emit_json_line([])
+                    return
                 if target_id is not None:
                     console.print(
                         "[yellow]Job is not in a pollable state "
@@ -1369,14 +1559,17 @@ def poll_jobs(
                     console.print("[dim]No in-flight jobs to poll.[/dim]")
                 return
 
-            title = "Poll result" if watch == 1 else f"Poll tick {tick}/{watch}"
-            console.print(_render_poll_result_table(polled, title=title))
+            if as_json:
+                _emit_json_line([_job_row(job) for job in polled])
+            else:
+                title = "Poll result" if watch == 1 else f"Poll tick {tick}/{watch}"
+                console.print(_render_poll_result_table(polled, title=title))
 
             # If every polled job reached terminal state, stop early —
             # nothing more to do. This matters most when watching a
             # single JOB_ID that has just completed.
             if all(job.is_terminal for job in polled):
-                if watch > 1:
+                if not as_json and watch > 1:
                     console.print("[dim]All polled jobs are terminal; stopping.[/dim]")
                 return
 
@@ -1409,11 +1602,13 @@ def poll_jobs(
     default=None,
     help="Give up after this many seconds (default: wait forever).",
 )
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 def wait_job(
     job_id: str,
     cli_root: Path | None,
     interval: float,
     timeout: float | None,
+    as_json: bool,
 ):
     """Block until JOB_ID reaches a terminal state.
 
@@ -1425,17 +1620,34 @@ def wait_job(
 
     Transient poll errors are surfaced but do NOT end the wait — the
     next tick retries. Use Ctrl+C to abort.
+
+    With --json, prints a single ``{outcome, job}`` document at the
+    end (outcome: ``completed`` / ``failed`` / ``cancelled`` /
+    ``timeout`` / ``not-pollable`` / ``disappeared``); exit codes are
+    0 on success, 1 on failure, 2 on timeout.
     """
     import time
 
     from clm.recordings.workflow.jobs import JobState
 
+    def _emit_outcome(outcome: str, job, *, exit_code: int = 0) -> None:
+        _emit_json({"outcome": outcome, "job": None if job is None else _job_row(job)})
+        if exit_code:
+            raise SystemExit(exit_code)
+
     root = _resolve_recordings_root(cli_root)
     manager = _make_job_manager_for_root(root)
 
     try:
-        target = _resolve_job_by_prefix(manager, job_id)
+        target = _resolve_job_by_prefix(manager, job_id, json_mode=as_json)
         if target.is_terminal:
+            if as_json:
+                _emit_outcome(
+                    target.state.value,
+                    target,
+                    exit_code=1 if target.state == JobState.FAILED else 0,
+                )
+                return
             console.print(f"[yellow]Job {target.id[:8]} is already {target.state.value}.[/yellow]")
             return
 
@@ -1448,11 +1660,13 @@ def wait_job(
             polled = manager.poll_once(job_id=target.id)
             current = manager.get(target.id)
             if current is None:
+                if as_json:
+                    _emit_outcome("disappeared", None, exit_code=1)
                 console.print(f"[red]Job {target.id[:8]} disappeared from store.[/red]")
                 raise SystemExit(1)
 
             # Print on any state/message/error transition.
-            if (
+            if not as_json and (
                 current.state != last_state
                 or current.message != last_message
                 or current.last_poll_error != last_poll_error
@@ -1475,11 +1689,19 @@ def wait_job(
 
             if current.is_terminal:
                 if current.state == JobState.COMPLETED:
+                    if as_json:
+                        _emit_outcome("completed", current)
+                        return
                     console.print(f"\n[green]Done.[/green] Output: {current.final_path}")
                 elif current.state == JobState.FAILED:
+                    if as_json:
+                        _emit_outcome("failed", current, exit_code=1)
                     console.print(f"\n[red]Failed: {current.error}[/red]")
                     raise SystemExit(1)
                 else:
+                    if as_json:
+                        _emit_outcome(current.state.value, current)
+                        return
                     console.print(f"\n[yellow]Terminated: {current.state.value}[/yellow]")
                 return
 
@@ -1487,12 +1709,17 @@ def wait_job(
                 # Nothing happened — job state didn't allow a poll. That
                 # means someone else (dashboard) moved it out of an
                 # in-flight state between our get() and our poll. Bail.
+                if as_json:
+                    _emit_outcome("not-pollable", current)
+                    return
                 console.print(
                     f"[yellow]Job {target.id[:8]} is no longer in a pollable state.[/yellow]"
                 )
                 return
 
             if timeout is not None and (time.monotonic() - started_at) >= timeout:
+                if as_json:
+                    _emit_outcome("timeout", current, exit_code=2)
                 console.print(
                     f"[yellow]Timed out after {timeout}s; job is still {current.state.value}.[/yellow]"
                 )
@@ -1537,17 +1764,24 @@ def wait_job(
     is_flag=True,
     help="Skip the confirmation prompt.",
 )
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 def prune_jobs(
     cli_root: Path | None,
     states: tuple[str, ...],
     job_id: str | None,
     assume_yes: bool,
+    as_json: bool,
 ):
     """Delete terminal jobs from the on-disk store.
 
     In-flight jobs (queued/uploading/processing/downloading) are
     never pruned — cancel them first with ``jobs cancel`` if you
     want them gone.
+
+    With --json, emits ``{pruned, jobs}`` with the rows that were
+    deleted. ``--json`` without ``--yes`` is a usage error — the
+    interactive prompt cannot be kept off stdout, so JSON mode demands
+    explicit non-interactive confirmation.
     """
     from clm.recordings.workflow.jobs import JobState
 
@@ -1556,12 +1790,13 @@ def prune_jobs(
 
     try:
         if job_id is not None:
-            target = _resolve_job_by_prefix(manager, job_id)
+            target = _resolve_job_by_prefix(manager, job_id, json_mode=as_json)
             if not target.is_terminal:
-                console.print(
+                _diagnostic(
                     f"[red]Refusing to prune in-flight job {target.id[:8]} "
                     f"(state={target.state.value}). Cancel it first with "
-                    f"'clm recordings jobs cancel {target.id[:8]}'.[/red]"
+                    f"'clm recordings jobs cancel {target.id[:8]}'.[/red]",
+                    json_mode=as_json,
                 )
                 raise SystemExit(1)
             victims = [target]
@@ -1576,38 +1811,51 @@ def prune_jobs(
             victims = [j for j in manager.list_jobs() if j.state in wanted_states]
 
         if not victims:
-            console.print("[dim]No matching jobs to prune.[/dim]")
+            if as_json:
+                _emit_json({"pruned": 0, "jobs": []})
+            else:
+                console.print("[dim]No matching jobs to prune.[/dim]")
             return
 
-        table = Table(title=f"About to prune {len(victims)} job(s)")
-        table.add_column("ID", style="dim")
-        table.add_column("State")
-        table.add_column("Input")
-        table.add_column("Message")
-        for job in victims:
-            state_style = {
-                "completed": "green",
-                "failed": "red",
-                "cancelled": "yellow",
-            }.get(job.state.value, "blue")
-            table.add_row(
-                job.id[:8],
-                f"[{state_style}]{job.state.value}[/{state_style}]",
-                job.raw_path.name,
-                (job.error or job.message or "")[:60],
-            )
-        console.print(table)
+        if not as_json:
+            table = Table(title=f"About to prune {len(victims)} job(s)")
+            table.add_column("ID", style="dim")
+            table.add_column("State")
+            table.add_column("Input")
+            table.add_column("Message")
+            for job in victims:
+                state_style = {
+                    "completed": "green",
+                    "failed": "red",
+                    "cancelled": "yellow",
+                }.get(job.state.value, "blue")
+                table.add_row(
+                    job.id[:8],
+                    f"[{state_style}]{job.state.value}[/{state_style}]",
+                    job.raw_path.name,
+                    (job.error or job.message or "")[:60],
+                )
+            console.print(table)
 
         if not assume_yes:
+            if as_json:
+                # The interactive prompt (and its input echo) cannot be
+                # kept off stdout reliably, so --json demands --yes and
+                # fails loudly instead of corrupting the JSON stream.
+                raise click.UsageError("--json requires --yes (non-interactive confirmation).")
             if not click.confirm(f"Delete these {len(victims)} job(s) from the store?"):
                 console.print("[yellow]Aborted.[/yellow]")
                 return
 
+        victim_rows = [_job_row(job) for job in victims]
         deleted = 0
         for job in victims:
             if manager.delete_job(job.id):
                 deleted += 1
-        console.print(f"[green]Pruned[/green] {deleted} job(s).")
+        if as_json:
+            _emit_json({"pruned": deleted, "jobs": victim_rows})
+        else:
+            console.print(f"[green]Pruned[/green] {deleted} job(s).")
     finally:
         manager.shutdown()
 
