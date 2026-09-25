@@ -664,7 +664,11 @@ def week_cmd(
     all_channels: bool,
     ledger_path: Path | None,
 ) -> None:
-    """Release every topic in the selected section(s) — a "week" — to a channel.
+    """Release every topic in the selected section(s) to a channel.
+
+    Also available as ``clm release section`` (#1009): sections are weeks by
+    the schedule's convention, not by structure, so both spellings name the
+    same command with identical behaviour.
 
     SELECTORS use the same grammar as ``build --only-sections``: ``id:`` /
     ``idx:`` / ``name:`` prefixes, or a bare 1-based index or
@@ -781,6 +785,12 @@ def _print_channel_status(row: dict[str, object]) -> None:
         )
         if awaiting:
             click.echo("  awaiting sync: " + ", ".join(awaiting))
+
+
+# ``clm release section`` is the same command under the structural name
+# (#1009, follow-up of #916): a section is a thematic block; "week" is what
+# the schedule makes of it. Both spellings stay — no deprecation, no shim.
+release_group.add_command(week_cmd, name="section")
 
 
 @release_group.command("status")
