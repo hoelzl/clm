@@ -51,3 +51,39 @@ def test_resolve_deck_topic_wrong_language_section_name(course_1):
     # Looking up the German section name under lang="en" should miss.
     if section.name["de"] != section.name["en"]:
         assert course_1.resolve_deck_topic(de_section_name, en_deck_name, "en") == (None, None)
+
+
+def test_resolve_deck_file_returns_the_matching_source_path(course_1):
+    """The recordings ledger keys on the deck's source file (#1004)."""
+    section = _first_section_with_notebooks(course_1)
+    nb = section.notebooks[0]
+
+    path = course_1.resolve_deck_file(section.name["en"], nb.file_name("en", ""), "en")
+
+    assert path == nb.source_path
+    assert path is not None and path.is_file()
+
+
+def test_resolve_deck_file_unknown_deck_is_none(course_1):
+    section = _first_section_with_notebooks(course_1)
+    assert course_1.resolve_deck_file(section.name["en"], "99 Not A Real Deck", "en") is None
+
+
+def test_resolve_deck_location_skips_the_other_language_half(course_1):
+    """A split deck's halves share a slot; the half whose intrinsic language
+    is not *lang* must not win the lookup (the dashboard lists it that way)."""
+    section = _first_section_with_notebooks(course_1)
+    nb = section.notebooks[0]
+    section_name, deck_name = section.name["en"], nb.file_name("en", "")
+    assert course_1.resolve_deck_location(section_name, deck_name, "en") == (
+        section.id,
+        nb.topic.id,
+        nb.source_path,
+    )
+
+    nb.output_language_filter = "de"  # pretend it is the DE half of a split deck
+    try:
+        assert course_1.resolve_deck_location(section_name, deck_name, "en") == (None, None, None)
+        assert course_1.resolve_deck_file(section_name, deck_name, "en") is None
+    finally:
+        nb.output_language_filter = None

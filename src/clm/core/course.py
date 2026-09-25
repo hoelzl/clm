@@ -56,6 +56,7 @@ from clm.core.utils.path_utils import is_image_file, is_in_dir
 from clm.core.utils.text_utils import Text
 
 if TYPE_CHECKING:
+    from clm.core.course_files.notebook_file import NotebookFile
     from clm.core.cross_references import CrossReferenceResolver
     from clm.core.topic_resolver import TopicMatch
 
@@ -438,6 +439,38 @@ class Course(NotebookMixin):
         simply skipped. Both companions of a split deck share one
         ``topic.id``, so which half matches does not change the result.
         """
+        section_id, topic_id, _ = self.resolve_deck_location(section_name, deck_name, lang)
+        return section_id, topic_id
+
+    def resolve_deck_file(self, section_name: str, deck_name: str, lang: str) -> Path | None:
+        """The source file of the deck the recordings dashboard names.
+
+        Same lookup as :meth:`resolve_deck_topic`, returning the matching
+        notebook's on-disk source path — for a split deck the half whose
+        intrinsic ``output_language_filter`` is *lang*. The recordings ledger
+        (#1004) keys on this path: a topic id alone is not a source anchor
+        when a topic id resolves to two directories (cohort-archive modules).
+        """
+        return self.resolve_deck_location(section_name, deck_name, lang)[2]
+
+    def resolve_deck_location(
+        self, section_name: str, deck_name: str, lang: str
+    ) -> tuple[str | None, str | None, Path | None]:
+        """``(section_id, topic_id, source_path)`` for a dashboard deck in one walk.
+
+        ``(None, None, None)`` when nothing matches. Recording provenance
+        needs all three, and each is a full section × notebook scan, so the
+        two narrower resolvers above share this one.
+        """
+        found = self._find_deck_notebook(section_name, deck_name, lang)
+        if found is None:
+            return None, None, None
+        section, nb = found
+        return section.id, nb.topic.id, nb.source_path
+
+    def _find_deck_notebook(
+        self, section_name: str, deck_name: str, lang: str
+    ) -> "tuple[Section, NotebookFile] | None":
         for section in self.sections:
             try:
                 if section.name[lang] != section_name:
@@ -445,12 +478,20 @@ class Course(NotebookMixin):
             except (KeyError, TypeError):
                 continue
             for nb in section.notebooks:
+                # A split deck is two notebooks sharing one slot; each half
+                # carries its intrinsic language, and the dashboard lists only
+                # the half matching the shown language (routes.py). Mirror
+                # that, so lang="en" never resolves to the .de half when both
+                # halves render the same title.
+                nb_lang = getattr(nb, "output_language_filter", None)
+                if nb_lang in ("de", "en") and nb_lang != lang:
+                    continue
                 try:
                     if nb.file_name(lang, "") == deck_name:
-                        return section.id, nb.topic.id
+                        return section, nb
                 except (KeyError, ValueError):
                     continue
-        return None, None
+        return None
 
     def add_file(self, path: Path, warn_if_no_topic: bool = True) -> Topic | None:
         for topic in self.topics:

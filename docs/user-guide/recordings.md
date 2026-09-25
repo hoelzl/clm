@@ -288,7 +288,9 @@ Each course can track which recordings belong to which lectures. State is
 stored as JSON files under `~/.config/clm/recordings/`. At record time CLM
 also stamps each part with the `section_id`, `topic_id`, and `slide_digest`
 of the slides that were presented, which enables drift detection (see
-[Detecting Stale Recordings](#detecting-stale-recordings-slide-drift)).
+[Detecting Stale Recordings](#detecting-stale-recordings-slide-drift)), and
+writes a committed, source-anchored entry to the topic's recordings ledger
+(see [The Committed Recordings Ledger](#the-committed-recordings-ledger)).
 
 ### Viewing Status
 
@@ -352,6 +354,33 @@ provenance used by [drift detection](#detecting-stale-recordings-slide-drift).
 When a recording is assigned to a lecture, the tool captures the current
 git commit hash and dirty status of the course repository. This lets you
 correlate recordings with the exact version of the slides that were presented.
+
+### The Committed Recordings Ledger
+
+The state file is per machine and per `(course, language)` and is never
+committed, so it cannot carry what every editing agent needs to know: *which
+version of the slides a recording showed*. That lives in a committed ledger
+beside the deck, `<topic>/.clm/recordings-ledger.json`, written by the
+dashboard right after the state file at record time. Per recorded part it
+stores the source anchor (`{kind, commit, dirty}` — `commit` for a clean
+tree, `commit-dirty` when there were uncommitted edits, `unanchored` when the
+course is not a git checkout) and the recorded language's per-member content
+fingerprints (the same fingerprints the sync ledger records). Split decks
+share one entry per stem; `lang` on each part says which side was shown.
+
+Course repos ignore `.clm/*` with explicit exceptions, so add one line to the
+course repo's `.gitignore` (CLM warns after every ledger write while the file
+would still be ignored):
+
+```
+**/.clm/*
+!**/.clm/sync-ledger.json
+!**/.clm/recordings-ledger.json
+```
+
+Commit the ledger with the course; a deck edit and its ledger change travel
+together. The full schema, the anchor kinds, and the `hash_version` rule are
+in `clm info recordings`.
 
 ### Detecting Stale Recordings (Slide Drift)
 

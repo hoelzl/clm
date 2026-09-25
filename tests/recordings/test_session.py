@@ -2019,6 +2019,144 @@ class TestStateWiring:
         assert part.takes[0].topic_id == "topic-old"
         assert part.takes[0].slide_digest == "sha256:old"
 
+    def _stop_after_arm(self, mock_obs, session, obs_output: Path) -> None:
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+    def test_ledger_entry_written_beside_state(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """The dashboard write path of the committed recordings ledger (#1004).
+
+        The part stamped into the machine-local state file gets a twin entry
+        in ``<topic>/.clm/recordings-ledger.json``: same ``recorded_at``, the
+        arm-time anchor (here ``commit-dirty``) and member fingerprints.
+        """
+        from clm.recordings import ledger as rl
+        from clm.recordings.record_provenance import RecordProvenance
+        from clm.recordings.state import CourseRecordingState
+
+        deck_path = tmp_path / "course" / "slides" / "topic_x" / "slides_t.de.py"
+        deck_path.parent.mkdir(parents=True)
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p0")
+        prov = RecordProvenance(
+            topic_id="topic-x",
+            git_commit="deadbeef",
+            git_dirty=True,
+            deck_path=deck_path,
+            members={"id:s0": "fp-s0", "id:m1": "fp-m1"},
+        )
+
+        session.arm("c", "s", "t", part_number=0, lecture_id="l1", provenance=prov)
+        self._stop_after_arm(mock_obs, session, obs_output)
+
+        ledger_path = deck_path.parent / ".clm" / "recordings-ledger.json"
+        assert ledger_path.is_file(), "dashboard write path did not create the ledger"
+        entry = rl.load(ledger_path).decks["slides_t"]
+        assert entry.ack is None
+        [ledger_part] = entry.parts
+        state_part = state.get_lecture("l1").parts[0]
+        assert ledger_part.part == 1  # unsuffixed single-part mode is part 1 in state
+        assert ledger_part.recorded_at == state_part.recorded_at
+        assert ledger_part.course_id == "c"
+        assert ledger_part.lang == "en"
+        assert ledger_part.anchor == rl.RecordingAnchor(
+            kind="commit-dirty", commit="deadbeef", dirty=True
+        )
+        assert ledger_part.members == {"id:s0": "fp-s0", "id:m1": "fp-m1"}
+        assert ledger_part.hash_version == rl.HASH_VERSION
+
+    def test_ledger_retake_fingerprints_the_deck_as_it_is_at_stop_time(
+        self, mock_obs, recording_root: Path, tmp_path: Path
+    ):
+        """A retake re-records the same (course, part, lang) slot from the deck
+        as it is when the recording stops — not from the arm-time snapshot
+        (a retake inside the retake window never re-arms)."""
+        from clm.recordings import ledger as rl
+        from clm.recordings.record_provenance import RecordProvenance
+        from clm.recordings.state import CourseRecordingState
+        from tests.recordings.test_ledger import DE0, EN0, _write_pair
+
+        deck_path = _write_pair(tmp_path / "course" / "slides" / "topic_x")
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+        # Arm-time snapshot: deliberately stale, to prove it is not what lands.
+        prov = RecordProvenance(
+            git_commit="aaaa", git_dirty=False, deck_path=deck_path, members={"id:s0": "stale"}
+        )
+        expected: list[dict[str, str]] = []
+        for i, de_text in enumerate((DE0, DE0.replace("DE eins", "DE eins, neu"))):
+            _write_pair(deck_path.parent, de=de_text, en=EN0)
+            expected.append(rl.deck_members(deck_path, "de"))
+            obs_output = tmp_path / f"rec-{i}.mkv"
+            obs_output.write_bytes(b"take%d" % i)
+            session.arm("c", "s", "t", part_number=0, lang="de", lecture_id="l1", provenance=prov)
+            self._stop_after_arm(mock_obs, session, obs_output)
+
+        assert expected[0] != expected[1]
+        entry = rl.load(deck_path.parent / ".clm" / "recordings-ledger.json").decks["slides_t"]
+        [ledger_part] = entry.parts
+        assert ledger_part.members == expected[1]
+        # No git checkout under tmp_path: the arm-time commit is the fallback anchor.
+        assert ledger_part.anchor == rl.RecordingAnchor(kind="commit", commit="aaaa")
+        # The state file keeps the take history; the ledger keeps the active take.
+        assert state.get_lecture("l1").parts[0].takes
+
+    def test_no_deck_path_writes_no_ledger(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """Provenance without a resolved deck file (CLI/tests) leaves no ledger behind."""
+        from clm.recordings.record_provenance import RecordProvenance
+        from clm.recordings.state import CourseRecordingState
+
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p0")
+        prov = RecordProvenance(topic_id="topic-x", git_commit="deadbeef")
+
+        session.arm("c", "s", "t", part_number=0, lecture_id="l1", provenance=prov)
+        self._stop_after_arm(mock_obs, session, obs_output)
+
+        assert state.get_lecture("l1").parts[0].git_commit == "deadbeef"
+        assert not list(tmp_path.rglob("recordings-ledger.json"))
+
     def test_cascade_rename_fires_on_path_rename(
         self, mock_obs, recording_root: Path, tmp_path: Path
     ):

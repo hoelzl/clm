@@ -69,6 +69,11 @@ TOPICS: dict[str, TopicInfo] = {
         "The shared agent-task contract every clm agent toolkit implements",
         "agent-tasks.md",
     ),
+    "recordings": TopicInfo(
+        "recordings",
+        "Recording provenance: local state file, committed recordings ledger, drift report",
+        "recordings.md",
+    ),
 }
 
 
@@ -104,6 +109,7 @@ def info(topic: str | None) -> None:
         clm info slide-format   # Slide file format reference
         clm info releases       # Per-topic solution release reference
         clm info sync-agents    # Agent workflow for clm slides sync
+        clm info recordings     # Recording provenance: state file, ledger, report
     """
     if topic is None:
         click.echo(f"CLM {__version__} — Available documentation topics:\n")

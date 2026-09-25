@@ -121,3 +121,67 @@ def test_resolver_exception_is_swallowed(tmp_path):
     assert prov.section_id is None
     assert prov.topic_id is None
     assert prov.slide_digest is None
+
+
+# ---------------------------------------------------------------------------
+# Source anchor for the recordings ledger (#1004)
+# ---------------------------------------------------------------------------
+
+_HEADER_DE = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Titel\") }}\n\n"
+_HEADER_EN = "# j2 from 'macros.j2' import header_en\n# {{ header_en(\"Title\") }}\n\n"
+_DE = _HEADER_DE + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Titel\n'
+_EN = _HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Title\n'
+
+
+class _DeckCourse(_FakeCourse):
+    """A course that also resolves the deck's source file."""
+
+    def __init__(self, mapping, files):
+        super().__init__(mapping)
+        self._files = files
+
+    def resolve_deck_file(self, section_name, deck_name, lang):
+        return self._files.get((section_name, deck_name, lang))
+
+
+def _split_pair(folder):
+    folder.mkdir(parents=True)
+    (folder / "slides_t.de.py").write_text(_DE, encoding="utf-8")
+    (folder / "slides_t.en.py").write_text(_EN, encoding="utf-8")
+    return folder / "slides_t.de.py"
+
+
+def test_deck_path_and_members_resolved_for_the_recorded_language(tmp_path):
+    de = _split_pair(tmp_path / "topic_x")
+    course = _DeckCourse(
+        {("Week 1", "00 Intro", "de"): ("sec-1", "topic-x")},
+        {("Week 1", "00 Intro", "de"): de},
+    )
+
+    prov = build_record_provenance(course, None, "Week 1", "00 Intro", "de")
+
+    assert prov.deck_path == de
+    assert prov.members is not None and "id:s0" in prov.members
+    from clm.recordings.ledger import deck_members
+
+    assert prov.members == deck_members(de, "de")
+
+
+def test_course_without_deck_file_resolver_leaves_anchor_unset(tmp_path):
+    course = _FakeCourse({("Week 1", "00 Intro", "en"): ("sec-1", "topic-x")})
+    prov = build_record_provenance(course, None, "Week 1", "00 Intro", "en")
+    assert prov.deck_path is None
+    assert prov.members is None
+
+
+def test_unparseable_deck_keeps_path_with_empty_members(tmp_path):
+    folder = tmp_path / "topic_x"
+    folder.mkdir()
+    lone = folder / "slides_t.de.py"
+    lone.write_text(_DE, encoding="utf-8")  # no twin: not a split pair
+    course = _DeckCourse({}, {("Week 1", "00 Intro", "de"): lone})
+
+    prov = build_record_provenance(course, None, "Week 1", "00 Intro", "de")
+
+    assert prov.deck_path == lone
+    assert prov.members == {}
