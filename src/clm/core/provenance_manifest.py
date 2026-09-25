@@ -454,7 +454,7 @@ def find_course_manifest_path(
     a real ``clm build`` wrote its output. This resolves the manifest by
     convention instead:
 
-    1. ``output_root`` if given (the ``clm recordings drift --source`` /
+    1. ``output_root`` if given (the ``clm recordings report --source`` /
        ``--manifest`` override); otherwise the default build output root
        ``course_root/output`` from :func:`resolve_course_paths`.
     2. ``<output_root>/.clm-manifest.json`` (single default target), else

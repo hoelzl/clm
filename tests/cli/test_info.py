@@ -158,4 +158,5 @@ class TestLoadTopicContent:
         assert "harvest-agents" in TOPICS
         assert "agent-tasks" in TOPICS
         assert "recordings" in TOPICS
-        assert len(TOPICS) == 11
+        assert "recordings-agents" in TOPICS
+        assert len(TOPICS) == 12

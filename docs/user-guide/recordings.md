@@ -287,8 +287,8 @@ available while a recording is in progress — stop first.
 Each course can track which recordings belong to which lectures. State is
 stored as JSON files under `~/.config/clm/recordings/`. At record time CLM
 also stamps each part with the `section_id`, `topic_id`, and `slide_digest`
-of the slides that were presented, which enables drift detection (see
-[Detecting Stale Recordings](#detecting-stale-recordings-slide-drift)), and
+of the slides that were presented (the secondary signal of the
+[re-recording backlog](#the-re-recording-backlog-report--ack)), and
 writes a committed, source-anchored entry to the topic's recordings ledger
 (see [The Committed Recordings Ledger](#the-committed-recordings-ledger)).
 
@@ -338,7 +338,7 @@ Recording status values: `pending`, `processing`, `processed`, `failed`.
 The `section_id`, `topic_id`, and `slide_digest` fields are optional (they
 default to `null`) and are absent in pre-1.8 state files, which are still
 loaded for backward compatibility. When present they record the slide
-provenance used by [drift detection](#detecting-stale-recordings-slide-drift).
+provenance the [re-recording backlog](#the-re-recording-backlog-report--ack) uses as its secondary signal.
 
 ### Assignment Modes
 
@@ -382,40 +382,41 @@ Commit the ledger with the course; a deck edit and its ledger change travel
 together. The full schema, the anchor kinds, and the `hash_version` rule are
 in `clm info recordings`.
 
-### Detecting Stale Recordings (Slide Drift)
+### The Re-recording Backlog (`report` / `ack`)
 
 ```bash
-clm recordings drift python-basics
+clm recordings report path/to/course        # which recorded decks changed, and how
+clm recordings ack slides/…/slides_x.de.py --note "reword only"
 ```
 
-`clm recordings drift COURSE_ID` compares each recorded part's stamped slide
-digest against the topic's current digest in the build provenance manifest
-(`.clm-manifest.json`) and classifies every part as:
+`clm recordings report [PATH]` reads every committed recordings ledger under
+PATH and compares each recorded part's member fingerprints with the deck as
+it is now — no build, no video. One row per recorded deck with a severity
+class (`structural` — a slide added/removed/reordered or code changed;
+`visible` — slide text changed; `narration` — only the voiceover changed;
+`notes` — only trainer notes changed; `none`), `changed/total` member
+counts, the commits since the recording that touched the deck, and the
+acknowledgement state. `orphaned` rows are ledger entries whose deck no
+longer exists; `--all` adds `unrecorded` decks. Exit code `0` when nothing
+needs attention, `1` when something does.
 
-- **current** — the slides are unchanged since the recording was made.
-- **changed** — the slides have been edited since the recording, so the part
-  may need to be re-recorded.
-- **unknown** — the part predates provenance stamping, or its topic is absent
-  from the manifest.
+There is no automatic "re-record" verdict: the classes are the evidence and
+you decide. `clm recordings ack DECK [--note …]` records that decision at
+the deck's current fingerprints — the deck reads `acknowledged` until it
+changes again, then `drifted-since-ack` with the severity of the change
+since the ack. Commit the ledger with the deck.
 
-The manifest is resolved in priority order: `--manifest` > `--source` >
-`--spec-file`'s default `output/` root > the `spec_file` of the matching
-`recordings.courses` config entry.
+With a build manifest at hand (`--manifest FILE`, `--source DIR` or
+`--spec-file SPEC`) each part also carries a secondary
+`built_output_changed` flag from the build-output digest stamped in the
+local state file — a hint that templates, includes or a clm upgrade changed
+the rendered bytes, never a prerequisite.
 
-| Flag | Purpose |
-|------|---------|
-| `--source DIR` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/` location). |
-| `--manifest FILE` | Path to a specific `.clm-manifest.json` (overrides `--source` and the spec). |
-| `--spec-file FILE` | Course spec XML; its default `output/` root is searched for the manifest. |
-| `--all` | Show every recorded part, not just the ones whose slides changed. |
-| `--json` | Emit machine-readable JSON. |
-
-```bash
-# Show every part (including current ones) using an explicit manifest
-clm recordings drift python-basics \
-    --manifest /output/python-basics/.clm-manifest.json \
-    --all
-```
+The former `clm recordings drift` command is retired in favour of `report`
+(see `clm info migration`). Recordings made before the ledger existed are
+seeded from the local state files with `clm recordings seed-ledger`. The
+full field reference is in `clm info commands`; the agent loop in
+`clm info recordings-agents`.
 
 ## Course Configuration
 

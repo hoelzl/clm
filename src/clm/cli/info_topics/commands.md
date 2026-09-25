@@ -5259,33 +5259,62 @@ Options:
   `status` (`processed` / `failed` / `processing` / `pending` /
   `unrecorded`), and `next`.
 
-#### `clm recordings drift`
+#### `clm recordings report`
 
-Report which recordings have gone stale after slide edits. Each recorded
-part stamps, at record time, the topic it records and that topic's
-build-output digest (from the `.clm-manifest.json` provenance index). `drift`
-re-reads the current manifest and compares: a part is `changed` when the
-topic's built output differs from when it was recorded, `current` when it
-matches, and `unknown` when it predates provenance stamping or its topic is
-absent from the manifest (`unknown` is never reported as up to date).
+The re-recording backlog: which recorded decks changed since their video was
+shot, and how. Reads every committed `<topic>/.clm/recordings-ledger.json`
+under PATH (a course root, a topic directory, or one deck file) and compares
+each recorded part's member fingerprints with the deck as it is now — no
+build, no video, no model, and **no re-record judgment** (see `clm info
+recordings-agents` for the loop, `clm info recordings` for the ledger).
 
 ```
-clm recordings drift COURSE_ID [OPTIONS]
+clm recordings report [PATH] [OPTIONS]
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--source PATH` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/` location) |
-| `--manifest PATH` | Path to a specific `.clm-manifest.json` (overrides `--source` and the spec) |
+| `PATH` | Course root, topic directory or deck file to scan (default: `.`) |
+| `--all` | Also list split decks on disk that have no recorded part (`unrecorded`) |
+| `--manifest PATH` | A specific `.clm-manifest.json`, enabling the secondary `built_output_changed` flag (overrides `--source` and the spec) |
+| `--source PATH` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/`) |
 | `--spec-file PATH` | Course spec XML; its default `output/` root is searched for the manifest |
-| `--all` | Show every recorded part, not just the changed ones |
-| `--json` | Emit machine-readable JSON |
+| `--json` | Emit the machine-readable envelope (`schema`, `tool`, `verb`, `is_clean`, `needs_attention`, `counts`, `ledger_errors`, `decks`) on stdout; diagnostics go to stderr |
 
-The manifest is resolved in priority order: `--manifest` > `--source` >
-`--spec-file`'s default `output/` root > the `spec_file` of the matching
-`recordings.courses` config entry. By default only `changed` parts are
-listed (the answer to "which videos must I re-record?"); pass `--all` to see
-every part.
+One row per recorded deck: `status` (`recorded` / `orphaned` — ledger entry
+whose deck no longer exists / `unrecorded`), `severity` (`structural` /
+`visible` / `narration` / `notes` / `none`, or `unverifiable` when the entry
+cannot be trusted), `ack_state` (`unacknowledged` / `acknowledged` /
+`drifted-since-ack` / `stale-ack`), and one entry per recorded
+`(course_id, part, lang)` with `changed/total` member counts,
+`changed_members`, the commits since the anchor that touched the deck, and
+— only with a manifest — the secondary `built_output_changed` flag.
+
+Exit codes: `0` nothing needs attention, `1` at least one row does, `2` a
+ledger could not be read.
+
+#### `clm recordings ack`
+
+Acknowledge a recorded deck at its current fingerprints: "seen, decided not
+to re-record". Writes the deck's current member fingerprints for every
+recorded language plus the note to the `ack` block of its ledger entry;
+`report` then shows `acknowledged` until the deck changes again, and
+`drifted-since-ack` (with the severity of the change since the ack) after —
+an edit of a different slide re-surfaces the deck, the acknowledged edit
+stays acknowledged. Commit the ledger with the deck.
+
+```
+clm recordings ack DECK [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `DECK` | The deck file (`.de`/`.en` half) |
+| `--note TEXT` | Why this deck is not being re-recorded |
+| `--json` | Emit `{schema, tool, verb, deck, ledger, langs, members, note, written}` |
+
+Exit `2` (nothing written) when the deck has no recorded part or cannot be
+fingerprinted. Warns when git would ignore the ledger.
 
 #### `clm recordings compare`
 

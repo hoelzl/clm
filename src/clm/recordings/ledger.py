@@ -71,6 +71,7 @@ __all__ = [
     "deck_key_for",
     "deck_members",
     "deck_members_at_ref",
+    "id_order",
     "ignored_ledger_warning",
     "is_git_ignored",
     "ledger_path_for",
@@ -78,6 +79,7 @@ __all__ = [
     "part_identity",
     "record_part",
     "resolve_part_members",
+    "resolve_part_order",
     "save",
     "split_halves",
 ]
@@ -129,15 +131,25 @@ class LedgerPart(BaseModel):
     lang: str
     anchor: RecordingAnchor
     members: dict[str, str] = Field(default_factory=dict)
+    #: id-bearing member keys in recorded document order. ``members`` is a
+    #: sorted JSON object on disk, so the order the "member order changed"
+    #: rule needs must be stored explicitly; empty for entries written before
+    #: it existed (the rule is then skipped, never guessed).
+    order: list[str] = Field(default_factory=list)
     hash_version: int = HASH_VERSION
 
 
 class DeckAck(BaseModel):
-    """ "Seen, decided not to re-record at these fingerprints" (#965)."""
+    """ "Seen, decided not to re-record at these fingerprints" (#965).
+
+    ``members`` and ``order`` are keyed ``"<lang>:<member-key>"`` — one ack
+    covers every language the deck entry records.
+    """
 
     at: str
     note: str | None = None
     members: dict[str, str] = Field(default_factory=dict)
+    order: list[str] = Field(default_factory=list)
     hash_version: int = HASH_VERSION
 
 
@@ -196,6 +208,16 @@ def split_halves(deck_path: Path) -> tuple[Path, Path] | None:
         deck_path.with_name(f"{stem}.de{ext}"),
         deck_path.with_name(f"{stem}.en{ext}"),
     )
+
+
+def id_order(members: dict[str, str]) -> list[str]:
+    """The id-bearing keys of a freshly computed member map, in document order.
+
+    Only meaningful on a map straight from :func:`deck_members` /
+    :func:`deck_members_at_ref` (insertion order = document order), never on
+    one loaded from the sorted JSON.
+    """
+    return [key for key in members if key.startswith("id:")]
 
 
 def anchor_for(commit: str | None, dirty: bool) -> RecordingAnchor:
@@ -283,6 +305,21 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     if outcome.deck is None:
         return None
     return _members_of(outcome.deck, side)
+
+
+def resolve_part_order(
+    part: LedgerPart, members: dict[str, str], status: MembersStatus
+) -> list[str] | None:
+    """The recorded id-member order matching :func:`resolve_part_members`' result.
+
+    Stored order for a ``recorded`` entry (``None`` when the entry predates
+    the field), document order of the recomputed map otherwise.
+    """
+    if status == "recorded":
+        return list(part.order) or None
+    if status in ("recomputed", "approximate"):
+        return id_order(members)
+    return None
 
 
 def resolve_part_members(

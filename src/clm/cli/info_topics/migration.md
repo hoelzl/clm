@@ -2,6 +2,29 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm recordings drift` removed; `clm recordings report` replaces it (#965, {version})
+
+**Breaking for scripts invoking `recordings drift`.** `drift` compared the
+build-output digest stamped in the machine-local state file with the
+topic's digest in `.clm-manifest.json`: topic-granular, bound to whichever
+spec the manifest was built from, needing a build, and measured wrong in the
+"changed" direction for a quarter of the answerable parts. It is removed
+without an alias (the agent-toolkit no-shim posture).
+
+| Previous invocation | Replacement |
+|---|---|
+| `clm recordings drift COURSE_ID` | `clm recordings report [PATH]` — per deck, from the committed `<topic>/.clm/recordings-ledger.json` (#1004), no build; severity `structural` / `visible` / `narration` / `notes` / `none` plus ack state. Exit `1` when something needs attention |
+| `clm recordings drift COURSE_ID --all` | `clm recordings report PATH --all` (adds `unrecorded` decks) |
+| `clm recordings drift COURSE_ID --json` | `clm recordings report PATH --json` (envelope: `schema`, `tool`, `verb`, `is_clean`, `needs_attention`, `decks`) |
+| `--manifest` / `--source` / `--spec-file` | Unchanged options — now only enable the secondary `built_output_changed` flag per part; never a prerequisite |
+| (no acknowledgement) | `clm recordings ack DECK [--note …]` |
+
+Recordings made before the ledger existed have no entries yet: seed them from
+the local state files with `clm recordings seed-ledger COURSE_ID` (#1005)
+and add `!**/.clm/recordings-ledger.json` to the course repo's `.gitignore`.
+The `slide_digest` stamp in the local state file is still written and still
+feeds the secondary flag. Loop and vocabulary: `clm info recordings-agents`.
+
 ## `clm slides coverage` is an agent toolkit; the Ollama judge moved behind `autopilot` (#963, {version})
 
 **Breaking for scripts that relied on the in-process judge.** `clm slides
