@@ -1376,3 +1376,45 @@ class TestValidateTasks:
         errors = [f for f in result.errors if f.type == "invalid_task_step"]
         assert len(errors) == 1
         assert "standalone token" in errors[0].message
+
+
+class TestDiagramSourceIncludeIsInfo:
+    """Including another topic's diagram SOURCE is the supported sharing
+    pattern (#987): ``include_source_is_topic_dir`` drops to info for it."""
+
+    def _spec_including(self, tmp_path, rel_source: str, as_attr: str):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        _make_topic(tmp_path, "module_100_basics", "topic_020_other")
+        source = tmp_path / "slides" / "module_100_basics" / "topic_020_other" / rel_source
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("<mxfile/>\n", encoding="utf-8")
+        return _write_spec(
+            tmp_path,
+            f"""\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <topic>intro<include
+                  source="slides/module_100_basics/topic_020_other/{rel_source}"
+                  as="{as_attr}"/></topic>
+              </topics>
+            </section></sections>""",
+        )
+
+    def test_diagram_source_is_info_not_warning(self, tmp_path):
+        spec_file = self._spec_including(tmp_path, "drawio/cosine.drawio", "drawio/cosine.drawio")
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        findings = [f for f in result.findings if f.type == "include_source_is_topic_dir"]
+        assert [f.severity for f in findings] == ["info"]
+        assert "img-generated" in findings[0].message
+        assert all(f.type != "include_source_is_topic_dir" for f in result.warnings)
+
+    def test_non_diagram_topic_source_stays_a_warning(self, tmp_path):
+        spec_file = self._spec_including(tmp_path, "data/table.csv", "data/table.csv")
+
+        result = validate_spec(spec_file, tmp_path / "slides")
+
+        findings = [f for f in result.findings if f.type == "include_source_is_topic_dir"]
+        assert [f.severity for f in findings] == ["warning"]

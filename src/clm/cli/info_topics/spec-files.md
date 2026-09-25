@@ -618,7 +618,7 @@ parent element.
 | Attribute | Required | Description |
 |-----------|----------|-------------|
 | `source` | Yes | Course-root-relative path to the file or directory to include. Forward-slash and backslash separators are both accepted and normalized internally. `..` segments and absolute paths are rejected. |
-| `as` | No | Relative target path inside the topic directory. Defaults to the basename of `source`. Must be relative with no `..` segments. Acts as the per-topic deduplication key — two includes on the same parent cannot share the same `as` (parse-time error). |
+| `as` | No | Relative target path inside the topic directory. Defaults to the basename of `source`. Must be relative with no `..` segments. Acts as the per-topic deduplication key — two includes on the same parent cannot share the same `as` (parse-time error). For a diagram source (`.drawio`/`.pu`) it must be `drawio/<name>.drawio` / `pu/<name>.pu` (parse-time error otherwise) — see "Sharing a diagram between topics" below. |
 | `optional` | No | `"true"` or `"false"` (default: `false`, case-insensitive). When `true`, a missing source is silently skipped instead of producing an `include_source_missing` error during validation/build. |
 
 #### How includes are resolved
@@ -647,6 +647,49 @@ parent element.
   spec error reported at parse time (you cannot pick two sources for
   the same target).
 
+#### Sharing a diagram between topics
+
+A DrawIO or PlantUML diagram is authored by exactly one topic (in its
+`drawio/` or `pu/` subdirectory, rendered into its `img-generated/`). When a
+second topic shows the same diagram — and is used by specs that do not
+include the owner — do **not** keep a static copy in the consumer's `img/`:
+the copy drifts on the next re-render, and when both topics share a
+section's output `img/` the build reports "multiple writers produced
+different content" conflicts. Include the owner's **source** instead, on the
+consuming `<topic>` in every spec that uses it:
+
+```xml
+<topic id="vector_embeddings">
+    <include source="slides/module_550_ml_azav/topic_0360_rag_introduction/drawio/cosine-distance.drawio"
+             as="drawio/cosine-distance.drawio"/>
+    <include source="slides/module_550_ml_azav/topic_0360_rag_introduction/drawio/vector-difference.drawio"
+             as="drawio/vector-difference.drawio"/>
+</topic>
+```
+
+The consumer renders the included source through its normal diagram
+pipeline: the render lands in the **consumer's** `img-generated/` (commit it
+like any other render) and ships as its output `img/<name>.png`, so the
+slide's `<img src="img/cosine-distance.png">` needs no change. Two
+consumers in one section write byte-identical renders, which the output
+registry dedups instead of flagging.
+
+Rules:
+
+- **`as` must keep the diagram subdirectory**: `as="drawio/<name>.drawio"`
+  or `as="pu/<name>.pu"`. The render target is derived from the virtual
+  path's grandparent, so any other `as` (including the default basename) is
+  rejected at parse time (`CourseSpecError`).
+- Keep the **full stem**: `embeddings.de.drawio` renders as
+  `embeddings.de.png`, so `as="drawio/embeddings.de.drawio"`.
+- Delete the static copy from the consumer's `img/` — a real file at the
+  render's output name would be a second writer.
+- `clm validate` reports the cross-topic source as `include_source_is_topic_dir`
+  at **info** level for diagram sources (for any other include it stays a
+  warning): coupling to the owning topic is the intent here.
+- If the owning topic moves, every consumer's include fails loudly with
+  `include_source_missing` at validate and build time.
+
 #### Materializing includes for local notebook execution
 
 Includes are virtual at build time, but running a notebook directly in
@@ -663,7 +706,7 @@ per-topic `.clm-include` ledger so it can clean up safely later. See
 |----------|----------|---------------|
 | `include_source_missing` | Error | `source` path does not exist under the course root and the include is not `optional`. |
 | `include_shadowed` | Warning | A real file/directory already occupies `<topic-dir>/<as>` — the local copy will be used, the include will not. Suppressed when the topic's `.clm-include` ledger lists a matching entry (sync-includes-managed materialization). |
-| `include_source_is_topic_dir` | Warning | `source` resolves into another `slides/.../topic_*` directory. Allowed but fragile; prefer pulling from a stable location like `examples/`. |
+| `include_source_is_topic_dir` | Warning (Info for a diagram source) | `source` resolves into another `slides/.../topic_*` directory. Allowed but fragile; prefer pulling from a stable location like `examples/`. For a `.drawio`/`.pu` source this is the supported "Sharing a diagram between topics" pattern and only informational. |
 | `include_dependencies` | Info | One per unique include source — lists the source's `pyproject.toml` `[project] dependencies` so authors can confirm the worker environment satisfies them. |
 | `include_section_inheritance` | Info | One per section-level include — lists every topic that inherits it and any topic that overrides it with a different source. |
 
