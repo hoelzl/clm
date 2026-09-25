@@ -296,7 +296,86 @@ def test_same_source_rendered_by_two_topics_with_only_one_committed_render(tmp_p
 
     assert _findings(validate_spec(spec_file, tmp_path / "slides"), "image_name_conflict") == []
 
-    # Diverged sources DO conflict, committed render or not.
+    # Diverged sources DO conflict, committed render or not — one finding, under
+    # the course's render format (svg, read off b's committed render).
     (a / "pu" / "bank-dm.pu").write_text("@startuml\nA -> C\n@enduml\n", encoding="utf-8")
     found = _findings(validate_spec(spec_file, tmp_path / "slides"), "image_name_conflict")
-    assert sorted(f.details["image"] for f in found) == ["bank-dm.png", "bank-dm.svg"]
+    assert [f.details["image"] for f in found] == ["bank-dm.svg"]
+
+
+def test_renamed_diagram_include_provides_the_virtual_name(tmp_path):
+    """The build renders the VIRTUAL path's stem (a renamed include lands under its new name)."""
+    owner = _make_topic(tmp_path, "module_100_basics", "topic_020_owner")
+    (owner / "drawio").mkdir()
+    (owner / "drawio" / "a.drawio").write_text("<mxfile/>", encoding="utf-8")
+    consumer = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+    _deck(consumer, "slides_intro.py", "b.png")
+    spec_file = _spec(
+        tmp_path,
+        f'<topic id="intro"><include source="{OWNER}/drawio/a.drawio" as="drawio/b.drawio"/></topic>',
+    )
+
+    assert _findings(validate_spec(spec_file, tmp_path / "slides"), "image_ref_missing") == []
+
+
+def test_shadowed_include_is_not_a_provider(tmp_path):
+    """A real local file wins over the include at build time — no conflict, only include_shadowed."""
+    topic = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+    (topic / "img").mkdir()
+    (topic / "img" / "logo.png").write_bytes(b"local override")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "logo.png").write_bytes(b"shared")
+    spec_file = _spec(
+        tmp_path, '<topic id="intro"><include source="assets/logo.png" as="img/logo.png"/></topic>'
+    )
+
+    result = validate_spec(spec_file, tmp_path / "slides")
+
+    assert _findings(result, "image_name_conflict") == []
+    assert _findings(result, "include_shadowed")
+
+
+def test_diagram_source_outside_any_topic_does_not_crash(tmp_path):
+    consumer = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+    _deck(consumer, "slides_intro.py", "loose.png")
+    (tmp_path / "loose.drawio").write_text("<mxfile/>", encoding="utf-8")
+    spec_file = _spec(
+        tmp_path,
+        '<topic id="intro"><include source="loose.drawio" as="drawio/loose.drawio"/></topic>',
+    )
+
+    result = validate_spec(spec_file, tmp_path / "slides")
+
+    assert _findings(result, "image_ref_missing") == []
+
+
+def test_legacy_render_with_stale_img_generated_twin_conflicts(tmp_path):
+    """The build renders into a committed legacy img/ render; a stale img-generated/ twin still ships."""
+    topic = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+    (topic / "drawio").mkdir()
+    (topic / "drawio" / "x.drawio").write_text("<mxfile/>", encoding="utf-8")
+    (topic / "img").mkdir()
+    (topic / "img" / "x.png").write_bytes(b"legacy render")
+    (topic / "img-generated").mkdir()
+    (topic / "img-generated" / "x.png").write_bytes(b"stale twin")
+    spec_file = _spec(tmp_path, "<topic>intro</topic>")
+
+    [finding] = _findings(validate_spec(spec_file, tmp_path / "slides"), "image_name_conflict")
+    assert sorted(p["source"] for p in finding.details["providers"]) == [
+        "img-generated/x.png",
+        "render of drawio/x.drawio",
+    ]
+
+    # Migrated (twin removed): one provider, no finding.
+    (topic / "img-generated" / "x.png").unlink()
+    assert _findings(validate_spec(spec_file, tmp_path / "slides"), "image_name_conflict") == []
+
+
+def test_reference_in_either_render_format_is_satisfied(tmp_path):
+    topic = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+    _deck(topic, "slides_intro.py", "flow.svg")
+    (topic / "pu").mkdir()
+    (topic / "pu" / "flow.pu").write_text("@startuml\n@enduml\n", encoding="utf-8")
+    spec_file = _spec(tmp_path, "<topic>intro</topic>")
+
+    assert _findings(validate_spec(spec_file, tmp_path / "slides"), "image_ref_missing") == []

@@ -30,7 +30,9 @@ class ImageFile(CourseFile):
         ``clm course migrate-generated-images`` mirrors this computation and
         must stay in lockstep.
         """
-        return f"{self.path.stem}.{self.course.image_format}"
+        from clm.core.utils.path_utils import render_file_name
+
+        return render_file_name(self.path.stem, self.course.image_format)
 
     @property
     def generated_img_path(self) -> Path:

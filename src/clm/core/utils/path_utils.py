@@ -181,6 +181,20 @@ IMG_DATA_FOLDERS = frozenset({"imgdata"})
 GENERATED_IMG_DIR = "img-generated"
 IMG_DIRS = frozenset({"img", GENERATED_IMG_DIR})
 
+
+def render_file_name(source_stem: str, image_format: str) -> str:
+    """The file name a diagram source renders to: the source's FULL stem + the format.
+
+    The extension is appended, never substituted via ``with_suffix``: a
+    multi-dot source like ``embeddings.de.drawio`` has the stem
+    ``embeddings.de`` and must render to ``embeddings.de.png``, not
+    ``embeddings.png`` (issue #855). The one definition every site uses —
+    the build's render target, the validator's image checks, the
+    generated-images migration.
+    """
+    return f"{source_stem}.{image_format}"
+
+
 IMG_SOURCE_FILE_EXTENSIONS = frozenset({".pu", ".drawio", ".psd", ".xfc"})
 
 SUPPORTED_PROG_LANG_EXTENSIONS = frozenset(

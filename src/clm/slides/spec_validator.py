@@ -31,7 +31,12 @@ from clm.core.topic_resolver import (
     find_slide_files,
     matches_for_binding,
 )
-from clm.core.utils.path_utils import GENERATED_IMG_DIR, is_diagram_source, is_private_dir_name
+from clm.core.utils.path_utils import (
+    GENERATED_IMG_DIR,
+    is_diagram_source,
+    is_private_dir_name,
+    render_file_name,
+)
 
 
 @dataclass
@@ -1029,19 +1034,45 @@ _MD_IMG_REGEX = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 
 #: Image formats a diagram source can render to (``clm build --image-format``).
 _RENDER_FORMATS = ("png", "svg")
+_DEFAULT_RENDER_FORMAT = "png"
+
+#: Per-run digest memo — a file is hashed at most once per ``validate_spec``,
+#: and only when a name has two or more providers.
+_Digests = dict[Path, str]
+
+
+def _digest(path: Path, digests: _Digests) -> str:
+    from clm.core.provenance_manifest import hash_file
+
+    if path not in digests:
+        try:
+            digests[path] = hash_file(path)
+        except OSError:
+            digests[path] = f"unreadable:{path}"
+    return digests[path]
 
 
 @dataclass
 class _ImageProvider:
-    """One way a topic makes ``img/<name>`` exist in its section's output."""
+    """One way a topic makes ``img/<name>`` exist in its section's output.
+
+    Content keys are computed lazily (:meth:`content_keys`) — only a name
+    with two or more providers ever needs them. A file provider's key is its
+    digest; a render provider's keys are its source digest plus the owner's
+    committed render digest when one exists. Two providers agree when their
+    key sets intersect: byte-identical output by construction.
+    """
 
     topic_id: str
     source: str  # human-readable: "img/x.png", "render of drawio/x.drawio", "include examples/…"
-    #: Every key under which this provider's output bytes are known: a
-    #: file's digest; for a render, the source digest plus the owner's
-    #: committed render digest when one exists. Two providers agree when
-    #: their key sets intersect — byte-identical output by construction.
-    content_keys: frozenset[str]
+    files: tuple[Path, ...] = ()
+    render_source: Path | None = None
+
+    def content_keys(self, digests: _Digests) -> frozenset[str]:
+        keys = {_digest(p, digests) for p in self.files if p.is_file()}
+        if self.render_source is not None:
+            keys.add("render:" + _digest(self.render_source, digests))
+        return frozenset(keys)
 
 
 def _image_refs(text: str) -> set[str]:
@@ -1058,15 +1089,6 @@ def _image_refs(text: str) -> set[str]:
     return refs
 
 
-def _content_key(path: Path) -> str:
-    import hashlib
-
-    try:
-        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return f"unreadable:{path}"
-
-
 def _files_below(root: Path) -> dict[str, Path]:
     """``{relative posix name: path}`` for every file under *root* (empty if absent)."""
     if not root.is_dir():
@@ -1079,28 +1101,68 @@ def _files_below(root: Path) -> dict[str, Path]:
     }
 
 
-def _render_providers(topic_id: str, source: Path, label: str) -> list[tuple[str, _ImageProvider]]:
-    """The render names a diagram source produces, keyed like the output ``img/``.
+def _committed_render(owner_dir: Path | None, stem: str, image_format: str) -> Path | None:
+    """The committed render the build will target for *stem* in *owner_dir*, if any.
 
-    The content key is the source **owner's** committed render when it has
-    one (``img-generated/`` first, legacy ``img/`` second — the owner is the
-    topic whose ``pu/``/``drawio/`` holds the source, also for an include),
-    else the source bytes. Two topics rendering the same source therefore
-    share one key, and a static copy compares against the real render.
+    Mirrors :attr:`~clm.core.course_files.image_file.ImageFile.img_path`: a
+    committed legacy ``img/`` render keeps its location, else
+    ``img-generated/``. ``None`` when nothing is committed — then there is
+    nothing to compare bytes against.
     """
-    out: list[tuple[str, _ImageProvider]] = []
-    owner_dir = source.parents[1]
-    source_key = "render:" + _content_key(source)
-    for fmt in _RENDER_FORMATS:
-        name = f"{source.stem}.{fmt}"
-        keys = {source_key}
-        committed = owner_dir / GENERATED_IMG_DIR / name
-        if not committed.is_file():
-            committed = owner_dir / "img" / name
-        if committed.is_file():
-            keys.add(_content_key(committed))
-        out.append((name, _ImageProvider(topic_id, f"render of {label}", frozenset(keys))))
-    return out
+    if owner_dir is not None:
+        for subdir in ("img", GENERATED_IMG_DIR):
+            candidate = owner_dir / subdir / render_file_name(stem, image_format)
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _infer_image_format(topic_dirs: list[Path]) -> str:
+    """The course's build image format, read off the committed renders.
+
+    ``clm build --image-format`` is course-wide and not in the spec; a
+    committed ``img-generated/*.svg`` beside a diagram source says the
+    course renders SVG, else the default (``png``).
+    """
+    for topic_dir in topic_dirs:
+        generated = topic_dir / GENERATED_IMG_DIR
+        if generated.is_dir() and any(generated.glob("*.svg")):
+            return "svg"
+    return _DEFAULT_RENDER_FORMAT
+
+
+@dataclass
+class _TopicImages:
+    """What a topic contributes to its section's output ``img/``."""
+
+    #: name -> providers that will write it
+    providers: dict[str, list[_ImageProvider]] = field(default_factory=dict)
+    #: every name a deck may reference without a finding — includes both
+    #: render formats of every diagram source, since the spec does not know
+    #: the build's ``--image-format``
+    satisfied: set[str] = field(default_factory=set)
+
+    def add(self, name: str, provider: _ImageProvider) -> None:
+        self.providers.setdefault(name, []).append(provider)
+        self.satisfied.add(name)
+
+    image_format: str = _DEFAULT_RENDER_FORMAT
+
+    def add_render(
+        self, topic_id: str, source: Path, render_stem: str, label: str, owner_dir: Path | None
+    ) -> Path | None:
+        """Register a diagram source; returns the committed render it targets, if any."""
+        committed = _committed_render(owner_dir, render_stem, self.image_format)
+        self.providers.setdefault(render_file_name(render_stem, self.image_format), []).append(
+            _ImageProvider(
+                topic_id,
+                f"render of {label}",
+                files=(committed,) if committed is not None else (),
+                render_source=source,
+            )
+        )
+        self.satisfied.update(render_file_name(render_stem, f) for f in _RENDER_FORMATS)
+        return committed
 
 
 def _topic_image_providers(
@@ -1108,81 +1170,97 @@ def _topic_image_providers(
     topic_dir: Path,
     includes: list[IncludeSpec],
     course_root: Path,
-) -> dict[str, list[_ImageProvider]]:
+    image_format: str = _DEFAULT_RENDER_FORMAT,
+) -> _TopicImages:
     """Everything that lands in the section output ``img/`` from *topic_dir*."""
-    providers: dict[str, list[_ImageProvider]] = {}
+    out = _TopicImages(image_format=image_format)
 
-    def add(name: str, provider: _ImageProvider) -> None:
-        providers.setdefault(name, []).append(provider)
-
-    # The topic's own diagram sources first: their committed renders in
-    # img-generated/ (or the legacy img/ location) are the SAME provider,
-    # regenerated by the build, so those files are not listed a second time.
-    own_render_names: set[str] = set()
+    # The topic's own diagram sources first. The committed render the build
+    # targets is the SAME provider (regenerated by the build), so that file is
+    # not listed a second time; a stale twin in the other directory is.
+    render_targets: set[Path] = set()
     for subdir in ("pu", "drawio"):
         folder = topic_dir / subdir
         if folder.is_dir():
             for source in sorted(folder.iterdir()):
                 if source.is_file() and is_diagram_source(source):
-                    for name, provider in _render_providers(
-                        topic_id, source, f"{subdir}/{source.name}"
-                    ):
-                        own_render_names.add(name)
-                        add(name, provider)
+                    committed = out.add_render(
+                        topic_id, source, source.stem, f"{subdir}/{source.name}", topic_dir
+                    )
+                    if committed is not None:
+                        render_targets.add(committed)
     for subdir in ("img", GENERATED_IMG_DIR):
         for name, path in _files_below(topic_dir / subdir).items():
-            if name in own_render_names:
+            if path in render_targets:
                 continue
-            add(name, _ImageProvider(topic_id, f"{subdir}/{name}", frozenset({_content_key(path)})))
+            out.add(name, _ImageProvider(topic_id, f"{subdir}/{name}", files=(path,)))
 
     for inc in includes:
         source_path = course_root / inc.source
-        if not source_path.exists() or any(ch in inc.source for ch in "*?["):
-            continue
+        if not source_path.exists():
+            continue  # reported by _validate_includes
         as_parts = Path(inc.as_path).parts
         if not as_parts:
             continue
-        head, rest = as_parts[0], Path(*as_parts[1:]).as_posix() if len(as_parts) > 1 else ""
+        # A real local file at the include's target shadows it (the build
+        # ignores the include there, and _validate_includes reports it).
+        if (topic_dir / inc.as_path).exists() and source_path.is_file():
+            continue
+        head = as_parts[0]
+        rest = Path(*as_parts[1:]).as_posix() if len(as_parts) > 1 else ""
         if head in ("img", GENERATED_IMG_DIR):
             if source_path.is_dir():
                 for name, path in _files_below(source_path).items():
                     full = f"{rest}/{name}" if rest else name
-                    add(
-                        full,
-                        _ImageProvider(
-                            topic_id,
-                            f"include {inc.source}/{name}",
-                            frozenset({_content_key(path)}),
-                        ),
-                    )
+                    if (topic_dir / head / full).exists():
+                        continue  # shadowed by a local file
+                    out.add(full, _ImageProvider(topic_id, f"include {inc.source}/{name}", (path,)))
             elif rest:
-                add(
-                    rest,
-                    _ImageProvider(
-                        topic_id, f"include {inc.source}", frozenset({_content_key(source_path)})
-                    ),
-                )
+                out.add(rest, _ImageProvider(topic_id, f"include {inc.source}", (source_path,)))
         elif head in ("pu", "drawio"):
             if source_path.is_file() and is_diagram_source(source_path):
-                for name, provider in _render_providers(
-                    topic_id, source_path, f"include {inc.source}"
-                ):
-                    add(name, provider)
+                # The build renders the VIRTUAL path's stem (a renamed include
+                # renders under its new name); bytes come from the source.
+                out.add_render(
+                    topic_id,
+                    source_path,
+                    Path(inc.as_path).stem,
+                    f"include {inc.source}",
+                    _include_owner_dir(source_path),
+                )
             elif source_path.is_dir():
                 for source in sorted(source_path.iterdir()):
                     if source.is_file() and is_diagram_source(source):
-                        for name, provider in _render_providers(
-                            topic_id, source, f"include {inc.source}/{source.name}"
-                        ):
-                            add(name, provider)
-    return providers
+                        if (topic_dir / inc.as_path / source.name).exists():
+                            continue
+                        out.add_render(
+                            topic_id,
+                            source,
+                            source.stem,
+                            f"include {inc.source}/{source.name}",
+                            _include_owner_dir(source),
+                        )
+    return out
 
 
-def _providers_disagree(providers: list[_ImageProvider]) -> bool:
+def _include_owner_dir(source: Path) -> Path | None:
+    """The topic directory owning an included diagram source, if it is topic-shaped.
+
+    Only a source under a ``pu/``/``drawio/`` subdirectory has a committed
+    render to compare against; anything else (a diagram kept at the course
+    root, say) has no owner and compares by source bytes alone.
+    """
+    if source.parent.name in ("pu", "drawio") and len(source.resolve().parents) > 1:
+        return source.resolve().parent.parent
+    return None
+
+
+def _providers_disagree(providers: list[_ImageProvider], digests: _Digests) -> bool:
     """True when some two providers have no content key in common."""
-    for i, a in enumerate(providers):
-        for b in providers[i + 1 :]:
-            if a.content_keys.isdisjoint(b.content_keys):
+    keys = [p.content_keys(digests) for p in providers]
+    for i, a in enumerate(keys):
+        for b in keys[i + 1 :]:
+            if a.isdisjoint(b):
                 return True
     return False
 
@@ -1208,14 +1286,23 @@ def _validate_images(
     * ``image_name_conflict`` — warning: two providers that collapse onto
       one section output ``img/`` (``img/`` and ``img-generated/`` both
       count, include-provided files count, renders count by their source
-      bytes or committed render) supply the same name with different
-      bytes. Today this only surfaces as the build-time "multiple writers
-      produced different content, last writer won" warning.
+      bytes or the owner's committed render) supply the same name with
+      different bytes. Today this only surfaces as the build-time "multiple
+      writers produced different content, last writer won" warning.
 
     Both carry ``details`` for ``--json``: the image name, the referencing
     decks, and the competing providers.
     """
     from clm.core.topic_resolver import find_slide_files
+
+    digests: _Digests = {}
+    resolved_dirs: list[Path] = []
+    for section in spec.sections:
+        for topic_spec in section.topics:
+            matches = matches_for_binding(topic_map, topic_spec.id, section.module_for(topic_spec))
+            if len(matches) == 1 and matches[0].path.is_dir():
+                resolved_dirs.append(matches[0].path)
+    image_format = _infer_image_format(resolved_dirs)
 
     for section in spec.sections:
         section_name = section.name.en or section.name.de
@@ -1228,10 +1315,14 @@ def _validate_images(
             if len(matches) != 1 or not matches[0].path.is_dir():
                 continue
             topic_dir = matches[0].path
-            provided = _topic_image_providers(
-                topic_spec.id, topic_dir, section.includes_for(topic_spec), course_root
+            images = _topic_image_providers(
+                topic_spec.id,
+                topic_dir,
+                section.includes_for(topic_spec),
+                course_root,
+                image_format,
             )
-            for name, providers in provided.items():
+            for name, providers in images.providers.items():
                 section_providers.setdefault(name, []).extend(providers)
 
             referenced: dict[str, list[str]] = {}
@@ -1243,7 +1334,7 @@ def _validate_images(
                 for name in _image_refs(text):
                     referenced.setdefault(name, []).append(deck.name)
             for name in sorted(referenced):
-                if name in provided:
+                if name in images.satisfied:
                     continue
                 findings.append(
                     SpecFinding(
@@ -1276,7 +1367,7 @@ def _validate_images(
 
         for name in sorted(section_providers):
             providers = section_providers[name]
-            if not _providers_disagree(providers):
+            if len(providers) < 2 or not _providers_disagree(providers, digests):
                 continue
             findings.append(
                 SpecFinding(
@@ -1303,7 +1394,7 @@ def _validate_images(
                             {
                                 "topic": p.topic_id,
                                 "source": p.source,
-                                "content": sorted(p.content_keys),
+                                "content": sorted(p.content_keys(digests)),
                             }
                             for p in providers
                         ],
