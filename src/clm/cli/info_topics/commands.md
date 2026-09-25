@@ -5326,12 +5326,18 @@ stores"). No video analysis: for every active take in
 `<user-config>/clm/recordings/COURSE_ID.json` the anchor is the stamped git
 commit (`commit` / `commit-dirty`) or, for parts recorded before stamping
 existed, the last commit on the current branch before `recorded_at`
-(`time`); the deck is the lecture's `"<section name>::<deck name>"` display
-names resolved through the course **as it was at that commit** (a throwaway
-`git worktree` of the anchor, so renames since then need no special case),
-then mapped onto the current tree (same path, else the topic's current
-directory by topic id); the members are the deck's fingerprints at the
-anchor.
+(`time`) — and, when the deck is not found there (a course authored just in
+time is recorded from a working tree whose edits land in the next commits),
+the first commits after `recorded_at`, in order, up to five; the deck is the
+lecture's `"<section name>::<deck name>"` display names resolved through the
+course **as it was at that commit** (a throwaway `git worktree` of the
+anchor, disabled sections kept, so renames since then need no special case;
+a section renamed since resolves by a deck name that is unique in the
+course), then mapped onto the current tree (same path, else the topic's
+current directory by topic id); the members are the deck's fingerprints at
+the anchor. Seeded entries carry `"evidence": "anchor"`: `report` calls
+them `recomputed` (clean commit) or `approximate` (dirty or time anchor),
+never `recorded`, and `seed-ledger` never overwrites a record-time entry.
 
 ```
 clm recordings seed-ledger COURSE_ID [OPTIONS]

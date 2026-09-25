@@ -47,6 +47,7 @@ __all__ = [
     "SeedPart",
     "SeedResult",
     "commit_before",
+    "commits_after",
     "lang_of_course_id",
     "repo_prefix",
     "seed_from_state",
@@ -139,6 +140,26 @@ def commit_before(repo: Path, recorded_at: str) -> str | None:
     return out.strip() or None if out else None
 
 
+#: How many commits after a recording a time anchor may look at when the
+#: deck cannot be resolved at the last commit before it. A course authored
+#: just in time is recorded from a working tree whose edits land in the next
+#: commits; the week's section is often still disabled in the last commit
+#: before the recording.
+TIME_ANCHOR_LOOKAHEAD = 5
+
+
+def commits_after(repo: Path, recorded_at: str, limit: int = TIME_ANCHOR_LOOKAHEAD) -> list[str]:
+    """The first *limit* commits on ``HEAD`` after *recorded_at*, oldest first."""
+    from datetime import datetime
+
+    try:
+        stamp = datetime.fromisoformat(recorded_at)
+    except (TypeError, ValueError):
+        return []
+    out = _git(repo, "rev-list", "--reverse", f"--after={stamp.isoformat()}", "HEAD")
+    return out.split()[:limit] if out else []
+
+
 def lang_of_course_id(course_id: str) -> str | None:
     """``"…-de"`` / ``"…-en"`` → the recording language the dashboard appended."""
     for lang in rl.RECORDABLE_LANGS:
@@ -202,13 +223,19 @@ def _commit_trees(repo: Path) -> Iterator[_CommitTrees]:
 
 
 def _load_course(spec_file: Path, course_root: Path) -> Course | None:
+    """The course at *course_root*, disabled sections included.
+
+    A week that was disabled in the spec at the anchor commit (and enabled
+    in the working tree the recording was made from) must still resolve its
+    display names, so the spec is parsed with ``keep_disabled=True``.
+    """
     from clm.core.course import Course
     from clm.core.course_spec import CourseSpec, CourseSpecError
 
     if not spec_file.is_file():
         return None
     try:
-        spec = CourseSpec.from_file(spec_file)
+        spec = CourseSpec.from_file(spec_file, keep_disabled=True)
         return Course.from_spec(spec, course_root, output_root=None)
     except (CourseSpecError, OSError, ValueError) as exc:
         logger.warning("Could not load course {} at {}: {}", spec_file, course_root, exc)
@@ -256,6 +283,32 @@ class _Pending:
     part: Any  # RecordingPart
     anchor: rl.RecordingAnchor
     seed: SeedPart
+    #: further commits to try when the deck is not found at ``anchor`` (time anchors only)
+    alternatives: list[str] = field(factory=list)
+
+
+def _resolve_deck(
+    course: Course, section: str, deck: str, lang: str
+) -> tuple[str | None, Path | None]:
+    """``(topic_id, path)`` by section + deck name, else by a deck name unique in the course.
+
+    A section renamed since the recording still carries the same decks; a
+    deck name (``"NN Title"``) that occurs exactly once in the course is an
+    unambiguous identity.
+    """
+    _sid, topic_id, path = course.resolve_deck_location(section, deck, lang)
+    if path is not None:
+        return topic_id, path
+    hits: list[tuple[str | None, Path | None]] = []
+    for sec in course.sections:
+        try:
+            name = sec.name[lang]
+        except (KeyError, TypeError):
+            continue
+        _sid, tid, p = course.resolve_deck_location(name, deck, lang)
+        if p is not None and (tid, p) not in hits:
+            hits.append((tid, p))
+    return hits[0] if len(hits) == 1 else (None, None)
 
 
 def seed_from_state(
@@ -307,13 +360,17 @@ def seed_from_state(
                 anchor={},
             )
             result.parts.append(seed)
+            alternatives: list[str] = []
             if part.git_commit:
                 anchor = rl.anchor_for(part.git_commit, part.git_dirty)
             else:
                 commit = commit_before(repo_top, part.recorded_at) if part.recorded_at else None
-                if commit is None:
-                    seed.reason = "no commit stamped and no ISO recorded_at with a commit before it"
+                alternatives = commits_after(repo_top, part.recorded_at) if part.recorded_at else []
+                if commit is None and not alternatives:
+                    seed.reason = "no commit stamped and no ISO recorded_at with a commit near it"
                     continue
+                if commit is None:
+                    commit, alternatives = alternatives[0], alternatives[1:]
                 anchor = rl.RecordingAnchor(kind="time", commit=commit, dirty=False)
             seed.anchor = anchor.model_dump()
             if names is None:
@@ -321,12 +378,20 @@ def seed_from_state(
                 continue
             assert anchor.commit is not None
             by_commit.setdefault(anchor.commit, []).append(
-                _Pending(lecture.lecture_id, names[0], names[1], part, anchor, seed)
+                _Pending(lecture.lecture_id, names[0], names[1], part, anchor, seed, alternatives)
             )
 
-    # Pass 2: one worktree per anchor commit, released before the next.
+    # Pass 2: one worktree per anchor commit, released before the next. A
+    # time-anchored part whose deck is not found at its commit moves on to
+    # the next candidate commit (queued at the end, so each tree is built
+    # once).
     with _commit_trees(repo_top) as trees:
-        for commit, pendings in by_commit.items():
+        queue = list(by_commit)
+        i = 0
+        while i < len(queue):
+            commit = queue[i]
+            i += 1
+            pendings = by_commit[commit]
             tree = trees.tree(commit)
             if tree is None:
                 for p in pendings:
@@ -335,7 +400,7 @@ def seed_from_state(
             anchor_root = tree / prefix
             course_at = _load_course(anchor_root / spec_rel, anchor_root)
             for p in pendings:
-                _seed_one(
+                found = _seed_one(
                     p,
                     state=state,
                     lang=lang,
@@ -347,6 +412,14 @@ def seed_from_state(
                     dry_run=dry_run,
                     written=written,
                 )
+                if not found and p.alternatives:
+                    nxt = p.alternatives.pop(0)
+                    p.anchor = rl.RecordingAnchor(kind="time", commit=nxt, dirty=False)
+                    p.seed.anchor = p.anchor.model_dump()
+                    if nxt not in by_commit:
+                        by_commit[nxt] = []
+                        queue.append(nxt)
+                    by_commit[nxt].append(p)
 
     result.ledgers_written = sorted(p.relative_to(course_root).as_posix() for p in written)
     return result
@@ -364,7 +437,8 @@ def _seed_one(
     topic_map: dict[str, list[Any]],
     dry_run: bool,
     written: set[Path],
-) -> None:
+) -> bool:
+    """Seed one part at its current anchor; ``False`` when the deck was not found there."""
     seed, anchor = p.seed, p.anchor
     assert anchor.commit is not None
     short = anchor.commit[:12]
@@ -373,11 +447,11 @@ def _seed_one(
     anchor_deck: Path | None = None
     topic_id: str | None = None
     if course_at is not None:
-        _sid, topic_id, anchor_deck = course_at.resolve_deck_location(p.section, p.deck, lang)
+        topic_id, anchor_deck = _resolve_deck(course_at, p.section, p.deck, lang)
     if anchor_deck is None and current_course is not None:
         # The spec (or the deck under those names) did not exist at the
         # anchor: resolve through the current course, read at the anchor tree.
-        _sid, topic_id, current_deck = current_course.resolve_deck_location(p.section, p.deck, lang)
+        topic_id, current_deck = _resolve_deck(current_course, p.section, p.deck, lang)
         if current_deck is not None:
             try:
                 anchor_deck = anchor_root / current_deck.resolve().relative_to(course_root)
@@ -385,13 +459,13 @@ def _seed_one(
                 anchor_deck = None
     if anchor_deck is None or not anchor_deck.is_file():
         seed.reason = f"deck '{p.deck}' in section '{p.section}' not found at {short}"
-        return
+        return False
 
     # The members at the anchor.
     members = rl.deck_members(anchor_deck, lang)
     if not members:
         seed.reason = f"deck at {short} is not a parseable deck"
-        return
+        return True
 
     # The current home.
     current_deck = _map_to_current(anchor_deck, anchor_root, course_root, topic_id, topic_map)
@@ -400,7 +474,7 @@ def _seed_one(
             f"deck exists at {short} as '{anchor_deck.relative_to(anchor_root).as_posix()}' "
             f"but not in the current tree"
         )
-        return
+        return True
     seed.deck = current_deck.relative_to(course_root).as_posix()
     seed.members = len(members)
 
@@ -422,17 +496,17 @@ def _seed_one(
         existing = _existing(ledger_path, deck_key, entry)
     except rl.LedgerError as exc:
         seed.reason = str(exc)
-        return
+        return True
     if existing is not None:
         if existing == entry:
             seed.status = "unchanged"
-            return
+            return True
         if existing.evidence == "recorded" and existing.members:
             # The dashboard fingerprinted what was on screen; a commit can
             # only approximate that. Keep the better evidence.
             seed.status = "unchanged"
             seed.reason = "kept the record-time entry"
-            return
+            return True
     seed.status = "updated" if existing is not None else "seeded"
     if not dry_run:
         try:
@@ -440,8 +514,9 @@ def _seed_one(
         except rl.LedgerError as exc:
             seed.status = "unresolved"
             seed.reason = str(exc)
-            return
+            return True
         written.add(ledger_path)
+    return True
 
 
 def _existing(ledger_path: Path, deck_key: str, entry: rl.LedgerPart) -> rl.LedgerPart | None:

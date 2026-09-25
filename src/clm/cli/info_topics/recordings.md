@@ -94,6 +94,10 @@ course at that commit; the members are the deck's fingerprints there.
   erases the first cohort's — those videos still ship to that cohort.
 - **`recorded_at`** matches the local state file's stamp (local time,
   seconds).
+- **`evidence`** says where `members` came from: `recorded` (the dashboard
+  fingerprinted the tree that was on screen — exact even on a dirty tree)
+  or `anchor` (seeded later from the anchor commit — only as good as the
+  commit; `report` shows such parts as `recomputed` or `approximate`).
 - **`course_id`** is the state-file course id the part was recorded under
   (`<spec slug>-<lang>`).
 - **`ack`** is the deck-level acknowledgement block: `{"at", "note",

@@ -264,6 +264,55 @@ def test_spec_outside_course_root_is_a_clear_error(course: _Course, tmp_path: Pa
         seed_from_state(_state("S::D"), spec_file=elsewhere, course_root=course.root, lang="de")
 
 
+def test_time_anchor_looks_forward_when_the_deck_landed_after_the_recording(course: _Course):
+    """Just-in-time authoring: the deck did not exist in any commit before the
+    recording (it was recorded from the working tree and committed right after)."""
+    lecture_id = course.lecture_id()
+    course.de.unlink()
+    course.en.unlink()
+    course.commit("v0: no deck yet", "2026-04-18T10:00:00")
+    course.write(DE0.replace("DE eins", "DE eins, aufgenommen"), EN0)
+    v1 = course.commit("v1: the deck, committed after the recording", "2026-04-19T09:00:00")
+    shown = rl.deck_members(course.de, "de")
+
+    state = _state(
+        lecture_id, RecordingPart(part=1, raw_file="r.mkv", recorded_at="2026-04-18T20:00:00")
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+    assert seed.anchor == {"kind": "time", "commit": v1, "dirty": False}
+    entry = rl.load(rl.ledger_path_for(course.de)).decks["slides_t"].parts[0]
+    assert entry.members == shown
+
+
+def test_disabled_section_at_the_anchor_still_resolves(course: _Course):
+    """The last commit before the recording wins when the deck is there — even
+    if its week was still disabled in that commit's spec."""
+    lecture_id = course.lecture_id()
+    (course.root / "course-specs" / "kurs.xml").write_text(
+        SPEC_XML.replace("<section>", '<section enabled="false">'), encoding="utf-8"
+    )
+    v0 = course.commit("v0: week disabled", "2026-04-18T10:00:00")
+    course.spec.write_text(SPEC_XML, encoding="utf-8")
+    course.commit("v1: enabled", "2026-04-19T09:00:00")
+
+    state = _state(
+        lecture_id, RecordingPart(part=1, raw_file="r.mkv", recorded_at="2026-04-18T20:00:00")
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+    assert seed.anchor["commit"] == v0
+
+
+def test_deck_resolves_by_unique_name_when_the_section_was_renamed(course: _Course):
+    v1 = course.commit("v1", "2026-04-18T10:00:00")
+    lecture_id = course.lecture_id()
+    renamed = lecture_id.replace("Woche 01: Start", "Woche 01: Neuer Name")
+    state = _state(renamed, RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1))
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+
+
 def test_seeding_is_idempotent_and_dry_run_writes_nothing(course: _Course):
     v1 = course.commit("v1", "2026-04-18T10:00:00")
     state = _state(
@@ -323,9 +372,7 @@ def test_cli_seed_ledger_json_and_exit_codes(course: _Course, monkeypatch):
     state = _state(
         course.lecture_id(),
         RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1),
-        RecordingPart(
-            part=2, raw_file="r2.mkv", recorded_at="2020-01-01T00:00:00"
-        ),  # before any commit
+        RecordingPart(part=2, raw_file="r2.mkv", recorded_at="yesterday"),  # unparseable stamp
     )
     monkeypatch.setattr("clm.recordings.state.load_state", lambda course_id: state)
     runner = CliRunner()
