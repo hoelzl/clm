@@ -122,6 +122,7 @@ def result_to_dict(result) -> dict:
                     "message": f.message,
                     "suggestion": f.suggestion or None,
                     "matches": f.matches or None,
+                    "details": f.details or None,
                     "sections": f.sections or None,
                 }.items()
                 if v is not None
