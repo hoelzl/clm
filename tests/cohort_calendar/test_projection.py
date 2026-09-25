@@ -306,3 +306,76 @@ class TestBucketRefIdentity:
         d = self._qualified_deck("", "intro", "slides_010_intro")
         (a,) = project([self._solo_bucket(d, week=1)], cfg()).assignments
         assert a.bucket_refs == ("intro/slides_010_intro",)
+
+
+class TestDiagnosticRules:
+    """Every diagnostic carries a stable ``rule`` and an ``anchor`` (#966)."""
+
+    @staticmethod
+    def _rules(proj) -> set[tuple[str, str, str]]:
+        return {(d.level, d.rule, d.anchor) for d in proj.diagnostics}
+
+    def test_no_teaching_weekdays(self):
+        proj = project([bucket("A", weekdays=())], cfg(pattern=()))
+        assert self._rules(proj) == {("error", "no-teaching-weekdays", "pattern")}
+        assert proj.diagnostics[0].payload()["severity"] == "error"
+
+    def test_unknown_and_ambiguous_refs(self):
+        buckets = [bucket("dup", weekdays=("mon",)), bucket("dup", weekdays=("tue",))]
+        proj = project(
+            buckets,
+            cfg(adjustments=[Pin("nope", MON), Split("dup", (MON, dt.date(2026, 3, 3)))]),
+        )
+        assert ("error", "unknown-ref", "adjustments[pin nope]") in self._rules(proj)
+        assert ("error", "ambiguous-ref", "adjustments[split dup]") in self._rules(proj)
+        split = next(d for d in proj.diagnostics if d.rule == "ambiguous-ref")
+        assert split.dates == ("2026-03-02", "2026-03-03")
+
+    def test_pin_pair_rules(self):
+        buckets = [bucket("A", weekdays=("mon",)), bucket("B", weekdays=("tue",))]
+        proj = project(
+            buckets,
+            cfg(
+                pattern=("mon", "tue", "wed", "thu", "fri"),
+                adjustments=[Pin("A", dt.date(2026, 3, 10)), Pin("B", dt.date(2026, 3, 3))],
+            ),
+        )
+        rules = self._rules(proj)
+        assert ("error", "pins-out-of-order", "adjustments[pin A, pin B]") in rules, rules
+        proj = project(buckets, cfg(adjustments=[Pin("A", MON), Pin("A", dt.date(2026, 3, 9))]))
+        assert ("error", "duplicate-pin", "adjustments[pin A, pin A]") in self._rules(proj)
+
+    def test_segment_rules_anchor_the_segment(self):
+        buckets = [bucket(f"B{i}", weekdays=("mon",)) for i in range(4)]
+        full = project(
+            buckets,
+            cfg(
+                pattern=("mon", "tue", "wed", "thu", "fri"),
+                adjustments=[Pin("B3", dt.date(2026, 3, 3))],
+            ),
+        )
+        over = next(d for d in full.diagnostics if d.rule == "segment-overfull")
+        assert over.anchor == "segment 2026-03-02..2026-03-02"
+        assert over.dates == ("2026-03-02", "2026-03-02")
+        free = project(
+            buckets,
+            cfg(
+                pattern=("mon", "tue", "wed", "thu", "fri"),
+                adjustments=[Pin("B3", dt.date(2026, 3, 9))],
+            ),
+        )
+        slack = next(d for d in free.diagnostics if d.rule == "segment-free-dates")
+        assert slack.level == "warning"
+        assert slack.anchor == "segment 2026-03-02..2026-03-08"  # the calendar day before the pin
+
+    def test_end_overflow_rule(self):
+        proj = project(
+            [bucket("A", weekdays=("mon",)), bucket("B", weekdays=("mon",))],
+            cfg(end=MON),
+        )
+        (diag,) = proj.errors
+        assert (diag.rule, diag.anchor, diag.dates) == (
+            "end-overflow",
+            "end",
+            ("2026-03-02", "2026-03-02"),
+        )

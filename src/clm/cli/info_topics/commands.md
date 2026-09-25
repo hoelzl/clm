@@ -975,8 +975,14 @@ teaching dates before a pin, `insert`/`merge` dates that are not teaching
 dates). Exits non-zero if there are errors, so it suits a pre-push hook.
 
 ```
-clm calendar check [OPTIONS] SPEC_FILE      # --channel/--calendar/--data-dir
+clm calendar check [OPTIONS] SPEC_FILE      # --channel/--calendar/--data-dir/--json
 ```
+
+`--json` (CLM {version}+, issue #966) emits the findings as rows —
+`{"ok", "errors", "warnings", "findings": [{"severity", "rule", "anchor",
+"dates", "message"}]}` — with a stable `rule` code and an `anchor` naming
+the TOML key / adjustment / projected segment the finding attaches to; exit
+code unchanged (1 on errors). Rule table and examples: `clm info calendar`.
 
 #### `clm calendar status`
 
@@ -987,8 +993,15 @@ plan coordinate (e.g. `W4 Tuesday`), the **drift** in days versus the ideal
 (no-holiday, no-adjustment) calendar, and an upcoming lookahead.
 
 ```
-clm calendar status [OPTIONS] SPEC_FILE     # --channel/--calendar/-L/--as-of/--data-dir
+clm calendar status [OPTIONS] SPEC_FILE     # --channel/--calendar/-L/--as-of/--data-dir/--json
 ```
+
+`--json` (CLM {version}+, issue #966) emits `{"as_of", "language", "state",
+"current", "reference", "upcoming", "drift_days", "has_errors", "plan"}` —
+`state` ∈ `class-today` / `no-class-today` / `not-started` / `finished` /
+`empty`, assignments as rows (dates, `plan_label`, `content`, `decks`,
+`bucket_refs`), and `plan` = every projected assignment. Shape: `clm info
+calendar`.
 
 #### `clm calendar push`
 
@@ -1008,6 +1021,7 @@ clm calendar push [OPTIONS] SPEC_FILE
 | `--credentials PATH` | Google credentials JSON (env: `CLM_GOOGLE_CREDENTIALS`). Either an OAuth "Desktop app" client — a browser consent flow runs once, then the token is cached — or a service-account key for a service account the calendar is shared with ("Make changes to events"). |
 | `-L, --language` | Language for event titles (default `de`). |
 | `--dry-run` | Print the insert/update/delete plan; change nothing. |
+| `--json` | Emit the plan as one JSON document (`inserts` / `updates` / `deletes` rows with each event's `uid`, dates and `summary`, plus `totals`) — with `--dry-run` before anything touches Google Calendar, otherwise the plan that was applied (CLM {version}+, issue #966). Diagnostics stay on stderr. |
 | `--data-dir DIR` | Course data directory (as elsewhere). |
 
 The push only ever touches **CLM-managed events**: every event it creates is
@@ -1032,6 +1046,9 @@ clm calendar status course.xml --channel jan -L en
 clm calendar status course.xml --channel jan --as-of 2026-05-06
 clm calendar push   course.xml --channel jan --dry-run
 clm calendar push   course.xml --channel jan --credentials oauth-client.json
+clm calendar check  course.xml --channel jan --json                 # findings as rows
+clm calendar status course.xml --channel jan --as-of 2026-05-06 --json
+clm calendar push   course.xml --channel jan --dry-run --json       # the plan, nothing pushed
 ```
 
 ### `clm course resolve-topic`

@@ -76,10 +76,32 @@ class Assignment:
 
 @frozen
 class Diagnostic:
-    """A structural finding from projection (surfaced by ``calendar check``)."""
+    """A structural finding from projection (surfaced by ``calendar check``).
+
+    ``rule`` is the stable machine code of the check that fired, ``anchor``
+    names where in the calendar TOML the finding attaches (a top-level key
+    such as ``pattern`` / ``end``, an adjustment such as
+    ``adjustments[pin some/ref]``, or a projected ``segment START..END``), and
+    ``dates`` lists the projected ISO dates involved — the structured fields
+    ``calendar check --json`` emits for an agent that edits the TOML (#966).
+    ``message`` stays the human sentence.
+    """
 
     level: str  # "error" | "warning"
     message: str
+    rule: str = ""
+    anchor: str = ""
+    dates: tuple[str, ...] = ()
+
+    def payload(self) -> dict[str, object]:
+        """The ``--json`` row (keys are stable; ``severity`` mirrors ``level``)."""
+        return {
+            "severity": self.level,
+            "rule": self.rule,
+            "anchor": self.anchor,
+            "dates": list(self.dates),
+            "message": self.message,
+        }
 
 
 @frozen
@@ -155,13 +177,21 @@ class _TeachingDates:
 
 
 def _resolve_ref(ref: str, buckets) -> tuple[int | None, str | None]:
-    """Resolve a pin/split bucket-ref to a unique bucket index."""
+    """Resolve a pin/split bucket-ref to a unique bucket index.
+
+    The error text starts with the rule word (``unknown`` / ``ambiguous``);
+    :func:`_ref_rule` turns it into the diagnostic's rule code.
+    """
     matches = [i for i, b in enumerate(buckets) if ref in b.ref_ids]
     if not matches:
         return None, f"unknown bucket ref {ref!r} (no topic/deck id matches)."
     if len(matches) > 1:
         return None, f"ambiguous bucket ref {ref!r} (matches buckets {matches})."
     return matches[0], None
+
+
+def _ref_rule(err: str) -> str:
+    return "ambiguous-ref" if err.startswith("ambiguous") else "unknown-ref"
 
 
 def _deck_ref(deck: ScheduleDeck) -> str:
@@ -204,6 +234,8 @@ def project(buckets: list[Bucket], config: CohortCalendarConfig) -> Projection:
                 Diagnostic(
                     "error",
                     "no teaching weekdays: set `pattern` or use weekday subsections.",
+                    rule="no-teaching-weekdays",
+                    anchor="pattern",
                 ),
             ),
         )
@@ -223,6 +255,9 @@ def project(buckets: list[Bucket], config: CohortCalendarConfig) -> Projection:
                         "warning",
                         f"insert date {adj.date} is not a teaching date "
                         "(wrong weekday or a holiday); it will not appear.",
+                        rule="insert-not-teaching-date",
+                        anchor=f"adjustments[insert {adj.date}]",
+                        dates=(adj.date.isoformat(),),
                     )
                 )
         elif isinstance(adj, Merge):
@@ -230,21 +265,45 @@ def project(buckets: list[Bucket], config: CohortCalendarConfig) -> Projection:
         elif isinstance(adj, Split):
             idx, err = _resolve_ref(adj.ref, buckets)
             if err:
-                diagnostics.append(Diagnostic("error", f"split: {err}"))
+                diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        f"split: {err}",
+                        rule=_ref_rule(err),
+                        anchor=f"adjustments[split {adj.ref}]",
+                        dates=tuple(d.isoformat() for d in adj.dates),
+                    )
+                )
             else:
                 splits[idx] = adj  # type: ignore[index]
         elif isinstance(adj, Pin):
             idx, err = _resolve_ref(adj.ref, buckets)
             if err:
-                diagnostics.append(Diagnostic("error", f"pin: {err}"))
+                diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        f"pin: {err}",
+                        rule=_ref_rule(err),
+                        anchor=f"adjustments[pin {adj.ref}]",
+                        dates=(adj.date.isoformat(),),
+                    )
+                )
             else:
                 pins.append((idx, adj))  # type: ignore[arg-type]
 
     pins.sort(key=lambda p: p[0])
     for (i0, p0), (i1, p1) in zip(pins, pins[1:], strict=False):
+        pair_anchor = f"adjustments[pin {p0.ref}, pin {p1.ref}]"
+        pair_dates = (p0.date.isoformat(), p1.date.isoformat())
         if i0 == i1:
             diagnostics.append(
-                Diagnostic("error", f"two pins target the same bucket (index {i0}).")
+                Diagnostic(
+                    "error",
+                    f"two pins target the same bucket (index {i0}).",
+                    rule="duplicate-pin",
+                    anchor=pair_anchor,
+                    dates=pair_dates,
+                )
             )
         if p0.date >= p1.date:
             diagnostics.append(
@@ -252,6 +311,9 @@ def project(buckets: list[Bucket], config: CohortCalendarConfig) -> Projection:
                     "error",
                     f"pins out of order: bucket {i0} pinned to {p0.date} but later "
                     f"bucket {i1} pinned to the earlier-or-equal {p1.date}.",
+                    rule="pins-out-of-order",
+                    anchor=pair_anchor,
+                    dates=pair_dates,
                 )
             )
 
@@ -328,21 +390,30 @@ def _project_segment(
 
     if bounded and seg_end_excl is not None:
         available = dates.index_on_or_after(seg_end_excl) - start_i
+        seg_last = _prev_day(seg_end_excl)
+        seg_anchor = f"segment {seg_start.isoformat()}..{seg_last.isoformat()}"
+        seg_dates = (seg_start.isoformat(), seg_last.isoformat())
         if demand > available:
             diagnostics.append(
                 Diagnostic(
                     "error",
-                    f"segment {seg_start}–{_prev_day(seg_end_excl)}: {hi - lo} buckets "
+                    f"segment {seg_start}–{seg_last}: {hi - lo} buckets "
                     f"need {demand} teaching dates but only {available} are available — "
                     f"merge ≥ {demand - available} bucket(s) to fit.",
+                    rule="segment-overfull",
+                    anchor=seg_anchor,
+                    dates=seg_dates,
                 )
             )
         elif demand < available:
             diagnostics.append(
                 Diagnostic(
                     "warning",
-                    f"segment {seg_start}–{_prev_day(seg_end_excl)}: "
+                    f"segment {seg_start}–{seg_last}: "
                     f"{available - demand} free teaching date(s) before the next pin.",
+                    rule="segment-free-dates",
+                    anchor=seg_anchor,
+                    dates=seg_dates,
                 )
             )
     elif config.end is not None:
@@ -355,6 +426,9 @@ def _project_segment(
                     f"content does not fit before end {config.end}: needs {demand} "
                     f"teaching dates, {available} available — merge ≥ {demand - available} "
                     "bucket(s).",
+                    rule="end-overflow",
+                    anchor="end",
+                    dates=(seg_start.isoformat(), config.end.isoformat()),
                 )
             )
 

@@ -132,6 +132,39 @@ def assignment_body(a: Assignment, language: str) -> str:
     return _body_text(a)
 
 
+def assignment_payload(a: Assignment, language: str) -> dict[str, object]:
+    """Public: one assignment as a ``--json`` row (``calendar status --json``, #966).
+
+    Dates are ISO strings; ``date_label`` / ``content`` / ``summary`` are the
+    same localized strings the text output prints, so an agent can quote them
+    without re-deriving; ``decks`` carry the globally-unique identity parts
+    (``module`` / ``topic_id`` / ``deck_file``) that ``bucket_refs`` join.
+    """
+    return {
+        "start_date": a.start_date.isoformat(),
+        "end_date": a.end_date.isoformat(),
+        "kind": a.kind,
+        "label": a.label,
+        "plan_label": a.plan_label,
+        "section_title": a.section_title,
+        "date_label": assignment_date_label(a, language),
+        "content": assignment_content(a),
+        "summary": assignment_summary(a, language),
+        "decks": [
+            {
+                "title": d.video_title,
+                "module": d.module,
+                "topic_id": d.topic_id,
+                "deck_file": d.deck_file,
+                "number_in_section": d.number_in_section,
+            }
+            for d in a.decks
+        ],
+        "bucket_refs": list(a.bucket_refs),
+        "activity_labels": list(a.activity_labels),
+    }
+
+
 def render_markdown(course_title: str, projection: Projection, language: str) -> str:
     """One date-ordered table: ``Date | Content`` (insert rows shown in italics)."""
     date_h, content_h = _MD_HEADERS[language]

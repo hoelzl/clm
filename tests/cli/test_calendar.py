@@ -1,5 +1,6 @@
 """Tests for the ``clm export calendar`` command (issue #283, phase 4)."""
 
+import json
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -383,3 +384,226 @@ class TestCalendarPush:
         result = CliRunner().invoke(cli, ["calendar", "--help"])
         assert result.exit_code == 0
         assert "push" in result.output
+
+
+def _stdout(result) -> str:
+    """The runner's stdout alone, on Click 8.1 (split streams) and 8.2+ alike."""
+    try:
+        return result.stdout
+    except ValueError:  # streams not separated on this Click
+        return result.output
+
+
+def _stderr(result) -> str:
+    try:
+        return result.stderr or ""
+    except ValueError:
+        return result.output
+
+
+class TestCalendarJson:
+    """``--json`` on ``check`` / ``status`` / ``push --dry-run`` (#966).
+
+    The TOML is hand-edited and clm never writes it, so an agent maintaining a
+    cohort calendar is the editor: it needs the findings as rows (rule,
+    severity, anchor, dates), the status as a document, and the push plan
+    before anything touches Google Calendar. stdout carries only the JSON
+    document; diagnostics stay on stderr; exit codes are unchanged.
+    """
+
+    # An `insert` on a Saturday (not a teaching date) → one warning; the fit
+    # is untouched, so the calendar is still OK.
+    CAL_STRAY_INSERT = CAL_OK + '\n[[adjustments]]\ninsert = 2026-03-07\nlabel = "Review"\n'
+
+    def test_check_json_ok_with_findings_rows(self, tmp_path):
+        cal = _write(tmp_path, self.CAL_STRAY_INSERT)
+        result = CliRunner().invoke(
+            cli, ["calendar", "check", str(SPEC_PATH), "--calendar", str(cal), "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(_stdout(result))
+        assert payload["ok"] is True
+        assert payload["errors"] == 0
+        assert payload["warnings"] == 1
+        (finding,) = payload["findings"]
+        assert finding["severity"] == "warning"
+        assert finding["rule"] == "insert-not-teaching-date"
+        assert finding["anchor"] == "adjustments[insert 2026-03-07]"
+        assert finding["dates"] == ["2026-03-07"]
+        assert "not a teaching date" in finding["message"]
+
+    def test_check_json_errors_exit_nonzero_and_anchor_the_key(self, tmp_path):
+        cal = _write(tmp_path, CAL_TOO_SHORT)
+        result = CliRunner().invoke(
+            cli, ["calendar", "check", str(SPEC_PATH), "--calendar", str(cal), "--json"]
+        )
+        assert result.exit_code == 1, result.output
+        payload = json.loads(_stdout(result))  # nothing but the document on stdout
+        assert payload["ok"] is False
+        assert payload["errors"] == 1
+        (finding,) = [f for f in payload["findings"] if f["severity"] == "error"]
+        assert finding["rule"] == "end-overflow"
+        assert finding["anchor"] == "end"
+        assert finding["dates"] == ["2026-03-02", "2026-03-02"]
+        assert "merge" in finding["message"]
+
+    def test_check_json_unknown_ref_names_the_adjustment(self, tmp_path):
+        cal = _write(
+            tmp_path, CAL_OK + '\n[[adjustments]]\npin = "no_such_topic"\ndate = 2026-03-03\n'
+        )
+        result = CliRunner().invoke(
+            cli, ["calendar", "check", str(SPEC_PATH), "--calendar", str(cal), "--json"]
+        )
+        assert result.exit_code == 1, result.output
+        payload = json.loads(_stdout(result))
+        rules = {(f["rule"], f["anchor"]) for f in payload["findings"]}
+        assert ("unknown-ref", "adjustments[pin no_such_topic]") in rules, rules
+
+    def test_status_json_document(self, tmp_path):
+        cal = _write(tmp_path, CAL_OK)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "status",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "--as-of",
+                "2026-03-02",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(_stdout(result))
+        assert payload["as_of"] == "2026-03-02"
+        assert payload["language"] == "en"
+        assert payload["state"] == "class-today"
+        assert payload["drift_days"] == 0
+        assert payload["has_errors"] is False
+        current = payload["current"]
+        assert current["start_date"] == "2026-03-02"
+        assert current["date_label"] == "Monday 2026-03-02"
+        assert "Some Topic from Test 1" in current["content"]
+        assert current["decks"][0]["topic_id"]
+        assert current["bucket_refs"]
+        assert payload["reference"] == current
+        # The whole projected plan, not just the lookahead: three teaching days.
+        assert [a["start_date"] for a in payload["plan"]] == [
+            "2026-03-02",
+            "2026-03-03",
+            "2026-03-04",
+        ]
+        assert [a["start_date"] for a in payload["upcoming"]] == ["2026-03-03", "2026-03-04"]
+
+    def test_status_json_finished_state(self, tmp_path):
+        cal = _write(tmp_path, CAL_OK)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "status",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--as-of",
+                "2026-03-05",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(_stdout(result))
+        assert payload["state"] == "finished"
+        assert payload["current"] is None
+        assert payload["upcoming"] == []
+
+    def test_push_dry_run_json_is_the_plan(self, tmp_path, monkeypatch):
+        TestCalendarPush._patch_api(monkeypatch)
+        from clm.cohort_calendar import google_sync
+
+        def _no_apply(*args, **kwargs):
+            raise AssertionError("apply_plan must not run under --dry-run")
+
+        monkeypatch.setattr(google_sync, "apply_plan", _no_apply)
+        cal = _write(tmp_path, TestCalendarPush.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "--credentials",
+                str(TestCalendarPush._creds(tmp_path)),
+                "--dry-run",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(_stdout(result))
+        assert payload["dry_run"] is True
+        assert payload["applied"] is False
+        assert payload["calendar_id"] == "cal-id"
+        assert payload["namespace"] == "jan"
+        assert payload["totals"] == {"inserts": 3, "updates": 0, "deletes": 0, "unchanged": 0}
+        first = payload["inserts"][0]
+        assert first["start_date"] == "2026-03-02"
+        assert first["end_date_exclusive"] == "2026-03-03"
+        assert first["uid"]
+        assert "Some Topic from Test 1" in first["summary"]
+        assert payload["updates"] == [] and payload["deletes"] == []
+
+    def test_push_json_reports_the_applied_plan(self, tmp_path, monkeypatch):
+        TestCalendarPush._patch_api(monkeypatch)
+        from clm.cohort_calendar import google_sync
+
+        applied = {}
+        monkeypatch.setattr(
+            google_sync,
+            "apply_plan",
+            lambda service, cal_id, plan: applied.setdefault("plan", plan),
+        )
+        cal = _write(tmp_path, TestCalendarPush.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--credentials",
+                str(TestCalendarPush._creds(tmp_path)),
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(_stdout(result))
+        assert payload["dry_run"] is False and payload["applied"] is True
+        assert payload["totals"]["inserts"] == 3
+        assert len(applied["plan"].inserts) == 3
+
+    def test_projection_errors_block_push_json_too(self, tmp_path):
+        cal = _write(tmp_path, CAL_TOO_SHORT + '\n[google]\ncalendar_id = "cal-id"\n')
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--credentials",
+                str(TestCalendarPush._creds(tmp_path)),
+                "--dry-run",
+                "--json",
+            ],
+        )
+        assert result.exit_code != 0
+        assert _stdout(result).strip() == ""  # no half document on stdout
+        assert "Calendar has errors" in _stderr(result)

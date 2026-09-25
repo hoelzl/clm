@@ -21,7 +21,10 @@ clm calendar push   <spec>   # Mirror the calendar into a Google calendar
 | `--calendar PATH` | Explicit path to the `.calendar.toml` file (overrides `--channel`) |
 | `--data-dir PATH` | Course data directory containing `slides/` (default: auto-detected) |
 
-Exactly one of `--channel` or `--calendar` is required.
+Exactly one of `--channel` or `--calendar` is required. `check`, `status`
+and `push` also take `--json` (CLM {version}+, issue #966): the result is one
+JSON document on stdout, diagnostics stay on stderr, exit codes are
+unchanged — see [JSON output](#json-output-for-agents) below.
 
 ### `clm calendar generate` flags
 
@@ -38,6 +41,7 @@ Exactly one of `--channel` or `--calendar` is required.
 |---|---|
 | `-L de\|en` | Language for titles (default: `de`) |
 | `--as-of DATE` | Reference date in YYYY-MM-DD (default: today) |
+| `--json` | Emit the status as a JSON document (see below) |
 
 ### `clm calendar push` flags
 
@@ -50,6 +54,7 @@ Exactly one of `--channel` or `--calendar` is required.
 | `--credentials PATH` | Google credentials JSON (env: `CLM_GOOGLE_CREDENTIALS`): an OAuth "Desktop app" client (one-time browser consent, cached token) or a service-account key the calendar is shared with |
 | `-L de\|en` | Language for event titles (default: `de`) |
 | `--dry-run` | Print the insert/update/delete plan; change nothing |
+| `--json` | Emit the plan as a JSON document — with `--dry-run` before anything touches Google, otherwise the plan that was applied |
 
 The push only touches **CLM-managed events**: each event is tagged (private
 extended properties) with the cohort namespace and the same stable
@@ -59,6 +64,90 @@ in the same calendar. Events are all-day and marked free (transparent).
 Each event uses the same title/body format as the `.ics` feed (see
 [Event format](#event-format) below). Projection errors (see
 `clm calendar check`) block the push.
+
+## JSON output for agents
+
+The calendar TOML is hand-edited and clm never writes it, so when an agent
+maintains a cohort calendar it *is* the editor. `--json` gives it structured
+findings instead of prose (CLM {version}+, issue #966). In every case stdout
+carries exactly one JSON document, diagnostics and errors go to stderr, and
+the exit code is unchanged.
+
+`clm calendar check --json`:
+
+```json
+{
+  "ok": false, "errors": 1, "warnings": 1,
+  "findings": [
+    {"severity": "error", "rule": "end-overflow", "anchor": "end",
+     "dates": ["2026-03-02", "2026-03-20"],
+     "message": "content does not fit before end 2026-03-20: needs 12 teaching dates, 10 available — merge ≥ 2 bucket(s)."},
+    {"severity": "warning", "rule": "insert-not-teaching-date",
+     "anchor": "adjustments[insert 2026-03-07]", "dates": ["2026-03-07"],
+     "message": "insert date 2026-03-07 is not a teaching date (wrong weekday or a holiday); it will not appear."}
+  ]
+}
+```
+
+`rule` is stable; `anchor` names where in the TOML the finding attaches — a
+top-level key (`pattern`, `end`), an adjustment (`adjustments[pin REF]`,
+`adjustments[split REF]`, `adjustments[insert DATE]`, `adjustments[pin A, pin B]`
+for a pair), or a projected `segment START..END` between pins; `dates` are the
+projected ISO dates involved.
+
+| Rule | Severity | Anchor |
+|---|---|---|
+| `no-teaching-weekdays` | error | `pattern` |
+| `unknown-ref` / `ambiguous-ref` | error | `adjustments[pin REF]` / `adjustments[split REF]` |
+| `duplicate-pin` / `pins-out-of-order` | error | `adjustments[pin A, pin B]` |
+| `segment-overfull` | error | `segment START..END` |
+| `end-overflow` | error | `end` |
+| `segment-free-dates` | warning | `segment START..END` |
+| `insert-not-teaching-date` | warning | `adjustments[insert DATE]` |
+
+`clm calendar status --json` (with `--as-of` for a deterministic answer):
+
+```json
+{
+  "as_of": "2026-03-02", "language": "en",
+  "state": "class-today",
+  "current": {"start_date": "2026-03-02", "end_date": "2026-03-02", "kind": "video",
+              "label": null, "plan_label": "W1 Monday", "section_title": "Week 1",
+              "date_label": "Monday 2026-03-02", "content": "Intro; Law",
+              "summary": "Intro (+1 more)",
+              "decks": [{"title": "Intro", "module": "module_100", "topic_id": "intro",
+                         "deck_file": "slides_010_intro", "number_in_section": 1}],
+              "bucket_refs": ["module_100/intro/slides_010_intro"], "activity_labels": []},
+  "reference": {"…": "the assignment drift was measured against (current, else next)"},
+  "upcoming": [{"…": "the next assignments, same shape"}],
+  "drift_days": 0,
+  "has_errors": false,
+  "plan": [{"…": "every projected assignment, same shape — the whole calendar"}]
+}
+```
+
+`state` is one of `class-today`, `no-class-today`, `not-started`, `finished`,
+`empty`. `drift_days` is `+behind` / `-ahead` / `0` on plan, or `null` when
+nothing to measure. `plan` is the full projection (the same rows
+`generate` renders), so an agent can reason past the five-row `upcoming`
+lookahead.
+
+`clm calendar push --dry-run --json` (the plan; identical shape without
+`--dry-run`, then with `"dry_run": false, "applied": true`):
+
+```json
+{
+  "dry_run": true, "applied": false,
+  "calendar_id": "abc123…@group.calendar.google.com", "namespace": "jan",
+  "inserts": [{"uid": "…", "start_date": "2026-03-02", "end_date_exclusive": "2026-03-03",
+               "summary": "Intro (+1 more)", "description": "Week 1\n\n01  Intro\n02  Law"}],
+  "updates": [{"event_id": "…", "uid": "…", "start_date": "…", "end_date_exclusive": "…",
+               "summary": "…", "description": "…"}],
+  "deletes": [{"event_id": "…", "label": "2026-03-09  Old title"}],
+  "unchanged": 4,
+  "totals": {"inserts": 1, "updates": 1, "deletes": 1, "unchanged": 4}
+}
+```
 
 ## Calendar file format
 
