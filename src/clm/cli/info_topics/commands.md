@@ -3800,7 +3800,7 @@ Manage git repositories for course output directories.
 | Subcommand | Description |
 |------------|-------------|
 | `git init SPEC_FILE` | Initialize git repos in output directories (idempotent — re-run to add remotes) |
-| `git status SPEC_FILE` | Show status of all output repos |
+| `git status SPEC_FILE` | Show status of all output repos (`--json` for one array with one element per repo — see below) |
 | `git commit SPEC_FILE` | Stage and commit changes |
 | `git push SPEC_FILE` | Push commits to remote |
 | `git sync SPEC_FILE -m MSG` | Commit and push in one operation |
@@ -3818,6 +3818,39 @@ Key options for `git commit`, `git push`, and `git sync`:
 | `--all-channels` | all | Act on every release-channel (cohort) repo of every stream instead of output targets. Mutually exclusive with `--target`. |
 | `--all` | all | Act on every distributed output target **and** every release-channel repo in one pass (CLM {version}+) — the single push-everything workflow. Each destination is visited once (a path shared by several streams collapses to one repo). On a course with no `<release-channels>`, it degrades to the plain output-target set. Mutually exclusive with `--target`/`--channel`/`--all-channels`. |
 | `--dry-run` | all | Show what would be done. Read-only git queries execute for real (CLM {version}, #686), so the preview resolves the actual branch — `push --dry-run` names the branch it would push instead of `origin/''`. Mutating commands are stubbed with a `[dry-run] Would run:` line; `fetch` counts as mutating, so ahead/behind previews may compare against slightly stale remote refs (and `sync --dry-run` can exit 1 when those refs show the remote ahead — the same abort the real run would take). `init --dry-run` contacts the remote read-only (`ls-remote`) to classify it, prompt-free (`GIT_TERMINAL_PROMPT=0`) — unreachable remotes degrade to the local-only preview. |
+
+**`git status --json` (CLM {version}+, issue #969).** One JSON array on stdout
+with one element per visited repository — the same set the text visits, with
+a destination shared by several streams collapsed to one element (its
+`shared_with` names the other channels). Diagnostics (the `--dry-run` header
+and its `[dry-run] Would run:` stubs, the shared-destination note) go to
+stderr; the exit code is unchanged (`0` even when repos are dirty or behind —
+the JSON carries the facts). This is the one-call answer to "is any target or
+cohort repo dirty, ahead or behind?" before `release sync --push` or
+`git sync --all`:
+
+```json
+[
+  {"kind": "target", "name": "trainer", "language": "de", "display_name": "trainer/de",
+   "shared_with": [], "path": "…/output/trainer/de", "exists": true, "initialized": true,
+   "branch": "master", "remote": "git@github.com:Org/ml-course-trainer-de.git",
+   "ahead": 1, "behind": 0, "dirty": true, "untracked": 1,
+   "changes": [{"status": "??", "path": "Sec/02 More.ipynb"}, {"status": " M", "path": "Sec/01 Intro.ipynb"}]},
+  {"kind": "channel", "name": "solutions/jan", "language": null, "display_name": "solutions/jan",
+   "shared_with": [], "path": "…/solutions/jan", "exists": false, "initialized": false,
+   "branch": null, "remote": null, "ahead": null, "behind": null,
+   "dirty": false, "untracked": 0, "changes": []}
+]
+```
+
+`kind` is `target` (an `<output-target>`, one element per language) or
+`channel` (a release channel, `name` = its `STREAM/CHANNEL` address, `language`
+only when the channel is language-scoped). `exists` / `initialized` say whether
+the directory and its `.git` are there; the remaining fields are `null` /
+empty until both hold. `ahead` / `behind` are `null` without an `origin`, and
+under `--dry-run` compare against un-fetched (possibly stale) remote refs.
+`changes` are `git status --porcelain` rows (`status` is the two-column XY
+code); `dirty` is their non-emptiness and `untracked` the `??` count.
 
 **Non-distributed targets (issue #292).** Without `--target`, `clm git` skips
 any output target with `distribute="false"` — and, by default, any target named
@@ -3850,6 +3883,7 @@ clm git sync course.xml --force-with-lease -m "msg"  # commit + force push
 clm git init course.xml --channel jan          # create one cohort repo
 clm git sync course.xml --channel jan -m "Release functions"  # push a cohort
 clm git status course.xml --all-channels       # status of every cohort repo
+clm git status course.xml --all --json         # every target + cohort repo as JSON rows
 clm git push course.xml --all                  # push targets + every cohort in one go
 clm git sync course.xml --all -m "Weekly update"  # commit + push everything
 ```

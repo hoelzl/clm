@@ -6,6 +6,7 @@ selection guards, and an end-to-end check that the private provenance manifest
 (``.clm-released.json``) is.
 """
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -718,3 +719,159 @@ class TestChannelGitEndToEnd:
         assert "clm git reset" in result.output
         # The blocked sync did not commit the local change.
         assert "Sec/02 More.ipynb" not in _ls_files(channel)
+
+
+# ---------------------------------------------------------------------------
+# clm git status --json (issue #969)
+# ---------------------------------------------------------------------------
+
+
+def _stdout(result) -> str:
+    """The runner's stdout alone, on Click 8.1 (split streams) and 8.2+ alike."""
+    try:
+        return result.stdout
+    except ValueError:  # streams not separated on this Click
+        return result.output
+
+
+def _stderr(result) -> str:
+    try:
+        return result.stderr or ""
+    except ValueError:
+        return result.output
+
+
+def _rows(result) -> list[dict]:
+    text = _stdout(result)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Mixed streams: locate the document.
+        return json.loads(text[text.index("[") :])
+
+
+class TestStatusJson:
+    """``clm git status --json``: one element per visited repository (issue #969)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_network(self):
+        with (
+            patch("clm.cli.commands.git.remote_exists", return_value=False),
+            patch("clm.cli.commands.git.remote_has_commits", return_value=False),
+        ):
+            yield
+
+    def test_reports_every_repo_with_kind_and_state(self, tmp_path: Path, git_identity):
+        """Targets and channels in one array; a missing directory is a row
+        too (``exists: false``), not an omission."""
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        (tmp_path / "output" / "trainer").mkdir(parents=True)
+        _populate_channel(tmp_path / "solutions" / "jan")
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--all"])
+
+        result = runner.invoke(git_group, ["status", str(spec_file), "--all", "--json"])
+        assert result.exit_code == 0, result.output
+
+        rows = _rows(result)
+        by_display = {row["display_name"]: row for row in rows}
+        assert "jan" in by_display
+        jan = by_display["jan"]
+        assert jan["kind"] == "channel"
+        assert jan["name"] == "jan"
+        assert jan["language"] is None
+        assert jan["exists"] is True
+        assert jan["initialized"] is True
+        assert jan["branch"]
+        assert jan["remote"] is None
+        assert jan["ahead"] is None and jan["behind"] is None
+        assert jan["dirty"] is False
+        assert jan["changes"] == []
+        assert jan["path"] == str(tmp_path / "solutions" / "jan")
+
+        legacy = [row for row in rows if row["name"] == "legacy"]
+        assert legacy, [row["display_name"] for row in rows]
+        assert all(row["kind"] == "target" for row in legacy)
+        assert all(row["exists"] is False and row["initialized"] is False for row in legacy)
+        assert all(row["branch"] is None for row in legacy)
+
+        trainer = [row for row in rows if row["name"] == "trainer"]
+        assert trainer and {row["language"] for row in trainer} <= {"de", "en"}
+
+    def test_dirty_untracked_and_changes(self, tmp_path: Path, git_identity):
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        channel = tmp_path / "solutions" / "jan"
+        _populate_channel(channel)
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+
+        (channel / "Sec" / "02 More.ipynb").write_text("more", encoding="utf-8")
+        (channel / "Sec" / "01 Intro.ipynb").write_text("edited", encoding="utf-8")
+        # The private manifest is gitignored by init and must not count.
+        (channel / ".clm-manifest.json").write_text('{"v": 2}', encoding="utf-8")
+
+        result = runner.invoke(git_group, ["status", str(spec_file), "--channel", "jan", "--json"])
+        assert result.exit_code == 0, result.output
+
+        [jan] = _rows(result)
+        assert jan["dirty"] is True
+        assert jan["untracked"] == 1
+        changes = {c["path"].replace("\\", "/"): c["status"] for c in jan["changes"]}
+        assert changes == {"Sec/02 More.ipynb": "??", "Sec/01 Intro.ipynb": " M"}
+
+    def test_ahead_and_behind_against_a_remote(self, tmp_path: Path, git_identity):
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        channel = tmp_path / "solutions" / "jan"
+        _populate_channel(channel)
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+        bare = _init_bare_remote(tmp_path / "remote.git")
+        _git(channel, "remote", "add", "origin", str(bare))
+        _git(channel, "push", "-q", "-u", "origin", "HEAD")
+
+        result = runner.invoke(git_group, ["status", str(spec_file), "--channel", "jan", "--json"])
+        [jan] = _rows(result)
+        assert jan["remote"] == str(bare)
+        assert (jan["ahead"], jan["behind"]) == (0, 0)
+
+        (channel / "Sec" / "02 More.ipynb").write_text("more", encoding="utf-8")
+        _git(channel, "add", "-A")
+        _git(channel, "commit", "-qm", "local only")
+
+        result = runner.invoke(git_group, ["status", str(spec_file), "--channel", "jan", "--json"])
+        [jan] = _rows(result)
+        assert (jan["ahead"], jan["behind"]) == (1, 0)
+        assert jan["dirty"] is False
+
+    def test_dry_run_keeps_stdout_one_document(self, tmp_path: Path, git_identity):
+        """``--dry-run`` stubs the ``fetch`` with a ``[dry-run] Would run:``
+        line; under ``--json`` that and the header go to stderr."""
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        channel = tmp_path / "solutions" / "jan"
+        _populate_channel(channel)
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+        bare = _init_bare_remote(tmp_path / "remote.git")
+        _git(channel, "remote", "add", "origin", str(bare))
+        _git(channel, "push", "-q", "-u", "origin", "HEAD")
+
+        result = runner.invoke(
+            git_group, ["status", str(spec_file), "--channel", "jan", "--dry-run", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        [jan] = json.loads(_stdout(result))
+        assert jan["remote"] == str(bare)
+        assert "DRY RUN" in _stderr(result)
+        assert "[dry-run] Would run" in _stderr(result)
+
+    def test_text_output_is_unchanged_without_the_flag(self, tmp_path: Path, git_identity):
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        _populate_channel(tmp_path / "solutions" / "jan")
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+
+        result = runner.invoke(git_group, ["status", str(spec_file), "--channel", "jan"])
+        assert result.exit_code == 0, result.output
+        assert "[jan]" in result.output
+        assert "Clean (no uncommitted changes)" in result.output
+        assert not result.output.lstrip().startswith("[{")

@@ -158,3 +158,22 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(pytest.mark.slow)
             if "e2e" not in [marker.name for marker in item.iter_markers()]:
                 item.add_marker(pytest.mark.e2e)
+
+
+@pytest.fixture(autouse=True)
+def _reset_git_context_vars():
+    """Start every test with ``clm git``'s process-scoped context vars clear.
+
+    The subcommands set ``_dry_run_mode`` (and ``status --json`` sets
+    ``_machine_output``) for the life of the process — fine for a real CLI
+    invocation, but a Click test runner reuses the thread, so a
+    ``--dry-run`` test leaves later tests on the same xdist worker with
+    every mutating git call stubbed (``subprocess.run`` never called).
+    """
+    from clm.cli.commands import git as git_module
+
+    git_module._dry_run_mode.set(False)
+    git_module._machine_output.set(False)
+    yield
+    git_module._dry_run_mode.set(False)
+    git_module._machine_output.set(False)
