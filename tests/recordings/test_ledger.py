@@ -165,14 +165,58 @@ def test_unsplit_deck_members_fall_back_to_cells(tmp_path: Path):
 
     de = rl.deck_members(deck, "de")
     en = rl.deck_members(deck, "en")
-    assert set(de) == {"cell:j2/0", "cell:j2/1", "id:s0", "cell:markdown/0", "id:c1"}
-    assert set(en) == {"cell:j2/0", "cell:j2/1", "id:s0", "id:c1"}  # the DE-only note is not EN
+    assert set(de) == {
+        "cell:header/j2/0",
+        "cell:header/j2/1",
+        "id:s0",
+        "cell:s0/markdown/0",
+        "id:c1",
+    }
+    assert set(en) == {"cell:header/j2/0", "cell:header/j2/1", "id:s0", "id:c1"}  # DE-only note
     assert de["id:s0"] != en["id:s0"]  # each side's own title cell
     assert de["id:c1"] == en["id:c1"]  # the shared code cell
 
     # The fingerprint ignores the slide_id attribute, like a split member's.
     deck.write_text(UNSPLIT.replace('slide_id="c1"', 'slide_id="c9"'), encoding="utf-8")
     assert rl.deck_members(deck, "de")["id:c9"] == de["id:c1"]
+
+
+def test_unsplit_cell_ordinals_are_scoped_to_their_slide(tmp_path: Path):
+    """Inserting an id-less cell renumbers only its own group, like the split model."""
+    deck = (
+        '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# # A\n\n'
+        '# %% [markdown] lang="de"\n# a1\n\n'
+        '# %% [markdown] lang="de" tags=["slide"] slide_id="b"\n# # B\n\n'
+        '# %% [markdown] lang="de"\n# b1\n\n'
+    )
+    before = rl.unsplit_members(deck, "de")
+    inserted = deck.replace("# a1\n\n", '# a1\n\n# %% [markdown] lang="de"\n# a2\n\n')
+    after = rl.unsplit_members(inserted, "de")
+    assert before["cell:b/markdown/0"] == after["cell:b/markdown/0"]  # untouched group
+    assert set(after) - set(before) == {"cell:a/markdown/1"}
+
+
+def test_stale_single_file_beside_a_split_pair_is_not_an_unsplit_deck(tmp_path: Path):
+    de = _write_pair(tmp_path / "t")
+    stale = de.with_name("slides_t.py")
+    stale.write_text(UNSPLIT, encoding="utf-8")
+    assert not rl.is_unsplit_deck(stale)
+    assert rl.is_unsplit_deck(tmp_path / "t" / "slides_other.py")
+
+
+def test_seeded_evidence_is_never_reported_as_exact(tmp_path: Path):
+    for kind, dirty, expected in (
+        ("commit", False, "recomputed"),
+        ("commit-dirty", True, "approximate"),
+        ("time", False, "approximate"),
+    ):
+        part = _part(
+            anchor=rl.RecordingAnchor(kind=kind, commit="abc", dirty=dirty), evidence="anchor"
+        )
+        assert rl.resolve_part_members(part, tmp_path / "slides_t.de.py")[1] == expected
+    # Record-time evidence is exact even on a dirty tree.
+    part = _part(anchor=rl.anchor_for("abc", True))
+    assert rl.resolve_part_members(part, tmp_path / "slides_t.de.py")[1] == "recorded"
 
 
 def test_deck_members_is_empty_without_a_twin(tmp_path: Path):

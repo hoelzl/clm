@@ -43,7 +43,14 @@ if TYPE_CHECKING:
     from clm.core.course import Course
     from clm.recordings.state import CourseRecordingState
 
-__all__ = ["SeedPart", "SeedResult", "commit_before", "lang_of_course_id", "seed_from_state"]
+__all__ = [
+    "SeedPart",
+    "SeedResult",
+    "commit_before",
+    "lang_of_course_id",
+    "repo_prefix",
+    "seed_from_state",
+]
 
 SeedStatus = Literal["seeded", "updated", "unchanged", "unresolved"]
 
@@ -116,8 +123,19 @@ def _git(cwd: Path, *args: str) -> str | None:
 
 
 def commit_before(repo: Path, recorded_at: str) -> str | None:
-    """The last commit on ``HEAD`` not after *recorded_at* (``git rev-list -1 --before``)."""
-    out = _git(repo, "rev-list", "-1", f"--before={recorded_at}", "HEAD")
+    """The last commit on ``HEAD`` not after *recorded_at* (``git rev-list -1 --before``).
+
+    *recorded_at* must be an ISO-8601 timestamp: git's approxidate treats
+    garbage as "now", which would silently anchor a part on ``HEAD`` — a
+    guess, which seeding never makes.
+    """
+    from datetime import datetime
+
+    try:
+        stamp = datetime.fromisoformat(recorded_at)
+    except (TypeError, ValueError):
+        return None
+    out = _git(repo, "rev-list", "-1", f"--before={stamp.isoformat()}", "HEAD")
     return out.strip() or None if out else None
 
 
@@ -129,27 +147,47 @@ def lang_of_course_id(course_id: str) -> str | None:
     return None
 
 
+def repo_prefix(course_root: Path) -> tuple[Path, Path] | None:
+    """``(repo toplevel, course_root relative to it)`` — a course may live in a repo subdirectory."""
+    top = _git(course_root, "rev-parse", "--show-toplevel")
+    prefix = _git(course_root, "rev-parse", "--show-prefix")
+    if top is None or prefix is None:
+        return None
+    return Path(top.strip()), Path(prefix.strip())
+
+
 class _CommitTrees:
-    """Throwaway detached worktrees, one per anchor commit, removed on exit."""
+    """Throwaway detached worktrees of anchor commits, one at a time.
+
+    Seeding walks the parts grouped by anchor commit, so at most one tree
+    (the whole repository at that commit, LFS smudge skipped) exists at any
+    moment; it is removed as soon as its commit's parts are done.
+    """
 
     def __init__(self, repo: Path):
         self.repo = repo
         self.base = Path(tempfile.mkdtemp(prefix="clm-seed-"))
-        self.trees: dict[str, Path | None] = {}
+        self.current: tuple[str, Path] | None = None
 
     def tree(self, commit: str) -> Path | None:
-        if commit not in self.trees:
-            target = self.base / commit[:12]
-            out = _git(self.repo, "worktree", "add", "--detach", "--quiet", str(target), commit)
-            self.trees[commit] = target if out is not None and target.is_dir() else None
-            if self.trees[commit] is None:
-                logger.warning("Could not check out {} for seeding", commit[:12])
-        return self.trees[commit]
+        if self.current is not None and self.current[0] == commit:
+            return self.current[1]
+        self.release()
+        target = self.base / commit[:12]
+        out = _git(self.repo, "worktree", "add", "--detach", "--quiet", str(target), commit)
+        if out is None or not target.is_dir():
+            logger.warning("Could not check out {} for seeding", commit[:12])
+            return None
+        self.current = (commit, target)
+        return target
+
+    def release(self) -> None:
+        if self.current is not None:
+            _git(self.repo, "worktree", "remove", "--force", str(self.current[1]))
+            self.current = None
 
     def close(self) -> None:
-        for tree in self.trees.values():
-            if tree is not None:
-                _git(self.repo, "worktree", "remove", "--force", str(tree))
+        self.release()
         shutil.rmtree(self.base, ignore_errors=True)
         _git(self.repo, "worktree", "prune")
 
@@ -188,25 +226,36 @@ def _split_lecture_id(lecture_id: str) -> tuple[str, str] | None:
 
 
 def _map_to_current(
-    anchor_deck: Path, anchor_root: Path, course_root: Path, topic_id: str | None
+    anchor_deck: Path,
+    anchor_course_root: Path,
+    course_root: Path,
+    topic_id: str | None,
+    topic_map: dict[str, list[Any]],
 ) -> Path | None:
     """The current path of a deck resolved in an anchor tree, or ``None``."""
-    from clm.core.topic_resolver import build_topic_map
-
     try:
-        rel = anchor_deck.resolve().relative_to(anchor_root.resolve())
+        rel = anchor_deck.resolve().relative_to(anchor_course_root.resolve())
     except ValueError:
         return None
     candidate = course_root / rel
     if candidate.is_file():
         return candidate
     if topic_id:
-        matches = build_topic_map(course_root / "slides").get(topic_id, [])
-        for match in matches:
-            by_name = match.path / anchor_deck.name
+        for match in topic_map.get(topic_id, []):
+            by_name = Path(match.path) / anchor_deck.name
             if by_name.is_file():
                 return by_name
     return None
+
+
+@define
+class _Pending:
+    lecture_id: str
+    section: str
+    deck: str
+    part: Any  # RecordingPart
+    anchor: rl.RecordingAnchor
+    seed: SeedPart
 
 
 def seed_from_state(
@@ -222,124 +271,186 @@ def seed_from_state(
     *spec_file* is the spec the recordings were made from (its
     course-root-relative path is looked up in each anchor tree; the current
     course is the fallback when the spec did not exist at the anchor).
+    Raises ``ValueError`` when *spec_file* is not under *course_root* or
+    *course_root* is not inside a git repository.
     """
+    from clm.core.topic_resolver import build_topic_map
+
     lang = rl._check_lang(lang)
     result = SeedResult(course_id=state.course_id, lang=lang)
     course_root = course_root.resolve()
-    spec_rel = spec_file.resolve().relative_to(course_root)
+    try:
+        spec_rel = spec_file.resolve().relative_to(course_root)
+    except ValueError:
+        raise ValueError(
+            f"spec file {spec_file} is not under the course root {course_root}; "
+            "pass --spec-file and --course-root consistently"
+        ) from None
+    located = repo_prefix(course_root)
+    if located is None:
+        raise ValueError(f"{course_root} is not inside a git repository")
+    repo_top, prefix = located
     current_course = _load_course(course_root / spec_rel, course_root)
-    courses_at: dict[str, Course | None] = {}
+    topic_map = build_topic_map(course_root / "slides")
     written: set[Path] = set()
 
-    with _commit_trees(course_root) as trees:
-        for lecture in state.lectures:
-            names = _split_lecture_id(lecture.lecture_id)
-            for part in lecture.parts:
-                seed = SeedPart(
-                    lecture_id=lecture.lecture_id,
-                    part=part.part,
-                    recorded_at=part.recorded_at,
-                    status="unresolved",
-                    anchor={},
-                )
-                result.parts.append(seed)
-
-                # 1. the anchor
-                if part.git_commit:
-                    anchor = rl.anchor_for(part.git_commit, part.git_dirty)
-                else:
-                    commit = (
-                        commit_before(course_root, part.recorded_at) if part.recorded_at else None
-                    )
-                    if commit is None:
-                        seed.reason = "no commit stamped and none before recorded_at"
-                        continue
-                    anchor = rl.RecordingAnchor(kind="time", commit=commit, dirty=False)
-                seed.anchor = anchor.model_dump()
-                assert anchor.commit is not None
-                if names is None:
-                    seed.reason = "lecture id is not '<section>::<deck>'"
+    # Pass 1: anchors (no git tree needed), grouped by commit.
+    by_commit: dict[str, list[_Pending]] = {}
+    for lecture in state.lectures:
+        names = _split_lecture_id(lecture.lecture_id)
+        for part in lecture.parts:
+            seed = SeedPart(
+                lecture_id=lecture.lecture_id,
+                part=part.part,
+                recorded_at=part.recorded_at,
+                status="unresolved",
+                anchor={},
+            )
+            result.parts.append(seed)
+            if part.git_commit:
+                anchor = rl.anchor_for(part.git_commit, part.git_dirty)
+            else:
+                commit = commit_before(repo_top, part.recorded_at) if part.recorded_at else None
+                if commit is None:
+                    seed.reason = "no commit stamped and no ISO recorded_at with a commit before it"
                     continue
-                section_name, deck_name = names
+                anchor = rl.RecordingAnchor(kind="time", commit=commit, dirty=False)
+            seed.anchor = anchor.model_dump()
+            if names is None:
+                seed.reason = "lecture id is not '<section>::<deck>'"
+                continue
+            assert anchor.commit is not None
+            by_commit.setdefault(anchor.commit, []).append(
+                _Pending(lecture.lecture_id, names[0], names[1], part, anchor, seed)
+            )
 
-                # 2. the deck, through the course at the anchor
-                tree = trees.tree(anchor.commit)
-                if tree is None:
-                    seed.reason = f"anchor commit {anchor.commit[:12]} cannot be checked out"
-                    continue
-                if anchor.commit not in courses_at:
-                    courses_at[anchor.commit] = _load_course(tree / spec_rel, tree)
-                course_at = courses_at[anchor.commit]
-                anchor_deck: Path | None = None
-                topic_id: str | None = None
-                if course_at is not None:
-                    _sid, topic_id, anchor_deck = course_at.resolve_deck_location(
-                        section_name, deck_name, lang
-                    )
-                if anchor_deck is None:
-                    # The spec (or the deck under those names) did not exist
-                    # at the anchor: resolve through the current course and
-                    # read that deck at the anchor tree instead.
-                    if current_course is not None:
-                        _sid, topic_id, current_deck = current_course.resolve_deck_location(
-                            section_name, deck_name, lang
-                        )
-                        if current_deck is not None:
-                            anchor_deck = tree / current_deck.resolve().relative_to(course_root)
-                if anchor_deck is None or not anchor_deck.is_file():
-                    seed.reason = (
-                        f"deck '{deck_name}' in section '{section_name}' not found at "
-                        f"{anchor.commit[:12]}"
-                    )
-                    continue
-
-                # 3. the members at the anchor
-                members = rl.deck_members(anchor_deck, lang)
-                if not members:
-                    seed.reason = f"deck at {anchor.commit[:12]} is not a parseable split pair"
-                    continue
-
-                # 4. the current home
-                current_deck = _map_to_current(anchor_deck, tree, course_root, topic_id)
-                if current_deck is None:
-                    seed.reason = (
-                        f"deck exists at {anchor.commit[:12]} as "
-                        f"'{anchor_deck.relative_to(tree).as_posix()}' but not in the current tree"
-                    )
-                    continue
-                seed.deck = current_deck.relative_to(course_root).as_posix()
-                seed.members = len(members)
-
-                # 5. write (idempotent)
-                ledger_path = rl.ledger_path_for(current_deck)
-                seed.ledger = ledger_path.relative_to(course_root).as_posix()
-                entry = rl.LedgerPart(
-                    part=part.part,
-                    recorded_at=part.recorded_at,
-                    course_id=state.course_id,
+    # Pass 2: one worktree per anchor commit, released before the next.
+    with _commit_trees(repo_top) as trees:
+        for commit, pendings in by_commit.items():
+            tree = trees.tree(commit)
+            if tree is None:
+                for p in pendings:
+                    p.seed.reason = f"anchor commit {commit[:12]} cannot be checked out"
+                continue
+            anchor_root = tree / prefix
+            course_at = _load_course(anchor_root / spec_rel, anchor_root)
+            for p in pendings:
+                _seed_one(
+                    p,
+                    state=state,
                     lang=lang,
-                    anchor=anchor,
-                    members=members,
-                    order=rl.id_order(members),
+                    course_at=course_at,
+                    current_course=current_course,
+                    anchor_root=anchor_root,
+                    course_root=course_root,
+                    topic_map=topic_map,
+                    dry_run=dry_run,
+                    written=written,
                 )
-                existing = _existing(ledger_path, rl.deck_key_for(current_deck), entry)
-                if existing is not None and existing == entry:
-                    seed.status = "unchanged"
-                    continue
-                seed.status = "updated" if existing is not None else "seeded"
-                if not dry_run:
-                    rl.record_part(ledger_path, rl.deck_key_for(current_deck), entry)
-                    written.add(ledger_path)
 
     result.ledgers_written = sorted(p.relative_to(course_root).as_posix() for p in written)
     return result
 
 
-def _existing(ledger_path: Path, deck_key: str, entry: rl.LedgerPart) -> rl.LedgerPart | None:
+def _seed_one(
+    p: _Pending,
+    *,
+    state: CourseRecordingState,
+    lang: str,
+    course_at: Course | None,
+    current_course: Course | None,
+    anchor_root: Path,
+    course_root: Path,
+    topic_map: dict[str, list[Any]],
+    dry_run: bool,
+    written: set[Path],
+) -> None:
+    seed, anchor = p.seed, p.anchor
+    assert anchor.commit is not None
+    short = anchor.commit[:12]
+
+    # The deck, through the course at the anchor.
+    anchor_deck: Path | None = None
+    topic_id: str | None = None
+    if course_at is not None:
+        _sid, topic_id, anchor_deck = course_at.resolve_deck_location(p.section, p.deck, lang)
+    if anchor_deck is None and current_course is not None:
+        # The spec (or the deck under those names) did not exist at the
+        # anchor: resolve through the current course, read at the anchor tree.
+        _sid, topic_id, current_deck = current_course.resolve_deck_location(p.section, p.deck, lang)
+        if current_deck is not None:
+            try:
+                anchor_deck = anchor_root / current_deck.resolve().relative_to(course_root)
+            except ValueError:
+                anchor_deck = None
+    if anchor_deck is None or not anchor_deck.is_file():
+        seed.reason = f"deck '{p.deck}' in section '{p.section}' not found at {short}"
+        return
+
+    # The members at the anchor.
+    members = rl.deck_members(anchor_deck, lang)
+    if not members:
+        seed.reason = f"deck at {short} is not a parseable deck"
+        return
+
+    # The current home.
+    current_deck = _map_to_current(anchor_deck, anchor_root, course_root, topic_id, topic_map)
+    if current_deck is None:
+        seed.reason = (
+            f"deck exists at {short} as '{anchor_deck.relative_to(anchor_root).as_posix()}' "
+            f"but not in the current tree"
+        )
+        return
+    seed.deck = current_deck.relative_to(course_root).as_posix()
+    seed.members = len(members)
+
+    # Write (idempotent; never over record-time evidence).
+    ledger_path = rl.ledger_path_for(current_deck)
+    seed.ledger = ledger_path.relative_to(course_root).as_posix()
+    entry = rl.LedgerPart(
+        part=p.part.part,
+        recorded_at=p.part.recorded_at,
+        course_id=state.course_id,
+        lang=lang,
+        anchor=anchor,
+        members=members,
+        order=rl.id_order(members),
+        evidence="anchor",
+    )
+    deck_key = rl.deck_key_for(current_deck)
     try:
-        ledger = rl.load(ledger_path)
-    except rl.LedgerError:
-        return None
+        existing = _existing(ledger_path, deck_key, entry)
+    except rl.LedgerError as exc:
+        seed.reason = str(exc)
+        return
+    if existing is not None:
+        if existing == entry:
+            seed.status = "unchanged"
+            return
+        if existing.evidence == "recorded" and existing.members:
+            # The dashboard fingerprinted what was on screen; a commit can
+            # only approximate that. Keep the better evidence.
+            seed.status = "unchanged"
+            seed.reason = "kept the record-time entry"
+            return
+    seed.status = "updated" if existing is not None else "seeded"
+    if not dry_run:
+        try:
+            rl.record_part(ledger_path, deck_key, entry)
+        except rl.LedgerError as exc:
+            seed.status = "unresolved"
+            seed.reason = str(exc)
+            return
+        written.add(ledger_path)
+
+
+def _existing(ledger_path: Path, deck_key: str, entry: rl.LedgerPart) -> rl.LedgerPart | None:
+    """The entry with *entry*'s identity already in the ledger, or ``None``.
+
+    A ledger that exists but cannot be read raises :class:`rl.LedgerError`
+    — the part is then reported unresolved rather than written over.
+    """
+    ledger = rl.load(ledger_path)
     deck = ledger.decks.get(deck_key)
     if deck is None:
         return None

@@ -48,6 +48,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from attrs import frozen as frozen_dataclass
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -83,6 +84,8 @@ __all__ = [
     "resolve_part_order",
     "save",
     "split_halves",
+    "UnsplitCell",
+    "unsplit_cells",
     "unsplit_members",
 ]
 
@@ -139,6 +142,11 @@ class LedgerPart(BaseModel):
     #: it existed (the rule is then skipped, never guessed).
     order: list[str] = Field(default_factory=list)
     hash_version: int = HASH_VERSION
+    #: Where ``members`` came from: ``recorded`` — fingerprinted from the
+    #: tree that was on screen (the dashboard write path; exact even on a
+    #: dirty tree); ``anchor`` — recomputed from the anchor commit later
+    #: (seeding), which is only as good as the commit.
+    evidence: Literal["recorded", "anchor"] = "recorded"
 
 
 class DeckAck(BaseModel):
@@ -260,31 +268,53 @@ def _members_of(deck: BilingualDeck, lang: Lang) -> dict[str, str]:
 
 
 def is_unsplit_deck(deck_path: Path) -> bool:
-    """A single-file bilingual deck (no ``.de``/``.en`` tag, no twin on disk)."""
+    """A single-file bilingual deck: no ``.de``/``.en`` tag and no split twin on disk.
+
+    A stale ``slides_x.py`` beside ``slides_x.de.py`` / ``slides_x.en.py``
+    is **not** an unsplit deck — the pair is the deck.
+    """
     from clm.core.slide_text.pairing import split_lang_tag
 
-    return split_lang_tag(deck_path) is None and split_halves(deck_path) is not None
+    if split_lang_tag(deck_path) is not None:
+        return False
+    halves = split_halves(deck_path)
+    return halves is not None and not any(h.exists() for h in halves)
 
 
-def unsplit_members(text: str, lang: str, comment_token: str = "#") -> dict[str, str]:
-    """Member fingerprints of a single-file bilingual deck for *lang*.
+@frozen_dataclass
+class UnsplitCell:
+    """One member of a single-file bilingual deck: its key, kind, role and fingerprint."""
+
+    key: str
+    kind: str  # markdown | code | j2
+    role: str  # header | slide | subslide | voiceover | notes | code | aux
+    fingerprint: str
+
+
+def unsplit_cells(text: str, lang: str, comment_token: str = "#") -> list[UnsplitCell]:
+    """The members of a single-file bilingual deck for *lang*, in file order.
 
     The bilingual document model (:mod:`clm.slides.bilingual_doc`) needs a
     split pair; a deck that keeps both languages in one file falls back to
     its percent-format cells: every cell whose ``lang`` attribute is *lang*
     or absent is a member, keyed ``id:<slide_id>`` when it carries one,
-    else ``cell:<kind>/<ordinal>`` (ordinal among the id-less cells of that
-    kind, in file order). The fingerprint is the cell's bytes modulo the
-    ``slide_id`` attribute — the same :func:`content_fingerprint` as a split
-    member, so the ledger holds one hashing form.
+    else ``cell:<group>/<kind>/<ordinal>`` — *group* is the ``slide_id`` of
+    the nearest id-bearing cell above (``header`` before the first), so an
+    inserted id-less cell only renumbers its own group, exactly like the
+    split model's ``pos:`` handles. The fingerprint is the cell's bytes
+    modulo the ``slide_id`` attribute — the same :func:`content_fingerprint`
+    as a split member, so the ledger holds one hashing form. This is the
+    ONE keying rule; the ledger map and the report index both derive from
+    it.
     """
     from clm.core.slide_text.slide_parser import parse_cells
     from clm.slides.bilingual_doc import SideCell
     from clm.slides.doc_identity import content_fingerprint
 
     side = _check_lang(lang)
-    out: dict[str, str] = {}
-    ordinals: dict[str, int] = {}
+    out: list[UnsplitCell] = []
+    group = "header"
+    ordinals: dict[tuple[str, str], int] = {}
     for index, cell in enumerate(parse_cells(text, comment_token)):
         meta = cell.metadata
         if meta.lang not in (None, side):
@@ -292,13 +322,25 @@ def unsplit_members(text: str, lang: str, comment_token: str = "#") -> dict[str,
         kind = meta.cell_type if meta.cell_type in ("code", "j2") else "markdown"
         if meta.slide_id:
             key = f"id:{meta.slide_id}"
+            group = meta.slide_id
         else:
-            ordinal = ordinals.get(kind, 0)
-            ordinals[kind] = ordinal + 1
-            key = f"cell:{kind}/{ordinal}"
-        lines = (cell.header, *cell.content.splitlines())
+            ordinal = ordinals.get((group, kind), 0)
+            ordinals[(group, kind)] = ordinal + 1
+            key = f"cell:{group}/{kind}/{ordinal}"
+        if "voiceover" in meta.tags:
+            role = "voiceover"
+        elif "notes" in meta.tags:
+            role = "notes"
+        elif "subslide" in meta.tags:
+            role = "subslide"
+        elif "slide" in meta.tags:
+            role = "slide"
+        elif kind == "j2":
+            role = "header"
+        else:
+            role = "code" if kind == "code" else "aux"
         side_cell = SideCell(
-            lines=tuple(lines),
+            lines=(cell.header, *cell.content.splitlines()),
             index=index,
             line_number=cell.line_number,
             part="deck",
@@ -309,8 +351,13 @@ def unsplit_members(text: str, lang: str, comment_token: str = "#") -> dict[str,
             vo_anchor=None,
             cell_type=kind,
         )
-        out[key] = content_fingerprint(side_cell)
+        out.append(UnsplitCell(key, kind, role, content_fingerprint(side_cell)))
     return out
+
+
+def unsplit_members(text: str, lang: str, comment_token: str = "#") -> dict[str, str]:
+    """``{key: fingerprint}`` of :func:`unsplit_cells` — the ledger's map form."""
+    return {c.key: c.fingerprint for c in unsplit_cells(text, lang, comment_token)}
 
 
 def deck_members(deck_path: Path, lang: str) -> dict[str, str]:
@@ -402,7 +449,10 @@ def resolve_part_members(
     """The trustworthy member fingerprints of *part* — the ``hash_version`` rule.
 
     * recorded under the current :data:`HASH_VERSION` and non-empty →
-      ``(members, "recorded")``;
+      ``(members, "recorded")`` — unless the entry's ``evidence`` is
+      ``anchor`` (seeded from a commit): then ``"recomputed"`` for a clean
+      ``commit`` anchor and ``"approximate"`` for any other kind, because
+      a dirty or time-chosen commit under-describes what was shown;
     * otherwise, with a commit anchor → recomputed from the deck at that
       commit: ``(members, "recomputed")`` for a clean anchor, ``(members,
       "approximate")`` for a ``commit-dirty`` one (the commit under-describes
@@ -412,6 +462,9 @@ def resolve_part_members(
       fingerprint function would compute differently.
     """
     if part.hash_version == HASH_VERSION and part.members:
+        if part.evidence == "anchor":
+            exact = part.anchor.kind == "commit" and not part.anchor.dirty
+            return dict(part.members), ("recomputed" if exact else "approximate")
         return dict(part.members), "recorded"
     if part.anchor.commit:
         recomputed = deck_members_at_ref(deck_path, part.anchor.commit, part.lang)

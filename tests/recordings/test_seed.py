@@ -167,6 +167,103 @@ def test_unstamped_part_anchors_on_the_last_commit_before_recorded_at(course: _C
     assert seed.anchor == {"kind": "time", "commit": v1, "dirty": False}
 
 
+def test_seeding_never_overwrites_record_time_evidence(course: _Course):
+    v1 = course.commit("v1", "2026-04-18T10:00:00")
+    # The dashboard wrote this entry from the tree that was on screen.
+    exact = {"id:s0": "seen-on-screen"}
+    rl.record_part(
+        rl.ledger_path_for(course.de),
+        "slides_t",
+        rl.LedgerPart(
+            part=1,
+            recorded_at="t",
+            course_id="kurs-de",
+            lang="de",
+            anchor=rl.anchor_for(v1, True),
+            members=exact,
+            order=["id:s0"],
+        ),
+    )
+    state = _state(
+        course.lecture_id(),
+        RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1, git_dirty=True),
+    )
+
+    [seed] = course.seed(state).parts
+    assert seed.status == "unchanged"
+    assert seed.reason == "kept the record-time entry"
+    kept = rl.load(rl.ledger_path_for(course.de)).decks["slides_t"].parts[0]
+    assert kept.members == exact and kept.evidence == "recorded"
+
+
+def test_seeded_entries_carry_anchor_evidence(course: _Course):
+    v1 = course.commit("v1", "2026-04-18T10:00:00")
+    state = _state(
+        course.lecture_id(),
+        RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1, git_dirty=True),
+    )
+    course.seed(state)
+    entry = rl.load(rl.ledger_path_for(course.de)).decks["slides_t"].parts[0]
+    assert entry.evidence == "anchor"
+    assert rl.resolve_part_members(entry, course.de)[1] == "approximate"
+
+
+def test_garbage_recorded_at_is_unresolved_not_head(course: _Course):
+    course.commit("v1", "2026-04-18T10:00:00")
+    assert commit_before(course.root, "t") is None
+    state = _state(
+        course.lecture_id(), RecordingPart(part=1, raw_file="r.mkv", recorded_at="yesterday")
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "unresolved"
+
+
+def test_malformed_ledger_marks_the_part_unresolved(course: _Course):
+    v1 = course.commit("v1", "2026-04-18T10:00:00")
+    path = rl.ledger_path_for(course.de)
+    path.parent.mkdir()
+    path.write_text("{broken", encoding="utf-8")
+    state = _state(
+        course.lecture_id(), RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1)
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "unresolved"
+    assert "not valid JSON" in (seed.reason or "")
+    assert path.read_text(encoding="utf-8") == "{broken"
+
+
+def test_course_in_a_repo_subdirectory(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    course = _Course.__new__(_Course)
+    course.root = repo / "courses" / "python"
+    course.topic = course.root / "slides" / "module_100" / "topic_010_t"
+    course.topic.mkdir(parents=True)
+    (course.root / "course-specs").mkdir()
+    course.spec = course.root / "course-specs" / "kurs.xml"
+    course.spec.write_text(SPEC_XML, encoding="utf-8")
+    course.de = course.topic / "slides_t.de.py"
+    course.en = course.topic / "slides_t.en.py"
+    course.write(DE0, EN0)
+    v1 = course.commit("v1", "2026-04-18T10:00:00")
+
+    state = _state(
+        course.lecture_id(), RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1)
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+    assert seed.deck == "slides/module_100/topic_010_t/slides_t.de.py"
+
+
+def test_spec_outside_course_root_is_a_clear_error(course: _Course, tmp_path: Path):
+    course.commit("v1", "2026-04-18T10:00:00")
+    elsewhere = tmp_path / "elsewhere.xml"
+    elsewhere.write_text(SPEC_XML, encoding="utf-8")
+    with pytest.raises(ValueError, match="not under the course root"):
+        seed_from_state(_state("S::D"), spec_file=elsewhere, course_root=course.root, lang="de")
+
+
 def test_seeding_is_idempotent_and_dry_run_writes_nothing(course: _Course):
     v1 = course.commit("v1", "2026-04-18T10:00:00")
     state = _state(

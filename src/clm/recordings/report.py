@@ -136,42 +136,17 @@ def deck_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | Non
 
 
 def _unsplit_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | None:
-    """The single-file bilingual deck's members with kinds (see :func:`rl.unsplit_members`)."""
-    from clm.core.slide_text.slide_parser import parse_cells
+    """The single-file bilingual deck's members with kinds (:func:`rl.unsplit_cells`)."""
     from clm.core.utils.prog_lang_utils import comment_token_for_path
 
     try:
         text = deck_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
-    fingerprints = rl.unsplit_members(text, lang, comment_token_for_path(deck_path))
-    out: dict[str, MemberInfo] = {}
-    ordinals: dict[str, int] = {}
-    for cell in parse_cells(text, comment_token_for_path(deck_path)):
-        meta = cell.metadata
-        if meta.lang not in (None, lang):
-            continue
-        kind = meta.cell_type if meta.cell_type in ("code", "j2") else "markdown"
-        if meta.slide_id:
-            key = f"id:{meta.slide_id}"
-        else:
-            ordinal = ordinals.get(kind, 0)
-            ordinals[kind] = ordinal + 1
-            key = f"cell:{kind}/{ordinal}"
-        if "voiceover" in meta.tags:
-            role = "voiceover"
-        elif "notes" in meta.tags:
-            role = "notes"
-        elif "subslide" in meta.tags:
-            role = "subslide"
-        elif "slide" in meta.tags:
-            role = "slide"
-        elif kind == "j2":
-            role = "header"
-        else:
-            role = "code" if kind == "code" else "aux"
-        out[key] = MemberInfo(fp=fingerprints[key], kind=kind, role=role, layout="inline")
-    return out
+    return {
+        c.key: MemberInfo(fp=c.fingerprint, kind=c.kind, role=c.role, layout="inline")
+        for c in rl.unsplit_cells(text, lang, comment_token_for_path(deck_path))
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +191,8 @@ def _class_from_key(key: str) -> str:
             return "structural"
         return "visible"
     if scheme == "cell":
-        return "structural" if value.startswith("code/") else "visible"
+        parts = value.rsplit("/", 2)
+        return "structural" if len(parts) == 3 and parts[1] == "code" else "visible"
     return "structural"
 
 
