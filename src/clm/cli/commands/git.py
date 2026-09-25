@@ -4,6 +4,7 @@ This module provides commands for managing git repositories in course output
 directories, enabling trainers to commit and push generated course content.
 """
 
+import json
 import logging
 import os
 import shlex
@@ -30,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 # Context variable for dry-run mode
 _dry_run_mode: ContextVar[bool] = ContextVar("dry_run_mode", default=False)
+# Set while a subcommand emits a JSON document on stdout (``status --json``,
+# issue #969): every incidental line — the ``[dry-run] Would run:`` stubs in
+# particular — then goes to stderr so stdout stays one parseable document.
+_machine_output: ContextVar[bool] = ContextVar("machine_output", default=False)
 
 #: Opt-in switch for token-authenticated HTTPS git transport (issue #341).
 TOKEN_AUTH_ENV_VAR = "CLM_GIT_TOKEN_AUTH"
@@ -247,7 +252,7 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
     dry_run = _dry_run_mode.get()
     if dry_run and not _is_read_only_git(args):
-        click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
+        click.echo(f"  [dry-run] Would run: {_format_command(cmd)}", err=_machine_output.get())
         return subprocess.CompletedProcess(
             args=cmd,
             returncode=0,
@@ -281,7 +286,7 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
 
     dry_run = _dry_run_mode.get()
     if dry_run and not _is_read_only_git(args):
-        click.echo(f"  [dry-run] Would run: {_format_command(cmd)}")
+        click.echo(f"  [dry-run] Would run: {_format_command(cmd)}", err=_machine_output.get())
         return subprocess.CompletedProcess(
             args=cmd,
             returncode=0,
@@ -1130,6 +1135,71 @@ def init(
         click.echo()
 
 
+def _porcelain_changes(repo_path: Path) -> list[dict[str, str]]:
+    """``git status --porcelain -z`` as rows: ``{"status": XY, "path": …}``.
+
+    ``-z`` (NUL-separated) because the line form quotes paths containing
+    spaces or non-ASCII (``"Sec/01 Intro.ipynb"``), which are the norm in a
+    course tree. A rename/copy carries its source under ``"from"``.
+    """
+    tokens = run_git(repo_path, "status", "--porcelain", "-z").stdout.split("\0")
+    changes: list[dict[str, str]] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        i += 1
+        if not token:
+            continue
+        entry = {"status": token[:2], "path": token[3:]}
+        if "R" in token[:2] or "C" in token[:2]:
+            if i < len(tokens):
+                entry["from"] = tokens[i]
+                i += 1
+        changes.append(entry)
+    return changes
+
+
+def _repo_status_payload(repo: OutputRepo) -> dict[str, object]:
+    """One ``clm git status --json`` row (issue #969): the facts the text prints.
+
+    ``ahead`` / ``behind`` are ``None`` when the repo has no ``origin`` (and
+    compare against possibly stale remote refs under ``--dry-run``, which
+    stubs the ``fetch``). ``changes`` are ``git status --porcelain`` rows;
+    ``dirty`` is their non-emptiness and ``untracked`` the ``??`` count.
+    """
+    row: dict[str, object] = {
+        "kind": "channel" if repo.source == "channel" else "target",
+        "name": repo.target_name,
+        "language": repo.language or None,
+        "display_name": repo.display_name,
+        "shared_with": list(repo.shared_refs),
+        "path": str(repo.path),
+        "exists": repo.path.exists(),
+        "initialized": False,
+        "branch": None,
+        "remote": None,
+        "ahead": None,
+        "behind": None,
+        "dirty": False,
+        "untracked": 0,
+        "changes": [],
+    }
+    if not row["exists"] or not repo.has_git:
+        return row
+    row["initialized"] = True
+    branch = get_current_branch(repo.path)
+    row["branch"] = branch
+    if repo.has_remote():
+        row["remote"] = run_git(repo.path, "remote", "get-url", "origin").stdout.strip()
+        ahead, behind = get_remote_status(repo.path, branch)
+        row["ahead"] = ahead
+        row["behind"] = behind
+    row["changes"] = changes = _porcelain_changes(repo.path)
+    row["dirty"] = bool(changes)
+    row["untracked"] = sum(1 for c in changes if c["status"] == "??")
+    return row
+
+
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
@@ -1137,6 +1207,16 @@ def init(
 @_all_channels_option
 @_all_option
 @click.option("--dry-run", is_flag=True, help="Show paths that would be checked")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help=(
+        "Emit one JSON array with one element per visited repository "
+        "(kind, name, path, exists, initialized, branch, remote, ahead/behind, "
+        "dirty, changes, untracked); diagnostics stay on stderr, exit code unchanged."
+    ),
+)
 def status(
     spec_file: Path,
     target: str | None,
@@ -1144,13 +1224,17 @@ def status(
     all_channels: bool,
     all_repos: bool,
     dry_run: bool,
+    as_json: bool,
 ):
     """Show git status of output directories.
 
     Displays the git status for each output target that has a repository.
     Use --channel NAME / --all-channels to report on per-cohort release
     repositories instead of output targets (issue #208). Use --all to report
-    on output targets and every release channel in one pass.
+    on output targets and every release channel in one pass. ``--json``
+    emits the same facts as one array — one element per visited repository,
+    shared destinations collapsed as in the text output — for an agent
+    asking "is anything dirty, ahead or behind?" before a push (issue #969).
 
     \b
     Examples:
@@ -1159,18 +1243,57 @@ def status(
         clm git status course.xml --all-channels
         clm git status course.xml --all
         clm git status course.xml --dry-run
+        clm git status course.xml --all --json
     """
-    _dry_run_mode.set(dry_run)
+    # Reset both on the way out: a Click test runner reuses the context
+    # across invocations, and a leaked ``True`` would stub every later
+    # command's git calls (dry-run) or send its stubs to stderr (JSON).
+    dry_run_token = _dry_run_mode.set(dry_run)
+    machine_token = _machine_output.set(as_json)
+    try:
+        _status_body(
+            spec_file,
+            target=target,
+            channel=channel,
+            all_channels=all_channels,
+            all_repos=all_repos,
+            dry_run=dry_run,
+            as_json=as_json,
+        )
+    finally:
+        _machine_output.reset(machine_token)
+        _dry_run_mode.reset(dry_run_token)
+
+
+def _status_body(
+    spec_file: Path,
+    *,
+    target: str | None,
+    channel: str | None,
+    all_channels: bool,
+    all_repos: bool,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
     if dry_run:
-        click.echo("[DRY RUN MODE - Showing paths that would be checked]")
-        click.echo()
+        click.echo("[DRY RUN MODE - Showing paths that would be checked]", err=as_json)
+        click.echo(err=as_json)
 
     repos = _select_repos(
         spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
     )
 
     if not repos:
+        if as_json:
+            click.echo("[]")
+            click.echo("No output directories found.", err=True)
+            return
         click.echo("No output directories found.")
+        return
+
+    if as_json:
+        rows = [_repo_status_payload(repo) for repo in repos]
+        click.echo(json.dumps(rows, indent=2, ensure_ascii=False))
         return
 
     for repo in repos:
