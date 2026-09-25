@@ -2320,7 +2320,9 @@ former v2 engine (watermark baselines, `task`/`accept` round-trips,
 Single-language authoring sync for split-format decks
 (`<deck>.de.<ext>` / `<deck>.en.<ext>`, the layout produced by
 `clm slides split`). After an author edits **one** half of a pair, `sync`
-reconciles the *other* half.
+reconciles the *other* half. It needs both halves on disk: for a **unified**
+bilingual deck (both languages in one `slides_x.py` / `.cs`) use
+`clm slides suggest-sync` instead — see its section for the boundary table.
 
 `clm slides sync` is an **agent toolkit, not an autonomous solver**, and it
 **never calls a model**: it executes the mechanical items deterministically and
@@ -3110,16 +3112,27 @@ clm slides language-view slides_intro.py en --include-notes
 
 *Removed in CLM 1.8: the flat alias `clm suggest-sync` no longer exists — use this group-qualified form.*
 
-Compare a slide file against git HEAD and detect asymmetric bilingual edits.
-Suggests which cells need translation updates. Does not modify the file.
+Compare a **unified bilingual deck** (one file with de and en cells
+co-located) against git HEAD and detect asymmetric edits: cells changed in
+one language without a matching change in the other. Suggests which cells
+need a translation update. Read-only — it never modifies the file — and
+works for any percent-format source (`.py`, `.cs`, `.cpp`, …).
 
-> **Plumbing (since CLM {version}).** This command is **hidden** from
-> `clm slides --help` (it stays invocable by name and as the `suggest_sync` MCP
-> tool). It is a read-only suggester for the pre-split **bilingual** layout
-> (de/en cells co-located in one `.py`). For split-format decks
-> (`<deck>.de.<ext>` / `<deck>.en.<ext>`) use **`clm slides sync`**, which reconciles
-> the pair and writes the changes. Two `sync`-named commands on the everyday
-> surface was a source of confusion — `sync` is the canonical funnel.
+> **Scope boundary — which sync tool?** Two layouts exist, and each has its
+> own tool (CLM {version}+, issue #981):
+>
+> | Deck layout | Files | Tool |
+> |---|---|---|
+> | **Unified** (both languages in one file) | `slides_x.py` / `slides_x.cs` … | `clm slides suggest-sync` (read-only suggestions vs git HEAD; MCP `slides_suggest_sync`) |
+> | **Split** (one language per file, produced by `clm slides split`) | `slides_x.de.py` + `slides_x.en.py` | `clm slides sync` (ledger-backed reconciliation that *writes* the other half; MCP `slides_sync_report`) |
+>
+> `clm slides sync` cannot read a unified deck (it needs both halves on
+> disk), and `suggest-sync` has no write path — it is a diff-based
+> suggester, not a reconciler. The unified layout is still authored (the
+> whole C# course, part of the Python course), so `suggest-sync` is a
+> first-class verb on `clm slides --help`; it was hidden as "plumbing" in
+> earlier CLM {version} releases, which made it undiscoverable by the agents
+> it serves.
 
 ```
 clm slides suggest-sync [OPTIONS] FILE
