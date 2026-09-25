@@ -149,9 +149,12 @@ when the cell carries one, else `cell:<kind>/<ordinal>` (`markdown` /
 fingerprint function is the same. `report` classifies such cells by their
 tags (`notes`, `voiceover`) and kind.
 
+A split pair that does not normalize (duplicate ids, mismatched halves) is
+fingerprinted the same cell-wise way from the recorded half, and `report`
+compares a `cell:`-keyed entry cell-wise whatever the pair looks like now.
+
 An empty `members` map means the fingerprints could not be computed at
-record time (a lone split half, or a bundle that fails normalization); such
-an entry reports as `unverifiable`.
+record time (a lone split half); such an entry reports as `unverifiable`.
 
 `hash_version` is the sync ledger's fingerprint-function version, stamped
 per part (and per `ack`) and repeated on the envelope. The rule is the sync

@@ -264,14 +264,25 @@ def _map_to_current(
         rel = anchor_deck.resolve().relative_to(anchor_course_root.resolve())
     except ValueError:
         return None
+    from clm.recordings.report import find_deck_files
+
     candidate = course_root / rel
     if candidate.is_file():
         return candidate
-    if topic_id:
-        for match in topic_map.get(topic_id, []):
-            by_name = Path(match.path) / anchor_deck.name
-            if by_name.is_file():
-                return by_name
+    # Same topic directory, deck split (or joined) since the anchor: match by stem.
+    stem = rl.deck_key_for(anchor_deck)
+    lang = (
+        lang_of_course_id(anchor_deck.stem.rsplit(".", 1)[-1]) if "." in anchor_deck.stem else None
+    )
+    for topic_dir in (candidate.parent, *[Path(m.path) for m in topic_map.get(topic_id or "", [])]):
+        if not topic_dir.is_dir():
+            continue
+        by_name = topic_dir / anchor_deck.name
+        if by_name.is_file():
+            return by_name
+        halves = find_deck_files(topic_dir, stem)
+        if halves:
+            return halves.get(lang or "de") or next(iter(halves.values()))
     return None
 
 
@@ -308,7 +319,25 @@ def _resolve_deck(
         _sid, tid, p = course.resolve_deck_location(name, deck, lang)
         if p is not None and (tid, p) not in hits:
             hits.append((tid, p))
-    return hits[0] if len(hits) == 1 else (None, None)
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        return None, None
+    # The number changed with the section's line-up: match the title alone.
+    title = deck.split(" ", 1)[1] if " " in deck and deck.split(" ", 1)[0].isdigit() else deck
+    by_title: list[tuple[str | None, Path | None]] = []
+    for sec in course.sections:
+        for nb in sec.notebooks:
+            nb_lang = getattr(nb, "output_language_filter", None)
+            if nb_lang in ("de", "en") and nb_lang != lang:
+                continue
+            try:
+                name = nb.file_name(lang, "")
+            except (KeyError, ValueError):
+                continue
+            if name.split(" ", 1)[-1] == title and (nb.topic.id, nb.source_path) not in by_title:
+                by_title.append((nb.topic.id, nb.source_path))
+    return by_title[0] if len(by_title) == 1 else (None, None)
 
 
 def seed_from_state(

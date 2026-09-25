@@ -304,6 +304,67 @@ def test_disabled_section_at_the_anchor_still_resolves(course: _Course):
     assert seed.anchor["commit"] == v0
 
 
+def test_deck_split_since_the_recording_is_mapped_by_stem(course: _Course):
+    """Recorded as an unsplit deck; split into .de/.en halves since."""
+    from tests.recordings.test_ledger import UNSPLIT
+
+    course.de.unlink()
+    course.en.unlink()
+    unsplit = course.topic / "slides_t.py"
+    unsplit.write_text(UNSPLIT, encoding="utf-8")
+    v1 = course.commit("v1: unsplit", "2026-04-18T10:00:00")
+    lecture_id = course.lecture_id()
+    recorded = rl.deck_members(unsplit, "de")
+    unsplit.unlink()
+    course.write(DE0, EN0)
+    course.commit("v2: split", "2026-05-01T10:00:00")
+
+    state = _state(
+        lecture_id, RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1)
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+    assert seed.deck == "slides/module_100/topic_010_t/slides_t.de.py"
+    entry = rl.load(rl.ledger_path_for(course.de)).decks["slides_t"].parts[0]
+    assert entry.members == recorded
+    assert rl.uses_cell_scheme(entry.members)
+
+
+def test_deck_resolves_by_title_when_its_number_changed(course: _Course):
+    v1 = course.commit("v1", "2026-04-18T10:00:00")
+    lecture_id = course.lecture_id()
+    section, deck = lecture_id.split("::")
+    renumbered = f"{section}::07 {deck.split(' ', 1)[1]}"
+    state = _state(
+        renumbered, RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1)
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+
+
+def test_pair_refusing_normalization_at_the_anchor_seeds_by_cells(course: _Course):
+    dup = DE0 + DE0.split("\n\n", 1)[1]  # every slide id twice on the DE side
+    course.write(dup, EN0)
+    v1 = course.commit("v1: duplicate ids", "2026-04-18T10:00:00")
+    lecture_id = course.lecture_id()
+    course.write(DE0, EN0)
+    course.commit("v2: repaired", "2026-05-01T10:00:00")
+
+    state = _state(
+        lecture_id, RecordingPart(part=1, raw_file="r.mkv", recorded_at="t", git_commit=v1)
+    )
+    [seed] = course.seed(state).parts
+    assert seed.status == "seeded", seed.reason
+    entry = rl.load(rl.ledger_path_for(course.de)).decks["slides_t"].parts[0]
+    assert rl.uses_cell_scheme(entry.members)
+    # The report compares such an entry cell-wise against the repaired pair.
+    from clm.recordings.report import build_report
+
+    [row] = build_report(course.root).decks
+    assert row.severity in ("structural", "visible")  # the duplicates went away
+    assert row.parts[0].members_status == "recomputed"
+
+
 def test_deck_resolves_by_unique_name_when_the_section_was_renamed(course: _Course):
     v1 = course.commit("v1", "2026-04-18T10:00:00")
     lecture_id = course.lecture_id()

@@ -471,6 +471,18 @@ def _report_deck(
     any_half = next(iter(deck_files.values()))
     bundle_paths = _bundle_paths(deck_files)
     head_by_lang: dict[str, dict[str, MemberInfo] | None] = {}
+    cells_by_lang: dict[str, dict[str, MemberInfo] | None] = {}
+
+    def head_index(lang: str, members: dict[str, str]) -> dict[str, MemberInfo] | None:
+        """The deck's current index in the scheme the entry was recorded in."""
+        if rl.uses_cell_scheme(members):
+            if lang not in cells_by_lang:
+                cells_by_lang[lang] = _unsplit_member_index(deck_files.get(lang, any_half), lang)
+            return cells_by_lang[lang]
+        if lang not in head_by_lang:
+            head_by_lang[lang] = deck_member_index(any_half, lang)
+        return head_by_lang[lang]
+
     commits_by_anchor: dict[str, list[str] | None] = {}
     parts: list[PartReport] = []
     for part in sorted(entry.parts, key=rl.part_identity):
@@ -479,10 +491,8 @@ def _report_deck(
             # A hand-edited or foreign entry: report it, never let it abort the run.
             head, base, status = None, None, "unverifiable"
         else:
-            if part.lang not in head_by_lang:
-                head_by_lang[part.lang] = deck_member_index(any_half, part.lang)
-            head = head_by_lang[part.lang]
             base, status = rl.resolve_part_members(part, any_half)
+            head = head_index(part.lang, base or {})
         if base is None or head is None:
             severity, changed, total, changed_members = "unverifiable", 0, len(part.members), {}
         else:
@@ -523,17 +533,18 @@ def _report_deck(
     if ack is not None:
         if ack.hash_version != rl.HASH_VERSION:
             ack_state = "stale-ack"
-        elif any(not _ack_map(ack, lang)[0] for lang in head_by_lang):
+        elif any(not _ack_map(ack, lang)[0] for lang in {p.lang for p in entry.parts}):
             # A language recorded after the ack was written is not covered by
             # it: the deck is unacknowledged again (re-run `ack`), not drifted.
             ack_state = "unacknowledged"
         else:
             since: list[str] = []
-            for lang, head in head_by_lang.items():
+            for lang in sorted({p.lang for p in entry.parts}):
+                ack_members, ack_order = _ack_map(ack, lang)
+                head = head_index(lang, ack_members)
                 if head is None:
                     since.append("unverifiable")
                     continue
-                ack_members, ack_order = _ack_map(ack, lang)
                 since.append(diff_members(ack_members, head, ack_order).severity)
             severity_since_ack = _max_severity(since) if since else "none"
             ack_state = "acknowledged" if severity_since_ack == "none" else "drifted-since-ack"

@@ -87,6 +87,7 @@ __all__ = [
     "UnsplitCell",
     "unsplit_cells",
     "unsplit_members",
+    "uses_cell_scheme",
 ]
 
 #: The envelope schema of ``recordings-ledger.json``.
@@ -387,9 +388,28 @@ def deck_members(deck_path: Path, lang: str) -> dict[str, str]:
         logger.debug("No member fingerprints for {}: {}", deck_path, exc)
         return {}
     if bundle.outcome.deck is None:
-        logger.debug("No member fingerprints for {}: bundle refused normalization", deck_path)
-        return {}
+        # The pair does not normalize (duplicate ids, mismatched halves …):
+        # fall back to the recorded half's cells so the recording still has
+        # evidence. Entries keyed ``cell:`` are compared cell-wise by the
+        # report, whatever the pair looks like at HEAD.
+        logger.debug("{} refused normalization; using the cell scheme", deck_path)
+        half = (
+            deck_path
+            if deck_path.is_file()
+            else (bundle.de_path if side == "de" else bundle.en_path)
+        )
+        try:
+            return unsplit_members(
+                half.read_text(encoding="utf-8"), side, comment_token_for_path(half)
+            )
+        except (OSError, UnicodeDecodeError):
+            return {}
     return _members_of(bundle.outcome.deck, side)
+
+
+def uses_cell_scheme(members: dict[str, str]) -> bool:
+    """Whether a member map was produced by the cell scheme (:func:`unsplit_cells`)."""
+    return any(key.startswith("cell:") for key in members)
 
 
 def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] | None:
@@ -424,7 +444,8 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
         de_text, en_text, de_comp, en_comp, comment_token=comment_token_for_path(de_path)
     )
     if outcome.deck is None:
-        return None
+        half_text = de_text if side == "de" else en_text
+        return unsplit_members(half_text, side, comment_token_for_path(de_path))
     return _members_of(outcome.deck, side)
 
 
