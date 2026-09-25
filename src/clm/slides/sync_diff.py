@@ -1958,9 +1958,12 @@ class _Differ:
                 "broken_owner",
                 "none",
                 f"owner reference {dangling!r} matches no slide anchor "
-                f"(its slide was removed or renamed) — answer 'remove' to prune "
-                f"the orphaned narration from every present half, or fix the "
-                f"cell's for_slide / restore the slide by hand and re-report (#650)",
+                f"(its slide was removed or renamed) — if the slide was RENAMED, "
+                f"re-point the narration (`clm slides rename-id DECK OLD NEW` rewrites "
+                f"the dangling references when the deck already carries NEW, or fix "
+                f"the cell's for_slide by hand) and re-report; "
+                f"if it was REMOVED, answer 'remove' to prune the orphaned narration "
+                f"from every present half, or restore the slide by hand (#650)",
                 group=group,
                 member=member,
                 base=entry,

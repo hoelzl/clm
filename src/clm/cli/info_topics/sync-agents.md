@@ -270,9 +270,14 @@ the same untouched cells under a new anchor — mirror the inserted slide on
 the twin (e.g. answer its `translate_new`), then re-report; or a genuine
 deletion that merely coincides with a duplicate cell elsewhere — answer
 `remove` to execute it), `broken_owner` (a voiceover/notes companion cell
-whose `for_slide` matches no slide anchor — its owning slide was removed;
-answer `remove` to prune the orphaned narration from every present half,
-or hand-fix the `for_slide` / restore the slide and re-report. A framed
+whose `for_slide` matches no slide anchor — its owning slide was removed or
+renamed by hand; if it was *renamed*, re-point the narration first —
+`clm slides rename-id DECK OLD NEW` rewrites the dangling references when the
+deck already carries `NEW` (repoint mode, #990) and migrates whatever the
+ledger still keys on `OLD`, or hand-fix the `for_slide` — and re-report; if it was *removed*, answer
+`remove` to prune the orphaned narration from every present half, or
+restore the slide and re-report. Do not answer `remove` for a renamed
+owner: that deletes narration the rename meant to keep. A framed
 `broken_owner` suppresses the member's other rows for the pass, and until
 it is resolved the write gate refuses to record the pair. A slide *rename*
 the differ can see in the same pass never frames this: it emits the
@@ -852,8 +857,10 @@ rename therefore reads as a cold add on the new id (and a `record_remove` on the
 old one), so a cell you *renamed and edited* in one go reports `verify_cold` —
 whose `confirm` would bank the existing, now-stale twin. Use
 `clm slides rename-id DECK OLD NEW`: it rewrites the id (and every `for_slide`
-owner reference) on both halves and **migrates** the ledger baseline key
-(carrying the recorded fingerprints, never re-hashing). A pure rename then
+owner reference and `vo_anchor` token) on both halves *and in their separated
+voiceover companions* (#990 — an id that lives only in a companion cell renames
+the same way) and **migrates** the ledger baseline key (carrying the recorded
+fingerprints, never re-hashing an edited cell). A pure rename then
 reports clean; a rename you did alongside an edit reports `translate_edit`
 against the carried baseline — so the stale twin is never silently confirmed.
 

@@ -22,7 +22,8 @@ stale-``confirm``. (Content fingerprints are computed modulo ``slide_id`` /
 The two pieces are pure and independently testable:
 
 * :func:`rename_in_half` rewrites one half's text (``slide_id`` on the renamed
-  cell, ``for_slide`` on every companion that owns it).
+  cell, ``for_slide`` on every narrative cell it owns, and the ``id:<old>#n``
+  ``vo_anchor`` token of every separated-companion cell anchored to it — #990).
 * :func:`migrate_ledger_key` re-keys the ledger entry, its owner references,
   the id-keyed member-order handles, and — when the renamed id anchors a slide
   group — the whole positional-key / order cascade (via
@@ -35,14 +36,20 @@ import re
 
 from attrs import evolve, frozen
 
+from clm.core.slide_text.anchor_primitives import split_anchor
 from clm.core.slide_text.raw_cells import reconstruct, split_cells
 from clm.core.slide_text.slide_parser import parse_cell_header
+from clm.core.slide_text.voiceover_merge import parse_vo_anchor
+from clm.slides.bilingual_doc import BilingualDeck, Lang
+from clm.slides.doc_identity import baseline_from_deck
 from clm.slides.doc_ledger import DeckLedger, rename_group_scopes
 
 #: A usable ``slide_id``: non-empty, no whitespace, no ``"`` (which would break
 #: the header attribute). Deliberately permissive — slug *quality* is a separate
 #: concern; this only rejects ids that cannot be written into a cell header.
 _VALID_ID_RE = re.compile(r'^[^\s"]+$')
+
+_SIDES: tuple[Lang, Lang] = ("de", "en")
 
 
 @frozen
@@ -56,6 +63,16 @@ class RenameResult:
     de_for_slide_hits: int  # for_slide (owner) references rewritten on DE
     en_for_slide_hits: int
     ledger_migrated: bool  # a ledger baseline entry was re-keyed
+    #: ``vo_anchor="id:<old>#n"`` tokens rewritten (separated companions, #990).
+    de_vo_anchor_hits: int = 0
+    en_vo_anchor_hits: int = 0
+    #: Per-side companion files that were rewritten (or would be), with their
+    #: own hit counts — ``None`` when the half has no separated companion.
+    de_companion: CompanionRename | None = None
+    en_companion: CompanionRename | None = None
+    #: Repoint mode (#990): the deck already carried ``new`` and ``old`` survived
+    #: only as dangling ``for_slide`` / ``vo_anchor`` references (a hand rename).
+    repointed: bool = False
 
     @property
     def slide_id_hits(self) -> int:
@@ -64,6 +81,20 @@ class RenameResult:
     @property
     def for_slide_hits(self) -> int:
         return self.de_for_slide_hits + self.en_for_slide_hits
+
+    @property
+    def vo_anchor_hits(self) -> int:
+        return self.de_vo_anchor_hits + self.en_vo_anchor_hits
+
+
+@frozen
+class CompanionRename:
+    """What the rename touched in one separated voiceover companion (#990)."""
+
+    path: str
+    slide_id_hits: int
+    for_slide_hits: int
+    vo_anchor_hits: int
 
 
 def is_valid_slide_id(slide_id: str) -> bool:
@@ -89,18 +120,60 @@ def _rewrite_attr(header: str, attr: str, value: str) -> str:
     return re.sub(rf'{attr}="[^"]*"', f'{attr}="{value}"', header, count=1)
 
 
+def _rewrite_vo_anchor(header: str, old: str, new: str) -> tuple[str, bool]:
+    """Rewrite an ``id:<old>#n`` ``vo_anchor`` token to ``id:<new>#n``.
+
+    Only the ``id:`` anchor kind names a slide_id (``fp:`` / ``tm:`` anchors
+    do not); the occurrence ordinal is carried through, and a legacy token
+    without ``#n`` is rewritten too. Returns ``(header', changed)``.
+    """
+    anchor = parse_vo_anchor(header)
+    if anchor is None:
+        return header, False
+    kind, value, _occ = split_anchor(anchor)
+    if kind != "id" or _bare(value) != old:
+        return header, False
+    marker, _ = _split_marker(value)
+    _, _, occ_suffix = anchor.partition("#")
+    rewritten = f"id:{marker}{new}" + (f"#{occ_suffix}" if occ_suffix else "")
+    return _rewrite_attr(header, "vo_anchor", rewritten), True
+
+
 def slide_ids_in(text: str, comment_token: str) -> set[str]:
     """Every bare ``slide_id`` present in one half (markers stripped)."""
     _pre, cells = split_cells(text, comment_token)
     return {_bare(c.metadata.slide_id) for c in cells if c.metadata.slide_id is not None}
 
 
-def rename_in_half(text: str, comment_token: str, old: str, new: str) -> tuple[str, int, int]:
-    """Rewrite ``old`` → ``new`` on one half; return ``(text', slide_id_hits, for_slide_hits)``.
+def referenced_ids_in(text: str, comment_token: str) -> set[str]:
+    """Every bare id a ``for_slide`` or ``id:``-kind ``vo_anchor`` points at.
 
-    Rewrites the ``slide_id`` of the renamed cell **and** the ``for_slide`` of
-    every companion that owns it (a group rename cascades into ``for_slide``
-    references, exactly as the fingerprint's owner-free signature anticipates).
+    The *references* to slides, as opposed to the ids cells *carry*
+    (:func:`slide_ids_in`). A reference that names no carried id is dangling —
+    the state ``clm slides rename-id`` repairs in repoint mode (#990).
+    """
+    _pre, cells = split_cells(text, comment_token)
+    refs: set[str] = set()
+    for cell in cells:
+        if cell.metadata.for_slide is not None:
+            refs.add(_bare(cell.metadata.for_slide))
+        anchor = parse_vo_anchor(cell.lines[0])
+        if anchor is not None:
+            kind, value, _occ = split_anchor(anchor)
+            if kind == "id" and value:
+                refs.add(_bare(value))
+    return refs
+
+
+def rename_in_half(text: str, comment_token: str, old: str, new: str) -> tuple[str, int, int, int]:
+    """Rewrite ``old`` → ``new`` in one file's text.
+
+    Returns ``(text', slide_id_hits, for_slide_hits, vo_anchor_hits)``. Rewrites
+    the ``slide_id`` of the renamed cell, the ``for_slide`` of every narrative
+    cell that owns it (a group rename cascades into ``for_slide`` references,
+    exactly as the fingerprint's owner-free signature anticipates), and the
+    ``vo_anchor="id:<old>#n"`` token of every separated-companion cell anchored
+    to it (#990 — the same text works for a deck half and for its companion).
     Any ``!`` preserve marker on the matched attribute is carried through. The
     text is returned byte-identical when nothing matched. ``old``/``new`` are
     bare ids (no marker).
@@ -108,6 +181,7 @@ def rename_in_half(text: str, comment_token: str, old: str, new: str) -> tuple[s
     pre, cells = split_cells(text, comment_token)
     slide_id_hits = 0
     for_slide_hits = 0
+    vo_anchor_hits = 0
     for cell in cells:
         meta = cell.metadata
         header = cell.lines[0]
@@ -120,14 +194,32 @@ def rename_in_half(text: str, comment_token: str, old: str, new: str) -> tuple[s
             marker, _ = _split_marker(meta.for_slide)
             rewritten = _rewrite_attr(rewritten, "for_slide", marker + new)
             for_slide_hits += 1
+        rewritten, anchored = _rewrite_vo_anchor(rewritten, old, new)
+        if anchored:
+            vo_anchor_hits += 1
         if rewritten != header:
             cell.lines[0] = rewritten
             cell.metadata = parse_cell_header(rewritten, comment_token)
-    out = reconstruct(pre, cells) if (slide_id_hits or for_slide_hits) else text
-    return out, slide_id_hits, for_slide_hits
+    hits = slide_id_hits or for_slide_hits or vo_anchor_hits
+    out = reconstruct(pre, cells) if hits else text
+    return out, slide_id_hits, for_slide_hits, vo_anchor_hits
 
 
-def migrate_ledger_key(deck: DeckLedger, old: str, new: str) -> bool:
+def ledger_knows(deck: DeckLedger, slide_id: str) -> bool:
+    """Whether the ledger already records ``slide_id`` — as a member entry or a
+    group anchor (``pos:`` keys / group order). Decides between a full key
+    migration and a references-only one in repoint mode (#990)."""
+    return (
+        f"id:{slide_id}" in deck.members
+        or slide_id in deck.group_order
+        or any(slide_id in order for order in deck.group_order_by_side.values())
+        or any(k.startswith(f"pos:{slide_id}/") for k in deck.members)
+    )
+
+
+def migrate_ledger_key(
+    deck: DeckLedger, old: str, new: str, *, references_only: bool = False
+) -> bool:
     """Re-key the ledger baseline for a renamed ``slide_id`` (``old`` → ``new``).
 
     Migrates — never re-fingerprints — so a simultaneous content edit surfaces
@@ -141,6 +233,12 @@ def migrate_ledger_key(deck: DeckLedger, old: str, new: str) -> bool:
       / group-order cascade (its bare id tokens every ``pos:`` key of the group)
       via :func:`~clm.slides.doc_ledger.rename_group_scopes`.
 
+    ``references_only`` (repoint mode, #990, when the ledger *already* records
+    ``new``): only the owner references and order handles move; the ``id:<old>``
+    entry and any ``pos:<old>/`` cascade are left alone — re-keying them would
+    clobber the recorded ``new`` baseline. The stale ``old`` entries then frame
+    as mechanical ``record_remove`` rows on the next report.
+
     Returns ``True`` when anything changed (``False`` = the id was cold / absent,
     a no-op the caller reports as "ledger not updated").
     """
@@ -148,23 +246,25 @@ def migrate_ledger_key(deck: DeckLedger, old: str, new: str) -> bool:
     new_key = f"id:{new}"
     changed = False
 
-    # A slide group anchored by ``old`` tokens every pos: key + order scope of
-    # the group with its bare id — cascade those first. group_order is the
-    # canonical anchor list; the pos-key / by-side checks are belt-and-braces.
-    is_anchor = (
-        old in deck.group_order
-        or any(old in order for order in deck.group_order_by_side.values())
-        or any(k.startswith(f"pos:{old}/") for k in deck.members)
-    )
-    if is_anchor:
-        rename_group_scopes(deck, old, new)
-        changed = True
+    if not references_only:
+        # A slide group anchored by ``old`` tokens every pos: key + order scope
+        # of the group with its bare id — cascade those first. group_order is
+        # the canonical anchor list; the pos-key / by-side checks are
+        # belt-and-braces.
+        is_anchor = (
+            old in deck.group_order
+            or any(old in order for order in deck.group_order_by_side.values())
+            or any(k.startswith(f"pos:{old}/") for k in deck.members)
+        )
+        if is_anchor:
+            rename_group_scopes(deck, old, new)
+            changed = True
 
-    # The member entry itself (rename_group_scopes leaves the id: entry to us).
-    lm = deck.members.pop(old_key, None)
-    if lm is not None:
-        deck.members[new_key] = evolve(lm, entry=evolve(lm.entry, key=new_key))
-        changed = True
+        # The member entry itself (rename_group_scopes leaves the id: entry to us).
+        lm = deck.members.pop(old_key, None)
+        if lm is not None:
+            deck.members[new_key] = evolve(lm, entry=evolve(lm.entry, key=new_key))
+            changed = True
 
     # Owner references: a companion owned by the renamed slide points at it.
     for key, member in list(deck.members.items()):
@@ -173,10 +273,93 @@ def migrate_ledger_key(deck: DeckLedger, old: str, new: str) -> bool:
             changed = True
 
     # Member-order value lists carry id: handles (the anchor's own handle among
-    # them for the group-rename case) — swap them regardless of scope key.
+    # them for the group-rename case) — swap them regardless of scope key. In
+    # references-only mode the new handle may already be listed: drop the old
+    # one rather than duplicating.
     for scope_key, handles in list(deck.member_order.items()):
         if old_key in handles:
-            deck.member_order[scope_key] = [new_key if h == old_key else h for h in handles]
+            if new_key in handles:
+                deck.member_order[scope_key] = [h for h in handles if h != old_key]
+            else:
+                deck.member_order[scope_key] = [new_key if h == old_key else h for h in handles]
             changed = True
 
     return changed
+
+
+def migrate_reference_fingerprints(
+    deck: DeckLedger, before: BilingualDeck, after: BilingualDeck
+) -> int:
+    """Carry the ledger's fingerprints across the *reference* bytes a rename rewrote.
+
+    Issue #990. The recorded per-side fingerprint (:func:`content_fingerprint`)
+    covers every header byte except ``slide_id`` — so a narrative cell whose
+    ``for_slide="OLD"`` or ``vo_anchor="id:OLD#n"`` the rename rewrote no longer
+    matches its own baseline, and the next report frames it as edited on both
+    sides (``verify_translation``) although only the owner reference moved.
+
+    ``before`` / ``after`` are the same bundle parsed from the texts before and
+    after the rewrite. A rename never adds or removes cells, so every side
+    cell is paired by its rename-invariant handle — ``(lang, part, index)``,
+    the cell's ordinal in its source file — never by member sequence: a
+    previously dangling ``for_slide="NEW"`` orphan re-homes into a group after
+    the rewrite and would shift a positional pairing (review finding). For each
+    side whose fingerprint the rewrite perturbed, the recorded value is replaced
+    **only when it equals the pre-rewrite fingerprint** — a cell that had also
+    been edited off its baseline keeps the stale record, so the edit still
+    surfaces as ``translate_edit`` / ``verify_translation`` on the next report.
+    This is a migration in the same sense as :func:`migrate_ledger_key`: it
+    re-keys the bytes the rename itself changed and never re-fingerprints an
+    edit.
+
+    Call it **after** :func:`migrate_ledger_key` (the entries are looked up under
+    the *after* keys). Returns the number of ledger entries touched.
+    """
+    base_before = baseline_from_deck(before).members
+    base_after = baseline_from_deck(after).members
+    # (lang, part, index) → the after-member's rendered key.
+    after_by_cell: dict[tuple[str, str, int], str] = {}
+    for ma in after.members():
+        for lang in _SIDES:
+            cell = ma.side(lang)
+            if cell is not None:
+                after_by_cell[(lang, cell.part, cell.index)] = ma.key.render()
+    touched = 0
+    for mb in before.members():
+        eb = base_before.get(mb.key.render())
+        if eb is None:
+            continue
+        after_keys: set[str] = set()
+        for lang in _SIDES:
+            cell = mb.side(lang)
+            if cell is None:
+                continue
+            after_key = after_by_cell.get((lang, cell.part, cell.index))
+            if after_key is not None:
+                after_keys.add(after_key)
+        if len(after_keys) != 1:
+            continue  # sides re-paired differently — not a pure reference rewrite
+        ea = base_after.get(next(iter(after_keys)))
+        if ea is None:
+            continue
+        lm = deck.members.get(ea.key)
+        if lm is None:
+            continue
+        entry = lm.entry
+        migrated = entry
+        for lang in _SIDES:
+            fp_before, fp_after = eb.side_fp(lang), ea.side_fp(lang)
+            if fp_before == fp_after or fp_before is None:
+                continue
+            if entry.side_fp(lang) != fp_before:
+                continue  # edited off base — never re-fingerprint an edit
+            carry_sig = entry.side_sig(lang) == eb.side_sig(lang)
+            sig = ea.side_sig(lang) if carry_sig else entry.side_sig(lang)
+            if lang == "de":
+                migrated = evolve(migrated, de_fp=fp_after, de_sig=sig)
+            else:
+                migrated = evolve(migrated, en_fp=fp_after, en_sig=sig)
+        if migrated != entry:
+            deck.members[ea.key] = evolve(lm, entry=migrated)
+            touched += 1
+    return touched

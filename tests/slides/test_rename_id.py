@@ -16,7 +16,9 @@ from clm.slides.bilingual_doc import BilingualDeck
 from clm.slides.doc_lenses import parse_bundle
 from clm.slides.rename_id import (
     is_valid_slide_id,
+    ledger_knows,
     migrate_ledger_key,
+    referenced_ids_in,
     rename_in_half,
     slide_ids_in,
 )
@@ -81,7 +83,7 @@ class TestSlideIdsIn:
 
 class TestRenameInHalf:
     def test_rewrites_slide_id(self):
-        out, sid, fs = rename_in_half(DE0, "#", "s0-m", "s0-x")
+        out, sid, fs, _ = rename_in_half(DE0, "#", "s0-m", "s0-x")
         assert (sid, fs) == (1, 0)
         assert 'slide_id="s0-x"' in out
         assert 'slide_id="s0-m"' not in out
@@ -89,13 +91,13 @@ class TestRenameInHalf:
         assert 'slide_id="s0"' in out and "DE Text" in out
 
     def test_noop_returns_byte_identical(self):
-        out, sid, fs = rename_in_half(DE0, "#", "absent", "whatever")
+        out, sid, fs, _ = rename_in_half(DE0, "#", "absent", "whatever")
         assert (sid, fs) == (0, 0)
         assert out == DE0
 
     def test_preserves_preserve_marker(self):
         text = _build(HEADER_DE, _slide("!keep-me", "de", "Titel"))
-        out, sid, _ = rename_in_half(text, "#", "keep-me", "renamed")
+        out, sid, _, _ = rename_in_half(text, "#", "keep-me", "renamed")
         assert sid == 1
         assert 'slide_id="!renamed"' in out
 
@@ -105,7 +107,7 @@ class TestRenameInHalf:
             _slide("s0", "de", "Titel"),
             '# %% [markdown] lang="de" tags=["voiceover"] for_slide="s0"\n# VO\n\n',
         )
-        out, sid, fs = rename_in_half(text, "#", "s0", "s0-new")
+        out, sid, fs, _ = rename_in_half(text, "#", "s0", "s0-new")
         assert (sid, fs) == (1, 1)
         assert 'slide_id="s0-new"' in out
         assert 'for_slide="s0-new"' in out
@@ -170,3 +172,70 @@ class TestMigrateLedgerAnchorCascade:
         migrate_ledger_key(deck, "s0", "s0-new")
         new_key = pos_key.replace("pos:s0/", "pos:s0-new/", 1)
         assert (deck.members[new_key].entry.de_fp, deck.members[new_key].entry.en_fp) == fp_before
+
+
+class TestRenameVoAnchor:
+    """Regression tests for #990: ``vo_anchor`` tokens follow a renamed id."""
+
+    VO = (
+        '# %% [markdown] lang="de" tags=["voiceover"] for_slide="s0" vo_anchor="id:s0#1"\n'
+        "# Erzählung\n\n"
+        '# %% [markdown] lang="de" tags=["voiceover"] for_slide="other" vo_anchor="fp:abc#0"\n'
+        "# Andere\n\n"
+        '# %% [markdown] lang="de" tags=["voiceover"] for_slide="s0-x" vo_anchor="id:s0-x#0"\n'
+        "# Nicht s0\n"
+    )
+
+    def test_rewrites_id_anchor_keeping_the_ordinal(self):
+        out, sid, fs, va = rename_in_half(self.VO, "#", "s0", "s0-new")
+        assert (sid, fs, va) == (0, 1, 1)
+        assert 'for_slide="s0-new" vo_anchor="id:s0-new#1"' in out
+        # A prefix-sharing id and a fp: anchor are untouched.
+        assert 'for_slide="s0-x" vo_anchor="id:s0-x#0"' in out
+        assert 'vo_anchor="fp:abc#0"' in out
+
+    def test_legacy_anchor_without_ordinal(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="s0" vo_anchor="id:s0"\n# x\n'
+        )
+        out, _, _, va = rename_in_half(text, "#", "s0", "s0-new")
+        assert va == 1
+        assert 'vo_anchor="id:s0-new"' in out
+
+    def test_no_anchor_match_is_byte_stable(self):
+        out, sid, fs, va = rename_in_half(self.VO, "#", "absent", "x")
+        assert out == self.VO
+        assert (sid, fs, va) == (0, 0, 0)
+
+
+class TestReferencedIdsIn:
+    def test_collects_for_slide_and_id_anchor_targets(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="a" vo_anchor="id:b#1"\n# x\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="!c" vo_anchor="fp:abc#0"\n# y\n'
+        )
+        assert referenced_ids_in(text, "#") == {"a", "b", "c"}
+
+
+class TestMigrateLedgerKeyReferencesOnly:
+    """Repoint onto an id the ledger already records (#990 review finding 1)."""
+
+    def test_keeps_recorded_new_and_moves_owner_refs(self):
+        deck = _deck_ledger()
+        # Fake the "ledger knows NEW" state: a recorded entry under the target key.
+        deck.members["id:s0-x"] = evolve(
+            deck.members["id:s0"], entry=evolve(deck.members["id:s0"].entry, key="id:s0-x")
+        )
+        recorded_new = deck.members["id:s0-x"]
+        old_entry = deck.members["id:s0"]
+        assert ledger_knows(deck, "s0-x")
+
+        changed = migrate_ledger_key(deck, "s0", "s0-x", references_only=True)
+
+        assert changed is True
+        assert deck.members["id:s0-x"] is recorded_new  # not clobbered by OLD's baseline
+        assert deck.members["id:s0"] is old_entry  # left for the mechanical record_remove
+        assert all(m.entry.owner != "id:s0" for m in deck.members.values())
+        for handles in deck.member_order.values():
+            assert "id:s0" not in handles
+            assert handles.count("id:s0-x") <= 1
