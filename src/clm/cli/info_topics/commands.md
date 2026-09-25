@@ -2078,7 +2078,29 @@ clm slides rename-id PATH OLD NEW [EN_PATH]
 is found on disk) or both halves passed explicitly. It rewrites the `slide_id` (and
 every `for_slide` owner reference) on both halves and **migrates** the ledger
 baseline key — *migrates*, never re-fingerprints, so the recorded content hashes are
-carried under the new key. Consequently:
+carried under the new key.
+
+**Separated voiceover companions are part of the deck.** When the pair has
+companions (`voiceover/voiceover_<stem>.{de,en}.<ext>`, or the sibling layout),
+the rename rewrites them in the same step: every `for_slide="OLD"` owner
+reference, every `vo_anchor="id:OLD#n"` positional anchor (the ordinal is kept),
+and a companion cell's *own* `slide_id` — so `OLD` may be an id that exists only
+in the companions, and `NEW` must not collide with a companion id either. The
+recorded fingerprints cover those reference bytes, so they are carried across the
+rewrite for every cell that sits on its baseline; a companion cell you had also
+edited keeps its old record and still frames the edit on the next report. Without
+this the narration is orphaned: `clm validate` reports *for_slide 'OLD' matches no
+slide_id*, the build drops it, and `sync report` frames it as `broken_owner` whose
+only answer is `remove` (#990).
+
+**Repoint mode.** If the deck *already* carries `NEW` (you renamed the slide by
+hand) and `OLD` survives only as dangling `for_slide` / `vo_anchor` references, the
+same invocation rewrites those references instead of refusing with *no cell carries
+OLD*, and migrates whatever the ledger still keys on `OLD` (the `id:OLD` baseline is
+carried to `id:NEW` unless the ledger already records `NEW`, in which case only the
+owner references move). The JSON report says `"repointed": true`. A companion that
+exists in *both* layouts (sibling and `voiceover/`) is refused — reconcile it first,
+as `clm validate` asks. Consequently:
 
 - A pure rename (no content change) reports **clean** afterward — not cold.
 - A rename you did *together with* an edit reports `translate_edit` on the next
@@ -2088,11 +2110,11 @@ carried under the new key. Consequently:
 | Option | Effect |
 |---|---|
 | `--report-only`, `--dry-run` | Report what would change without modifying files or the ledger. |
-| `--json` | Emit a JSON report. |
+| `--json` | Emit a JSON report: per-side `slide_id_hits` / `for_slide_hits` / `vo_anchor_hits` (deck half **plus** its companion), a `companions` block with each companion's path and own counts (`null` for a half without one), and `ledger_migrated`. |
 
-It refuses (exit 2) if `NEW` already exists as a `slide_id` in the pair (that would
-create a duplicate id), if no cell carries `OLD`, if `OLD == NEW`, or if `NEW`
-contains whitespace or a double-quote. A deck with no recorded baseline (never
+It refuses (exit 2) if `NEW` already exists as a `slide_id` in the pair or its
+companions (that would create a duplicate id), if no cell carries `OLD`, if
+`OLD == NEW`, or if `NEW` contains whitespace or a double-quote. A deck with no recorded baseline (never
 `record`ed) still has its files rewritten — there is simply nothing to migrate.
 
 ```bash
