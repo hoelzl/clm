@@ -283,19 +283,20 @@ def apply_renumber(plan: RenumberPlan, *, use_git: bool | None = None) -> bool:
     ops = plan.renames
     if not ops:
         return False
-    git = _in_git_work_tree(plan.slides_dir) if use_git is None else use_git
+    git = in_git_work_tree(plan.slides_dir) if use_git is None else use_git
 
     interim = [
         op.old_path.with_name(f"{op.old_path.name}{_TMP_SUFFIX}{i}") for i, op in enumerate(ops)
     ]
     for op, tmp in zip(ops, interim, strict=True):
-        _move(op.old_path, tmp, git=git)
+        move_path(op.old_path, tmp, git=git)
     for op, tmp in zip(ops, interim, strict=True):
-        _move(tmp, op.new_path, git=git)
+        move_path(tmp, op.new_path, git=git)
     return git
 
 
-def _in_git_work_tree(path: Path) -> bool:
+def in_git_work_tree(path: Path) -> bool:
+    """Whether ``path`` lies inside a git work tree (``git rev-parse``)."""
     try:
         result = subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
@@ -308,7 +309,13 @@ def _in_git_work_tree(path: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
-def _move(src: Path, dst: Path, *, git: bool) -> None:
+def move_path(src: Path, dst: Path, *, git: bool) -> None:
+    """Move ``src`` to ``dst`` — ``git mv`` when *git* (history-preserving),
+    falling back to a plain rename when git refuses (e.g. an untracked file).
+
+    Shared with ``clm slides rename`` (#991): both renumber and a deck rename
+    want the same "record a 100 % rename when we can" behaviour.
+    """
     if git:
         result = subprocess.run(
             ["git", "-C", str(src.parent), "mv", str(src), str(dst)],
@@ -324,3 +331,7 @@ def _move(src: Path, dst: Path, *, git: bool) -> None:
             "git mv %s -> %s failed (%s); falling back to rename", src, dst, result.stderr.strip()
         )
     src.rename(dst)
+
+
+_in_git_work_tree = in_git_work_tree
+_move = move_path
