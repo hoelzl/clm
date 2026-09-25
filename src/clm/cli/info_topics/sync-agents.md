@@ -579,10 +579,17 @@ clm slides sync apply DECK --decisions - --json < decisions.json
 answer and writes nothing. Note what it does **not** cover: a dry run stops
 before the write, so it never runs the structural verify gate that a real pass
 runs afterwards — a document that dry-runs clean can still end in
-`verify_violations` (writes landed, nothing recorded). Landed items are recorded into the ledger
+`verify_violations` (writes landed, the faulted slide's records withheld). Landed items are recorded into the ledger
 **on fully resolved members only**, and the recording is **gated on the
-structural verify** — file writes from a pass that ends structurally corrupt
-stay on disk for review, but nothing is recorded as trusted. A landed row on
+structural verify per slide** (#992): a violation attributed to a slide —
+an `id-asymmetry` from a hand-removed slide whose removal is still a
+pending question, an orphaned companion cell — withholds the recording of
+that slide's group only; every other landed member records in the same
+pass. The withheld rows keep their file writes (review with `git diff`) and
+their old baseline, are listed in `verify_withheld`, and re-frame (or
+re-derive mechanically) on the next report. A violation that names no slide
+(`unify`, `order-parity`, an unprojectable companion layout) withholds
+everything, as before. A landed row on
 a member that still carries an unresolved sibling item (pending, rejected,
 failed — or an answered `conflict_tags`, which re-frames by design) keeps its
 file mutation, but its ledger recording is **deferred**: the entry stays at
@@ -611,7 +618,8 @@ they do not exist):
   "exit_code": 1,
   "deck_key": "slides_x", "ledger": "…/.clm/sync-ledger.json",
   "ledger_recorded": true,
-  "verify_violations": []
+  "verify_violations": [],
+  "verify_withheld": []
 }
 ```
 
@@ -628,8 +636,17 @@ whose ledger write was deferred because the member still carries an
 unresolved sibling item — nothing was banked; it re-frames on the next
 report. (A *file-mutating* row in the same situation stays `applied`, with
 the reason suffix `(recording deferred: unresolved sibling item on this
-member)`.) `ledger_recorded: false` with `verify_violations` means writes
-landed but nothing was trusted — fix the pair, then `record`. One violation
+member)`.) `verify_violations` non-empty means the written pair failed the
+structural verify somewhere. Read `verify_withheld` for what that cost: the
+handles listed there were written but not trusted (reason suffix
+`(recording deferred: the structural verify failed on this member's slide —
+see verify_violations)` when the fault is on their slide, `… failed
+deck-wide …` when the whole pair is refused). Every landed handle **not** in
+`verify_withheld` banked — do not re-answer those; answer the framed rows on
+the faulted slide (or fix the deck-wide fault, then `record`) and re-report.
+`ledger_recorded` only says whether the ledger file was saved with at least
+one new record; it is `false` both for a deck-wide fault and for a pass
+whose landed rows all sat on the faulted slide. One violation
 kind worth knowing by name: `order-parity` (the halves order their common
 id'd cells differently — a group swap or a one-sided cell move). It is only
 a warning in `sync verify` output, but it **blocks** `record` and `apply`'s

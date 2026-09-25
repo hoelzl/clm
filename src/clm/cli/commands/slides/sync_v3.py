@@ -328,6 +328,24 @@ def run_apply_v3(
 
     ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
     ledger = doc_ledger.load(ledger_path)
+
+    # The structural write-gate on the TRUST store (design §5): landed file
+    # mutations stay (review them with git), but a member of a slide that
+    # fails the structural verify is never recorded as verified — same gate
+    # `record` applies, over the same companion-inlined projection `verify`
+    # reads (D8). apply runs it after the write and scopes it per slide
+    # (#992): the failing slide's members are withheld, the rest is
+    # recorded. Lazy import: sync_verify still loads v2 modules.
+    def verify_gate() -> list:
+        from clm.slides.sync_verify import gate_projected_pair
+
+        return gate_projected_pair(
+            bundle.de_path,
+            bundle.en_path,
+            bundle.comment_token,
+            allow_diverged_companion=allow_diverged_companion,
+        )
+
     outcome = doc_apply.apply_deck(
         bundle,
         bundle.outcome.deck,
@@ -339,27 +357,11 @@ def run_apply_v3(
         only_members=set(members) if members else None,
         dry_run=dry_run,
         commit=_head_commit(bundle.de_path),
+        verify_gate=verify_gate,
     )
-    verify_violations: list[str] = []
+    verify_violations = [v.message for v in outcome.verify_violations]
     if outcome.error is None and not dry_run and outcome.ledger_changed:
-        # The structural write-gate on the TRUST store (design §5): landed
-        # file mutations stay (review them with git), but a pair that fails
-        # the structural verify is never recorded as verified — same gate
-        # `record` applies, over the same companion-inlined projection
-        # `verify` reads (D8). Lazy import: sync_verify still loads v2 modules.
-        from clm.slides.sync_verify import gate_projected_pair
-
-        verify_violations = [
-            v.message
-            for v in gate_projected_pair(
-                bundle.de_path,
-                bundle.en_path,
-                bundle.comment_token,
-                allow_diverged_companion=allow_diverged_companion,
-            )
-        ]
-        if not verify_violations:
-            doc_ledger.save(ledger, ledger_path)
+        doc_ledger.save(ledger, ledger_path)
 
     rejected = [r for r in outcome.results if r.status == "rejected"]
     exit_code = (
@@ -376,7 +378,10 @@ def run_apply_v3(
         payload["exit_code"] = exit_code
         payload["deck_key"] = doc_ledger.deck_key_for(bundle.de_path)
         payload["ledger"] = str(ledger_path)
-        payload["ledger_recorded"] = outcome.ledger_changed and not verify_violations
+        # `ledger_recorded` says whether the ledger was saved with at least
+        # one record; since #992 it can be true beside a non-empty
+        # `verify_violations` — the withheld handles are `verify_withheld`.
+        payload["ledger_recorded"] = outcome.ledger_changed and not dry_run
         payload["verify_violations"] = verify_violations
         _echo_json(payload)
         return exit_code
@@ -393,11 +398,22 @@ def run_apply_v3(
     for violation in verify_violations:
         click.echo(f"verify: {violation}", err=True)
     if verify_violations:
+        withheld = outcome.verify_withheld
+        if outcome.ledger_changed:
+            scope = (
+                f"{len(withheld)} landed item(s) on the failing slide(s) were "
+                f"written but NOT recorded into the ledger ({', '.join(withheld)}); "
+                "the other landed items were recorded"
+                if withheld
+                else "no landed item is on the failing slide(s); every landed item was recorded"
+            )
+        else:
+            scope = "applied changes were written but NOT recorded into the ledger"
         click.echo(
-            "structural verify failed — applied changes were written but NOT "
-            "recorded into the ledger; fix the pair, then `sync record`. If the "
-            "divergence is in a voiceover companion and is intentional, "
-            "`--allow-diverged-companion` records it anyway (logged)",
+            f"structural verify failed — {scope}; fix the pair, then re-run "
+            "`report` (or `sync record`). If the divergence is in a voiceover "
+            "companion and is intentional, `--allow-diverged-companion` records "
+            "it anyway (logged)",
             err=True,
         )
     _echo_rejections(rejected)

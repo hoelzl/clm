@@ -389,6 +389,47 @@ class TestRecordVerb:
         assert _payload(result.output)["refused"] == 0
 
 
+class TestOrphanAttribution:
+    """#992: the orphaned-narration refusal is attributed per missing owner —
+    but only where that attribution is sound."""
+
+    def test_whole_deck_gate_names_the_missing_owner_bare(self, tmp_path: Path) -> None:
+        de, en = _write_pair(
+            tmp_path,
+            de_comp=_vo_cell("ghost-vo", "de", "!ghost", "Weg."),
+            en_comp=_vo_cell("ghost-vo", "en", "!ghost", "Gone."),
+        )
+        strict = gate_projected_pair(de, en, "#")
+        assert [(v.kind, v.slide_id) for v in strict] == [("companion-refusal", "ghost")]
+        assert "'ghost'" in strict[0].message
+
+    def test_scoped_gate_keeps_the_callers_slide_id(self, tmp_path: Path) -> None:
+        # A scoped caller cannot read the narration either; its verdict must
+        # stay blocking *in its own scope*, not name some other slide.
+        de, en = _write_pair(tmp_path, **_ORPHANED_COMPANIONS)
+        scoped = gate_projected_pair(de, en, "#", slide_id="intro")
+        assert [(v.kind, v.slide_id) for v in scoped] == [("companion-refusal", "intro")]
+
+    def test_an_orphan_without_for_slide_stays_deck_wide(self, tmp_path: Path) -> None:
+        # No slide is named, so nothing can be attributed: `unmatched` is
+        # empty and the gate emits the deck-wide refusal (slide_id None).
+        no_owner = (
+            '# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="lost-vo"\n#\n# - {t}\n\n'
+        )
+        de, en = _write_pair(
+            tmp_path,
+            de_comp=no_owner.format(lang="de", t="Ohne Folie."),
+            en_comp=no_owner.format(lang="en", t="No slide."),
+        )
+        from clm.slides.sync_companion import project_pair
+
+        projection = project_pair(de, en, *_texts(de, en))
+        assert projection.refusal is not None
+        assert projection.unmatched == ()
+        strict = gate_projected_pair(de, en, "#")
+        assert [(v.kind, v.slide_id) for v in strict] == [("companion-refusal", None)]
+
+
 class TestApplyVerb:
     """apply's post-write ledger save runs the same strict gate."""
 
@@ -409,17 +450,24 @@ class TestApplyVerb:
         de.write_text(de.read_text(encoding="utf-8").replace("x = 1", "x = 42"), encoding="utf-8")
         return de, en
 
-    def test_ledger_is_withheld_when_the_gate_refuses(
+    def test_the_gate_withholds_only_the_faulted_slide(
         self, cli_runner: CliRunner, tmp_path: Path
     ) -> None:
+        # #992: the orphaned narration is attributed to its missing owner
+        # (`ghost`), so the shared edit in the healthy `intro` group records
+        # while the violation is still reported and the pass still exits 1.
         de, en = self._seed(cli_runner, tmp_path)
         result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"])
         payload = _payload(result.output)
-        assert payload["ledger_recorded"] is False
         assert payload["verify_violations"], payload
-        # Fail-safe, as before: the file write stays, only trust is withheld.
+        assert "ghost" in payload["verify_violations"][0]
+        assert payload["ledger_recorded"] is True
+        assert payload["verify_withheld"] == []
         assert "x = 42" in en.read_text(encoding="utf-8")
         assert result.exit_code == 1
+        # The orphan itself is not blessed: it is still framed next report.
+        again = _payload(cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output)
+        assert [i["action"] for i in again["items"]] == ["broken_owner"]
 
     def test_the_flag_lets_the_ledger_write_proceed(
         self, cli_runner: CliRunner, tmp_path: Path

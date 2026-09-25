@@ -41,6 +41,7 @@ from pathlib import Path
 
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.core.voiceover_companions import resolve_companion
+from clm.slides.slug import strip_preserve_marker
 from clm.slides.voiceover_tools import has_voiceover_cells_text, inline_pair_text
 
 
@@ -77,6 +78,14 @@ class ProjectedPair:
     de_companion: Path | None
     en_companion: Path | None
     refusal: str | None = None
+    #: The **bare** ``for_slide`` ids (preserve marker stripped) of companion
+    #: cells whose owning slide the deck no longer has — the orphaned-narration
+    #: refusal, sorted, unique. A caller that attributes the refusal to slides
+    #: (the per-slide write gate, #992) reads this instead of parsing
+    #: ``refusal``. Empty for every other refusal, **and** empty when any
+    #: orphan carries no ``for_slide`` at all: such a cell names no slide, so
+    #: the refusal stays deck-wide rather than attributable.
+    unmatched: tuple[str, ...] = ()
 
     @property
     def is_separated(self) -> bool:
@@ -146,8 +155,12 @@ def _inline_half(deck_path: Path, deck_text: str, companion: Path | None) -> tup
         return deck_text, []
     companion_text = companion.read_text(encoding="utf-8")
     result = inline_pair_text(deck_text, companion_text, comment_token_for_path(deck_path))
-    unmatched = [c.metadata.for_slide or "<no for_slide>" for c in result.unmatched]
+    unmatched = [c.metadata.for_slide or _NO_FOR_SLIDE for c in result.unmatched]
     return result.inlined_text, unmatched
+
+
+#: Placeholder for an unmatched companion cell that carries no ``for_slide``.
+_NO_FOR_SLIDE = "<no for_slide>"
 
 
 def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> ProjectedPair:
@@ -188,6 +201,7 @@ def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> Pr
     en_inlined, en_unmatched = _inline_half(en_path, en_text, en.companion)
     refusal: str | None = None
     unmatched = de_unmatched + en_unmatched
+    owners: tuple[str, ...] = ()
     if unmatched:
         refusal = (
             "a voiceover companion carries narration whose owning slide no longer "
@@ -195,6 +209,8 @@ def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> Pr
             f"{', '.join(sorted(set(unmatched)))}); syncing would drop it. Fix the "
             "slide_id / for_slide, or remove the orphaned narration, then re-run."
         )
+        if _NO_FOR_SLIDE not in unmatched:
+            owners = tuple(sorted({strip_preserve_marker(label) for label in unmatched}))
     return ProjectedPair(
         Representation.SEPARATED,
         de_inlined,
@@ -202,4 +218,5 @@ def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> Pr
         de.companion,
         en.companion,
         refusal=refusal,
+        unmatched=owners,
     )

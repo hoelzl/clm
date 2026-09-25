@@ -40,14 +40,23 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from attrs import define, evolve, field, frozen
 
 from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.agent_task import VALIDATORS, AnswerRejected
-from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, MemberKey, SideCell
+from clm.slides.bilingual_doc import (
+    HEADER_GROUP,
+    ORPHAN_GROUP,
+    BilingualDeck,
+    Lang,
+    Member,
+    MemberKey,
+    SideCell,
+)
 from clm.slides.doc_identity import (
     DeckBaseline,
     body_reconciliation_available,
@@ -77,6 +86,7 @@ from clm.slides.doc_write import (
     DeckWriteError,
     write_changed_files,
 )
+from clm.slides.slug import strip_preserve_marker
 from clm.slides.sync_diff import (
     FRAMED_ACTIONS,
     MECHANICAL_ACTIONS,
@@ -574,6 +584,40 @@ class ItemResult:
         }
 
 
+class StructuralViolation(Protocol):
+    """What :func:`apply_deck` reads off a structural verify finding.
+
+    Structurally :class:`clm.slides.sync_verify.VerifyViolation` — declared
+    here so the v3 core stays import-clean of the v2 verify module (design
+    §12.5); the CLI hands the real gate in through ``verify_gate``.
+    """
+
+    @property
+    def kind(self) -> str: ...
+
+    @property
+    def message(self) -> str: ...
+
+    @property
+    def slide_id(self) -> str | None: ...
+
+
+#: ``verify_gate``: the post-write structural verify, run by :func:`apply_deck`
+#: after the files are written and before anything is recorded. An empty
+#: result means "safe to record"; each violation withholds the recording of
+#: the slide group it names (``slide_id``), or of every landed member when it
+#: names none (#992).
+VerifyGate = Callable[[], Sequence[StructuralViolation]]
+
+_GATE_DEFERRAL_SLIDE = (
+    " (recording deferred: the structural verify failed on this member's slide"
+    " — see verify_violations)"
+)
+_GATE_DEFERRAL_DECK = (
+    " (recording deferred: the structural verify failed deck-wide — see verify_violations)"
+)
+
+
 @define
 class ApplyOutcome:
     """The whole apply pass over one deck."""
@@ -587,8 +631,14 @@ class ApplyOutcome:
     dry_run: bool = False
     #: The in-memory ledger was updated (landed items recorded) — the caller
     #: must persist it. Independent of ``wrote``: a confirm-only pass changes
-    #: the ledger without touching any file.
+    #: the ledger without touching any file. False when the structural verify
+    #: withheld every landed item (#992): nothing to persist.
     ledger_changed: bool = False
+    #: What the ``verify_gate`` returned after the write (empty without a gate).
+    verify_violations: list[StructuralViolation] = field(factory=list)
+    #: Handles of landed items whose recording the gate withheld — their file
+    #: mutation stays; the ledger keeps their old baseline (#992).
+    verify_withheld: list[str] = field(factory=list)
 
     def count(self, status: str) -> int:
         return sum(1 for r in self.results if r.status == status)
@@ -633,6 +683,8 @@ class ApplyOutcome:
                 r.payload() for r in self.results if r.status in ("rejected", "deferred", "failed")
             ],
             "items": [r.payload() for r in self.results],
+            "verify_violations": [v.message for v in self.verify_violations],
+            "verify_withheld": list(self.verify_withheld),
         }
 
 
@@ -2204,6 +2256,7 @@ def apply_deck(
     only_members: set[str] | None = None,
     dry_run: bool = False,
     commit: str | None = None,
+    verify_gate: VerifyGate | None = None,
 ) -> ApplyOutcome:
     """Apply a deck's diff per item; update ``ledger`` in memory.
 
@@ -2211,8 +2264,19 @@ def apply_deck(
     framed rows execute only with a valid decision, otherwise they stay
     ``pending``. On success the mutated bundle is re-parsed (abort on
     refusal), written atomically, and every landed item is recorded into
-    ``ledger`` — which the **caller** persists (so a CLI can batch or refuse
-    the save on a failed verify gate).
+    ``ledger`` — which the **caller** persists.
+
+    ``verify_gate`` is the structural verify the CLI runs over the written
+    pair (``gate_projected_pair``). It runs after the write and before the
+    recording, and it is **member-scoped** (#992): a violation naming a slide
+    withholds the recording of that slide's group only — the harvest
+    per-slide doctrine, "a corruption elsewhere in the deck must not block
+    recording the one slide an agent just reconciled" — while a violation
+    naming no slide (``unify``, ``order-parity``, an unprojectable layout)
+    withholds every landed item, as the whole-deck save refusal always did.
+    Withheld items keep their file mutation and their old ledger baseline;
+    they are listed in ``ApplyOutcome.verify_withheld`` and their result
+    reason says so. Without a gate nothing is withheld.
     """
     decisions = decisions or {}
     # One internal representation. ``decisions`` (handle -> answer) is the
@@ -2461,6 +2525,30 @@ def apply_deck(
             return outcome
         outcome.wrote = True
 
+    # The structural verify runs over the WRITTEN pair, before any recording
+    # (#992). Its verdict is scoped per slide group below, never per deck —
+    # except for a violation that names no slide.
+    outcome.verify_violations = list(verify_gate()) if verify_gate is not None else []
+    # Handle -> group token, over BOTH parses: a member the pass removed is
+    # known only to the pre-apply one. The verify names ids verbatim (a
+    # ``!`` preserve marker included); the deck keys them bare.
+    members_with_group = _members_with_group(final_deck) + _members_with_group(deck)
+    member_groups = {member.key.render(): token for token, member in members_with_group}
+    gate_blocked_groups, gate_unresolved = _gate_blocked_groups(
+        {
+            strip_preserve_marker(v.slide_id)
+            for v in outcome.verify_violations
+            if v.slide_id is not None
+        },
+        members_with_group,
+    )
+    # Fail-safe: a violation the engine cannot place (no slide, or a named id
+    # neither parse knows) withholds everything, exactly as the pre-#992
+    # whole-deck refusal did — never a silent no-op gate.
+    gate_blocks_all = bool(gate_unresolved) or any(
+        v.slide_id is None for v in outcome.verify_violations
+    )
+
     # Ledger updates for landed items — renames/migrations first, then the rest.
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
     target = ledger.decks.setdefault(deck_key, DeckLedger())
@@ -2517,12 +2605,25 @@ def apply_deck(
                 )
                 break
 
+    withheld_keys: set[str] = set()
+    recorded_any = False
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
         if item.key in unresolved_keys:
             if item.action == "conflict_tags" or item.defer_recording:
                 continue  # records nothing BY DESIGN — no deferral suffix
             _relabel_unrecorded(
                 item, " (recording deferred: unresolved sibling item on this member)"
+            )
+            continue
+        if gate_blocks_all or _item_group(item, member_groups) in gate_blocked_groups:
+            # The structural verify refused this member's slide (or the whole
+            # pair): the file mutation stays for review, the ledger keeps the
+            # old baseline, and the member re-frames on the next report.
+            if item.key not in withheld_keys:  # keys repeat across a member's rows
+                outcome.verify_withheld.append(item.key)
+            withheld_keys.add(item.key)
+            _relabel_unrecorded(
+                item, _GATE_DEFERRAL_DECK if gate_blocks_all else _GATE_DEFERRAL_SLIDE
             )
             continue
         scope = _pool_scope(item)
@@ -2534,6 +2635,7 @@ def apply_deck(
                 " (recording deferred: the pool's pending conflicts freeze it this pass)",
             )
             continue
+        recorded_any = True
         rerecorded_pools |= _record_item(
             target, fresh, item, provenance=provenance, frozen_pools=frozen_pools
         )
@@ -2561,13 +2663,15 @@ def apply_deck(
     # deferred above — the "stale" entry IS their surviving old baseline
     # (adversarial review of #615: a landed stamp_twin_id with a pending
     # framed sibling would otherwise lose the divergence's only record).
-    _sweep_migrated_pos(target, [e for e in landed if e[0].key not in unresolved_keys])
+    _sweep_migrated_pos(
+        target, [e for e in landed if e[0].key not in unresolved_keys | withheld_keys]
+    )
     # Order-trust seeding (issue #654, review C3): a pass that resolved
     # every item may bank order trust for scopes whose sides agree — the
     # only way a confirm-seeded deck ever acquires order trust through the
-    # verb loop. Divergent scopes are never seeded, and the caller's
-    # structural gate still arbitrates whether this save happens at all.
-    if not unresolved_keys:
+    # verb loop. Divergent scopes are never seeded, and a pass the
+    # structural verify faulted anywhere seeds nothing.
+    if not unresolved_keys and not outcome.verify_violations:
         seed_order_scopes(target, fresh)
     # Order scopes must not carry handles the ledger cannot back: a landed
     # order item beside still-pending members of its scope would otherwise
@@ -2580,8 +2684,78 @@ def apply_deck(
             target.member_order.pop(scope_key)
         elif len(kept) != len(handles):
             target.member_order[scope_key] = kept
-    outcome.ledger_changed = True
+    # A faulted pass changed the ledger only if something got past the gate;
+    # a clean pass reports the change as before (even when every row was
+    # deferred by the sibling rule — the caller's save is then a no-op).
+    outcome.ledger_changed = recorded_any or not outcome.verify_violations
     return outcome
+
+
+def _item_group(item: DiffItem, member_groups: dict[str, str]) -> str | None:
+    """The slide group a landed item records into, for the gate's scoping."""
+    key = item.key
+    if key.startswith("pos:"):
+        # ``pos:<group>/<kind>/<n>``, ``pos:<group>/pool.<kind>/…``,
+        # ``pos:<group>/order.<part>/…`` — the group is the first segment.
+        return key.split(":", 1)[1].rsplit("/", 2)[0]
+    if key in member_groups:
+        return member_groups[key]
+    if item.member is not None and item.member.owner is not None:
+        return item.member.owner.value
+    # A removed id'd member is in neither parse: its own id is its group when
+    # it was an anchor, and the gate names anchors by their id.
+    return key.split(":", 1)[1] if key.startswith("id:") else None
+
+
+def _gate_blocked_groups(
+    blocked_ids: set[str], members_with_group: list[tuple[str, Member]]
+) -> tuple[set[str], set[str]]:
+    """The groups a set of (bare) violation ``slide_id``s implicates (#992).
+
+    A violation names an id'd cell; the group holding that cell is withheld
+    wholesale (its positional pools pair per group, so a one-sided id'd
+    member inside it is exactly what a shifted pool looks like). A
+    companion cell whose ``for_slide`` names a blocked id implicates its
+    group too — the orphan group, once the owner is gone. The ids
+    themselves are anchor ids as well: a group whose anchor is one-sided
+    has nothing else to name it by. ``~groups`` (the deck-wide group order)
+    is blocked whenever any group is.
+
+    Returns ``(groups, unresolved)``: ``unresolved`` holds the ids that
+    matched nothing in either parse — no anchor, no member, no owner
+    reference. The caller treats any such id as a deck-wide refusal, so a
+    spelling the deck does not know can never turn an error-severity
+    violation into a no-op gate.
+    """
+    if not blocked_ids:
+        return set(), set()
+    groups: set[str] = set()
+    resolved: set[str] = set()
+    for token, member in members_with_group:
+        if token in blocked_ids:
+            groups.add(token)
+            resolved.add(token)
+        if member.key.scheme == "id" and member.key.value in blocked_ids:
+            groups.add(token)
+            resolved.add(member.key.value)
+        for cell in (member.de, member.en):
+            if cell is None or not cell.for_slide:
+                continue
+            owner = strip_preserve_marker(cell.for_slide)
+            if owner in blocked_ids:
+                groups.add(token)
+                resolved.add(owner)
+    groups.add("~groups")
+    return groups, blocked_ids - resolved
+
+
+def _members_with_group(deck: BilingualDeck) -> list[tuple[str, Member]]:
+    """Every member with its group token (anchor id, or the header/orphan token)."""
+    out: list[tuple[str, Member]] = [(HEADER_GROUP, m) for m in deck.header]
+    for group in deck.groups:
+        out.extend((group.anchor_id, m) for m in group.all_members())
+    out.extend((ORPHAN_GROUP, m) for m in deck.orphans)
+    return out
 
 
 def _incoherent_pool_confirms(
