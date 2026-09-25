@@ -47,8 +47,8 @@ clm recordings report PATH --json        # 4. the deck is `acknowledged`; exit 0
 git add -A && git commit                 # 5. ledger + deck edit travel together
 ```
 
-`PATH` is a course root, a topic directory, or one deck file (`.de`/`.en`
-half or stem). `DECK` is a deck file.
+`PATH` is a course root, a topic directory, or one deck file (an existing
+`.de`/`.en` half). `DECK` is a deck file.
 
 Exit codes are load-bearing: `report` **0** nothing needs attention, **1**
 at least one row does (a recorded deck with severity other than `none` that
@@ -105,6 +105,11 @@ member's fingerprint changed; `visible` when a presentation (markdown / j2)
 member changed; `narration` when only voiceover / companion members
 changed; `notes` when only trainer-notes members changed; `none` otherwise.
 A one-sided edit of the language that was **not** recorded does not count.
+An id-less member that vanished or appeared is classified from its handle
+alone (`pos:<group>/<kind>/<n>`): `code` → `structural`, anything else →
+`visible` — conservatively one class high for an id-less notes or
+narration cell, since the recorded map carries no roles. Stamp ids on
+such cells to get the exact class.
 
 ## Deciding
 
@@ -141,4 +146,6 @@ as a hint to look, never as a reason to re-record.
 - **`drift` is gone** — it compared build-output digests, needed a build, and
   was wrong in the "changed" direction for a quarter of the answerable
   parts; `report` replaces it (`clm info migration`).
+- **Seeding pre-ledger recordings** (`seed-ledger`) is #1005; until it ships,
+  recordings made before the ledger existed have no rows here.
 - **No MCP mirror yet** for `report`; the CLI `--json` is the agent surface.

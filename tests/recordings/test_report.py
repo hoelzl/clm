@@ -238,12 +238,51 @@ def test_commits_since_anchor_count_only_the_deck_bundle(course: _Course):
     course.commit("unrelated")
     course.write(DE_FULL.replace("DE eins", "DE eins, neu"), EN_FULL)
     c1 = course.commit("edit deck")
-    course.write(DE_FULL, EN_FULL, COMP_DE.replace("Erzählung", "E2"))
-    c2 = course.commit("edit companion")
+    # A companion-only commit (the companion lives in voiceover/, not beside the deck).
+    (course.topic / "voiceover" / "voiceover_t.de.py").write_text(
+        COMP_DE.replace("Erzählung", "E2"), encoding="utf-8"
+    )
+    c2 = course.commit("edit companion only")
 
     deck = course.deck()
     assert deck.parts[0].commits_since_anchor == [c2, c1]
     assert deck.parts[0].anchor["kind"] == "commit"
+
+
+def test_state_lookup_is_only_consulted_with_a_manifest(course: _Course):
+    course.record()
+    calls: list[str] = []
+
+    def lookup(course_id: str):
+        calls.append(course_id)
+        raise ValueError("malformed state file")
+
+    assert course.deck(state_lookup=lookup).parts[0].built_output_changed is None
+    assert calls == []  # no manifest: the state file is never read
+    deck = course.deck(manifest={"files": []}, state_lookup=lookup)
+    assert calls == ["c-de"]
+    assert (
+        deck.parts[0].built_output_changed is None
+    )  # a broken state file is a hint lost, not a crash
+
+
+def test_foreign_lang_entry_is_unverifiable_not_fatal(course: _Course):
+    course.record()
+    path = rl.ledger_path_for(course.de)
+    ledger = rl.load(path)
+    ledger.decks["slides_t"].parts.append(
+        rl.LedgerPart(
+            part=9,
+            recorded_at="t",
+            course_id="c-xx",
+            lang="xx",
+            anchor=rl.anchor_for(None, False),
+            hash_version=rl.HASH_VERSION - 1,
+        )
+    )
+    rl.save(ledger, path)
+    deck = course.deck()
+    assert [(p.lang, p.severity) for p in deck.parts] == [("de", "none"), ("xx", "unverifiable")]
 
 
 def test_dirty_anchor_recompute_after_hash_bump_is_approximate(course: _Course, monkeypatch):
@@ -396,6 +435,22 @@ def test_ack_covers_every_recorded_language(course: _Course):
     ack = rl.load(rl.ledger_path_for(course.de)).decks["slides_t"].ack
     assert ack is not None
     assert {k.split(":", 1)[0] for k in ack.members} == {"de", "en"}
+    assert course.deck().ack_state == "acknowledged"
+
+
+def test_language_recorded_after_the_ack_is_unacknowledged_not_drifted(course: _Course):
+    course.record(lang="de")
+    rr.acknowledge(course.de, note="de only")
+    assert course.deck().ack_state == "acknowledged"
+
+    course.record(part=2, lang="en", course_id="c-en")
+    deck = course.deck()
+    assert deck.ack_state == "unacknowledged"
+    assert deck.severity_since_ack is None
+    assert deck.ack_note == "de only"  # the old ack is still visible…
+    assert not deck.needs_attention  # …and nothing changed on either side
+
+    rr.acknowledge(course.de)
     assert course.deck().ack_state == "acknowledged"
 
 

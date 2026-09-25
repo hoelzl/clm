@@ -16,12 +16,13 @@ without an alias (the agent-toolkit no-shim posture).
 | `clm recordings drift COURSE_ID` | `clm recordings report [PATH]` — per deck, from the committed `<topic>/.clm/recordings-ledger.json` (#1004), no build; severity `structural` / `visible` / `narration` / `notes` / `none` plus ack state. Exit `1` when something needs attention |
 | `clm recordings drift COURSE_ID --all` | `clm recordings report PATH --all` (adds `unrecorded` decks) |
 | `clm recordings drift COURSE_ID --json` | `clm recordings report PATH --json` (envelope: `schema`, `tool`, `verb`, `is_clean`, `needs_attention`, `decks`) |
-| `--manifest` / `--source` / `--spec-file` | Unchanged options — now only enable the secondary `built_output_changed` flag per part; never a prerequisite |
+| `--manifest` / `--source` / `--spec-file` | Same options — now only enable the secondary `built_output_changed` flag per part; never a prerequisite. The `drift` fallback to the `spec_file` of the matching `recordings.courses` config entry is **gone** (`report` takes a path, not a course id): pass `--spec-file` explicitly |
 | (no acknowledgement) | `clm recordings ack DECK [--note …]` |
 
-Recordings made before the ledger existed have no entries yet: seed them from
-the local state files with `clm recordings seed-ledger COURSE_ID` (#1005)
-and add `!**/.clm/recordings-ledger.json` to the course repo's `.gitignore`.
+Recordings made before the ledger existed have no entries yet; #1005 adds
+`clm recordings seed-ledger COURSE_ID` to seed them from the local state files
+(check `clm info commands` for its presence in this version). Add
+`!**/.clm/recordings-ledger.json` to the course repo's `.gitignore`.
 The `slide_digest` stamp in the local state file is still written and still
 feeds the secondary flag. Loop and vocabulary: `clm info recordings-agents`.
 

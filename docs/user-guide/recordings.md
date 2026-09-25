@@ -413,8 +413,8 @@ local state file — a hint that templates, includes or a clm upgrade changed
 the rendered bytes, never a prerequisite.
 
 The former `clm recordings drift` command is retired in favour of `report`
-(see `clm info migration`). Recordings made before the ledger existed are
-seeded from the local state files with `clm recordings seed-ledger`. The
+(see `clm info migration`). Recordings made before the ledger existed have no
+ledger entries yet; seeding them from the local state files is #1005. The
 full field reference is in `clm info commands`; the agent loop in
 `clm info recordings-agents`.
 

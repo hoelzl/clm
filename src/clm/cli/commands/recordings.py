@@ -479,7 +479,10 @@ def report(
             raise SystemExit(2) from None
 
     result = build_report(
-        path, include_unrecorded=show_all, manifest=manifest, state_lookup=load_state
+        path,
+        include_unrecorded=show_all,
+        manifest=manifest,
+        state_lookup=load_state if manifest is not None else None,
     )
 
     if as_json:

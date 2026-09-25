@@ -32,6 +32,7 @@ ack recorded under an older ``hash_version`` is stale and reads as
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -42,6 +43,9 @@ from clm.recordings import ledger as rl
 
 if TYPE_CHECKING:
     from clm.recordings.state import CourseRecordingState
+
+#: ``course_id -> state`` for the secondary flag; ``None`` when a state file is absent.
+StateLookup = Callable[[str], "CourseRecordingState | None"]
 
 __all__ = [
     "SEVERITIES",
@@ -257,13 +261,24 @@ def find_deck_files(topic_dir: Path, deck_key: str) -> dict[str, Path]:
 
 
 def _commits_since(anchor: str, paths: list[Path]) -> list[str] | None:
-    """Commits after *anchor* that touched any of *paths* (newest first), or ``None``."""
+    """Commits after *anchor* that touched any of *paths* (newest first), or ``None``.
+
+    Pathspecs are given relative to the topic directory the command runs
+    in, so a companion under ``voiceover/`` is matched (a bare file name
+    would silently miss it).
+    """
     if not paths:
         return None
     cwd = paths[0].parent
+    specs: list[str] = []
+    for p in paths:
+        try:
+            specs.append(p.resolve().relative_to(cwd.resolve()).as_posix())
+        except ValueError:
+            specs.append(p.resolve().as_posix())
     try:
         completed = subprocess.run(
-            ["git", "log", "--format=%H", f"{anchor}..HEAD", "--", *[p.name for p in paths]],
+            ["git", "log", "--format=%H", f"{anchor}..HEAD", "--", *specs],
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -384,6 +399,16 @@ def _built_output_changed(
     return current != recorded
 
 
+def _safe_state(lookup: StateLookup | None, course_id: str) -> CourseRecordingState | None:
+    """A local state file is a hint for the secondary flag, never a reason to fail."""
+    if lookup is None:
+        return None
+    try:
+        return lookup(course_id)
+    except (OSError, ValueError):
+        return None
+
+
 def _report_deck(
     ledger_path: Path,
     deck_key: str,
@@ -391,7 +416,7 @@ def _report_deck(
     *,
     root: Path,
     manifest: dict[str, Any] | None,
-    state_lookup: Any,
+    state_lookup: StateLookup | None,
     state_cache: dict[str, CourseRecordingState | None],
 ) -> DeckReport:
     topic_dir = ledger_path.parent.parent
@@ -421,26 +446,35 @@ def _report_deck(
         )
 
     any_half = next(iter(deck_files.values()))
+    bundle_paths = _bundle_paths(deck_files)
     head_by_lang: dict[str, dict[str, MemberInfo] | None] = {}
+    commits_by_anchor: dict[str, list[str] | None] = {}
     parts: list[PartReport] = []
     for part in sorted(entry.parts, key=rl.part_identity):
-        if part.lang not in head_by_lang:
-            head_by_lang[part.lang] = deck_member_index(any_half, part.lang)
-        head = head_by_lang[part.lang]
-        base, status = rl.resolve_part_members(part, any_half)
+        status: rl.MembersStatus
+        if part.lang not in rl.RECORDABLE_LANGS:
+            # A hand-edited or foreign entry: report it, never let it abort the run.
+            head, base, status = None, None, "unverifiable"
+        else:
+            if part.lang not in head_by_lang:
+                head_by_lang[part.lang] = deck_member_index(any_half, part.lang)
+            head = head_by_lang[part.lang]
+            base, status = rl.resolve_part_members(part, any_half)
         if base is None or head is None:
             severity, changed, total, changed_members = "unverifiable", 0, len(part.members), {}
         else:
             diff = diff_members(base, head, rl.resolve_part_order(part, base, status))
             severity, changed, total = diff.severity, diff.changed, diff.total
             changed_members = diff.members
-        commits = (
-            _commits_since(part.anchor.commit, _bundle_paths(deck_files))
-            if part.anchor.commit
-            else None
-        )
-        if part.course_id not in state_cache:
-            state_cache[part.course_id] = state_lookup(part.course_id) if state_lookup else None
+        commits: list[str] | None = None
+        if part.anchor.commit:
+            if part.anchor.commit not in commits_by_anchor:
+                commits_by_anchor[part.anchor.commit] = _commits_since(
+                    part.anchor.commit, bundle_paths
+                )
+            commits = commits_by_anchor[part.anchor.commit]
+        if manifest is not None and part.course_id not in state_cache:
+            state_cache[part.course_id] = _safe_state(state_lookup, part.course_id)
         parts.append(
             PartReport(
                 course_id=part.course_id,
@@ -455,7 +489,7 @@ def _report_deck(
                 changed_members=changed_members,
                 commits_since_anchor=commits,
                 built_output_changed=_built_output_changed(
-                    manifest, state_cache[part.course_id], part
+                    manifest, state_cache.get(part.course_id), part
                 ),
             )
         )
@@ -466,6 +500,10 @@ def _report_deck(
     if ack is not None:
         if ack.hash_version != rl.HASH_VERSION:
             ack_state = "stale-ack"
+        elif any(not _ack_map(ack, lang)[0] for lang in head_by_lang):
+            # A language recorded after the ack was written is not covered by
+            # it: the deck is unacknowledged again (re-run `ack`), not drifted.
+            ack_state = "unacknowledged"
         else:
             since: list[str] = []
             for lang, head in head_by_lang.items():
@@ -525,7 +563,7 @@ def build_report(
     *,
     include_unrecorded: bool = False,
     manifest: dict[str, Any] | None = None,
-    state_lookup: Any = None,
+    state_lookup: StateLookup | None = None,
 ) -> Report:
     """The backlog for every ledger under *root* (a course root, topic dir or deck file).
 
