@@ -191,7 +191,16 @@ def test_load_absent_is_empty(tmp_path: Path):
 
 @pytest.mark.parametrize(
     "content",
-    ["{not json", "[]", '{"schema": 99, "decks": {}}', '{"schema": 1, "decks": {"x": 5}}'],
+    [
+        "{not json",
+        "[]",
+        '{"schema": 99, "decks": {}}',
+        '{"schema": 1, "decks": {"x": 5}}',
+        '{"schema": 1, "decks": []}',
+        '{"schema": 1, "hash_version": "x", "decks": {}}',
+        '{"schema": 1, "decks": {"x": {"parts": 5}}}',
+        '{"schema": 1, "decks": {"x": {"parts": [{"part": "one"}]}}}',
+    ],
 )
 def test_load_refuses_unreadable_ledgers(tmp_path: Path, content: str):
     path = tmp_path / "recordings-ledger.json"
@@ -213,16 +222,34 @@ def test_load_backfills_part_hash_version_from_envelope(tmp_path: Path):
     assert loaded.decks["slides_t"].parts[0].hash_version == 0
 
 
-def test_record_part_upserts_same_part_and_language(tmp_path: Path):
+def test_record_part_upserts_same_course_part_and_language(tmp_path: Path):
     path = tmp_path / ".clm" / "recordings-ledger.json"
     rl.record_part(path, "slides_t", _part(part=1, lang="de", members={"id:s0": "old"}))
     rl.record_part(path, "slides_t", _part(part=2, lang="de"))
     rl.record_part(path, "slides_t", _part(part=1, lang="en"))
+    # A second cohort's recording of the same part never erases the first's.
+    rl.record_part(path, "slides_t", _part(part=1, lang="de", course_id="c-2026-08-de"))
     rl.record_part(path, "slides_t", _part(part=1, lang="de", members={"id:s0": "new"}))
 
     parts = rl.load(path).decks["slides_t"].parts
-    assert [(p.part, p.lang) for p in parts] == [(1, "de"), (1, "en"), (2, "de")]
-    assert next(p for p in parts if (p.part, p.lang) == (1, "de")).members == {"id:s0": "new"}
+    assert [rl.part_identity(p) for p in parts] == [
+        ("c-2026-08-de", 1, "de"),
+        ("c-de", 1, "de"),
+        ("c-de", 1, "en"),
+        ("c-de", 2, "de"),
+    ]
+    assert next(p for p in parts if rl.part_identity(p) == ("c-de", 1, "de")).members == {
+        "id:s0": "new"
+    }
+
+
+@pytest.mark.parametrize("lang", ["EN", "en-US", "fr", ""])
+def test_deck_members_rejects_a_lang_that_names_no_side(tmp_path: Path, lang: str):
+    de = _write_pair(tmp_path / "t")
+    with pytest.raises(ValueError, match="recordable language"):
+        rl.deck_members(de, lang)
+    with pytest.raises(ValueError, match="recordable language"):
+        rl.deck_members_at_ref(de, "HEAD", lang)
 
 
 def test_record_part_keeps_other_decks_and_ack(tmp_path: Path):
@@ -296,6 +323,20 @@ def test_stale_hash_version_recomputes_from_anchor_commit(repo: Path):
     members, status = rl.resolve_part_members(part, de)
     assert status == "recomputed"
     assert members == recorded
+
+
+@needs_git
+def test_dirty_anchor_recompute_is_only_approximate(repo: Path):
+    de = _write_pair(repo / "slides" / "topic_x")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "recorded state")
+    commit = _git(repo, "rev-parse", "HEAD")
+    part = _part(hash_version=LEDGER_HASH_VERSION - 1, anchor=rl.anchor_for(commit, True))
+
+    members, status = rl.resolve_part_members(part, de)
+
+    assert status == "approximate"
+    assert members == rl.deck_members(de, "de")
 
 
 @needs_git

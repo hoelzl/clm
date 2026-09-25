@@ -25,9 +25,11 @@ exactly the fields the report needs and travels with the deck it describes —
 a deck edit and its ledger change land in the same commit, and a renamed or
 deleted deck shows up as `orphaned` instead of vanishing.
 
-Both are written by the recordings dashboard at record time: the local state
-file first, then the ledger entry with the same `recorded_at`. A ledger
-failure is logged and never blocks a recording.
+Both are written by the recordings dashboard when a recording stops: the
+local state file first, then the ledger entry with the same `recorded_at`.
+The ledger's anchor and fingerprints are taken at that moment (not at arm
+time), so a retake made after a quick edit fingerprints the edited deck. A
+ledger failure is logged and never blocks a recording.
 
 ## The recordings ledger
 
@@ -78,9 +80,11 @@ The build skips `.clm/` entirely, so the ledger is never a build input.
   `slides_x.en.py` → `slides_x`), exactly as the sync ledger keys its
   sections. A split deck has **one** entry; `lang` on each part records which
   side was shown and therefore which side's members are stored.
-- **`parts`** hold one entry per recorded part of that deck in that language.
-  A retake replaces the entry for the same `(part, lang)`; the take history
-  stays in the local state file.
+- **`parts`** hold one entry per `(course_id, part, lang)`: one cohort's
+  recording of that part in that language. A retake replaces the entry with
+  the same identity; the take history stays in the local state file. A
+  second cohort recording the same deck adds its own entries and never
+  erases the first cohort's — those videos still ship to that cohort.
 - **`recorded_at`** matches the local state file's stamp (local time,
   seconds).
 - **`course_id`** is the state-file course id the part was recorded under
@@ -127,7 +131,9 @@ entry reports as `unverifiable`.
 `hash_version` is the sync ledger's fingerprint-function version, stamped
 per part (and per `ack`) and repeated on the envelope. The rule is the sync
 ledger's: an entry recorded under an **older** version is never trusted. It
-is recomputed from the deck as committed at `anchor.commit` when one exists,
+is recomputed from the deck as committed at `anchor.commit` when one exists
+— reported as `recomputed` for a clean anchor and `approximate` for a
+`commit-dirty` one, since that commit under-describes what was shown —
 otherwise it reports as `unverifiable`. A part without its own
 `hash_version` inherits the envelope's.
 

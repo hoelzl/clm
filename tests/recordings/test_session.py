@@ -2086,16 +2086,18 @@ class TestStateWiring:
         assert ledger_part.members == {"id:s0": "fp-s0", "id:m1": "fp-m1"}
         assert ledger_part.hash_version == rl.HASH_VERSION
 
-    def test_ledger_retake_replaces_the_part_entry(
+    def test_ledger_retake_fingerprints_the_deck_as_it_is_at_stop_time(
         self, mock_obs, recording_root: Path, tmp_path: Path
     ):
-        """A retake re-records the same (part, lang) slot at the new anchor."""
+        """A retake re-records the same (course, part, lang) slot from the deck
+        as it is when the recording stops — not from the arm-time snapshot
+        (a retake inside the retake window never re-arms)."""
         from clm.recordings import ledger as rl
         from clm.recordings.record_provenance import RecordProvenance
         from clm.recordings.state import CourseRecordingState
+        from tests.recordings.test_ledger import DE0, EN0, _write_pair
 
-        deck_path = tmp_path / "course" / "slides" / "topic_x" / "slides_t.de.py"
-        deck_path.parent.mkdir(parents=True)
+        deck_path = _write_pair(tmp_path / "course" / "slides" / "topic_x")
         state = CourseRecordingState(course_id="c")
         state.ensure_lecture("l1", "t")
         session = RecordingSession(
@@ -2107,19 +2109,25 @@ class TestStateWiring:
             retake_window_seconds=0.0,
             state=state,
         )
-        for commit, fp in (("aaaa", "fp-old"), ("bbbb", "fp-new")):
-            obs_output = tmp_path / f"rec-{commit}.mkv"
-            obs_output.write_bytes(commit.encode())
-            prov = RecordProvenance(
-                git_commit=commit, git_dirty=False, deck_path=deck_path, members={"id:s0": fp}
-            )
-            session.arm("c", "s", "t", part_number=0, lecture_id="l1", provenance=prov)
+        # Arm-time snapshot: deliberately stale, to prove it is not what lands.
+        prov = RecordProvenance(
+            git_commit="aaaa", git_dirty=False, deck_path=deck_path, members={"id:s0": "stale"}
+        )
+        expected: list[dict[str, str]] = []
+        for i, de_text in enumerate((DE0, DE0.replace("DE eins", "DE eins, neu"))):
+            _write_pair(deck_path.parent, de=de_text, en=EN0)
+            expected.append(rl.deck_members(deck_path, "de"))
+            obs_output = tmp_path / f"rec-{i}.mkv"
+            obs_output.write_bytes(b"take%d" % i)
+            session.arm("c", "s", "t", part_number=0, lang="de", lecture_id="l1", provenance=prov)
             self._stop_after_arm(mock_obs, session, obs_output)
 
+        assert expected[0] != expected[1]
         entry = rl.load(deck_path.parent / ".clm" / "recordings-ledger.json").decks["slides_t"]
         [ledger_part] = entry.parts
-        assert ledger_part.anchor.commit == "bbbb"
-        assert ledger_part.members == {"id:s0": "fp-new"}
+        assert ledger_part.members == expected[1]
+        # No git checkout under tmp_path: the arm-time commit is the fallback anchor.
+        assert ledger_part.anchor == rl.RecordingAnchor(kind="commit", commit="aaaa")
         # The state file keeps the take history; the ledger keeps the active take.
         assert state.get_lecture("l1").parts[0].takes
 

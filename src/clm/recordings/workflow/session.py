@@ -1833,21 +1833,34 @@ class RecordingSession:
         failure is logged, never raised, because losing the recording is
         worse than losing its provenance. A ledger that git would ignore
         is reported as a warning (the "`.clm/` hides ledgers" landmine).
+
+        The evidence is taken **now**, not at arm time: a retake inside the
+        retake window re-uses the armed deck without re-arming, and the
+        edit the retake was made to show must be what the entry
+        fingerprints. Arm-time values are the fallback when the deck no
+        longer parses (the anchor then still names what was armed).
         """
         prov = deck.provenance
         if deck.lecture_id is None or prov is None or prov.deck_path is None:
             return
         try:
             from clm.recordings import ledger as recordings_ledger
+            from clm.recordings.git_info import get_git_info
 
             part = course_state._find_part(deck.lecture_id, state_part)
+            members = recordings_ledger.deck_members(prov.deck_path, deck.lang)
+            if not members:
+                members = dict(prov.members or {})
+            git = get_git_info(prov.deck_path.parent)
+            commit = git.get("commit") or prov.git_commit
+            dirty = bool(git.get("dirty")) if git.get("commit") else prov.git_dirty
             entry = recordings_ledger.LedgerPart(
                 part=state_part,
                 recorded_at=part.recorded_at,
                 course_id=course_state.course_id,
                 lang=deck.lang,
-                anchor=recordings_ledger.anchor_for(prov.git_commit, prov.git_dirty),
-                members=dict(prov.members or {}),
+                anchor=recordings_ledger.anchor_for(commit, dirty),
+                members=members,
             )
             ledger_path = recordings_ledger.ledger_path_for(prov.deck_path)
             recordings_ledger.record_part(

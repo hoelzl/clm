@@ -45,14 +45,16 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from clm.slides.doc_ledger import LEDGER_HASH_VERSION, LEDGER_SUBDIR, deck_key_for
+
+if TYPE_CHECKING:
+    from clm.slides.bilingual_doc import BilingualDeck, Lang
 
 __all__ = [
     "HASH_VERSION",
@@ -73,6 +75,7 @@ __all__ = [
     "is_git_ignored",
     "ledger_path_for",
     "load",
+    "part_identity",
     "record_part",
     "resolve_part_members",
     "save",
@@ -90,8 +93,14 @@ LEDGER_FILENAME = "recordings-ledger.json"
 
 AnchorKind = Literal["commit", "commit-dirty", "time", "mtime", "identified", "unanchored"]
 
-#: Member-fingerprint provenance as :func:`resolve_part_members` reports it.
-MembersStatus = Literal["recorded", "recomputed", "unverifiable"]
+#: Member-fingerprint provenance as :func:`resolve_part_members` reports it:
+#: ``recorded`` (stored under the current hash version), ``recomputed`` (from a
+#: clean anchor commit), ``approximate`` (from a *dirty* anchor commit, which
+#: under-describes what was shown), ``unverifiable`` (nothing trustworthy).
+MembersStatus = Literal["recorded", "recomputed", "approximate", "unverifiable"]
+
+#: The two sides a recording can show.
+RECORDABLE_LANGS: tuple[str, ...] = ("de", "en")
 
 
 class LedgerError(Exception):
@@ -201,14 +210,26 @@ def anchor_for(commit: str | None, dirty: bool) -> RecordingAnchor:
 # ---------------------------------------------------------------------------
 
 
-def _members_of(deck: object, lang: str) -> dict[str, str]:
-    from clm.slides.bilingual_doc import BilingualDeck
+def _check_lang(lang: str) -> Lang:
+    """The recorded language must name a side; anything else is a caller bug.
+
+    ``Member.side`` maps every non-``"de"`` value to the EN side, so an
+    unvalidated cookie value would store EN fingerprints under a bogus
+    ``lang`` and a separate ledger slot.
+    """
+    if lang not in RECORDABLE_LANGS:
+        raise ValueError(
+            f"not a recordable language: {lang!r} (expected one of {RECORDABLE_LANGS})"
+        )
+    return lang  # type: ignore[return-value]
+
+
+def _members_of(deck: BilingualDeck, lang: Lang) -> dict[str, str]:
     from clm.slides.doc_identity import content_fingerprint
 
-    assert isinstance(deck, BilingualDeck)
     out: dict[str, str] = {}
     for member in deck.members():
-        side = member.side(lang)  # type: ignore[arg-type]
+        side = member.side(lang)
         if side is not None:
             out[member.key.render()] = content_fingerprint(side)
     return out
@@ -220,10 +241,12 @@ def deck_members(deck_path: Path, lang: str) -> dict[str, str]:
     ``{}`` when the deck is not a split pair with an existing twin or the
     bundle fails the normalize precondition — the ledger then records an
     entry without evidence rather than blocking a recording, and the report
-    treats it as ``unverifiable``.
+    treats it as ``unverifiable``. Raises ``ValueError`` for a *lang* that
+    names no side.
     """
     from clm.slides.doc_lenses import DocLensError, load_bundle
 
+    side = _check_lang(lang)
     try:
         bundle = load_bundle(deck_path)
     except (DocLensError, OSError, UnicodeDecodeError) as exc:
@@ -232,7 +255,7 @@ def deck_members(deck_path: Path, lang: str) -> dict[str, str]:
     if bundle.outcome.deck is None:
         logger.debug("No member fingerprints for {}: bundle refused normalization", deck_path)
         return {}
-    return _members_of(bundle.outcome.deck, lang)
+    return _members_of(bundle.outcome.deck, side)
 
 
 def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] | None:
@@ -246,6 +269,7 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     from clm.slides.doc_lenses import parse_bundle
     from clm.slides.git_text import bundle_texts_at_ref
 
+    side = _check_lang(lang)
     halves = split_halves(deck_path)
     if halves is None:
         return None
@@ -258,7 +282,7 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     )
     if outcome.deck is None:
         return None
-    return _members_of(outcome.deck, lang)
+    return _members_of(outcome.deck, side)
 
 
 def resolve_part_members(
@@ -269,8 +293,10 @@ def resolve_part_members(
     * recorded under the current :data:`HASH_VERSION` and non-empty →
       ``(members, "recorded")``;
     * otherwise, with a commit anchor → recomputed from the deck at that
-      commit, ``(members, "recomputed")`` (``None`` when the commit no longer
-      resolves);
+      commit: ``(members, "recomputed")`` for a clean anchor, ``(members,
+      "approximate")`` for a ``commit-dirty`` one (the commit under-describes
+      what was shown; the report must say so), ``None`` when the commit no
+      longer resolves;
     * otherwise ``(None, "unverifiable")`` — never a hash a different
       fingerprint function would compute differently.
     """
@@ -279,7 +305,7 @@ def resolve_part_members(
     if part.anchor.commit:
         recomputed = deck_members_at_ref(deck_path, part.anchor.commit, part.lang)
         if recomputed:
-            return recomputed, "recomputed"
+            return recomputed, ("approximate" if part.anchor.dirty else "recomputed")
     return None, "unverifiable"
 
 
@@ -312,29 +338,45 @@ def load(path: Path) -> RecordingsLedger:
         raise LedgerError(
             f"recordings ledger {path} has schema {schema!r}; this clm reads schema {SCHEMA_VERSION}"
         )
-    file_hash_version = int(data.get("hash_version", 0) or 0)
-    # A part that carries no version of its own was written under the file's
-    # version — an older writer that only stamped the envelope. Fill it in
-    # before validation so the model default (the *current* version) can never
-    # promote an unversioned entry to trusted.
-    for raw_deck in (data.get("decks") or {}).values():
-        if isinstance(raw_deck, dict):
-            for raw_part in raw_deck.get("parts") or []:
-                if isinstance(raw_part, dict):
-                    raw_part.setdefault("hash_version", file_hash_version)
-            ack = raw_deck.get("ack")
-            if isinstance(ack, dict):
-                ack.setdefault("hash_version", file_hash_version)
     try:
+        _backfill_hash_versions(data)
         return RecordingsLedger.model_validate(data)
-    except ValueError as exc:
+    except (ValueError, TypeError, AttributeError) as exc:
         raise LedgerError(f"recordings ledger {path} is malformed: {exc}") from exc
+
+
+def _backfill_hash_versions(data: dict) -> None:
+    """Give every part/ack without its own ``hash_version`` the envelope's.
+
+    An older writer that only stamped the envelope must not have its entries
+    promoted to the model default (the *current* version) by validation.
+    Shape errors propagate to :func:`load`, which reports them as
+    :class:`LedgerError`.
+    """
+    raw_version = data.get("hash_version", 0)
+    if isinstance(raw_version, bool) or not isinstance(raw_version, int):
+        raise ValueError(f"hash_version must be an integer, got {raw_version!r}")
+    decks = data.get("decks") or {}
+    if not isinstance(decks, dict):
+        raise TypeError("decks must be an object")
+    for raw_deck in decks.values():
+        if not isinstance(raw_deck, dict):
+            raise TypeError("each deck entry must be an object")
+        parts = raw_deck.get("parts") or []
+        if not isinstance(parts, list):
+            raise TypeError("parts must be a list")
+        for raw_part in parts:
+            if isinstance(raw_part, dict):
+                raw_part.setdefault("hash_version", raw_version)
+        ack = raw_deck.get("ack")
+        if isinstance(ack, dict):
+            ack.setdefault("hash_version", raw_version)
 
 
 def _to_json(ledger: RecordingsLedger) -> bytes:
     """Canonical serialization: sorted keys, two-space indent, trailing newline."""
     for deck in ledger.decks.values():
-        deck.parts.sort(key=lambda p: (p.part, p.lang, p.recorded_at))
+        deck.parts.sort(key=lambda p: (p.part, p.lang, p.course_id, p.recorded_at))
     payload = ledger.model_dump(by_alias=True, mode="json")
     payload["schema"] = SCHEMA_VERSION
     payload["hash_version"] = HASH_VERSION
@@ -365,16 +407,28 @@ def save(ledger: RecordingsLedger, path: Path) -> bool:
     return True
 
 
+def part_identity(part: LedgerPart) -> tuple[str, int, str]:
+    """The upsert key of a part entry: ``(course_id, part, lang)``.
+
+    One course id is one cohort's recording run; a second cohort re-recording
+    the same deck part must not erase the first cohort's provenance — its
+    videos still ship to that cohort.
+    """
+    return part.course_id, part.part, part.lang
+
+
 def record_part(ledger_path: Path, deck_key: str, part: LedgerPart) -> bool:
     """Load–upsert–save one part entry: the record-time write path.
 
-    An existing entry for the same ``(part, lang)`` is replaced (a retake
-    supersedes the take it replaced — the state file keeps the take
-    history); entries for other parts and languages are untouched.
+    An existing entry with the same :func:`part_identity` is replaced (a
+    retake supersedes the take it replaced — the state file keeps the take
+    history); entries for other parts, languages and course ids are
+    untouched.
     """
     ledger = load(ledger_path)
     entry = ledger.deck(deck_key)
-    entry.parts = [p for p in entry.parts if not (p.part == part.part and p.lang == part.lang)]
+    key = part_identity(part)
+    entry.parts = [p for p in entry.parts if part_identity(p) != key]
     entry.parts.append(part)
     return save(ledger, ledger_path)
 
@@ -420,8 +474,3 @@ def ignored_ledger_warning(path: Path) -> str | None:
             f"add `!**/{LEDGER_SUBDIR}/{LEDGER_FILENAME}` to the course repo's .gitignore"
         )
     return None
-
-
-def now_stamp() -> str:
-    """The ``recorded_at`` / ``ack.at`` timestamp form (local time, seconds)."""
-    return datetime.now().isoformat(timespec="seconds")

@@ -439,23 +439,34 @@ class Course(NotebookMixin):
         simply skipped. Both companions of a split deck share one
         ``topic.id``, so which half matches does not change the result.
         """
-        found = self._find_deck_notebook(section_name, deck_name, lang)
-        if found is None:
-            return None, None
-        section, nb = found
-        return section.id, nb.topic.id
+        section_id, topic_id, _ = self.resolve_deck_location(section_name, deck_name, lang)
+        return section_id, topic_id
 
     def resolve_deck_file(self, section_name: str, deck_name: str, lang: str) -> Path | None:
         """The source file of the deck the recordings dashboard names.
 
         Same lookup as :meth:`resolve_deck_topic`, returning the matching
-        notebook's on-disk source path (the ``.de``/``.en`` half whose title
-        matches in *lang* for a split deck). The recordings ledger (#1004)
-        keys on this path — a topic id alone is not a source anchor when a
-        topic id resolves to two directories (cohort-archive modules).
+        notebook's on-disk source path — for a split deck the half whose
+        intrinsic ``output_language_filter`` is *lang*. The recordings ledger
+        (#1004) keys on this path: a topic id alone is not a source anchor
+        when a topic id resolves to two directories (cohort-archive modules).
+        """
+        return self.resolve_deck_location(section_name, deck_name, lang)[2]
+
+    def resolve_deck_location(
+        self, section_name: str, deck_name: str, lang: str
+    ) -> tuple[str | None, str | None, Path | None]:
+        """``(section_id, topic_id, source_path)`` for a dashboard deck in one walk.
+
+        ``(None, None, None)`` when nothing matches. Recording provenance
+        needs all three, and each is a full section × notebook scan, so the
+        two narrower resolvers above share this one.
         """
         found = self._find_deck_notebook(section_name, deck_name, lang)
-        return found[1].source_path if found is not None else None
+        if found is None:
+            return None, None, None
+        section, nb = found
+        return section.id, nb.topic.id, nb.source_path
 
     def _find_deck_notebook(
         self, section_name: str, deck_name: str, lang: str
@@ -467,6 +478,14 @@ class Course(NotebookMixin):
             except (KeyError, TypeError):
                 continue
             for nb in section.notebooks:
+                # A split deck is two notebooks sharing one slot; each half
+                # carries its intrinsic language, and the dashboard lists only
+                # the half matching the shown language (routes.py). Mirror
+                # that, so lang="en" never resolves to the .de half when both
+                # halves render the same title.
+                nb_lang = getattr(nb, "output_language_filter", None)
+                if nb_lang in ("de", "en") and nb_lang != lang:
+                    continue
                 try:
                     if nb.file_name(lang, "") == deck_name:
                         return section, nb
