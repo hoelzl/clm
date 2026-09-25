@@ -2258,6 +2258,80 @@ class TestTitleMacroBody:
         deck.assert_converged()
 
 
+class TestTitleMacroReportBodies:
+    """Regression tests for #993: the ``id:title`` row's ``de_body`` /
+    ``en_body`` carry the macro line, and a header body banks in one apply.
+
+    A single-line j2 cell has an empty ``body`` by construction, so the report
+    framed the header with empty bodies and only the ``de``/``en`` excerpts
+    showed the line — two agents independently had to guess the answer
+    format. The excerpt must be valid decision input for every member.
+    """
+
+    def _both_retitled(self, tmp_path: Path) -> _Deck:
+        deck = _deck(tmp_path)
+        deck.edit_de('header_de("Titel DE")', 'header_de("Neuer Titel")')
+        deck.edit_en('header_en("Title EN")', 'header_en("New Title")')
+        return deck
+
+    def test_verify_translation_header_row_carries_both_macro_lines(self, tmp_path: Path):
+        deck = self._both_retitled(tmp_path)
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:title")
+        assert item.action == "verify_translation"
+        payload = item.payload()
+        assert payload["de_body"] == '# {{ header_de("Neuer Titel") }}'
+        assert payload["en_body"] == '# {{ header_en("New Title") }}'
+        # The excerpt keys stay what they were.
+        assert payload["de"].startswith('# {{ header_de("Neuer Titel") }}')
+
+    def test_translate_edit_header_row_carries_the_macro_lines(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.edit_en('header_en("Title EN")', 'header_en("Weather Agent")')
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:title")
+        assert item.action == "translate_edit"
+        payload = item.payload()
+        assert payload["en_body"] == '# {{ header_en("Weather Agent") }}'
+        assert payload["de_body"] == '# {{ header_de("Titel DE") }}'
+
+    def test_excerpt_body_is_valid_decision_input_for_the_header(self, tmp_path: Path):
+        """The M10 property, now for header rows: feed ``de_body`` back
+        (edited) as the ``body`` and the executor accepts it."""
+        deck = self._both_retitled(tmp_path)
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:title")
+        corrected = item.payload()["en_body"].replace("New Title", "Newer Title")
+        outcome = deck.apply(_decision("id:title", body=corrected + "\n", side="en"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert '# {{ header_en("Newer Title") }}\n' in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
+    def test_header_body_banks_in_the_same_apply(self, tmp_path: Path):
+        """(b) of #993: a body answer on the header, applied with no
+        rejections, leaves the next report clean — no extra confirm round."""
+        deck = _deck(tmp_path)
+        deck.edit_de('header_de("Titel DE")', 'header_de("Dritter Titel")')
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("id:title", "translate_edit")]
+        outcome = deck.apply(_decision("id:title", body='# {{ header_en("Third Title") }}\n'))
+        assert outcome.all_applied, outcome.to_payload()
+        assert outcome.to_payload()["counts"]["rejected"] == 0
+        assert not outcome.verify_violations
+        deck.assert_converged()
+        _, again = deck.diff()
+        assert again.items == []
+
+    def test_normal_cells_keep_the_delimiter_free_body(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.edit_de("DE Text", "DE Text NEU")
+        _, diff = deck.diff()
+        item = next(i for i in diff.items if i.key == "id:s0-m")
+        payload = item.payload()
+        assert payload["de_body"].rstrip("\n") == "# DE Text NEU"
+        assert not payload["de_body"].startswith("# %%")
+
+
 class TestMacroHeaderFromBody:
     """Regression tests for #629: the bare-text splice must target exactly
     one quoted macro argument (F1) and reject characters that could escape
