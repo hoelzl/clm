@@ -14,6 +14,7 @@ channel's ledger in the spec's ``<release-channels>``) or by an explicit
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from clm.cohort_calendar.projection import project
 from clm.cohort_calendar.render import (
     assignment_content,
     assignment_date_label,
+    assignment_payload,
     render_csv,
     render_ics,
     render_markdown,
@@ -235,21 +237,53 @@ def calendar_group() -> None:
 calendar_group.add_command(calendar)  # the projection: `clm calendar generate`
 
 
+_JSON_OPT = click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit the result as JSON on stdout (diagnostics stay on stderr; exit codes unchanged).",
+)
+
+
+def _echo_json(payload: object) -> None:
+    click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
 @calendar_group.command("check")
 @spec_argument
 @_channel_options
+@_JSON_OPT
 def check_cmd(
-    spec_file: Path, channel: str, calendar_path: Path | None, data_dir: Path | None
+    spec_file: Path,
+    channel: str,
+    calendar_path: Path | None,
+    data_dir: Path | None,
+    as_json: bool,
 ) -> None:
     """Validate a cohort calendar against the course schedule.
 
     Date-free: reports unknown/ambiguous refs, over-full segments (with the
     exact deficit), end overflow, and warnings (free dates, stray inserts).
     Exits non-zero if there are errors — suitable for a pre-push hook.
+    ``--json`` emits the findings as rows (``rule`` / ``severity`` / ``anchor``
+    / ``dates`` / ``message``) for an agent maintaining the TOML (#966).
     """
     config = _load_config(spec_file, channel, calendar_path)
     _, buckets = _resolve_buckets(spec_file, "en", data_dir)
     proj = project(buckets, config)
+
+    if as_json:
+        _echo_json(
+            {
+                "ok": proj.ok,
+                "errors": len(proj.errors),
+                "warnings": len(proj.warnings),
+                "findings": [d.payload() for d in proj.diagnostics],
+            }
+        )
+        if not proj.ok:
+            raise SystemExit(1)
+        return
 
     for diag in proj.errors:
         click.echo(f"error: {diag.message}", err=True)
@@ -267,6 +301,40 @@ def _plan_totals(plan, *, prefix: str) -> str:
         f"{prefix}{len(plan.inserts)} insert(s), {len(plan.updates)} update(s), "
         f"{len(plan.deletes)} delete(s); {plan.unchanged} unchanged."
     )
+
+
+def _event_payload(body: dict, uid_key: str) -> dict[str, object]:
+    return {
+        "uid": body.get("extendedProperties", {}).get("private", {}).get(uid_key),
+        "start_date": (body.get("start") or {}).get("date"),
+        # Exclusive, as the Google API (and the .ics DTEND convention) has it.
+        "end_date_exclusive": (body.get("end") or {}).get("date"),
+        "summary": body.get("summary", ""),
+        "description": body.get("description", ""),
+    }
+
+
+def _plan_payload(plan, *, dry_run: bool, calendar_id: str, namespace: str, uid_key: str) -> dict:
+    """The ``push --json`` document: the insert/update/delete plan as rows (#966)."""
+    return {
+        "dry_run": dry_run,
+        "applied": not dry_run,
+        "calendar_id": calendar_id,
+        "namespace": namespace,
+        "inserts": [_event_payload(body, uid_key) for body in plan.inserts],
+        "updates": [
+            {"event_id": event_id, **_event_payload(body, uid_key)}
+            for event_id, body in plan.updates
+        ],
+        "deletes": [{"event_id": event_id, "label": label} for event_id, label in plan.deletes],
+        "unchanged": plan.unchanged,
+        "totals": {
+            "inserts": len(plan.inserts),
+            "updates": len(plan.updates),
+            "deletes": len(plan.deletes),
+            "unchanged": plan.unchanged,
+        },
+    }
 
 
 @calendar_group.command("push")
@@ -292,6 +360,7 @@ def _plan_totals(plan, *, prefix: str) -> str:
     is_flag=True,
     help="Show the insert/update/delete plan without changing the calendar.",
 )
+@_JSON_OPT
 def push_cmd(
     spec_file: Path,
     language: str,
@@ -301,6 +370,7 @@ def push_cmd(
     calendar_id: str,
     credentials_path: Path | None,
     dry_run: bool,
+    as_json: bool,
 ) -> None:
     """Mirror a cohort's viewing calendar into a Google calendar.
 
@@ -313,6 +383,11 @@ def push_cmd(
     CLM_GOOGLE_CREDENTIALS): either an OAuth "Desktop app" client (a browser
     consent flow runs once, then the token is cached) or a service account the
     target calendar is shared with ("Make changes to events").
+
+    ``--json`` emits the plan as rows (``inserts`` / ``updates`` / ``deletes``
+    with each event's UID, dates and title, plus ``totals``) — with
+    ``--dry-run`` before anything touches Google Calendar, otherwise the plan
+    that was applied (#966).
     """
     from clm.cohort_calendar import google_sync
 
@@ -350,6 +425,17 @@ def push_cmd(
         existing = google_sync.fetch_managed_events(service, target, namespace)
         plan = google_sync.plan_sync(desired, existing)
         if dry_run:
+            if as_json:
+                _echo_json(
+                    _plan_payload(
+                        plan,
+                        dry_run=True,
+                        calendar_id=target,
+                        namespace=namespace,
+                        uid_key=google_sync.UID_KEY,
+                    )
+                )
+                return
             for line in google_sync.describe_plan(plan):
                 click.echo(line)
             click.echo(_plan_totals(plan, prefix="Dry run — would apply: "))
@@ -357,6 +443,17 @@ def push_cmd(
         google_sync.apply_plan(service, target, plan)
     except google_sync.GoogleSyncError as e:
         raise click.ClickException(str(e)) from None
+    if as_json:
+        _echo_json(
+            _plan_payload(
+                plan,
+                dry_run=False,
+                calendar_id=target,
+                namespace=namespace,
+                uid_key=google_sync.UID_KEY,
+            )
+        )
+        return
     click.echo(_plan_totals(plan, prefix="Pushed: "))
 
 
@@ -408,6 +505,39 @@ def _format_status(report, language: str) -> list[str]:
     return lines
 
 
+def _status_state(report) -> str:
+    """One word for the report's headline (mirrors :func:`_format_status`)."""
+    if report.reference is None and not report.finished:
+        return "empty"
+    if report.finished:
+        return "finished"
+    if report.not_started:
+        return "not-started"
+    if report.current is not None:
+        return "class-today"
+    return "no-class-today"
+
+
+def _status_payload(report, projection, language: str) -> dict[str, object]:
+    """The ``status --json`` document (#966): the same facts the text prints,
+    plus the whole projected plan so an agent can reason past the lookahead."""
+
+    def row(a):
+        return assignment_payload(a, language) if a is not None else None
+
+    return {
+        "as_of": report.as_of.isoformat(),
+        "language": language,
+        "state": _status_state(report),
+        "current": row(report.current),
+        "reference": row(report.reference),
+        "upcoming": [assignment_payload(a, language) for a in report.upcoming],
+        "drift_days": report.drift_days,
+        "has_errors": report.has_errors,
+        "plan": [assignment_payload(a, language) for a in projection.assignments],
+    }
+
+
 @calendar_group.command("status")
 @spec_argument
 @language_option(default="de", aliases=("--lang",), help="Language for titles and labels.")
@@ -419,6 +549,7 @@ def _format_status(report, language: str) -> list[str]:
     default=None,
     help="Reference date (default: today). For tests, dated handouts, what-if previews.",
 )
+@_JSON_OPT
 def status_cmd(
     spec_file: Path,
     language: str,
@@ -426,14 +557,28 @@ def status_cmd(
     calendar_path: Path | None,
     data_dir: Path | None,
     as_of: dt.datetime | None,
+    as_json: bool,
 ) -> None:
-    """Show where a cohort is today vs the plan (the only now-relative command)."""
+    """Show where a cohort is today vs the plan (the only now-relative command).
+
+    ``--json`` emits the same facts as a document (``state``, ``current``,
+    ``reference``, ``upcoming``, ``drift_days``) plus ``plan`` — every
+    projected assignment — for an agent (#966).
+    """
     language = language.lower()
     config = _load_config(spec_file, channel, calendar_path)
     _, buckets = _resolve_buckets(spec_file, language, data_dir)
     as_of_date = as_of.date() if as_of is not None else dt.date.today()
 
     report = compute_status(buckets, config, as_of_date)
+    if as_json:
+        _echo_json(_status_payload(report, project(buckets, config), language))
+        if report.has_errors:
+            click.echo(
+                "warning: this calendar has projection errors; run `clm calendar check`.",
+                err=True,
+            )
+        return
     for line in _format_status(report, language):
         click.echo(line)
     if report.has_errors:
