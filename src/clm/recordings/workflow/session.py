@@ -1861,6 +1861,7 @@ class RecordingSession:
                 lang=deck.lang,
                 anchor=recordings_ledger.anchor_for(commit, dirty),
                 members=members,
+                order=recordings_ledger.id_order(members),
             )
             ledger_path = recordings_ledger.ledger_path_for(prov.deck_path)
             recordings_ledger.record_part(

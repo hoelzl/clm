@@ -308,5 +308,6 @@ the *other* stream's uncommitted promotions too.
 
 - `clm info commands` — full reference for the `clm release` and `clm git` groups
 - [Spec-file reference → Release Channels](spec-file-reference.md#release-channels-per-cohort-solution-release)
-- [`clm recordings drift`](recordings.md) — detect recordings that went stale
-  after slide edits, using the same provenance manifest
+- [`clm recordings report`](recordings.md) — the re-recording backlog after
+  slide edits; the same provenance manifest feeds its secondary
+  `built_output_changed` flag

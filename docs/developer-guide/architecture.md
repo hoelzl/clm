@@ -484,9 +484,12 @@ Managed video recording workflow: five-step audio pipeline
 processing backends (`OnnxAudioFirstBackend`, `ExternalAudioFirstBackend`,
 `AuphonicBackend` via `make_backend()`), watcher-driven automation,
 per-course JSON state with slide-version provenance stamping, and an HTMX
-web dashboard (`recordings.web.create_app`). `clm recordings drift`
-compares stamped `slide_digest`s against the build provenance manifest.
-Requires `[recordings]`.
+web dashboard (`recordings.web.create_app`). At record time the dashboard also
+writes the committed per-topic recordings ledger (`recordings.ledger`,
+`<topic>/.clm/recordings-ledger.json`: source anchor + member fingerprints);
+`clm recordings report` / `ack` (`recordings.report`) turn it into the
+re-recording backlog, with the stamped `slide_digest` versus the build
+provenance manifest as a secondary flag. Requires `[recordings]`.
 
 #### `clm.release` (per-topic solution release)
 

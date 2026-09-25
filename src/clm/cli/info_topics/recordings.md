@@ -67,6 +67,7 @@ The build skips `.clm/` entirely, so the ledger is never a build input.
           "lang": "de",
           "anchor": {"kind": "commit", "commit": "1cfeeb23dd…", "dirty": false},
           "members": {"id:intro": "<sha256>", "pos:intro/code/0": "<sha256>", "…": "…"},
+          "order": ["id:intro", "…"],
           "hash_version": 1
         }
       ],
@@ -90,9 +91,10 @@ The build skips `.clm/` entirely, so the ledger is never a build input.
 - **`course_id`** is the state-file course id the part was recorded under
   (`<spec slug>-<lang>`).
 - **`ack`** is the deck-level acknowledgement block: `{"at", "note",
-  "members", "hash_version"}` — the member fingerprints at which someone
-  decided *not* to re-record. Written by `clm recordings ack`; `null` until
-  then.
+  "members", "order", "hash_version"}` — the member fingerprints (and
+  id-member order) at which someone decided *not* to re-record, keyed
+  `"<lang>:<member-key>"` so one ack covers every recorded language.
+  Written by `clm recordings ack`; `null` until then.
 
 The file is canonical JSON (sorted keys, two-space indent, trailing newline),
 so a merge conflict is a genuine same-part conflict and stays line-local.
@@ -123,6 +125,11 @@ the `slide_id` attribute), keyed by the member's handle (`id:<slide_id>` for
 id-bearing cells, `pos:<group>/<kind>/<ordinal>` for id-less ones). They are
 stored **always**, not only for dirty trees, so the report never depends on
 git history being available (shallow clones, squashed cohorts).
+
+`order` lists the id-bearing member keys in the document order the
+recording showed — `members` is a sorted JSON object, so the "member order
+changed" rule needs it stored explicitly. An entry without `order` (written
+before the field existed) skips that rule; it is never guessed.
 
 An empty `members` map means the fingerprints could not be computed at
 record time (the deck was not a parseable `.de`/`.en` split pair); such an
@@ -164,8 +171,8 @@ the author decides, and `ack` records the decision at member granularity so
 a later edit of a different slide re-surfaces the deck while the acknowledged
 edit stays acknowledged.
 
-The classes are documented here from {version}; the `report` and `ack`
-verbs that compute them ship with the remaining half of #965.
+The agent loop over these rows — `report --json` → decide → `ack` — is in
+`clm info recordings-agents`; the command reference in `clm info commands`.
 
 ## Recordings configuration
 
@@ -203,6 +210,5 @@ quarter of the answerable parts.
 
 `report` replaces it with the source comparison above: per deck, no build,
 the tracker's own severity vocabulary, and an acknowledgement state. `drift`
-retires without an alias when `report` lands (see `clm info migration`); the
-build-output digest survives only as the secondary `built_output_changed`
-flag.
+is retired without an alias (see `clm info migration`); the build-output
+digest survives only as the secondary `built_output_changed` flag.

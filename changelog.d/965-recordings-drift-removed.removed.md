@@ -1,0 +1,1 @@
+- **`clm recordings drift` removed (#965).** Replaced by `clm recordings report` — the build-output digest comparison was topic-granular, spec-bound, needed a build, and read `changed` for a quarter of the untouched parts it could answer. No alias; `clm info migration` has the mapping. The `slide_digest` stamp stays and feeds `report`'s secondary `built_output_changed` flag.
