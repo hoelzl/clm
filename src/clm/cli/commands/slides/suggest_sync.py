@@ -10,7 +10,7 @@ import click
 from clm.slides.language_tools import suggest_sync
 
 
-@click.command("suggest-sync", hidden=True)
+@click.command("suggest-sync")
 @click.argument(
     "file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -32,17 +32,20 @@ def suggest_sync_cmd(
     source_language: str | None,
     json_output: bool,
 ):
-    """Compare a slide file against git HEAD and suggest sync updates (plumbing).
+    """Suggest sync updates for a UNIFIED bilingual deck (one file, de+en cells).
 
-    Read-only, single-FILE, *bilingual* (de/en cells co-located in one .py)
-    suggester. It is hidden from the normal command surface and kept for the
-    pre-split bilingual format and agent/MCP use. For split-format decks
-    (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) use ``clm slides sync``, which
-    reconciles the pair and writes the changes.
+    Read-only: compares FILE against its git HEAD version and lists the
+    cells edited in one language without a matching edit in the other.
+    Uses slide_id metadata for precise pairing when available; falls back
+    to positional pairing. Works for any percent-format source (``.py``,
+    ``.cs``, ``.cpp``, …).
 
-    Detects cells modified in one language without corresponding changes
-    in the other language.  Uses slide_id metadata for precise pairing
-    when available; falls back to positional pairing.
+    Scope boundary: this is the tool for decks that keep both languages in
+    ONE file (the unified layout — still the whole C# course and part of the
+    Python course, issue #981). For SPLIT decks (``<deck>.de.<ext>`` /
+    ``<deck>.en.<ext>``, the layout ``clm slides split`` produces) use
+    ``clm slides sync``, which reconciles the pair against its ledger and
+    writes the changes; it cannot read a unified deck.
 
     \b
     Examples:

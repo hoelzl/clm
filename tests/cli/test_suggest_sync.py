@@ -119,3 +119,24 @@ class TestSuggestSyncCommand:
         data = json.loads(result.output)
         assert data["sync_needed"] is False
         assert data["suggestions"] == []
+
+
+class TestDiscoverable:
+    """Regression for #981: the unified bilingual layout is still authored
+    (the whole C# course), so the command must be discoverable — a hidden
+    verb is invisible to the agents the docstring claims it serves."""
+
+    def test_listed_in_slides_help(self):
+        from clm.cli.main import cli
+
+        result = CliRunner().invoke(cli, ["slides", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "suggest-sync" in result.output
+
+    def test_help_states_the_unified_vs_split_boundary(self):
+        result = CliRunner().invoke(suggest_sync_cmd, ["--help"])
+        assert result.exit_code == 0, result.output
+        flat = " ".join(result.output.split())  # Click rewraps the docstring
+        assert "UNIFIED" in flat
+        assert "clm slides sync" in flat
+        assert "plumbing" not in flat.lower()
