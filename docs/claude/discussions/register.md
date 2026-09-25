@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-09-24
-review-by: 2027-03-24
+updated: 2026-09-25
+review-by: 2027-03-25
 ---
 # Register: discussions index
 
@@ -18,8 +18,30 @@ the reasons behind it are in `README.md`; the save procedure is
 | `cpp-ide-export` | Student-facing C++ IDE export (#928): Phase 4 verification and rollout, the owner's review of the generated output (kernel drops bare-expression output → `SHOW(expr);` everywhere; `slide_` prefix; `section_name` attribute; plain title; HTML→Markdown comments; no promotion heuristic), the lambda-crash landmine, differential check with values | Active — all follow-ups merged; owner's student-view review of four decks still open | clm #937, #938, #939, #940; CppCourses #129, #130; `docs/claude/handovers/cpp-ide-export-handover.md` | S1 |
 | `agent-discussion-continuity` | Porting the save/resume-discussion stack (skills, `docs/claude/discussions/`, transcript tooling) from CppCourses/Cenotaph to this repository | Active — stack landed and in use from this save; first saves of older sessions pending | clm #941 | S1 (last owner turn of the `cpp-ide-export` transcript) |
 | `agent-toolkit-candidates` | Which clm features should stop being stand-alone and become agent toolkits (the sync / release / harvest shape): survey of embedded-LLM paths, human-only output, and CLI-first affordances; three tiers filed as issues | Active — Tier 1 complete (#959–#963); S7 landed #965's `--json` surface half (PR #988, merged; issue stays open for the #907-gated `report`/accept verbs per the owner's split-landing decision); #966/#967, the #907 design, or deferred #981 next | umbrella clm #970, children #959–#969 plus #981, `docs/claude/agent-toolkit-candidates-investigation.md` (PR #971); kit PR #973; #960 PRs #974, #975, #976, #978; #961 PR #980; narration map PR #982; #962 PR #984; #963 PR #985; #965 surface half PR #988 | S2, S3, S4, S5, S6, S7 |
+| `recordings-rerecord-backlog` | #907: what retires the hand-maintained re-recording tracker (PythonCourses#360) — source-anchored provenance in a committed per-topic ledger, five severity classes from the member diff, member-granular `ack`, seeding from the local state files without video analysis; the build-output digest demoted after measuring 22/84 false "changed" verdicts | Decided — design note written, implementation issues filed, #907 open as umbrella | `docs/claude/design/recordings-rerecord-backlog.md`; issues #1004, #1005, #1006, #1007; #965 unblocked | S8 |
+| `shared-diagram-renders` | #987: sharing generated diagram renders — include the diagram *source* per consuming topic (the code path exists, untested), validator carve-out + `as` prefix check, `image_ref_missing` / `image_name_conflict` as the safety net; topic-level declaration deferred with a revisit condition | Decided — design note written; #987 = step 1, #1008 = step 1b | `docs/claude/design/shared-diagram-renders.md`; issue #1008 | S8 (transcript under `recordings-rerecord-backlog`) |
+| `schedule-section-week` | #916: sections are weeks by *convention* for `export schedule`; the calendar already places subsections as a flat sequence; non-week sections are name-only subsections — written into `clm info calendar` / `clm info spec-files`; `release section` alias accepted, the other shapes rejected as duplicates of existing mechanisms | Decided — docs landed with the S8 save; #916 closes on merge | info topics `calendar.md`, `spec-files.md`; issue #1009 | S8 (transcript under `recordings-rerecord-backlog`) |
 
 ### Dropped threads / corrections worth keeping
+
+- #907's framing of backfill as "turn `identify-rev` output into stamps"
+  was a prior worth dropping: the dashboard-era state files already stamp
+  `git_commit` on 123/197 parts and `recorded_at` on all, so seeding needs
+  no video; `identify-rev` is the upgrade path for the separate 402-video
+  inventory only. Likewise the issue's (c) was mostly present already — the
+  missing pieces are the deck path and a committed home, not the commit.
+  `clm info recordings` does not exist (the brief asked for it). (S8)
+- #987's "including another topic's diagram source is unclear or
+  unsupported" is wrong in the useful direction: the virtual splice
+  classifies by suffix and renders into the consumer's `img-generated/`;
+  it is untested, not unsupported. The trap is `as` without the
+  `drawio/`/`pu/` prefix (the render target is derived from the virtual
+  path's grandparent). (S8)
+- #916's "a sixth teaching day has nowhere to go" assumed `weekday=` is
+  required; name-only subsections are teaching days already, and the
+  calendar never looked at section length. The date-anchored
+  `export schedule` shape was dropped as a duplicate of
+  `calendar generate -f md|csv`. (S8)
 
 - The initial S4 snapshot said no supported transcript source was available.
   OpenCode's export does expose the public dialogue; a manually reviewed
@@ -100,6 +122,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S5 | 2026-09-20 | `agent-toolkit-candidates/transcripts/2026-09-20-s5.md` | Public-text extraction from the storage DB; tool/reasoning payloads omitted (~20 kchar) | 8 / 55 | OpenCode session `ses_f44adfd80ffe59gdU9Pk47pW0o`, main checkout (resumed S4 via the `resume-discussion` skill), manually reviewed | content through the owner's save request and the knowledge-audit acknowledgement (the resume + #961 landing as PR #980, the polish-placement argument, the surface-orthogonality review, the three follow-ups: #963 note + ratification, #981, narration-map PR #982); the save itself is covered by the state file |
 | S6 | 2026-09-20 | `agent-toolkit-candidates/transcripts/2026-09-20-s6.md` | Public-text extraction from the storage `part` table; tool/reasoning payloads omitted (~15 kchar) | 3 / 84 | OpenCode session `ses_f4404fcb1ffek3baid0Qv0DK78`, main checkout (resumed S5 at outcomes depth via the `resume-discussion` skill; the two question-tool answers are recorded as a marked parenthetical block, not verbatim dialogue), manually reviewed | content through the owner's save request and the knowledge-audit acknowledgement (#962 landed as PR #984 with the confirm-once placement check and a three-finding adversarial review; #963 landed as PR #985 — coverage/assign-ids toolkits, `language-coverage` rename, a seven-finding review; both merged, both issues closed); the save itself is covered by the state file |
 | S7 | 2026-09-24 | `agent-toolkit-candidates/transcripts/2026-09-24-s7.md` | Public-text extraction from the storage `part` table; tool/reasoning payloads omitted (~12 kchar); session span 2026-09-20 → 2026-09-24 | 4 / 57 | OpenCode session `ses_f3ff89f24ffemxPDVwF10rs0MP`, main checkout (resumed S6 at conversation depth via the `resume-discussion` skill — the first full-depth opencode resume; the two question-tool answers are recorded as marked parenthetical blocks, not verbatim dialogue), manually reviewed | content through the owner's save request and the knowledge-audit acknowledgement (#965 picked by the owner and scoped to the `--json` half; PR #988 shipped with a five-finding adversarial review — all fixed — and merged 2026-09-21; issue #965 stays open with a split-landing comment); the save itself is covered by the state file |
+| S8 | 2026-09-25 | `recordings-rerecord-backlog/transcripts/2026-09-25-s8.md` | 2.13 MB → 13 kchar (167:1) | 1 / 6 (one-owner-turn autonomous design session; 116 tool stubs) | Claude Code session `294de972-4d44-4c5b-b9e7-73168a6a6815.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, main checkout; docs written in worktree `design-907-987-916`) | content through the design-note, issue and comment work for #907 / #987 / #916 (three threads from one session); the save itself is covered by the three state files |
 
 ### Deliberately skipped
 
@@ -108,3 +131,5 @@ the reasons behind it are in `README.md`; the save procedure is
 | 2026-07-26 … 2026-09-13 | 11 Claude sessions and 2 Hermes sessions listed by `python scripts/audit_transcripts.py` at the time of S1 | Predate the discussion stack; not triaged yet, not skipped for good — the #928 design sessions (2026-09-12/13, slug `…-issue-928-cpp-ide-export`) and the two long Hermes reviews of July 2026 (#704 adversarial review, performance-regression investigation) are the candidates; the raw sources still exist on the maintainer's machine |
 | 2026-09-14, 2026-09-18 | `64d938aa…`, `8891edb1…` (root slug) | Empty sessions (0 owner turns); nothing to save |
 | 2026-09-18 | `8c80e928…` (14 owner turns, open-issue prioritisation → the 1.29.0 release) and `4fddb4b5…` (3 owner turns, #914 / #881+#886 / #868–#870 implementation) | Not triaged at S2; the first is a candidate (prioritisation argument), the second is task work already recorded in PRs #954/#956/#957 and the release notes |
+| 2026-09-06 … 2026-09-13 | `83a877dc…` (#917 investigation, 3 owner turns), `0260bc6b…` (#793, 1 turn), `8ad64f38…` / `c0890feb…` / `4fdc59b9…` (#928 phases 1–3 in the `issue-928-cpp-ide-export` worktree slug, 8/2/4 turns) | Task sessions recorded in their PRs and the #928 handover; the #928 design argument is the S1 candidate already noted above — not re-triaged at S8 |
+| 2026-09-25 | `ca62afc6…` (0 owner turns), `942bdc7f…` (4 owner turns, issue triage that led to the autonomous backlog run), `c787e1f0…` and `63c0dc34…` (3 owner turns each, skill-driven implementation of #968/#969/#981/#993/#991) | The empty one has nothing to save; the two implementation sessions are task work recorded in PRs #998–#1001 and #1003; the triage session is a candidate (the prioritisation argument for the backlog order), not triaged at S8 |
