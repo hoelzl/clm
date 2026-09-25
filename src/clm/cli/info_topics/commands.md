@@ -2211,6 +2211,88 @@ clm slides rename-id slides_pe_03a_chain_of_thought.de.py old-slug new-slug --dr
 clm slides rename-id slides_pe_03a_chain_of_thought.de.py old-slug new-slug
 ```
 
+### `clm slides rename`
+
+*Added in CLM {version} (issue #991).*
+
+Rename a split deck's **file stem** — the stem-level sibling of `rename-id`. Deck
+names drift from content (`slides_30_task_templates` teaching agent skills), and
+renaming by hand is a four-place procedure with silent failure modes: the twin
+must move too (pairing is by stem), the separated voiceover companions must move
+too (paired by stem — left behind, the narration silently drops from the build),
+the per-topic sync ledger keys its deck section by the stem (a hand rename
+reads as **cold**, and a later `confirm` banks a possibly stale twin — the #572
+footgun one level up), and the build cache keys its lookup rows on the absolute
+input path (a renamed deck re-executes although nothing changed).
+
+```bash
+clm slides rename PATH NEW_STEM [EN_PATH]
+```
+
+`PATH` is one half of a split pair (`<deck>.de.<ext>` / `<deck>.en.<ext>` — the
+twin is found on disk) or both halves passed explicitly. `NEW_STEM` is the **bare**
+new stem (`slides_30_skills`): the language tag and extension are kept, so
+`slides_30_task_templates.{de,en}.py` become `slides_30_skills.{de,en}.py`. In one
+step it:
+
+- moves both halves, their companions (`voiceover/voiceover_<stem>.{de,en}.<ext>`,
+  or the sibling layout — each companion stays in the layout it was in) **and
+  their HTTP-replay cassettes** (`<half>.http-cassette.yaml` in `.clm/cassettes/`,
+  the legacy `cassettes/` / `_cassettes/`, or as a sibling — keyed by the half's
+  stem, so a cassette left behind would make a `replay` build fail and a `once`
+  build re-record against the live API), with `git mv` inside a work tree
+  (100 % renames, history preserved), else a plain rename;
+- re-keys the deck's section in `<topic>/.clm/sync-ledger.json` as a **pure
+  rename** — the recorded fingerprints are keyed by `slide_id` / position and
+  never by the stem, so the deck stays warm: `clm slides sync report` is clean
+  afterwards, and a rename done together with an edit still frames
+  `translate_edit`, never a cold `confirm`;
+- rewrites the build cache's path-keyed rows (`processed_files`,
+  `processing_issues`, `executed_notebooks`) in the cache DB the `clm` entry
+  point resolved (`--cache-db-path` / `CLM_CACHE_DB_PATH`) — the same
+  migration `clm course renumber` does — so the deck does not re-execute;
+- runs `clm validate` on the renamed halves (companions read with them) and
+  reports the findings.
+
+It **refuses before touching anything** (exit 2) when a target half or
+companion name already exists, when a lone half's new twin name is taken by a
+file outside the rename, when a companion lives in both layouts (reconcile it
+first, as `clm validate` asks), when the ledger already holds a section under
+`NEW_STEM`, or when the stem is not bare (carries `.de`/`.en`, an extension or a
+path), starts with `voiceover_` (the companion prefix), or would drop the
+routing prefix (`slides_` / `topic_` / `project_` — the build discovers decks by
+it). A case-only rename (`slides_Intro` → `slides_intro`) is allowed. **Course
+specs need no change**: `<topic>` elements
+resolve by directory-name suffix and decks are discovered on disk. Built output
+filenames derive from the header *title*, not the stem, so a stem rename does not
+orphan files in release destinations.
+
+| Option | Effect |
+|---|---|
+| `--single` | Rename a lone half (and its companion) that has no twin on disk. |
+| `--no-cache-migrate` | Leave the cache rows alone; the renamed deck re-executes once. |
+| `--no-validate` | Skip the post-rename `clm validate`. |
+| `--report-only`, `--dry-run` | Report every move, the ledger re-key and the cache rows that would be rewritten, touching nothing. |
+| `--json` | Emit a JSON report: `moves[]` (`role` = `de` / `en` / `de_companion` / `en_companion` / `de_cassette` / `en_cassette`, `old`, `new`), `git_mv`, `ledger` / `ledger_section` / `ledger_migrated`, `cache` (`rows_rewritten`, `dry_run`; `null` when no cache DB or `--no-cache-migrate`), `validation` (`errors[]`, `warning_count`; `null` when skipped), `warnings[]`. |
+
+Exit codes: `0` renamed (or would rename); `1` renamed, but the post-rename
+validation reported errors (the rename has landed — fix the deck); `2` refused.
+
+**What it does not do.** Evergreen artifacts that carry deck file stems — the
+cohort `video-schedule.csv` `deck_file` column — go stale; the report says so
+(regenerate with `clm run refresh-overviews SPEC` when the spec declares that
+task, else `clm calendar generate` / `clm export outline`). Prose that names the
+old stem is not rewritten. Renaming a **topic id** is `clm course renumber`'s
+territory (directory renames + cache migration); a `rename-topic` that also
+migrates the release ledgers and frozen manifests is a separate follow-up.
+
+```bash
+# Preview: every move, the ledger re-key, the cache rows
+clm slides rename slides_30_task_templates.de.py slides_30_skills --dry-run
+# Apply
+clm slides rename slides_30_task_templates.de.py slides_30_skills
+```
+
 ### `clm slides slug-report`
 
 *Added in CLM {version}.*

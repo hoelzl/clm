@@ -538,6 +538,41 @@ def save(ledger: TopicLedger, path: Path) -> bool:
     return wrote
 
 
+def rename_deck_key(path: Path, old_key: str, new_key: str) -> bool:
+    """Re-key one deck section ``old_key`` → ``new_key`` in the ledger file at
+    ``path`` (``clm slides rename``, #991).
+
+    A pure rename: the section's members, order scopes and preamble
+    fingerprints are carried verbatim — they are keyed by ``slide_id`` /
+    position, never by the deck stem — so the renamed deck stays warm instead
+    of cold-starting (the file-level analogue of ``rename-id``'s key
+    migration). Returns ``False`` when the ledger or the section is absent.
+
+    Deliberately NOT routed through :func:`save`: its section merge cannot
+    express dropping a section (see :func:`_merge_with_disk`), and a rename
+    must drop the old key. This is a direct read-modify-write of the whole
+    file — acceptable because a deck rename is a deliberate, one-off
+    operation, not a sweep verb racing sibling runs. Refuses (``ValueError``)
+    when ``new_key`` already has a section: re-keying onto it would clobber
+    another deck's trust.
+    """
+    from clm.infrastructure.utils.path_utils import atomic_write_bytes
+
+    if not path.is_file():
+        return False
+    ledger = _from_bytes(path.read_bytes())
+    section = ledger.decks.pop(old_key, None)
+    if section is None:
+        return False
+    if new_key in ledger.decks:
+        raise ValueError(f"ledger {path} already holds a section for {new_key!r}")
+    ledger.decks[new_key] = section
+    for deck_key, deck_ledger in ledger.decks.items():
+        prune_dangling_refs(deck_ledger, deck_key)
+    atomic_write_bytes(path, _to_json(ledger).encode("utf-8"))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Building the differ's baseline from the ledger (§5 → §6.1)
 # ---------------------------------------------------------------------------
