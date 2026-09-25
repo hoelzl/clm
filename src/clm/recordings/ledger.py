@@ -78,6 +78,7 @@ __all__ = [
     "load",
     "part_identity",
     "record_part",
+    "rename_deck_key",
     "resolve_part_members",
     "resolve_part_order",
     "save",
@@ -468,6 +469,32 @@ def record_part(ledger_path: Path, deck_key: str, part: LedgerPart) -> bool:
     entry.parts = [p for p in entry.parts if part_identity(p) != key]
     entry.parts.append(part)
     return save(ledger, ledger_path)
+
+
+def rename_deck_key(path: Path, old_key: str, new_key: str) -> bool:
+    """Re-key one deck's entry ``old_key`` → ``new_key`` in the ledger at *path*.
+
+    The hook ``clm slides rename`` runs beside the sync ledger's re-key
+    (#1007): a renamed deck keeps its recorded parts and its ack instead of
+    reporting ``orphaned``. Returns ``False`` when the ledger or the entry
+    is absent; raises ``ValueError`` when *new_key* already has an entry
+    (re-keying onto it would merge two decks' recordings) or the ledger
+    cannot be read.
+    """
+    if not path.is_file():
+        return False
+    try:
+        ledger = load(path)
+    except LedgerError as exc:
+        raise ValueError(str(exc)) from None
+    entry = ledger.decks.pop(old_key, None)
+    if entry is None:
+        return False
+    if new_key in ledger.decks:
+        raise ValueError(f"recordings ledger {path} already holds an entry for {new_key!r}")
+    ledger.decks[new_key] = entry
+    save(ledger, path)
+    return True
 
 
 # ---------------------------------------------------------------------------
