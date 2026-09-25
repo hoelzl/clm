@@ -463,9 +463,11 @@ def _is_macro_cell(cell: SideCell) -> bool:
     Its j2 line is simultaneously the cell's boundary AND its whole content,
     so the generic body guards/writer cannot apply: any valid replacement
     text *is* a boundary line, and a "body" written after ``lines[0]`` would
-    be a raw appended line, not a title change (issue #609).
+    be a raw appended line, not a title change (issue #609). The predicate
+    lives on the cell (:attr:`SideCell.is_macro`) so the report's excerpt
+    projection and this writer agree on which cells it covers (#993).
     """
-    return cell.cell_type == "j2" and all(line == "" for line in cell.lines[1:])
+    return cell.is_macro
 
 
 _MACRO_QUOTED_ARG_RE = re.compile(r'"[^"]*"')

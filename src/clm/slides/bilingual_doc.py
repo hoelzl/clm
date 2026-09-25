@@ -141,6 +141,29 @@ class SideCell:
     def body(self) -> str:
         return "\n".join(self.lines[1:])
 
+    @property
+    def is_macro(self) -> bool:
+        """A single-line j2 cell (e.g. the ``id:title`` header macro).
+
+        Its j2 line is simultaneously the cell's boundary AND its whole
+        content, so ``body`` is empty by construction: the line the author
+        edits is ``header`` (issue #609).
+        """
+        return self.cell_type == "j2" and all(line == "" for line in self.lines[1:])
+
+    @property
+    def decision_body(self) -> str:
+        """What a ``body`` answer for this cell must contain (issue #993).
+
+        The cell without its delimiter line — or, for a single-line j2 macro
+        cell, the macro line itself, which is what the executor replaces
+        (:func:`clm.slides.doc_apply._macro_header_from_body`). The report
+        projects this into ``de_body`` / ``en_body`` so the excerpt is valid
+        decision input for every member, header rows included; the ledger
+        fingerprints keep using :attr:`body`.
+        """
+        return self.header if self.is_macro else self.body
+
 
 @define
 class Member:

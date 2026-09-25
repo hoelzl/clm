@@ -137,7 +137,12 @@ misclassified every blocked item. `resolution` is the schema-4 discriminator.
 The `de`/`en` excerpts are the full cell bytes **including** the `# %%` header
 line; **`de_body`/`en_body`** are the same cells without it — which is exactly
 what a `body` answer must contain, so you can feed an excerpt straight back
-(trailing blank lines are ignored at the write boundary). A report whose
+(trailing blank lines are ignored at the write boundary). For a single-line
+j2 macro member (`id:title`, the deck's `{{ header_de(...) }}` /
+`{{ header_en(...) }}` line) `de_body`/`en_body` carry that macro line itself
+(CLM {version}+, issue #993 — they were empty before, since the line is the
+cell's only line): feed it back edited as the `body`, or the bare title text
+(see "Exception — single-line j2 macro members" below). A report whose
 **questions** are all `verify_cold` also carries a top-level `hint` — that is
 the seeding case; use `record`, not a confirm-all document (see "Cold
 members"). Mechanical `record_neutral` rows sit beside them and do not suppress
@@ -552,10 +557,14 @@ it is refused (exit 2, nothing written):
 
   **Exception — single-line j2 macro members** (e.g. `id:title`, the deck's
   header macro): the cell is one j2 line, so the `body` answer is either the
-  full replacement line (`# {{ header_de("Neuer Titel") }}`) or the bare
-  replacement text (`Neuer Titel`), which is spliced into the existing
-  macro's quoted argument. The line is replaced in place; multi-line bodies
-  and `# %%` lines are rejected.
+  full replacement line (`# {{ header_de("Neuer Titel") }}` — the row's
+  `de_body`/`en_body` show the current one, #993) or the bare replacement
+  text (`Neuer Titel`), which is spliced into the existing macro's quoted
+  argument. The line is replaced in place; multi-line bodies and `# %%`
+  lines are rejected. On a two-sided `verify_translation` header row the
+  `body` names its `side` like any other member; the row banks in the same
+  apply (a header apply that stayed framed on the next report in clm ≤1.28
+  was the deck-wide structural gate of #992, fixed in 1.29).
 - `choice` — one of the item's `answers` (e.g. `confirm`, `de`, `en`,
   `keep_twin`). For a `translate_edit` whose edit left the twin a faithful
   rendering, `{"key": …, "choice": "keep_twin"}` records the new baseline and

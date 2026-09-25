@@ -453,8 +453,12 @@ class DiffItem:
                 # …and the same cell WITHOUT its `# %%` delimiter line, which
                 # is exactly what a `body` answer must contain (finding M10:
                 # report output was not valid decision input, so every agent
-                # independently rediscovered "strip line 1").
-                entry[f"{lang}_body"] = cell.body
+                # independently rediscovered "strip line 1"). For a
+                # single-line j2 macro cell (the `id:title` header) that is
+                # the macro line itself — its `body` is empty by
+                # construction, and an empty excerpt sent agents guessing
+                # the answer format (issue #993).
+                entry[f"{lang}_body"] = cell.decision_body
         return entry
 
 
