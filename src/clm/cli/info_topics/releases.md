@@ -146,13 +146,20 @@ clm release add SPEC TOPIC_ID... --all-channels            # every channel
 clm release add SPEC TOPIC_ID... --ledger release/jan.txt
 ```
 
-### `clm release week`
+### `clm release week` / `clm release section`
 
 Release every topic in one or more course sections.
 
 ```
 clm release week SPEC SELECTOR... --channel NAME
+clm release section SPEC SELECTOR... --channel NAME   # same command, structural name
 ```
+
+`section` is an alias of `week` with identical behaviour (since {version},
+#1009): a section is a thematic block, and "week" is what `clm export
+schedule` and the cohort calendar make of it by convention (`clm info
+calendar`, "Sections, weeks and teaching days"). Both spellings are kept —
+course-repo runbooks written against `week` keep working.
 
 Selectors: bare index (`1`), `id:SECTION_ID`, `idx:N`, `name:SUBSTRING`.
 Section indices are disabled-inclusive — enabling/disabling sections does not

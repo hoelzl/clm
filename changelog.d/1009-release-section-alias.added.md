@@ -1,0 +1,1 @@
+- **`clm release section` — alias of `clm release week` (#1009, follow-up of #916).** Identical behaviour and options; both spellings are kept (no deprecation). Sections are weeks by the schedule's convention, not by structure, so the structural name is now available. Documented in `clm info commands` and `clm info releases`.

@@ -1514,3 +1514,22 @@ class TestSyncJson:
         doc = json.loads(_stdout(result))[0]
         assert doc["partial_manifest"] is True
         assert doc["rows"][0]["action"] == "skip-failed"
+
+
+def test_section_is_an_alias_of_week(tmp_path):
+    """``clm release section`` names the same command as ``week`` (#1009)."""
+    runner = CliRunner()
+    via_week = tmp_path / "week.txt"
+    via_section = tmp_path / "section.txt"
+
+    for verb, ledger in (("week", via_week), ("section", via_section)):
+        result = runner.invoke(
+            release_group, [verb, str(SPEC), "name:Week 1", "--ledger", str(ledger)]
+        )
+        assert result.exit_code == 0, result.output
+
+    assert Ledger.load(via_section).released == Ledger.load(via_week).released
+    assert set(Ledger.load(via_section).released) == WEEK1_TOPICS
+    # Both spellings are listed; neither is hidden or deprecated.
+    listing = runner.invoke(release_group, ["--help"]).output
+    assert "  week" in listing and "  section" in listing

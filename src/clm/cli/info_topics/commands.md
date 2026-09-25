@@ -4111,6 +4111,7 @@ channel name keeps working when it is unique across streams.
 | `release channels SPEC_FILE` | **List** every declared channel: its `ADDRESS` (what `--channel` matches), `LANG`, feeding output target, ledger, and destination. `--json` emits the same rows for scripting (CLM {version}+). |
 | `release add SPEC_FILE TOPIC_IDS… --channel NAME` | Append topic ids to the channel's ledger (validated against the spec). |
 | `release week SPEC_FILE SELECTORS… --channel NAME` | Append **every topic in the selected section(s)** to the ledger — a section-scoped `release add`. `SELECTORS` use the `build --only-sections` grammar (`id:`/`idx:`/`name:` prefixes, or a bare 1-based index / name substring). Section indices are disabled-inclusive; a selected-but-`enabled="false"` section is reported and skipped. |
+| `release section SPEC_FILE SELECTORS… --channel NAME` | Alias of `release week` with identical behaviour (since {version}, #1009): sections are weeks by the schedule's convention, not by structure (see `clm info calendar`, "Sections, weeks and teaching days"). Both spellings are kept; neither is deprecated. |
 | `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. `--json` emits one array with a row per channel (CLM {version}+, issue #967): `channel`, `stream`, `ledger`, `dest`, `topics_total`, `released`, `pending`, `frozen`, `awaiting_sync`, `skeleton_frozen`, `frozen_manifest` — the frozen half is `null` without a destination. |
 | `release sync SPEC_FILE --channel NAME` | Promote released-but-not-frozen topics from the built source into the cohort repo and freeze them. `--dry-run --json` emits the promotion plan as rows (see below). |
 | `release provision SPEC_FILE [--channel NAME]` | Apply the spec's `<share-with>` declarations: share each channel repo into its GitLab access group(s) via the API (issue #294). Idempotent; needs `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN` with `api` scope — exported, or in the project's `.env` (found by walking up from the spec file, as `clm build` does; an exported value wins) — and repos must already exist on the remote. `--dry-run` previews the shares **and ends with a `credentials:` line** saying which token variable is set or `MISSING — the real run will fail` (exit code stays 0; issue #870). Channels without a parseable GitLab remote are skipped with a note. |
@@ -4185,6 +4186,7 @@ Examples:
 clm build course.xml                                       # writes .clm-manifest.json
 clm release add course.xml functions lists --channel jan   # release two topics to a cohort
 clm release week course.xml "name:Week 1" --channel jan    # release a whole section's topics
+clm release section course.xml "name:Week 1" --channel jan # the same, structural spelling (#1009)
 clm release status course.xml --channel jan                # what's released vs pending/frozen
 clm release status course.xml --all-channels --json        # the same, one row per channel
 clm git init course.xml --channel jan                      # one-time: create the cohort repo
