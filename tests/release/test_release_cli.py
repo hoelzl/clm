@@ -1306,3 +1306,211 @@ def test_sync_explicit_path_with_channel_is_an_error(tmp_path):
     )
     assert result.exit_code != 0
     assert "single channel" in result.output
+
+
+# ---------------------------------------------------------------------------
+# --json on status / sync (#967)
+# ---------------------------------------------------------------------------
+
+
+def _stdout(result) -> str:
+    """The runner's stdout alone, on Click 8.1 (split streams) and 8.2+ alike."""
+    try:
+        return result.stdout
+    except ValueError:  # streams not separated on this Click
+        return result.output
+
+
+def _stderr(result) -> str:
+    try:
+        return result.stderr or ""
+    except ValueError:
+        return result.output
+
+
+class TestStatusJson:
+    def test_single_ledger_is_one_row(self, tmp_path):
+        ledger = tmp_path / "jan.txt"
+        Ledger([KNOWN_TOPIC]).save(ledger)
+        result = CliRunner().invoke(
+            release_group, ["status", str(SPEC), "--ledger", str(ledger), "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(_stdout(result))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["channel"] == ""
+        assert row["ledger"] == str(ledger)
+        assert row["released"] == [KNOWN_TOPIC]
+        assert KNOWN_TOPIC not in row["pending"]
+        assert row["topics_total"] == len(row["released"]) + len(row["pending"])
+        # No destination: the frozen half is absent, not guessed.
+        assert row["dest"] is None
+        assert row["frozen"] is None
+        assert row["awaiting_sync"] is None
+        assert row["skeleton_frozen"] is None
+
+    def test_all_channels_reports_frozen_state_per_channel(self, tmp_path):
+        runner = CliRunner()
+        course_root = tmp_path
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        _write_source(course_root / "output" / "shared")
+        _write_source(course_root / "output" / "completed")
+        runner.invoke(release_group, ["add", str(spec_file), "intro", "--all-channels"])
+        # Only the materials stream has synced: solutions is released but awaiting.
+        assert (
+            runner.invoke(
+                release_group, ["sync", str(spec_file), "--channel", "materials/2026-04"]
+            ).exit_code
+            == 0
+        )
+        result = runner.invoke(
+            release_group, ["status", str(spec_file), "--all-channels", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        rows = json.loads(_stdout(result))
+        assert [r["channel"] for r in rows] == ["materials/2026-04", "solutions/2026-04"]
+        materials, solutions = rows
+        assert materials["stream"] == "materials"
+        assert materials["released"] == ["intro"]
+        assert materials["frozen"] == ["intro"]
+        assert materials["awaiting_sync"] == []
+        assert materials["skeleton_frozen"] is True
+        assert materials["frozen_manifest"].endswith(".clm-released.materials.json")
+        assert solutions["frozen"] == []
+        assert solutions["awaiting_sync"] == ["intro"]
+        assert solutions["skeleton_frozen"] is False
+        assert solutions["dest"] == str(course_root / "release" / "solutions" / "2026-04")
+
+
+class TestSyncJson:
+    def _explicit(self, tmp_path):
+        source = tmp_path / "src"
+        dest = tmp_path / "jan"
+        _write_source(source)
+        ledger = tmp_path / "jan.txt"
+        Ledger(["intro"]).save(ledger)
+        return ["--ledger", str(ledger), "--source", str(source), "--dest", str(dest)], dest
+
+    def test_dry_run_json_is_the_plan_and_copies_nothing(self, tmp_path):
+        args, dest = self._explicit(tmp_path)
+        result = CliRunner().invoke(release_group, ["sync", *args, "--dry-run", "--json"])
+        assert result.exit_code == 0, result.output
+        docs = json.loads(_stdout(result))
+        assert len(docs) == 1
+        doc = docs[0]
+        assert doc["dry_run"] is True
+        assert doc["channel"] == "jan"  # explicit paths: the destination dir name
+        assert doc["dest"] == str(dest)
+        assert doc["language"] == ""
+        assert doc["partial_manifest"] is False
+        assert doc["skeleton"]["action"] == "copy"
+        assert doc["skeleton"]["file_count"] == 1
+        assert doc["skeleton"]["files"] == ["shared/data.csv"]
+        assert doc["rows"] == [
+            {"kind": "topic", "action": "copy", "topic_id": "intro", "file_count": 1}
+        ]
+        assert doc["evergreen_up_to_date"] == 0
+        assert doc["push"] == {"requested": False, "message": "Release to jan: 1 new"}
+        assert "result" not in doc
+        assert not dest.exists()
+
+    def test_dry_run_json_shows_skip_frozen_and_refreeze(self, tmp_path):
+        args, dest = self._explicit(tmp_path)
+        runner = CliRunner()
+        assert runner.invoke(release_group, ["sync", *args]).exit_code == 0
+        plain = json.loads(
+            _stdout(runner.invoke(release_group, ["sync", *args, "--dry-run", "--json"]))
+        )
+        assert plain[0]["rows"] == [
+            {"kind": "topic", "action": "skip-frozen", "topic_id": "intro", "file_count": 1}
+        ]
+        assert plain[0]["skeleton"]["action"] == "frozen"
+        assert "files" not in plain[0]["skeleton"]
+        assert plain[0]["push"]["message"] == "Release to jan: no topic changes"
+        refreeze = json.loads(
+            _stdout(
+                runner.invoke(
+                    release_group,
+                    [
+                        "sync",
+                        *args,
+                        "--refreeze",
+                        "intro",
+                        "--dry-run",
+                        "--json",
+                        "--push",
+                        "-m",
+                        "Hotfix",
+                    ],
+                )
+            )
+        )
+        assert refreeze[0]["rows"][0]["action"] == "refreeze"
+        assert refreeze[0]["push"] == {"requested": True, "message": "Hotfix"}
+
+    def test_dry_run_json_lists_evergreen_refresh_rows(self, tmp_path):
+        args, dest = self._explicit(tmp_path)
+        runner = CliRunner()
+        assert runner.invoke(release_group, ["sync", *args]).exit_code == 0
+        (dest / "shared" / "data.csv").write_text("stale", encoding="utf-8")
+        result = runner.invoke(
+            release_group, ["sync", *args, "--evergreen", "shared/*", "--dry-run", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        doc = json.loads(_stdout(result))[0]
+        assert {
+            "kind": "skeleton",
+            "action": "refresh",
+            "path": "shared/data.csv",
+            "label": "evergreen",
+        } in doc["rows"]
+
+    def test_real_run_json_reports_the_result(self, tmp_path):
+        args, dest = self._explicit(tmp_path)
+        result = CliRunner().invoke(release_group, ["sync", *args, "--json"])
+        assert result.exit_code == 0, result.output
+        doc = json.loads(_stdout(result))[0]
+        assert doc["dry_run"] is False
+        assert doc["result"]["files_copied"] == 2
+        assert doc["result"]["copied_topics"] == ["intro"]
+        assert doc["result"]["skeleton_copied"] is True
+        assert (dest / "Sec/01 Intro.ipynb").is_file()
+
+    def test_json_with_push_needs_dry_run(self, tmp_path):
+        args, dest = self._explicit(tmp_path)
+        result = CliRunner().invoke(release_group, ["sync", *args, "--json", "--push"])
+        assert result.exit_code != 0
+        assert _stdout(result).strip() == ""
+        assert "--dry-run" in _stderr(result)
+        assert not dest.exists()  # refused before promoting anything
+
+    def test_all_channels_json_is_one_array_in_spec_order(self, tmp_path):
+        runner = CliRunner()
+        course_root = tmp_path
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        _write_source(course_root / "output" / "shared")
+        _write_source(course_root / "output" / "completed")
+        runner.invoke(release_group, ["add", str(spec_file), "intro", "--all-channels"])
+        result = runner.invoke(
+            release_group, ["sync", str(spec_file), "--all-channels", "--dry-run", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        docs = json.loads(_stdout(result))
+        assert [d["channel"] for d in docs] == ["materials/2026-04", "solutions/2026-04"]
+        assert [d["stream"] for d in docs] == ["materials", "solutions"]
+        assert all(d["rows"][0]["action"] == "copy" for d in docs)
+        assert "=== " not in _stdout(result)
+
+    def test_partial_manifest_marks_skip_failed_rows(self, tmp_path):
+        args, dest = self._explicit(tmp_path)
+        source = tmp_path / "src"
+        manifest = json.loads((source / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+        manifest["partial"] = True
+        manifest["failed_topics"] = ["intro"]
+        (source / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+        result = CliRunner().invoke(release_group, ["sync", *args, "--dry-run", "--json"])
+        assert result.exit_code == 0, result.output
+        doc = json.loads(_stdout(result))[0]
+        assert doc["partial_manifest"] is True
+        assert doc["rows"][0]["action"] == "skip-failed"

@@ -44,8 +44,13 @@ from clm.core.provenance_manifest import (
 from clm.release.frozen_manifest import FROZEN_FILENAME, load_frozen_manifest
 from clm.release.ledger import Ledger, partition_known
 from clm.release.sync import (
+    COPY,
+    REFREEZE,
     REFRESH,
+    SKIP_FAILED,
+    SKIP_FROZEN,
     EvergreenScan,
+    SyncPlan,
     SyncResult,
     apply_sync,
     plan_sync,
@@ -81,6 +86,17 @@ _LEDGER_OPT = click.option(
     default=None,
     help="Path to the channel's release ledger (created on first add).",
 )
+_JSON_OPT = click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit one JSON array (one element per channel, in spec order) on stdout; "
+    "notes and warnings go to stderr; exit codes unchanged.",
+)
+
+
+def _echo_json(payload: object) -> None:
+    click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 @frozen
@@ -227,7 +243,12 @@ def _resolve_channels(
 
 
 def _check_shared_destination_overlap(
-    spec_file: Path, channel_ref: str, dest_path: Path, manifest: dict
+    spec_file: Path,
+    channel_ref: str,
+    dest_path: Path,
+    manifest: dict,
+    *,
+    notes_to_stderr: bool = False,
 ) -> None:
     """Sync preflight for shared destinations (issue #325).
 
@@ -261,7 +282,8 @@ def _check_shared_destination_overlap(
             click.echo(
                 f"Note: '{other_ref}' shares this destination but its source "
                 f"target is not built; the cross-stream overlap check will run "
-                f"once it is."
+                f"once it is.",
+                err=notes_to_stderr,
             )
             continue
         other_manifest = load_manifest(other_manifest_path)
@@ -276,7 +298,8 @@ def _check_shared_destination_overlap(
                 f"Note: {len(overlap.identical)} topic-owned file(s) are built "
                 f"byte-identically by '{channel_ref}' and '{other_ref}' (shared "
                 f"static content, e.g. project scaffolding); whichever stream "
-                f"releases the owning topic first delivers them."
+                f"releases the owning topic first delivers them.",
+                err=notes_to_stderr,
             )
         if overlap.conflicting:
             paths = overlap.conflicting
@@ -696,31 +719,65 @@ def week_cmd(
         _append_to_ledger(target_ledger, topic_ids, prefix)
 
 
-def _print_channel_status(
+def _channel_status(
     *,
     all_ids: list[str],
     ledger_path: Path,
     dest_path: Path | None,
     channel: str,
     stream: str,
-) -> None:
-    """One channel's released/pending (and, with *dest_path*, frozen) report."""
+) -> dict[str, object]:
+    """One channel's released/pending (and, with *dest_path*, frozen) facts.
+
+    The ``status --json`` row (#967); :func:`_print_channel_status` renders it.
+    The frozen half is ``None`` without a destination — absent, not guessed.
+    """
     ledger = Ledger.load(ledger_path)
     released = ledger.released_set
     pending = [tid for tid in all_ids if tid not in released]
+    row: dict[str, object] = {
+        "channel": channel,
+        "stream": stream,
+        "ledger": str(ledger_path),
+        "dest": str(dest_path) if dest_path is not None else None,
+        "topics_total": len(all_ids),
+        "released": list(ledger.released),
+        "pending": pending,
+        "frozen": None,
+        "awaiting_sync": None,
+        "skeleton_frozen": None,
+        "frozen_manifest": None,
+    }
+    if dest_path is not None:
+        loaded = load_frozen_manifest(dest_path, stream=stream, channel=channel or "?")
+        frozen = loaded.manifest
+        row["frozen"] = sorted(frozen.frozen)
+        row["awaiting_sync"] = [tid for tid in ledger.released if not frozen.is_frozen(tid)]
+        row["skeleton_frozen"] = frozen.skeleton_frozen
+        row["frozen_manifest"] = str(loaded.path)
+    return row
 
-    click.echo(f"Topics: {len(all_ids)} total, {len(released)} released, {len(pending)} pending")
-    if ledger.released:
-        click.echo("  released: " + ", ".join(ledger.released))
+
+def _print_channel_status(row: dict[str, object]) -> None:
+    """Render one :func:`_channel_status` row the way the text verb always has."""
+    released = row["released"]
+    pending = row["pending"]
+    assert isinstance(released, list) and isinstance(pending, list)
+    click.echo(
+        f"Topics: {row['topics_total']} total, {len(released)} released, {len(pending)} pending"
+    )
+    if released:
+        click.echo("  released: " + ", ".join(released))
     if pending:
         click.echo("  pending:  " + ", ".join(pending))
 
-    if dest_path is not None:
-        frozen = load_frozen_manifest(dest_path, stream=stream, channel=channel or "?").manifest
-        awaiting = [tid for tid in ledger.released if not frozen.is_frozen(tid)]
+    frozen = row["frozen"]
+    awaiting = row["awaiting_sync"]
+    if frozen is not None and awaiting is not None:
+        assert isinstance(frozen, list) and isinstance(awaiting, list)
         click.echo(
-            f"Destination: {len(frozen.frozen)} frozen, {len(awaiting)} released "
-            f"awaiting sync, skeleton {'frozen' if frozen.skeleton_frozen else 'not copied'}"
+            f"Destination: {len(frozen)} frozen, {len(awaiting)} released "
+            f"awaiting sync, skeleton {'frozen' if row['skeleton_frozen'] else 'not copied'}"
         )
         if awaiting:
             click.echo("  awaiting sync: " + ", ".join(awaiting))
@@ -738,19 +795,23 @@ def _print_channel_status(
     default=None,
     help="Channel destination repo; when given, also reports frozen state.",
 )
+@_JSON_OPT
 def status_cmd(
     spec_file: Path,
     channels: tuple[str, ...],
     all_channels: bool,
     ledger_path: Path | None,
     dest_path: Path | None,
+    as_json: bool,
 ) -> None:
     """Show released vs pending topics (and frozen state with --dest/--channel).
 
     Report several channels in one call with repeated/glob ``--channel`` or
     ``--all-channels`` (issue #390); each channel's frozen state resolves from
     its own ``--dest``. Explicit ``--ledger``/``--dest`` apply to a single
-    channel only.
+    channel only. ``--json`` emits one array with a row per channel —
+    ``released`` / ``pending`` / ``frozen`` / ``awaiting_sync`` topic ids,
+    ``ledger``, ``dest``, ``frozen_manifest``, ``stream`` (#967).
     """
     all_ids = _spec_topic_ids(spec_file)
 
@@ -761,29 +822,40 @@ def status_cmd(
                 "--channel/--all-channels."
             )
         resolved = _resolve_channels(spec_file, channels, all_channels)
-        for index, channel in enumerate(resolved):
-            if len(resolved) > 1:
-                if index:
-                    click.echo()
-                click.echo(f"[{channel.name}]")
-            _print_channel_status(
+        rows = [
+            _channel_status(
                 all_ids=all_ids,
                 ledger_path=channel.ledger,
                 dest_path=channel.dest,
                 channel=channel.name,
                 stream=channel.stream,
             )
+            for channel in resolved
+        ]
+        if as_json:
+            _echo_json(rows)
+            return
+        for index, (channel, row) in enumerate(zip(resolved, rows, strict=True)):
+            if len(resolved) > 1:
+                if index:
+                    click.echo()
+                click.echo(f"[{channel.name}]")
+            _print_channel_status(row)
         return
 
     if ledger_path is None:
         raise click.ClickException("Pass --ledger PATH or --channel NAME (or --all-channels).")
-    _print_channel_status(
+    row = _channel_status(
         all_ids=all_ids,
         ledger_path=ledger_path,
         dest_path=dest_path,
         channel="",
         stream="",
     )
+    if as_json:
+        _echo_json([row])
+        return
+    _print_channel_status(row)
 
 
 @release_group.command("sync")
@@ -843,6 +915,7 @@ def status_cmd(
     "<evergreen> patterns from the spec.",
 )
 @click.option("--dry-run", is_flag=True, help="Print the plan; copy nothing.")
+@_JSON_OPT
 @click.option(
     "--push",
     is_flag=True,
@@ -871,6 +944,7 @@ def sync_cmd(
     language: str | None,
     evergreen_patterns: tuple[str, ...],
     dry_run: bool,
+    as_json: bool,
     push: bool,
     commit_message: str | None,
 ) -> None:
@@ -905,7 +979,19 @@ def sync_cmd(
     PATTERN`` re-copies frozen skeleton files later -- the escape hatch
     ``--refreeze`` provides for topics -- without recording anything: the
     file is frozen again after the run.
+
+    ``--json`` (#967) emits one array with a document per channel: the plan
+    as ``rows`` (``copy`` / ``refreeze`` / ``skip-frozen`` / ``skip-failed``
+    topics with file counts, ``refresh`` skeleton files labelled
+    ``evergreen`` / ``refreeze-skeleton``), the ``skeleton`` decision, the
+    ``push`` commit preview, and — on a real run — the ``result``. It needs
+    ``--dry-run`` when combined with ``--push`` (the push output is not JSON).
     """
+    if as_json and push and not dry_run:
+        raise click.ClickException(
+            "--json with --push needs --dry-run: the commit/push output is not JSON. "
+            "Preview with --dry-run --json, then run the push without --json."
+        )
     if channels or all_channels:
         if spec_file is None:
             raise click.ClickException("--channel/--all-channels requires the SPEC_FILE argument.")
@@ -915,32 +1001,38 @@ def sync_cmd(
                 "when using --channel/--all-channels."
             )
         resolved_channels = _resolve_channels(spec_file, channels, all_channels)
+        docs: list[dict[str, object]] = []
         for index, resolved in enumerate(resolved_channels):
-            if len(resolved_channels) > 1:
+            if len(resolved_channels) > 1 and not as_json:
                 if index:
                     click.echo()
                 click.echo(f"=== {resolved.name} ===")
-            _sync_one_channel(
-                spec_file=spec_file,
-                channel=resolved.name,
-                ledger_path=resolved.ledger,
-                source_path=resolved.source,
-                dest_path=resolved.dest,
-                channel_lang=resolved.lang,
-                channel_evergreen=resolved.evergreen,
-                stream=resolved.stream,
-                refreeze_ids=refreeze_ids,
-                refreeze_all=refreeze_all,
-                refreeze_skeleton=refreeze_skeleton,
-                language=language,
-                evergreen_patterns=evergreen_patterns,
-                dry_run=dry_run,
-                push=push,
-                commit_message=commit_message,
+            docs.append(
+                _sync_one_channel(
+                    spec_file=spec_file,
+                    channel=resolved.name,
+                    ledger_path=resolved.ledger,
+                    source_path=resolved.source,
+                    dest_path=resolved.dest,
+                    channel_lang=resolved.lang,
+                    channel_evergreen=resolved.evergreen,
+                    stream=resolved.stream,
+                    refreeze_ids=refreeze_ids,
+                    refreeze_all=refreeze_all,
+                    refreeze_skeleton=refreeze_skeleton,
+                    language=language,
+                    evergreen_patterns=evergreen_patterns,
+                    dry_run=dry_run,
+                    push=push,
+                    commit_message=commit_message,
+                    as_json=as_json,
+                )
             )
+        if as_json:
+            _echo_json(docs)
         return
 
-    _sync_one_channel(
+    doc = _sync_one_channel(
         spec_file=spec_file,
         channel="",
         ledger_path=ledger_path,
@@ -957,7 +1049,36 @@ def sync_cmd(
         dry_run=dry_run,
         push=push,
         commit_message=commit_message,
+        as_json=as_json,
     )
+    if as_json:
+        _echo_json([doc])
+
+
+def _preview_result(plan: SyncPlan) -> SyncResult:
+    """What :func:`apply_sync` would report for *plan* — for the ``--push``
+    commit-message preview a dry run shows (#967)."""
+    return SyncResult(
+        copied_topics=tuple(t.topic_id for t in plan.topics if t.action == COPY),
+        refrozen_topics=tuple(t.topic_id for t in plan.topics if t.action == REFREEZE),
+        skipped_topics=tuple(t.topic_id for t in plan.topics if t.action == SKIP_FROZEN),
+        skeleton_copied=plan.copy_skeleton,
+        files_copied=sum(t.file_count for t in plan.to_copy),
+        failed_topics=tuple(t.topic_id for t in plan.topics if t.action == SKIP_FAILED),
+        refreshed_files=tuple(p.path for p in plan.evergreen_refresh),
+    )
+
+
+def _result_payload(result: SyncResult) -> dict[str, object]:
+    return {
+        "files_copied": result.files_copied,
+        "copied_topics": list(result.copied_topics),
+        "refrozen_topics": list(result.refrozen_topics),
+        "skipped_topics": list(result.skipped_topics),
+        "failed_topics": list(result.failed_topics),
+        "skeleton_copied": result.skeleton_copied,
+        "refreshed_files": list(result.refreshed_files),
+    }
 
 
 def _sync_one_channel(
@@ -978,14 +1099,21 @@ def _sync_one_channel(
     dry_run: bool,
     push: bool,
     commit_message: str | None,
-) -> None:
+    as_json: bool = False,
+) -> dict[str, object]:
     """Promote one channel: the per-channel body of :func:`sync_cmd`.
 
     *channel* is the already-canonicalized address (empty in explicit
     ``--ledger``/``--source``/``--dest`` mode); the channel's resolved paths,
     ``lang``, ``<evergreen>`` patterns and ``stream`` are passed in so the
-    multi-channel loop resolves each once.
+    multi-channel loop resolves each once. Returns the channel's ``--json``
+    document (#967); with *as_json* the plan/result lines are not printed and
+    every note goes to stderr, so stdout carries the array alone.
     """
+
+    def note(message: str) -> None:
+        click.echo(message, err=as_json)
+
     if ledger_path is None or source_path is None or dest_path is None:
         raise click.ClickException(
             "Specify --channel NAME, or all of --ledger, --source and --dest."
@@ -1029,14 +1157,16 @@ def _sync_one_channel(
     # Shared-destination preflight (issue #325): when another stream releases
     # into this destination, their built topic outputs must be disjoint.
     if channel and spec_file is not None:
-        _check_shared_destination_overlap(spec_file, channel, dest_path, manifest)
+        _check_shared_destination_overlap(
+            spec_file, channel, dest_path, manifest, notes_to_stderr=as_json
+        )
 
     ledger = Ledger.load(ledger_path)
     channel_name = channel or dest_path.name
     loaded = load_frozen_manifest(dest_path, stream=stream, channel=channel_name)
     frozen = loaded.manifest
     if loaded.ignored_legacy_channel is not None:
-        click.echo(
+        note(
             f"Note: leaving the legacy {FROZEN_FILENAME} alone — it records "
             f"channel '{loaded.ignored_legacy_channel}', not '{channel_name}' "
             f"(it migrates to a per-stream file on that channel's next sync)."
@@ -1096,57 +1226,71 @@ def _sync_one_channel(
     )
 
     if manifest.get("partial"):
-        click.echo(
+        note(
             "Note: the source build manifest is partial (the build reported "
             "errors); topics that failed in that build are refused below "
             "and promote once a build succeeds for them."
         )
-    skeleton_line = (
-        f"Channel '{channel_name or '?'}': "
-        f"skeleton {'copy' if plan.copy_skeleton else 'frozen'} "
-        f"({plan.skeleton_file_count} files)"
-    )
-    if plan.skeleton_present_count:
-        skeleton_line += f", {plan.skeleton_present_count} already present (kept)"
-    click.echo(skeleton_line)
+    skeleton_paths = [e["path"] for e in manifest_files_by_topic(manifest).get(None, [])]
+    if plan.skeleton_to_copy is not None:
+        wanted = set(plan.skeleton_to_copy)
+        skeleton_paths = [p for p in skeleton_paths if p in wanted]
+    skeleton_doc: dict[str, object] = {
+        "action": "copy" if plan.copy_skeleton else "frozen",
+        "file_count": plan.skeleton_file_count,
+        "present_count": plan.skeleton_present_count,
+    }
     if plan.copy_skeleton:
-        # The freeze is a one-shot, irreversible-by-default decision taken
-        # right here, so show what it covers while changing it is still
-        # cheap (issue #869): the onboarding surface -- READMEs, setup
-        # scripts -- is exactly what gets found wrong after delivery.
-        skeleton_paths = [e["path"] for e in manifest_files_by_topic(manifest).get(None, [])]
-        if plan.skeleton_to_copy is not None:
-            wanted = set(plan.skeleton_to_copy)
-            skeleton_paths = [p for p in skeleton_paths if p in wanted]
-        if skeleton_paths:
-            click.echo(
-                "  skeleton files -- frozen after this sync unless matched by "
-                "<evergreen>; re-copy one later with --refreeze-skeleton PATTERN:"
-            )
-            for rel in sorted(skeleton_paths):
-                click.echo(f"    {rel}")
-    for topic_plan in plan.topics:
-        click.echo(
-            f"  {topic_plan.action:<11} {topic_plan.topic_id} ({topic_plan.file_count} files)"
-        )
-    # Refreshes the skeleton copy itself does not already deliver — on a plain
-    # first sync that is none, so the lines only appear once the skeleton is
-    # frozen (or kept via presence-as-frozen, issue #325).
-    for evergreen_plan in plan.evergreen_refresh:
-        label = (
-            "refreeze-skeleton" if evergreen_plan.path in refreeze_skeleton_paths else "evergreen"
-        )
-        click.echo(f"  {REFRESH:<11} {evergreen_plan.path} ({label})")
-    if plan.evergreen and not plan.copy_skeleton:
-        up_to_date = sum(1 for e in plan.evergreen if e.action != REFRESH)
-        if up_to_date:
-            click.echo(f"  evergreen: {up_to_date} file(s) up-to-date")
-
+        skeleton_doc["files"] = sorted(skeleton_paths)
+    rows: list[dict[str, object]] = [
+        {
+            "kind": "topic",
+            "action": t.action,
+            "topic_id": t.topic_id,
+            "file_count": t.file_count,
+        }
+        for t in plan.topics
+    ]
+    rows.extend(
+        {
+            "kind": "skeleton",
+            "action": REFRESH,
+            "path": e.path,
+            "label": "refreeze-skeleton" if e.path in refreeze_skeleton_paths else "evergreen",
+        }
+        for e in plan.evergreen_refresh
+    )
+    evergreen_up_to_date = (
+        sum(1 for e in plan.evergreen if e.action != REFRESH)
+        if plan.evergreen and not plan.copy_skeleton
+        else 0
+    )
+    doc: dict[str, object] = {
+        "channel": channel_name,
+        "stream": stream,
+        "source": str(source_path),
+        "dest": str(dest_path),
+        "language": effective_lang or "",
+        "dry_run": dry_run,
+        "partial_manifest": bool(manifest.get("partial")),
+        "skeleton": skeleton_doc,
+        "rows": rows,
+        "evergreen_up_to_date": evergreen_up_to_date,
+        "push": {
+            "requested": push,
+            "message": commit_message or _default_push_message(channel_name, _preview_result(plan)),
+        },
+    }
+    if as_json:
+        if dry_run:
+            return doc
+    else:
+        _print_plan(plan, skeleton_paths, refreeze_skeleton_paths, channel_name)
     if dry_run:
         click.echo("Dry run: nothing copied.")
         if push:
             click.echo("Dry run: --push skipped (nothing was promoted).")
-        return
+        return doc
 
     result = apply_sync(
         plan=plan,
@@ -1159,10 +1303,15 @@ def _sync_one_channel(
     frozen.save(loaded.path)
     if loaded.adopted_legacy is not None:
         loaded.adopted_legacy.unlink(missing_ok=True)
-        click.echo(
+        note(
             f"Migrated the legacy {FROZEN_FILENAME} to the per-stream "
             f"{loaded.path.name} (issue #325)."
         )
+    doc["result"] = _result_payload(result)
+    if as_json:
+        if result.failed_topics:
+            _warn_failed_topics(result)
+        return doc
     click.echo(
         f"Copied {result.files_copied} file(s): "
         f"{len(result.copied_topics)} newly frozen, "
@@ -1182,12 +1331,7 @@ def _sync_one_channel(
             + ", ".join(refrozen_skeleton)
         )
     if result.failed_topics:
-        click.echo(
-            f"Warning: {len(result.failed_topics)} released topic(s) NOT promoted "
-            f"— they failed in the source build: {', '.join(result.failed_topics)}. "
-            f"Rebuild, then re-run sync.",
-            err=True,
-        )
+        _warn_failed_topics(result)
 
     if push:
         _push_channel_repo(
@@ -1198,3 +1342,57 @@ def _sync_one_channel(
             result=result,
             message=commit_message,
         )
+    return doc
+
+
+def _warn_failed_topics(result: SyncResult) -> None:
+    click.echo(
+        f"Warning: {len(result.failed_topics)} released topic(s) NOT promoted "
+        f"— they failed in the source build: {', '.join(result.failed_topics)}. "
+        f"Rebuild, then re-run sync.",
+        err=True,
+    )
+
+
+def _print_plan(
+    plan: SyncPlan,
+    skeleton_paths: list[str],
+    refreeze_skeleton_paths: set[str],
+    channel_name: str,
+) -> None:
+    """The text-mode plan, byte-for-byte what ``release sync`` always printed."""
+    skeleton_line = (
+        f"Channel '{channel_name or '?'}': "
+        f"skeleton {'copy' if plan.copy_skeleton else 'frozen'} "
+        f"({plan.skeleton_file_count} files)"
+    )
+    if plan.skeleton_present_count:
+        skeleton_line += f", {plan.skeleton_present_count} already present (kept)"
+    click.echo(skeleton_line)
+    if plan.copy_skeleton and skeleton_paths:
+        # The freeze is a one-shot, irreversible-by-default decision taken
+        # right here, so show what it covers while changing it is still
+        # cheap (issue #869): the onboarding surface -- READMEs, setup
+        # scripts -- is exactly what gets found wrong after delivery.
+        click.echo(
+            "  skeleton files -- frozen after this sync unless matched by "
+            "<evergreen>; re-copy one later with --refreeze-skeleton PATTERN:"
+        )
+        for rel in sorted(skeleton_paths):
+            click.echo(f"    {rel}")
+    for topic_plan in plan.topics:
+        click.echo(
+            f"  {topic_plan.action:<11} {topic_plan.topic_id} ({topic_plan.file_count} files)"
+        )
+    # Refreshes the skeleton copy itself does not already deliver — on a plain
+    # first sync that is none, so the lines only appear once the skeleton is
+    # frozen (or kept via presence-as-frozen, issue #325).
+    for evergreen_plan in plan.evergreen_refresh:
+        label = (
+            "refreeze-skeleton" if evergreen_plan.path in refreeze_skeleton_paths else "evergreen"
+        )
+        click.echo(f"  {REFRESH:<11} {evergreen_plan.path} ({label})")
+    if plan.evergreen and not plan.copy_skeleton:
+        up_to_date = sum(1 for e in plan.evergreen if e.action != REFRESH)
+        if up_to_date:
+            click.echo(f"  evergreen: {up_to_date} file(s) up-to-date")
