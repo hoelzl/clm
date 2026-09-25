@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from attrs import evolve
+from attrs import evolve, frozen
 
 from clm.slides import doc_apply, doc_ledger, sync_diff
 from clm.slides.bilingual_doc import MemberKey, SideCell
@@ -95,6 +95,7 @@ class _Deck:
         decision_rows: list[doc_apply.Decision] | None = None,
         dry_run: bool = False,
         only_members: set[str] | None = None,
+        verify_gate=None,
     ) -> doc_apply.ApplyOutcome:
         bundle, diff = self.diff()
         assert bundle.outcome.deck is not None
@@ -110,6 +111,7 @@ class _Deck:
             decision_rows=decision_rows,
             only_members=only_members,
             dry_run=dry_run,
+            verify_gate=verify_gate,
         )
         if outcome.error is None and not dry_run and outcome.ledger_changed:
             doc_ledger.save(ledger, ledger_path)
@@ -4491,3 +4493,279 @@ class TestOneOrderAuthorityPerPass:
         assert order_rows[0].key in mint.reason
         payload = outcome.to_payload()
         assert any(row["key"] == "id:nb" for row in payload["left_undone"])
+
+
+# ---------------------------------------------------------------------------
+# The structural verify gate is member-scoped (#992)
+# ---------------------------------------------------------------------------
+
+
+@frozen
+class _Violation:
+    """A stand-in for :class:`clm.slides.sync_verify.VerifyViolation`."""
+
+    kind: str
+    message: str
+    slide_id: str | None = None
+
+
+def _three_slide_deck(tmp_path: Path, *, companions: bool = False) -> _Deck:
+    """s0 / s1 (with a shared code cell) / s2, each with one localized cell."""
+    de = _build(
+        HEADER_DE,
+        _slide("s0", "de", "Eins"),
+        _localized("s0-m", "de", "DE Eins"),
+        _slide("s1", "de", "Zwei"),
+        _shared_code("x"),
+        _localized("s1-m", "de", "DE Zwei"),
+        _slide("s2", "de", "Drei"),
+        _localized("s2-m", "de", "DE Drei"),
+    )
+    en = _build(
+        HEADER_EN,
+        _slide("s0", "en", "One"),
+        _localized("s0-m", "en", "EN one"),
+        _slide("s1", "en", "Two"),
+        _shared_code("x"),
+        _localized("s1-m", "en", "EN two"),
+        _slide("s2", "en", "Three"),
+        _localized("s2-m", "en", "EN three"),
+    )
+    deck = _Deck(tmp_path, de, en)
+    if companions:
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(_vo_cell("s1-vo", "s1", "de", "Erklaere zwei")), encoding="utf-8"
+        )
+        (vo_dir / "voiceover_t.en.py").write_text(
+            _build(_vo_cell("s1-vo", "s1", "en", "Explain two")), encoding="utf-8"
+        )
+    deck.record()
+    return deck
+
+
+def _remove_en_slide_s1(deck: _Deck) -> None:
+    en = deck.en_path.read_text(encoding="utf-8")
+    gone = _slide("s1", "en", "Two") + _shared_code("x") + _localized("s1-m", "en", "EN two")
+    assert gone in en
+    deck.en_path.write_text(en.replace(gone, ""), encoding="utf-8")
+
+
+class TestStructuralGateScope:
+    """Regression tests for #992.
+
+    The post-write structural verify used to gate the WHOLE ledger save: one
+    error-severity violation anywhere in the pair (a hand-removed EN slide
+    still framed ``remove_localized_side``, an orphaned companion cell)
+    withheld the record of every landed member, and the next report re-framed
+    each freshly applied body as ``verify_translation``. The gate is now
+    scoped like the harvest per-slide gate: a violation attributed to a slide
+    withholds that slide's group only; a deck-wide violation still withholds
+    everything.
+    """
+
+    def test_members_outside_the_failing_slide_still_bank(self, tmp_path: Path):
+        # The field shape (#787, 2026-09-24): bodies on untouched slides plus
+        # one hand-removed EN slide whose removal is still a pending question.
+        from clm.slides.sync_verify import gate_projected_pair
+
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_en("EN one", "EN one NEW")
+        _remove_en_slide_s1(deck)
+        outcome = deck.apply(
+            _decision("id:s0-m", body="# DE Eins NEU"),
+            verify_gate=lambda: gate_projected_pair(deck.de_path, deck.en_path, "#"),
+        )
+        results = {(r.key, r.action): r for r in outcome.results}
+        assert results[("id:s0-m", "translate_edit")].status == "applied"
+        assert "recording deferred" not in results[("id:s0-m", "translate_edit")].reason
+        assert results[("id:s1", "remove_localized_side")].status == "pending"
+        assert {v.slide_id for v in outcome.verify_violations} == {"s1", "s1-m"}
+        assert outcome.ledger_changed is True
+        # The mechanical mirror INSIDE the failing group is withheld (it
+        # re-derives as a mechanical row next pass); the body outside it banks.
+        assert outcome.verify_withheld == ["pos:s1/code/0"]
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s1", "remove_localized_side"),
+            ("id:s1-m", "remove_localized_side"),
+            ("pos:s1/code/0", "record_remove"),
+        }
+
+    def test_one_rejected_sibling_does_not_unbank_the_rest(self, tmp_path: Path):
+        # The report's headline: 12 bodies applied, one malformed body
+        # rejected, and everything came back as verify_translation. The
+        # rejection was a coincidence — the gate was the cause.
+        from clm.slides.sync_verify import gate_projected_pair
+
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_en("EN one", "EN one NEW")
+        deck.edit_de("DE Drei", "DE Drei NEU")
+        deck.edit_en("EN three", "EN three NEW")
+        _remove_en_slide_s1(deck)
+        outcome = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:s0-m", body="# DE Eins NEU"),
+                doc_apply.Decision(key="id:s2-m", body="# DE Drei NEU 2"),  # no side
+            ],
+            verify_gate=lambda: gate_projected_pair(deck.de_path, deck.en_path, "#"),
+        )
+        statuses = _statuses(outcome)
+        assert statuses["id:s0-m"] == "applied"
+        assert statuses["id:s2-m"] == "rejected"
+        assert outcome.ledger_changed is True
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s1", "remove_localized_side"),
+            ("id:s1-m", "remove_localized_side"),
+            ("pos:s1/code/0", "record_remove"),
+            ("id:s2-m", "verify_translation"),
+        }
+
+    def test_the_failing_slides_own_landed_items_are_withheld(self, tmp_path: Path):
+        # A violation attributed to any member of a group withholds the whole
+        # group: a landed mechanical row inside it must not bank a snapshot
+        # the structural verify just refused.
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_de("x = 1", "x = 42")  # mechanical mirror inside group s1
+        deck.edit_en("EN one", "EN one NEW")
+
+        def gate():
+            return [_Violation("id-asymmetry", "s1-m is one-sided", slide_id="s1-m")]
+
+        ledger_before = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"), verify_gate=gate)
+        results = {(r.key, r.action): r for r in outcome.results}
+        mirror = results[("pos:s1/code/0", "propagate_shared_edit")]
+        assert mirror.status == "applied"
+        assert "structural verify failed on this member's slide" in mirror.reason
+        assert "recording deferred" not in results[("id:s0-m", "translate_edit")].reason
+        assert outcome.verify_withheld == ["pos:s1/code/0"]
+        assert outcome.ledger_changed is True
+        # The file mutation stays (fail-safe, as before) …
+        assert "x = 42" in deck.en_path.read_text(encoding="utf-8")
+        # … but the pool keeps its old baseline while s0-m carries the new one.
+        after = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        key = doc_ledger.deck_key_for(deck.de_path)
+        assert (
+            after.decks[key].members["pos:s1/code/0"].entry
+            == ledger_before.decks[key].members["pos:s1/code/0"].entry
+        )
+        assert (
+            after.decks[key].members["id:s0-m"].entry
+            != ledger_before.decks[key].members["id:s0-m"].entry
+        )
+
+    def test_a_deck_wide_violation_still_withholds_everything(self, tmp_path: Path):
+        # `unify` / `order-parity` carry no slide_id: the pair as a whole is
+        # untrustworthy, and the pre-#992 fail-safe stands unchanged.
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_en("EN one", "EN one NEW")
+        deck.edit_de("x = 1", "x = 42")
+
+        def gate():
+            return [_Violation("order-parity", "halves disagree about order")]
+
+        ledger_file = deck.de_path.parent / ".clm" / "sync-ledger.json"
+        ledger_before = ledger_file.read_bytes()
+        outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"), verify_gate=gate)
+        assert outcome.ledger_changed is False
+        assert sorted(outcome.verify_withheld) == ["id:s0-m", "pos:s1/code/0"]
+        for result in outcome.results:
+            assert result.status == "applied"
+            assert "structural verify failed deck-wide" in result.reason, result
+        assert ledger_file.read_bytes() == ledger_before
+
+    def test_orphaned_companion_withholds_its_owner_group_only(self, tmp_path: Path):
+        # The field's second stage: once the slide's removal landed, the
+        # companion cell that narrated it is orphaned, and the projection
+        # refusal used to be deck-wide. It is now attributed to the missing
+        # owner: the orphan (and the gone group) stay unrecorded, the rest banks.
+        from clm.slides.sync_verify import gate_projected_pair
+
+        deck = _three_slide_deck(tmp_path, companions=True)
+        deck.edit_en("EN one", "EN one NEW")
+        _remove_en_slide_s1(deck)
+
+        def gate():
+            return gate_projected_pair(deck.de_path, deck.en_path, "#")
+
+        first = deck.apply(
+            decision_rows=[
+                doc_apply.Decision(key="id:s0-m", body="# DE Eins NEU"),
+                doc_apply.Decision(key="id:s1", choice="remove"),
+                doc_apply.Decision(key="id:s1-m", choice="remove"),
+            ],
+            verify_gate=gate,
+        )
+        assert first.error is None, first.to_payload()
+        assert first.ledger_changed is True
+        kinds = {(v.kind, v.slide_id) for v in first.verify_violations}
+        assert ("companion-refusal", "s1") in kinds, kinds
+        assert all(v.slide_id is not None for v in first.verify_violations), kinds
+        _, diff = deck.diff()
+        # Only the orphaned narration is left to ANSWER — s0-m is banked. The
+        # landed removals inside the gone group were withheld with it and
+        # re-derive as mechanical `record_remove` rows until the orphan is
+        # resolved (the field's `broken_owner` pass, #650).
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s1-vo", "broken_owner"),
+            ("id:s1", "record_remove"),
+            ("id:s1-m", "record_remove"),
+            ("pos:s1/code/0", "record_remove"),
+        }
+        assert sorted(first.verify_withheld) == ["id:s1", "id:s1-m", "pos:s1/code/0"]
+
+    def test_a_preserve_marked_id_still_scopes_to_its_group(self, tmp_path: Path):
+        # Review finding: the verify names ids verbatim (`!` marker included)
+        # while the deck keys them bare — the two must meet, or a violation on
+        # a preserved id would implicate no group and withhold nothing.
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_de("x = 1", "x = 42")
+        deck.edit_en("EN one", "EN one NEW")
+
+        def gate():
+            return [_Violation("id-asymmetry", "!s1-m is one-sided", slide_id="!s1-m")]
+
+        outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"), verify_gate=gate)
+        assert outcome.verify_withheld == ["pos:s1/code/0"]
+        assert outcome.ledger_changed is True
+
+    def test_an_id_the_deck_does_not_know_withholds_everything(self, tmp_path: Path):
+        # Review finding (fail-safe): a named id neither parse can place must
+        # not degrade to a no-op gate — it is a deck-wide refusal, as before.
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_de("x = 1", "x = 42")
+        deck.edit_en("EN one", "EN one NEW")
+
+        def gate():
+            return [_Violation("id-asymmetry", "ghost is one-sided", slide_id="ghost")]
+
+        outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"), verify_gate=gate)
+        assert sorted(outcome.verify_withheld) == ["id:s0-m", "pos:s1/code/0"]
+        assert outcome.ledger_changed is False
+        for result in outcome.results:
+            assert "structural verify failed deck-wide" in result.reason, result
+
+    def test_withheld_handles_are_listed_once(self, tmp_path: Path):
+        # Keys repeat across a member's rows (a `record_neutral` beside a
+        # body row, say); the list an agent diffs must not double-count.
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_de("x = 1", "x = 42")
+
+        def gate():
+            return [_Violation("order-parity", "halves disagree")]
+
+        outcome = deck.apply(verify_gate=gate)
+        assert len(outcome.verify_withheld) == len(set(outcome.verify_withheld))
+
+    def test_no_gate_means_no_change(self, tmp_path: Path):
+        # Library callers that pass no gate keep the pre-#992 contract.
+        deck = _three_slide_deck(tmp_path)
+        deck.edit_en("EN one", "EN one NEW")
+        outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"))
+        assert outcome.verify_violations == []
+        assert outcome.verify_withheld == []
+        assert outcome.ledger_changed is True
+        deck.assert_converged()

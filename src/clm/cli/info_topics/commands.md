@@ -2446,8 +2446,16 @@ as bare text spliced into the macro's quoted argument — the line is replaced
 in place (issue #609). The mutated bundle is
 re-parsed before anything touches disk and written atomically (≤4 files);
 landed items are recorded into the ledger **on fully resolved members only**,
-**gated on the structural verify** (a pair failing verify keeps its file
-writes — review with `git diff` — but records nothing). A landed row on a
+**gated on the structural verify per slide** (CLM {version}, issue #992): a
+violation attributed to a slide (an `id-asymmetry`, a `duplicate-id`, an
+orphaned companion cell's `companion-refusal`) withholds the recording of
+that slide's group only — its landed rows keep their file writes (review
+with `git diff`) and their old baseline, and are listed in
+`verify_withheld` with the reason suffix `(recording deferred: the
+structural verify failed on this member's slide — see verify_violations)`;
+every other landed member records. A violation that names no slide
+(`unify`, `order-parity`, a mixed / cross-language layout) still withholds
+everything (`ledger_recorded: false`). A landed row on a
 member that still carries an unresolved sibling item — or an answered
 `conflict_tags`, which records nothing and defers the same-key recordings so
 suppressed body drift is never banked (a divergent-tags fork therefore banks
@@ -2465,8 +2473,10 @@ voiceover companions like `record`'s does, and takes the same
 **`left_undone`** list (the rejected / deferred / failed rows — the answered
 or mechanical work that did not land, so `wrote: true` + exit 1 is never the
 only signal; `pending` rows are the loop's normal state and stay out, #885),
-`ledger_recorded`, and
-`verify_violations`; rejected decisions are additionally echoed to stderr in
+`ledger_recorded` (the ledger was saved with at least one record — it can
+be `true` beside a non-empty `verify_violations` since #992),
+`verify_violations`, and `verify_withheld` (the landed handles the gate kept
+out of the ledger); rejected decisions are additionally echoed to stderr in
 both output modes. While an `order_decision` is framed in a pass, mechanical
 `mirror_order` rows defer instead of co-executing ("one order authority per
 pass", #885) and re-derive on the next report. Full envelope example:

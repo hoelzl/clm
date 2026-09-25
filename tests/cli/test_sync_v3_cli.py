@@ -984,3 +984,83 @@ class TestAlreadyApplied:
         (item,) = [i for i in payload["items"] if i["key"] == "id:no-such-member"]
         assert item["status"] == "rejected"
         assert "no member with this handle" in item["reason"]
+
+
+class TestScopedStructuralGate:
+    """Regression tests for #992 at the verb level.
+
+    A pending hand-removed EN slide fails the structural verify (id-asymmetry)
+    while the agent's bodies on the OTHER slides land. Before the fix the
+    verb refused the whole ledger save, and the next report re-framed every
+    applied body as ``verify_translation``.
+    """
+
+    DE3 = (
+        HEADER_DE
+        + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Eins\n\n'
+        + '# %% [markdown] lang="de" slide_id="s0-m"\n# DE Eins\n\n'
+        + '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\n#\n# # Zwei\n\n'
+        + '# %% [markdown] lang="de" slide_id="s1-m"\n# DE Zwei\n'
+    )
+    EN3 = (
+        HEADER_EN
+        + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # One\n\n'
+        + '# %% [markdown] lang="en" slide_id="s0-m"\n# EN one\n\n'
+        + '# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\n#\n# # Two\n\n'
+        + '# %% [markdown] lang="en" slide_id="s1-m"\n# EN two\n'
+    )
+    EN3_S1_REMOVED = (
+        HEADER_EN
+        + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # One\n\n'
+        + '# %% [markdown] lang="en" slide_id="s0-m"\n# EN one NEW\n'
+    )
+
+    def _seed(self, cli_runner: CliRunner, tmp_path: Path) -> tuple[Path, Path]:
+        de = tmp_path / "slides_t.de.py"
+        en = tmp_path / "slides_t.en.py"
+        de.write_text(self.DE3, encoding="utf-8")
+        en.write_text(self.EN3, encoding="utf-8")
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        en.write_text(self.EN3_S1_REMOVED, encoding="utf-8")
+        return de, en
+
+    def _apply(self, cli_runner: CliRunner, de: Path, *extra: str):
+        decisions = json.dumps(
+            {
+                "report_id": _fresh_report_id(cli_runner, de),
+                "decisions": [{"key": "id:s0-m", "body": "# DE Eins NEU"}],
+            }
+        )
+        return cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", *extra],
+            input=decisions,
+        )
+
+    def test_bodies_on_healthy_slides_bank_beside_a_pending_removal(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, _en = self._seed(cli_runner, tmp_path)
+        result = self._apply(cli_runner, de, "--json")
+        payload = _json_payload(result.output)
+        assert result.exit_code == 1, result.output  # the removal is still pending
+        assert payload["verify_violations"], payload
+        assert payload["ledger_recorded"] is True
+        assert payload["verify_withheld"] == []
+        body_row = next(i for i in payload["items"] if i["key"] == "id:s0-m")
+        assert body_row["status"] == "applied"
+        assert "recording deferred" not in body_row["reason"]
+        assert "# DE Eins NEU" in de.read_text(encoding="utf-8")
+
+        again = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        assert {i["key"] for i in again["items"]} == {"id:s1", "id:s1-m"}, again["items"]
+
+    def test_text_mode_names_the_partial_record(self, cli_runner: CliRunner, tmp_path: Path):
+        de, _en = self._seed(cli_runner, tmp_path)
+        result = self._apply(cli_runner, de)
+        assert result.exit_code == 1, result.output
+        err = _stderr(result)
+        assert "structural verify failed" in err
+        assert "every landed item was recorded" in err, err

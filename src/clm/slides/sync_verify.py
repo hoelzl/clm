@@ -512,18 +512,42 @@ def gate_projected_pair(
         projection.de_text, projection.en_text, token, slide_id=slide_id, role=role
     )
     if projection.refusal is not None:
-        violations.insert(
-            0,
-            VerifyViolation(
-                severity="error",
-                kind="companion-refusal",
-                message=(
-                    "the voiceover companions cannot be projected, so the pair's "
-                    f"narration cannot be verified: {projection.refusal}"
+        if projection.unmatched and slide_id is None:
+            # Orphaned narration is attributable: one violation per missing
+            # owner (bare id), keyed on that slide id, so apply's
+            # member-scoped ledger save (#992) withholds only the gone
+            # slide's group instead of the whole deck. A mixed /
+            # cross-language layout — or an orphan with no ``for_slide`` —
+            # stays one deck-wide refusal (``unmatched`` is empty then). A
+            # SCOPED call keeps the pre-#992 shape: one violation tagged with
+            # the caller's ``slide_id``, always in scope, because a caller
+            # that cannot read the narration must not get a clean verdict.
+            violations[0:0] = [
+                VerifyViolation(
+                    severity="error",
+                    kind="companion-refusal",
+                    message=(
+                        f"the voiceover companions cannot be projected for slide "
+                        f"{owner!r}, so its narration cannot be verified: "
+                        f"{projection.refusal}"
+                    ),
+                    slide_id=owner,
+                )
+                for owner in projection.unmatched
+            ]
+        else:
+            violations.insert(
+                0,
+                VerifyViolation(
+                    severity="error",
+                    kind="companion-refusal",
+                    message=(
+                        "the voiceover companions cannot be projected, so the pair's "
+                        f"narration cannot be verified: {projection.refusal}"
+                    ),
+                    slide_id=slide_id,
                 ),
-                slide_id=slide_id,
-            ),
-        )
+            )
     if not allow_diverged_companion:
         return violations
     raw_violations = structural_gate(
