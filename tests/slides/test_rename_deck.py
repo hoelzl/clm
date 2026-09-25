@@ -197,6 +197,25 @@ class TestPlan:
         with pytest.raises(DeckRenameError, match="already holds a section"):
             plan_deck_rename(de, en, "slides_new")
 
+    def test_recordings_ledger_entry_under_new_stem_refused(self, tmp_path: Path):
+        from clm.recordings import ledger as rl
+
+        de, en = _pair(tmp_path)
+        rec = rl.ledger_path_for(de)
+        rl.record_part(rec, "slides_new", _recording_part())
+        with pytest.raises(DeckRenameError, match="recordings ledger .* already holds"):
+            plan_deck_rename(de, en, "slides_new")
+
+    def test_unreadable_recordings_ledger_refuses(self, tmp_path: Path):
+        from clm.recordings import ledger as rl
+
+        de, en = _pair(tmp_path)
+        rec = rl.ledger_path_for(de)
+        rec.parent.mkdir()
+        rec.write_text("{broken", encoding="utf-8")
+        with pytest.raises(DeckRenameError, match="cannot be read"):
+            plan_deck_rename(de, en, "slides_new")
+
     def test_nothing_is_touched_by_planning(self, tmp_path: Path):
         de, en = _pair(tmp_path)
         _companions(tmp_path, subdir=True)
@@ -206,7 +225,50 @@ class TestPlan:
         assert before == after
 
 
+def _recording_part(part: int = 1):
+    from clm.recordings import ledger as rl
+
+    return rl.LedgerPart(
+        part=part,
+        recorded_at="2026-09-25T10:00:00",
+        course_id="c-de",
+        lang="de",
+        anchor=rl.anchor_for("abc", False),
+        members={"id:s0": "fp"},
+        order=["id:s0"],
+    )
+
+
 class TestApply:
+    def test_rekeys_the_recordings_ledger_entry(self, tmp_path: Path):
+        from clm.recordings import ledger as rl
+
+        de, en = _pair(tmp_path)
+        rec = rl.ledger_path_for(de)
+        rl.record_part(rec, "slides_old", _recording_part())
+        rl.record_part(rec, "slides_other", _recording_part(2))
+        ledger = rl.load(rec)
+        ledger.decks["slides_old"].ack = rl.DeckAck(at="t", note="kept", members={"de:id:s0": "fp"})
+        rl.save(ledger, rec)
+
+        plan = plan_deck_rename(de, en, "slides_new")
+        assert plan.recordings_ledger_path == rec
+        assert plan.recordings_ledger_has_entry is True
+        _git, _sync, recordings = apply_deck_rename(plan, use_git=False)
+        assert recordings is True
+
+        after = rl.load(rec)
+        assert set(after.decks) == {"slides_new", "slides_other"}
+        assert after.decks["slides_new"].parts[0].members == {"id:s0": "fp"}
+        assert after.decks["slides_new"].ack is not None
+        assert after.decks["slides_new"].ack.note == "kept"
+
+    def test_no_recordings_ledger_is_fine(self, tmp_path: Path):
+        de, en = _pair(tmp_path)
+        plan = plan_deck_rename(de, en, "slides_new")
+        assert plan.recordings_ledger_has_entry is False
+        assert apply_deck_rename(plan, use_git=False)[2] is False
+
     def test_moves_everything_and_rekeys_the_ledger(self, tmp_path: Path):
         de, en = _pair(tmp_path)
         vo_de, vo_en = _companions(tmp_path, subdir=True)
@@ -225,7 +287,7 @@ class TestApply:
         plan = plan_deck_rename(de, en, "slides_new")
         assert plan.ledger_has_section is True
 
-        used_git, migrated = apply_deck_rename(plan, use_git=False)
+        used_git, migrated, _rec = apply_deck_rename(plan, use_git=False)
 
         assert used_git is False
         assert migrated is True
@@ -242,7 +304,7 @@ class TestApply:
     def test_no_ledger_section_means_nothing_to_migrate(self, tmp_path: Path):
         de, en = _pair(tmp_path)
         plan = plan_deck_rename(de, en, "slides_new")
-        _, migrated = apply_deck_rename(plan, use_git=False)
+        _, migrated, _rec = apply_deck_rename(plan, use_git=False)
         assert migrated is False
         assert not ledger_path_for(de).exists()
 

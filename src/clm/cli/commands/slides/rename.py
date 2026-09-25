@@ -108,8 +108,9 @@ def rename_cmd(
     cache_report = None
     used_git = False
     ledger_migrated = False
+    recordings_migrated = False
     if not report_only:
-        used_git, ledger_migrated = apply_deck_rename(plan)
+        used_git, ledger_migrated, recordings_migrated = apply_deck_rename(plan)
     if not no_cache_migrate:
         cache_report = _migrate_cache(ctx, plan, dry_run=report_only)
 
@@ -122,6 +123,7 @@ def rename_cmd(
         report_only=report_only,
         used_git=used_git,
         ledger_migrated=ledger_migrated,
+        recordings_migrated=recordings_migrated,
         cache_report=cache_report,
         validation=validation,
     )
@@ -234,6 +236,7 @@ def _to_dict(
     report_only: bool,
     used_git: bool,
     ledger_migrated: bool,
+    recordings_migrated: bool,
     cache_report,
     validation: dict | None,
 ) -> dict:
@@ -246,6 +249,11 @@ def _to_dict(
         "ledger": str(plan.ledger_path),
         "ledger_section": plan.ledger_has_section,
         "ledger_migrated": ledger_migrated,
+        "recordings_ledger": None
+        if plan.recordings_ledger_path is None
+        else str(plan.recordings_ledger_path),
+        "recordings_ledger_entry": plan.recordings_ledger_has_entry,
+        "recordings_ledger_migrated": recordings_migrated,
         "cache": None
         if cache_report is None
         else {
@@ -272,6 +280,14 @@ def _print_human(payload: dict) -> None:
         click.echo(f"  ledger: section {state} (recorded baselines carried, deck stays warm)")
     else:
         click.echo("  ledger: no section for this deck (cold / not recorded) — nothing to migrate")
+    if payload["recordings_ledger_entry"]:
+        state = "would be re-keyed" if payload["report_only"] else "re-keyed"
+        state = (
+            state
+            if payload["report_only"] or payload["recordings_ledger_migrated"]
+            else "NOT re-keyed"
+        )
+        click.echo(f"  recordings ledger: entry {state} (recorded parts and ack carried)")
     cache = payload["cache"]
     if cache is None:
         click.echo("  cache: not migrated (no cache database, or --no-cache-migrate)")

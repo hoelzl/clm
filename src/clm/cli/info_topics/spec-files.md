@@ -687,6 +687,11 @@ Rules:
 - `clm validate` reports the cross-topic source as `include_source_is_topic_dir`
   at **info** level for diagram sources (for any other include it stays a
   warning): coupling to the owning topic is the intent here.
+- The safety net for per-spec declaration: a spec that forgets the include
+  gets an `image_ref_missing` warning from `clm validate` (the deck references
+  `img/cosine.png`, nothing in the topic produces it) instead of shipping a
+  broken image; two topics that ship *different* bytes under one name get
+  `image_name_conflict`. See "Validation findings for images" below.
 - If the owning topic moves, every consumer's include fails loudly with
   `include_source_missing` at validate and build time.
 
@@ -712,6 +717,21 @@ per-topic `.clm-include` ledger so it can clean up safely later. See
 
 Run `clm validate` to surface all of the above; `include_source_missing`
 also surfaces at build time.
+
+#### Validation findings for images
+
+Spec-mode `clm validate` resolves every `img/<name>` a deck references
+(`<img src="img/…">` and `![…](img/…)`) against what its topic will
+actually produce, and checks the section's shared output `img/` for
+same-name collisions — a structure pass, no build:
+
+| Category | Severity | When it fires |
+|----------|----------|---------------|
+| `image_ref_missing` | Warning | A deck of the topic references `img/<name>` and nothing in the topic produces it: no file in `img/` or `img-generated/`, no diagram source in `pu/`/`drawio/` whose render name (full stem + `png`/`svg`, so `embed.de.drawio` → `embed.de.png`) matches, no `<include>` providing it (a file or directory included as `img/…`, or a diagram source included as `pu/…`/`drawio/…`). `details`: `image`, `topic`, `section`, `referenced_in`. |
+| `image_name_conflict` | Warning | Two providers that collapse onto one section output `img/` supply the same name with different bytes — files in `img/` and `img-generated/` of any topic in the section, include-provided files, and diagram renders (compared by the source owner's committed render, else by the source bytes). A topic's own committed render of its own source is one provider, not two. `details`: `image`, `section`, `providers` (topic, source, content key). The suggestion points at "Sharing a diagram between topics". |
+
+Both are per section (topics only share an output `img/` inside one
+section) and only for topics the spec resolves unambiguously.
 
 ### `<output-targets>`
 

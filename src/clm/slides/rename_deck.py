@@ -84,6 +84,10 @@ class DeckRenamePlan:
     #: The ledger holds a section for the old stem (it will be re-keyed).
     ledger_has_section: bool
     warnings: tuple[str, ...] = field(factory=tuple)
+    #: The committed recordings ledger (#1004) and whether it holds an entry
+    #: for the old stem (re-keyed too, #1007).
+    recordings_ledger_path: Path | None = None
+    recordings_ledger_has_entry: bool = False
 
     @property
     def de(self) -> FileMove | None:
@@ -266,6 +270,26 @@ def plan_deck_rename(
             "stale section first (or choose another stem)."
         )
     has_section = old_stem in ledger.decks
+
+    # The recordings ledger shares the .clm/ directory and the stem key (#1007).
+    from clm.recordings import ledger as recordings_ledger
+
+    rec_path = recordings_ledger.ledger_path_for(anchor)
+    rec_has_entry = False
+    if rec_path.is_file():
+        try:
+            rec = recordings_ledger.load(rec_path)
+        except recordings_ledger.LedgerError as exc:
+            raise DeckRenameError(
+                f"the recordings ledger {rec_path} cannot be read ({exc}); repair it first"
+            ) from None
+        if stem in rec.decks:
+            raise DeckRenameError(
+                f'the recordings ledger {rec_path} already holds an entry for "{stem}" — '
+                "re-keying onto it would merge two decks' recordings. Remove the stale "
+                "entry first (or choose another stem)."
+            )
+        rec_has_entry = old_stem in rec.decks
     warnings.append(
         "evergreen artifacts that carry deck file stems (the cohort "
         "`video-schedule.csv` `deck_file` column) go stale — regenerate them "
@@ -279,13 +303,17 @@ def plan_deck_rename(
         ledger_path=ledger_path,
         ledger_has_section=has_section,
         warnings=tuple(warnings),
+        recordings_ledger_path=rec_path,
+        recordings_ledger_has_entry=rec_has_entry,
     )
 
 
-def apply_deck_rename(plan: DeckRenamePlan, *, use_git: bool | None = None) -> tuple[bool, bool]:
-    """Move the files and re-key the ledger section.
+def apply_deck_rename(
+    plan: DeckRenamePlan, *, use_git: bool | None = None
+) -> tuple[bool, bool, bool]:
+    """Move the files and re-key the ledger section(s).
 
-    Returns ``(used_git, ledger_migrated)``. Moves go through ``git mv``
+    Returns ``(used_git, ledger_migrated, recordings_ledger_migrated)``. Moves go through ``git mv``
     inside a work tree (history-preserving, 100 % renames), else
     ``Path.rename``; the plan's collision checks already ran, and the pair's
     files are moved half-first so a crash mid-way leaves a state
@@ -295,7 +323,7 @@ def apply_deck_rename(plan: DeckRenamePlan, *, use_git: bool | None = None) -> t
     the stem, so the deck stays warm.
     """
     if not plan.moves:
-        return False, False
+        return False, False, False
     git = in_git_work_tree(plan.moves[0].old.parent) if use_git is None else use_git
     for move in plan.moves:
         move.new.parent.mkdir(parents=True, exist_ok=True)
@@ -303,4 +331,11 @@ def apply_deck_rename(plan: DeckRenamePlan, *, use_git: bool | None = None) -> t
     migrated = False
     if plan.ledger_has_section:
         migrated = doc_ledger.rename_deck_key(plan.ledger_path, plan.old_stem, plan.new_stem)
-    return git, migrated
+    recordings_migrated = False
+    if plan.recordings_ledger_has_entry and plan.recordings_ledger_path is not None:
+        from clm.recordings import ledger as recordings_ledger
+
+        recordings_migrated = recordings_ledger.rename_deck_key(
+            plan.recordings_ledger_path, plan.old_stem, plan.new_stem
+        )
+    return git, migrated, recordings_migrated
