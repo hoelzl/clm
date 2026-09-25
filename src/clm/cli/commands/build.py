@@ -741,7 +741,9 @@ async def main_build(
         "plus the provenance manifests written and the log directory) to FILE "
         "when the build ends — whatever the output mode, and also on a spec "
         "validation failure, timeout or abort (issue #968). Parent directories "
-        "are created. stdout stays as the output mode defines it."
+        "are created. stdout stays as the output mode defines it. With --watch "
+        "the file is written once, when the watch session ends, and reflects "
+        "the initial build."
     ),
 )
 @click.pass_context

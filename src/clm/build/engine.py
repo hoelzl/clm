@@ -1805,9 +1805,12 @@ def write_build_report(report: JSONReportCollector, path: Path, *, spec_file: Pa
     data["spec_file"] = str(spec_file.absolute())
     data["report_written_at"] = datetime.now(timezone.utc).isoformat()
     try:
+        # ``default=str``: an error's ``details`` may carry a non-JSON value
+        # (a Path, an exception object); the report must still be written.
+        text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    except OSError as exc:
+        path.write_text(text + "\n", encoding="utf-8")
+    except (OSError, TypeError, ValueError) as exc:
         logger.error(f"Could not write the build report to {path}: {exc}")
         print(f"Could not write the build report to {path}: {exc}", file=sys.stderr)
         return None

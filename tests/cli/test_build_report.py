@@ -165,7 +165,38 @@ class TestJSONReportCollector:
     def test_record_exception_distinguishes_interrupt(self):
         collector = JSONReportCollector()
         collector.record_exception(KeyboardInterrupt())
-        assert collector.envelope()["status"] == "interrupted"
+        data = collector.envelope()
+        assert data["status"] == "interrupted"
+        assert data["errors"][0]["category"] == "build_interrupted"
+
+    def test_interrupt_after_a_recorded_summary_still_reads_interrupted(self):
+        """A mid-stage Ctrl-C is caught by the stage loop, marked aborted and
+        rendered before it propagates (issue #596); the headline must still
+        say the user stopped it, and the recorded abort error is kept."""
+        collector = JSONReportCollector()
+        reporter = BuildReporter(collector)
+        reporter.start_build("Course", 1)
+        reporter.mark_aborted(KeyboardInterrupt())
+        reporter.finish_build()
+        assert collector.output_data["status"] == "aborted"
+
+        collector.record_exception(KeyboardInterrupt())
+
+        data = collector.envelope()
+        assert data["status"] == "interrupted"
+        assert data["aborted"] is True
+        [err] = data["errors"]
+        assert err["category"] == "build_aborted"
+        assert "KeyboardInterrupt" in err["message"]
+
+    def test_system_exit_is_recorded_with_its_exit_code(self):
+        """The CLI's second-Ctrl-C handler raises ``SystemExit(1)``; the
+        report must not read ``message: "1"``."""
+        collector = JSONReportCollector()
+        collector.record_exception(SystemExit(1))
+        data = collector.envelope()
+        assert data["status"] == "aborted"
+        assert "exit code 1" in data["errors"][0]["message"]
 
     def test_envelope_always_carries_the_report_only_keys(self):
         data = JSONReportCollector().envelope()
@@ -393,6 +424,23 @@ class TestRunBuildWritesReport:
 
 
 class TestWriteBuildReport:
+    def test_non_json_detail_values_do_not_break_the_write(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """``BuildError.details`` is passed through unchanged and may hold a
+        Path or an exception; the report is a side channel and must still be
+        written (and never raise out of ``run_build``'s finally)."""
+        collector = JSONReportCollector()
+        error = _error()
+        error.details = {"path": tmp_path, "exc": ValueError("x")}
+        collector.show_summary(_summary(errors=[error]))
+        target = tmp_path / "report.json"
+
+        assert write_build_report(collector, target, spec_file=tmp_path / "c.xml") == target
+        data = _read(target)
+        assert data["errors"][0]["details"]["path"] == str(tmp_path)
+        assert capsys.readouterr().err == ""
+
     def test_creates_parent_directories_and_utf8(self, tmp_path: Path):
         collector = JSONReportCollector()
         collector.show_summary(_summary(errors=[_error("Umlaut: äöü")]))

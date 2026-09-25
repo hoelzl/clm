@@ -1233,17 +1233,30 @@ class JSONReportCollector(JSONOutputFormatter):
     def record_exception(self, exc: BaseException) -> None:
         """Mark the report aborted by an exception that escaped the build.
 
-        Only used when no outcome was recorded yet — a build whose summary
+        A ``KeyboardInterrupt`` always sets ``status: "interrupted"`` — even
+        when a summary was recorded, because a Ctrl-C mid-stage is caught by
+        the stage loop, marked aborted and rendered before it propagates, and
+        "the user stopped it" is the fact an agent needs. Any other exception
+        is recorded only when no outcome exists yet: a build whose summary
         already says ``failed``/``aborted`` keeps that verdict and its error
         list; this covers the startup failures (database, workers, proxy)
         that never reach ``finish_build``.
         """
-        if self.has_outcome:
-            return
         interrupted = isinstance(exc, KeyboardInterrupt)
+        if self.has_outcome and not interrupted:
+            return
         self.output_data["status"] = "interrupted" if interrupted else "aborted"
         self.output_data["aborted"] = True
-        message = str(exc) or type(exc).__name__
+        if self.has_outcome and interrupted and self.output_data.get("errors"):
+            # The stage loop already recorded the interrupt as the abort
+            # error; only the headline needed correcting.
+            return
+        if isinstance(exc, SystemExit):
+            # The CLI's second-Ctrl-C handler and other early exits carry a
+            # bare exit code, which would read as ``message: "1"``.
+            message = f"The build exited early with exit code {exc.code!r}"
+        else:
+            message = str(exc) or type(exc).__name__
         self.output_data["errors"] = [
             {
                 "error_type": "infrastructure",
@@ -1266,6 +1279,7 @@ class JSONReportCollector(JSONOutputFormatter):
         ]
         self.output_data["error_count"] = 1
         self.output_data["warning_count"] = len(self.output_data.get("warnings", []))
+        self.output_data["timed_out"] = self.output_data.get("timed_out", False)
 
     def record_manifests(self, paths: list[Any]) -> None:
         """Record the provenance manifests the build wrote (issue #968)."""

@@ -88,7 +88,7 @@ Key options:
 | `--plantuml-image TEXT` | Docker image for PlantUML workers; same bare-tag shorthand, per service (CLM {version}, #690). See "Image-override caveats" below |
 | `--drawio-image TEXT` | Docker image for Draw.io workers; same bare-tag shorthand, per service (CLM {version}, #690). See "Image-override caveats" below |
 | `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode. `json` prints one JSON document (the build envelope, see "JSON output and `--report`" below) on stdout instead of the progress display. |
-| `--report FILE` | Write the JSON build envelope to `FILE` when the build ends — **whatever the output mode** — so an agent can read a build a human ran with live progress (CLM {version}+, issue #968). Also written for a spec parse/validation failure, a timeout, an abort, and an exception that escapes before any summary. Parent directories are created; stdout and exit codes are unchanged. See "JSON output and `--report`" below. |
+| `--report FILE` | Write the JSON build envelope to `FILE` when the build ends — **whatever the output mode** — so an agent can read a build a human ran with live progress (CLM {version}+, issue #968). Also written for a spec parse/validation failure, a timeout, an abort, and an exception that escapes before any summary. Parent directories are created; stdout and exit codes are unchanged. With `--watch` the file is written once, when the watch session ends, and reflects the initial build. See "JSON output and `--report`" below. |
 | `-L, --language [de\|en]` | Generate only one language |
 | `--speaker-only` | Generate only the private (notes-bearing) outputs — both `trainer` and `recording` kinds. Skips public outputs (`code-along`, `completed`, `partial`). |
 | `--no-html` | Skip HTML generation for every topic, as if each carried `html="no"` in the spec. HTML is the only output format whose generation executes notebooks, so a `--no-html` build needs no Jupyter kernel — intended for the code-export compile CI and other kernel-free environments (CLM {version}). |
@@ -456,11 +456,15 @@ complete HTTP-cassette coverage for sections that make LLM calls.
 stdout when the build ends, and `clm build --report FILE` (CLM {version}+,
 issue #968) writes the same envelope to `FILE` in *every* output mode, so the
 human keeps the live progress display and an agent (or a CI step) reads the
-structured result afterwards. Both are produced by the same code path and
-never drift; the file only adds `provenance_manifests`, `spec_file` and
-`report_written_at`. Diagnostics stay on stderr, and the exit code is exactly
-what the build earned (see "Exit codes" below) — including when the report
-itself could not be written (reported on stderr, never raised).
+structured result afterwards. Both are produced by the same code path; the
+file adds `provenance_manifests`, `spec_file` and `report_written_at`, and it
+is the more complete of the two: it is written *after* the worker pool has
+stopped, so orphaned jobs found at teardown (`status: "timed_out"`) reach the
+file, while stdout — already printed with the summary — cannot be amended.
+Diagnostics stay on stderr, and the exit code is exactly what the build
+earned (see "Exit codes" below) — including when the report itself could not
+be written (reported on stderr, never raised). With `--watch`, the file is
+written once when the watch session ends and reflects the initial build only.
 
 ```json
 {
@@ -502,7 +506,7 @@ itself could not be written (reported on stderr, never raised).
 | `fatal` | Build finished with at least one fatal error |
 | `timed_out` | The job-stall detector / completion cap fired or the worker pool left orphaned jobs (issues #143/#617): the output tree is incomplete; exit 1 regardless of `--fail-on-error` (`timed_out: true`) |
 | `aborted` | Stage processing raised (`aborted: true`, one `build_aborted` error) — or, in the report file only, an exception escaped before any summary existed |
-| `interrupted` | Report file only: the build was interrupted (Ctrl-C / SIGTERM) before it finished |
+| `interrupted` | Report file only: the build was interrupted (Ctrl-C / SIGTERM). Mid-stage the interrupt is also the recorded `build_aborted` error (`aborted: true`); during startup or teardown it is the only entry. A second Ctrl-C exits at once and is recorded as `aborted` with the exit code |
 | `validation_failed` | The spec parsed but failed validation: `errors[]` carries one `spec_validation` entry per finding, `spec_file` the path; no build ran |
 | `error` | The spec could not be parsed (`error_type: "spec_parsing"`) or `--only-sections` named no section (`error_type: "section_selection"`): `file` and `message`; no build ran |
 
