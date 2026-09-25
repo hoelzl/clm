@@ -164,7 +164,30 @@ Show released vs pending topics and (with `--channel` or `--dest`) the frozen st
 
 ```
 clm release status SPEC --channel NAME
+clm release status SPEC --all-channels --json      # one row per channel, for scripting
 ```
+
+`--json` (CLM {version}+, issue #967) emits an array — one row per channel
+in spec order (a single row with `"channel": ""` in explicit `--ledger`
+mode):
+
+```json
+[
+  {
+    "channel": "materials/2026-04", "stream": "materials",
+    "ledger": "/course/release/materials-2026-04.txt",
+    "dest": "/course/release/materials/2026-04",
+    "topics_total": 12,
+    "released": ["intro", "functions"], "pending": ["lists", "…"],
+    "frozen": ["intro"], "awaiting_sync": ["functions"],
+    "skeleton_frozen": true,
+    "frozen_manifest": "/course/release/materials/2026-04/.clm-released.materials.json"
+  }
+]
+```
+
+`frozen`, `awaiting_sync`, `skeleton_frozen` and `frozen_manifest` are
+`null` when no destination is known (explicit `--ledger` without `--dest`).
 
 ### `clm release sync`
 
@@ -177,7 +200,39 @@ clm release sync SPEC --channel NAME --refreeze-all [--push]
 clm release sync SPEC --channel NAME --evergreen PATTERN [--push]
 clm release sync SPEC --channel NAME --refreeze-skeleton PATTERN [--push]
 clm release sync SPEC --all-channels --push          # promote + push every channel
+clm release sync SPEC --channel NAME --dry-run --json # the promotion plan as rows
 ```
+
+**`--dry-run --json`** (CLM {version}+, issue #967) emits the plan as one
+array with a document per channel, so an agent can decide what to release
+and predict what a sync will do:
+
+```json
+[
+  {
+    "channel": "materials/2026-04", "stream": "materials",
+    "source": "/course/output/shared", "dest": "/course/release/materials/2026-04",
+    "language": "de", "dry_run": true, "partial_manifest": false,
+    "skeleton": {"action": "frozen", "file_count": 7, "present_count": 0},
+    "rows": [
+      {"kind": "topic", "action": "copy", "topic_id": "functions", "file_count": 4},
+      {"kind": "topic", "action": "skip-frozen", "topic_id": "intro", "file_count": 3},
+      {"kind": "topic", "action": "skip-failed", "topic_id": "lists", "file_count": 0},
+      {"kind": "skeleton", "action": "refresh", "path": "NEWS.md", "label": "evergreen"}
+    ],
+    "evergreen_up_to_date": 1,
+    "push": {"requested": true, "message": "Release to materials/2026-04: 1 new, 1 evergreen"}
+  }
+]
+```
+
+A first sync's `skeleton` carries `"action": "copy"` and the `files` it
+would freeze. `push.message` is the commit message `--push` would use (your
+`-m` text, else the generated summary). `--json` without `--dry-run` runs
+the sync and adds `result` (`files_copied`, `copied_topics`,
+`refrozen_topics`, `skipped_topics`, `failed_topics`, `skeleton_copied`,
+`refreshed_files`); combined with `--push` it needs `--dry-run`, because
+the commit/push output is not JSON. Notes and warnings go to stderr.
 
 **First delivery to a fresh cohort** (issue #868): the destination directory
 is created by `clm release sync`, not by `clm build`, and `clm git init
