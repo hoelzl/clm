@@ -317,13 +317,18 @@ def unsplit_cells(text: str, lang: str, comment_token: str = "#") -> list[Unspli
     out: list[UnsplitCell] = []
     group = "header"
     ordinals: dict[tuple[str, str], int] = {}
+    seen_ids: dict[str, int] = {}
     for index, cell in enumerate(parse_cells(text, comment_token)):
         meta = cell.metadata
         if meta.lang not in (None, side):
             continue
         kind = meta.cell_type if meta.cell_type in ("code", "j2") else "markdown"
         if meta.slide_id:
-            key = f"id:{meta.slide_id}"
+            # A repeated id (the very defect that makes a pair refuse to
+            # normalize) keeps every occurrence: ``id:x``, ``id:x#2``, …
+            n = seen_ids.get(meta.slide_id, 0) + 1
+            seen_ids[meta.slide_id] = n
+            key = f"id:{meta.slide_id}" if n == 1 else f"id:{meta.slide_id}#{n}"
             group = meta.slide_id
         else:
             ordinal = ordinals.get((group, kind), 0)
@@ -455,14 +460,17 @@ def resolve_part_order(
 ) -> list[str] | None:
     """The recorded id-member order matching :func:`resolve_part_members`' result.
 
-    Stored order for a ``recorded`` entry (``None`` when the entry predates
-    the field), document order of the recomputed map otherwise.
+    The stored ``order`` whenever the entry's own members were used (they
+    come back from sorted JSON and carry no order); the document order of
+    the recomputed map when the members were re-read from the anchor
+    commit; ``None`` when nothing trustworthy is known (the rule is skipped).
     """
-    if status == "recorded":
-        return list(part.order) or None
-    if status in ("recomputed", "approximate"):
+    if status == "unverifiable":
+        return None
+    if members is not part.members and part.hash_version != HASH_VERSION:
+        # Recomputed from git: the map is in document order.
         return id_order(members)
-    return None
+    return list(part.order) or None
 
 
 def resolve_part_members(
@@ -486,8 +494,8 @@ def resolve_part_members(
     if part.hash_version == HASH_VERSION and part.members:
         if part.evidence == "anchor":
             exact = part.anchor.kind == "commit" and not part.anchor.dirty
-            return dict(part.members), ("recomputed" if exact else "approximate")
-        return dict(part.members), "recorded"
+            return part.members, ("recomputed" if exact else "approximate")
+        return part.members, "recorded"
     if part.anchor.commit:
         recomputed = deck_members_at_ref(deck_path, part.anchor.commit, part.lang)
         if recomputed:

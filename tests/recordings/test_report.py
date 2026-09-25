@@ -249,6 +249,19 @@ def test_commits_since_anchor_count_only_the_deck_bundle(course: _Course):
     assert deck.parts[0].anchor["kind"] == "commit"
 
 
+def test_commits_since_anchor_follow_a_topic_renumber(course: _Course):
+    """Edits made under the topic's old directory count after a renumber."""
+    course.record()
+    course.write(DE_FULL.replace("DE eins", "DE eins, neu"), EN_FULL)
+    c1 = course.commit("edit before the renumber")
+    new_topic = course.topic.parent / "topic_020_t"
+    _git(course.root, "mv", str(course.topic), str(new_topic))
+    c2 = course.commit("renumber")
+    # The ledger moved with the topic directory; the deck is found under its new home.
+    deck = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_t")
+    assert deck.parts[0].commits_since_anchor == [c2, c1]
+
+
 def test_state_lookup_is_only_consulted_with_a_manifest(course: _Course):
     course.record()
     calls: list[str] = []

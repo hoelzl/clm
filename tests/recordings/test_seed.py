@@ -361,7 +361,8 @@ def test_pair_refusing_normalization_at_the_anchor_seeds_by_cells(course: _Cours
     from clm.recordings.report import build_report
 
     [row] = build_report(course.root).decks
-    assert row.severity in ("structural", "visible")  # the duplicates went away
+    assert row.severity == "structural"  # the duplicated slides went away
+    assert any(k.endswith("#2") for k in row.parts[0].changed_members)
     assert row.parts[0].members_status == "recomputed"
 
 

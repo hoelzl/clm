@@ -479,3 +479,21 @@ def test_ignored_check_outside_git_is_unknown_and_silent(tmp_path: Path):
     # Not a repository: no verdict, no warning — never a false alarm.
     assert rl.is_git_ignored(path) in (None, False)
     assert rl.ignored_ledger_warning(path) is None
+
+
+def test_stored_order_is_used_for_seeded_entries(tmp_path: Path):
+    """A seeded entry's members come back from sorted JSON; the order rule must
+    read the stored ``order``, never the map's (alphabetical) key order."""
+    path = tmp_path / ".clm" / "recordings-ledger.json"
+    part = _part(
+        members={"id:z": "1", "id:a": "2"},
+        order=["id:z", "id:a"],
+        anchor=rl.anchor_for("abc", True),
+        evidence="anchor",
+    )
+    rl.record_part(path, "slides_t", part)
+    loaded = rl.load(path).decks["slides_t"].parts[0]
+    assert list(loaded.members) == ["id:a", "id:z"]  # sorted on disk
+    members, status = rl.resolve_part_members(loaded, tmp_path / "slides_t.de.py")
+    assert status == "approximate"
+    assert rl.resolve_part_order(loaded, members, status) == ["id:z", "id:a"]

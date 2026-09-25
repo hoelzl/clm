@@ -286,34 +286,40 @@ def find_deck_files(topic_dir: Path, deck_key: str) -> dict[str, Path]:
 def _commits_since(anchor: str, paths: list[Path]) -> list[str] | None:
     """Commits after *anchor* that touched any of *paths* (newest first), or ``None``.
 
-    Pathspecs are given relative to the topic directory the command runs
-    in, so a companion under ``voiceover/`` is matched (a bare file name
-    would silently miss it).
+    One ``git log --follow`` per path (git follows renames for a single
+    pathspec only), unioned and ordered by commit time: a topic renumbered
+    since the recording keeps its pre-rename edits in the count. Pathspecs
+    are given relative to the topic directory the command runs in, so a
+    companion under ``voiceover/`` is matched too.
     """
     if not paths:
         return None
     cwd = paths[0].parent
-    specs: list[str] = []
+    stamped: dict[str, int] = {}
     for p in paths:
         try:
-            specs.append(p.resolve().relative_to(cwd.resolve()).as_posix())
+            spec = p.resolve().relative_to(cwd.resolve()).as_posix()
         except ValueError:
-            specs.append(p.resolve().as_posix())
-    try:
-        completed = subprocess.run(
-            ["git", "log", "--format=%H", f"{anchor}..HEAD", "--", *specs],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except (FileNotFoundError, OSError):
-        return None
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.split()
+            spec = p.resolve().as_posix()
+        try:
+            completed = subprocess.run(
+                ["git", "log", "--follow", "--format=%H %ct", f"{anchor}..HEAD", "--", spec],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        except (FileNotFoundError, OSError):
+            return None
+        if completed.returncode != 0:
+            return None
+        for line in completed.stdout.splitlines():
+            sha, _, ts = line.partition(" ")
+            if sha:
+                stamped[sha] = int(ts or 0)
+    return sorted(stamped, key=lambda sha: (-stamped[sha], sha))
 
 
 def _bundle_paths(deck_files: dict[str, Path]) -> list[Path]:
