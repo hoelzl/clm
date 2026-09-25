@@ -233,6 +233,12 @@ class BuildConfig:
     no_color: bool = False
     verbose_logging: bool = False
 
+    # ``clm build --report FILE`` (issue #968): persist the JSON build
+    # envelope — the document ``--output-mode json`` prints — to this path
+    # when the build ends, whatever the output mode, including validation
+    # failures, timeouts and aborts. ``None`` writes nothing.
+    report_path: Path | None = None
+
     # Output filtering
     language: str | None = None
     speaker_only: bool = False

@@ -239,6 +239,7 @@ async def main_build(
     no_diagrams: bool = False,
     explain_rebuilds: bool = False,
     allow_unowned_output: bool = False,
+    report_path: Path | None = None,
 ) -> BuildSummary | None:
     """Adapt the ``clm build`` invocation onto the engine's ``run_build``.
 
@@ -327,6 +328,7 @@ async def main_build(
         write_provenance_manifest=provenance_manifest,
         telemetry_db_path=telemetry_db_path,
         explain_rebuilds=explain_rebuilds,
+        report_path=report_path,
     )
 
     # Fail fast, before any build work, when --watch is requested without
@@ -729,6 +731,21 @@ async def main_build(
         "--snapshot / --verify-against (it embeds a timestamp + commit)."
     ),
 )
+@click.option(
+    "--report",
+    "report_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Write the JSON build envelope (the document --output-mode json prints, "
+        "plus the provenance manifests written and the log directory) to FILE "
+        "when the build ends — whatever the output mode, and also on a spec "
+        "validation failure, timeout or abort (issue #968). Parent directories "
+        "are created. stdout stays as the output mode defines it. With --watch "
+        "the file is written once, when the watch session ends, and reflects "
+        "the initial build."
+    ),
+)
 @click.pass_context
 def build(
     ctx,
@@ -779,6 +796,7 @@ def build(
     env_file,
     no_env_file,
     provenance_manifest,
+    report_path,
 ):
     """Build a course from a spec file."""
     # ------------------------------------------------------------------
@@ -923,6 +941,7 @@ def build(
             no_diagrams=no_diagrams,
             explain_rebuilds=resolved_explain_rebuilds,
             allow_unowned_output=allow_unowned_output,
+            report_path=report_path,
         )
     )
 

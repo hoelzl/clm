@@ -26,6 +26,7 @@ subprocesses inherit the replay-transport settings.
 import logging
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from time import time
 from typing import Any, Literal
@@ -43,8 +44,10 @@ from clm.build.git_dir_mover import git_dir_mover
 from clm.build.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,
+    JSONReportCollector,
     OutputFormatter,
     QuietOutputFormatter,
+    TeeOutputFormatter,
     VerboseOutputFormatter,
 )
 from clm.build.output_ownership import OutputOwnership
@@ -425,6 +428,30 @@ def create_output_formatter(config: BuildConfig) -> OutputFormatter:
         )
 
 
+def validation_failure_envelope(validation_errors: list[str], spec_file: Path) -> dict[str, Any]:
+    """The JSON document for a spec that parsed but failed validation.
+
+    Printed by ``--output-mode json`` and persisted by ``--report FILE``
+    (issue #968) — one shape for both consumers.
+    """
+    return {
+        "status": "validation_failed",
+        "spec_file": str(spec_file),
+        "error_count": len(validation_errors),
+        "errors": [
+            {
+                "error_type": "configuration",
+                "category": "spec_validation",
+                "severity": "error",
+                "message": error,
+                "file_path": str(spec_file),
+                "actionable_guidance": "Fix the error in the course spec file and try again",
+            }
+            for error in validation_errors
+        ],
+    }
+
+
 def report_validation_errors(
     validation_errors: list[str],
     spec_file: Path,
@@ -434,41 +461,12 @@ def report_validation_errors(
     """Report validation errors in the appropriate output format."""
     import json as json_module
 
-    from clm.core.build_data_classes import BuildError
-
     output_mode = output_mode.lower()
 
-    # Convert validation errors to BuildError objects for consistent formatting
-    build_errors = [
-        BuildError(
-            error_type="configuration",
-            category="spec_validation",
-            severity="error",
-            file_path=str(spec_file),
-            message=error,
-            actionable_guidance="Fix the error in the course spec file and try again",
-        )
-        for error in validation_errors
-    ]
-
     if output_mode == "json":
-        output = {
-            "status": "validation_failed",
-            "spec_file": str(spec_file),
-            "error_count": len(build_errors),
-            "errors": [
-                {
-                    "error_type": e.error_type,
-                    "category": e.category,
-                    "severity": e.severity,
-                    "message": e.message,
-                    "file_path": e.file_path,
-                    "actionable_guidance": e.actionable_guidance,
-                }
-                for e in build_errors
-            ],
-        }
-        print(json_module.dumps(output, indent=2))
+        print(
+            json_module.dumps(validation_failure_envelope(validation_errors, spec_file), indent=2)
+        )
     elif output_mode == "quiet":
         _console.print(
             f"Spec validation failed with {len(validation_errors)} error(s): {spec_file}",
@@ -499,7 +497,11 @@ async def print_all_correlation_ids():
         _console.print(f"  {cid}: {data.format_dependencies()}")
 
 
-def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path], Path]:
+def initialize_paths_and_course(
+    config: BuildConfig,
+    *,
+    on_load_failure: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[Course, list[Path], Path]:
     """Initialize paths, load course spec, and create course object.
 
     Logging setup is the caller's concern: the ``clm build`` command calls
@@ -510,6 +512,11 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     (after rendering the errors via :func:`report_validation_errors`);
     spec-*parse* failures keep the pre-existing render-and-``SystemExit``
     behavior.
+
+    ``on_load_failure`` receives the JSON envelope of a parse / validation /
+    section-selection failure just before it is raised — the same document
+    ``--output-mode json`` prints — so ``--report FILE`` (issue #968) can
+    persist a failure that never reaches the build summary.
     """
     spec_file = config.spec_file.absolute()
 
@@ -531,15 +538,17 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         spec = CourseSpec.from_file(spec_file, keep_disabled=keep_disabled)
     except CourseSpecError as e:
         logger.error(f"Failed to parse spec file: {e}")
+        error_output = {
+            "status": "error",
+            "error_type": "spec_parsing",
+            "file": str(spec_file),
+            "message": str(e),
+        }
+        if on_load_failure is not None:
+            on_load_failure(error_output)
         if config.output_mode.lower() == "json":
             import json
 
-            error_output = {
-                "status": "error",
-                "error_type": "spec_parsing",
-                "file": str(spec_file),
-                "message": str(e),
-            }
             print(json.dumps(error_output, indent=2))
             raise SystemExit(1) from None
         else:
@@ -556,6 +565,8 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
     if validation_errors:
         for error in validation_errors:
             logger.error(f"Spec validation error: {error}")
+        if on_load_failure is not None:
+            on_load_failure(validation_failure_envelope(validation_errors, spec_file))
         report_validation_errors(
             validation_errors,
             spec_file,
@@ -629,6 +640,15 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
             section_selection = spec.resolve_section_selectors(config.selected_sections)
         except CourseSpecError as e:
             logger.error(f"--only-sections error: {e}")
+            if on_load_failure is not None:
+                on_load_failure(
+                    {
+                        "status": "error",
+                        "error_type": "section_selection",
+                        "file": str(spec_file),
+                        "message": str(e),
+                    }
+                )
             console = Console(file=sys.stderr, force_terminal=not config.no_color)
             console.print("\n[bold red]--only-sections error[/bold red]\n")
             console.print(str(e))
@@ -1769,12 +1789,83 @@ def format_exit_failure(summary: BuildSummary) -> str:
     )
 
 
+def write_build_report(report: JSONReportCollector, path: Path, *, spec_file: Path) -> Path | None:
+    """Persist the ``--report FILE`` document (issue #968).
+
+    Writes the collector's envelope — the ``--output-mode json`` document
+    plus ``provenance_manifests`` and the log directories — as UTF-8 JSON.
+    A write failure is reported on stderr and logged but never raised: the
+    report is a side channel, and the build's own exit code must not change
+    because its report could not be written.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    data = report.envelope()
+    data["spec_file"] = str(spec_file.absolute())
+    data["report_written_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        # ``default=str``: an error's ``details`` may carry a non-JSON value
+        # (a Path, an exception object); the report must still be written.
+        text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="utf-8")
+    except (OSError, TypeError, ValueError) as exc:
+        logger.error(f"Could not write the build report to {path}: {exc}")
+        print(f"Could not write the build report to {path}: {exc}", file=sys.stderr)
+        return None
+    logger.info(f"Wrote build report: {path}")
+    return path
+
+
 async def run_build(
     config: BuildConfig,
     *,
     output_formatter: OutputFormatter | None = None,
     build_reporter: BuildReporter | None = None,
     watch_runner=None,
+) -> BuildSummary | None:
+    """Run a course build from an already-constructed :class:`BuildConfig`.
+
+    Thin wrapper around :func:`_run_build_impl` that owns the
+    ``config.report_path`` side channel (issue #968): the chosen formatter is
+    teed with a :class:`JSONReportCollector`, and the collected envelope is
+    written to the report file when the build ends — on success, on a
+    validation failure (a load failure recorded through
+    ``initialize_paths_and_course``), on a timeout/abort that reached the
+    summary, and on an exception that escaped before any summary existed.
+    See :func:`_run_build_impl` for what the build itself does.
+    """
+    if output_formatter is None:
+        output_formatter = create_output_formatter(config)
+    report: JSONReportCollector | None = None
+    if config.report_path is not None:
+        report = JSONReportCollector()
+        output_formatter = TeeOutputFormatter(output_formatter, report)
+    try:
+        return await _run_build_impl(
+            config,
+            output_formatter=output_formatter,
+            build_reporter=build_reporter,
+            watch_runner=watch_runner,
+            report=report,
+        )
+    except BaseException as exc:
+        if report is not None:
+            report.record_exception(exc)
+        raise
+    finally:
+        if report is not None and config.report_path is not None:
+            write_build_report(report, config.report_path, spec_file=config.spec_file)
+
+
+async def _run_build_impl(
+    config: BuildConfig,
+    *,
+    output_formatter: OutputFormatter | None = None,
+    build_reporter: BuildReporter | None = None,
+    watch_runner=None,
+    report: JSONReportCollector | None = None,
 ) -> BuildSummary | None:
     """Run a course build from an already-constructed :class:`BuildConfig`.
 
@@ -1855,7 +1946,9 @@ async def run_build(
 
     # Show startup progress for loading course
     output_formatter.show_startup_message("Loading course specification...")
-    course, root_dirs, data_dir = initialize_paths_and_course(config)
+    course, root_dirs, data_dir = initialize_paths_and_course(
+        config, on_load_failure=report.record_failure if report is not None else None
+    )
     output_formatter.show_startup_message(
         f"Loaded {len(course.files)} files from {len(course.sections)} sections"
     )
@@ -2055,6 +2148,10 @@ async def run_build(
                 # per-stage-timeout policy.
                 if orphaned_jobs and summary is not None:
                     _record_teardown_orphans(summary, orphaned_jobs)
+                    # The report was recorded by show_summary before the
+                    # orphans existed; re-derive it from the final summary.
+                    if report is not None:
+                        report.record_summary(summary)
             except Exception as e:
                 logger.error(f"Failed to stop workers: {e}", exc_info=True)
         if mitm_manager is not None:
@@ -2127,6 +2224,8 @@ async def run_build(
                 )
                 if written:
                     logger.info("Wrote %d provenance manifest(s)", len(written))
+                if report is not None:
+                    report.record_manifests(written)
         except Exception as e:
             logger.warning("Failed to write provenance manifest(s): %s", e, exc_info=True)
 

@@ -151,7 +151,7 @@ class TestOnlySectionsRepeatedFlags:
         spec_file.write_text(THREE_SECTION_XML)
         captured: dict[str, list[str] | None] = {}
 
-        def fake_initialize(config):
+        def fake_initialize(config, **kwargs):
             captured["selected_sections"] = config.selected_sections
             raise SystemExit(0)
 

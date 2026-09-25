@@ -1059,16 +1059,35 @@ class JSONOutputFormatter(OutputFormatter):
 
     def show_summary(self, summary: BuildSummary) -> None:
         """Output final JSON to stdout."""
+        self.record_summary(summary)
+        # Output JSON to stdout
+        print(json.dumps(self.output_data, indent=2))
+
+    def record_summary(self, summary: BuildSummary) -> dict[str, Any]:
+        """Fold *summary* into :attr:`output_data` and return the envelope.
+
+        The envelope is what ``--output-mode json`` prints and what
+        ``--report FILE`` persists (issue #968); both go through here so the
+        two can never drift. Idempotent: calling it again with a summary
+        that was mutated after the first render (teardown orphans, issue
+        #617) simply re-derives every summary-owned key.
+        """
         # Determine final status
         if summary.aborted:
             self.output_data["status"] = "aborted"
         elif summary.has_fatal_errors():
             self.output_data["status"] = "fatal"
+        elif summary.timed_out:
+            # A stall/cap abort or teardown orphans (issues #143/#617): the
+            # output tree is incomplete and the CLI exits 1, so the document
+            # must not read "success" (issue #968).
+            self.output_data["status"] = "timed_out"
         elif summary.has_errors():
             self.output_data["status"] = "failed"
         else:
             self.output_data["status"] = "success"
         self.output_data["aborted"] = summary.aborted
+        self.output_data["timed_out"] = summary.timed_out
 
         # Add summary data
         self.output_data["duration_seconds"] = summary.duration
@@ -1137,9 +1156,7 @@ class JSONOutputFormatter(OutputFormatter):
 
         self.output_data["log_directory"] = str(get_log_dir())
         self.output_data["worker_log_directory"] = str(get_worker_log_dir())
-
-        # Output JSON to stdout
-        print(json.dumps(self.output_data, indent=2))
+        return self.output_data
 
     def _error_to_dict(self, error: BuildError) -> dict[str, Any]:
         """Convert BuildError to dictionary for JSON serialization."""
@@ -1182,3 +1199,174 @@ class JSONOutputFormatter(OutputFormatter):
     def cleanup(self) -> None:
         """No cleanup needed for JSON mode."""
         pass
+
+
+class JSONReportCollector(JSONOutputFormatter):
+    """Accumulate the JSON build envelope without printing it (issue #968).
+
+    Backs ``clm build --report FILE``: the engine tees the user's chosen
+    formatter with one of these, so the file gets exactly the envelope
+    ``--output-mode json`` would print — plus the facts only known after
+    the summary was rendered (provenance manifests, a late abort). It is a
+    formatter so it sees every ``show_*`` callback the reporter makes; it
+    never writes to stdout, which keeps the console output of the real
+    formatter untouched.
+    """
+
+    def show_summary(self, summary: BuildSummary) -> None:
+        """Record the summary; nothing is printed."""
+        self.record_summary(summary)
+
+    @property
+    def has_outcome(self) -> bool:
+        """Whether a summary or a load failure has been recorded."""
+        return self.output_data.get("status") != "in_progress"
+
+    def record_failure(self, envelope: dict[str, Any]) -> None:
+        """Adopt the envelope of a pre-build failure (spec parse/validation).
+
+        The keys mirror what ``--output-mode json`` prints for the same
+        failure, so a consumer parses one shape whichever way it got it.
+        """
+        self.output_data.update(envelope)
+
+    def record_exception(self, exc: BaseException) -> None:
+        """Mark the report aborted by an exception that escaped the build.
+
+        A ``KeyboardInterrupt`` always sets ``status: "interrupted"`` — even
+        when a summary was recorded, because a Ctrl-C mid-stage is caught by
+        the stage loop, marked aborted and rendered before it propagates, and
+        "the user stopped it" is the fact an agent needs. Any other exception
+        is recorded only when no outcome exists yet: a build whose summary
+        already says ``failed``/``aborted`` keeps that verdict and its error
+        list; this covers the startup failures (database, workers, proxy)
+        that never reach ``finish_build``.
+        """
+        interrupted = isinstance(exc, KeyboardInterrupt)
+        if self.has_outcome and not interrupted:
+            return
+        self.output_data["status"] = "interrupted" if interrupted else "aborted"
+        self.output_data["aborted"] = True
+        if self.has_outcome and interrupted and self.output_data.get("errors"):
+            # The stage loop already recorded the interrupt as the abort
+            # error; only the headline needed correcting.
+            return
+        if isinstance(exc, SystemExit):
+            # The CLI's second-Ctrl-C handler and other early exits carry a
+            # bare exit code, which would read as ``message: "1"``.
+            message = f"The build exited early with exit code {exc.code!r}"
+        else:
+            message = str(exc) or type(exc).__name__
+        self.output_data["errors"] = [
+            {
+                "error_type": "infrastructure",
+                "category": "build_interrupted" if interrupted else "build_aborted",
+                "severity": "fatal",
+                "file_path": None,
+                "message": strip_ansi(message),
+                "actionable_guidance": (
+                    "The build was interrupted before it finished."
+                    if interrupted
+                    else "The build stopped before producing a summary; see the log "
+                    "directory for the traceback."
+                ),
+                "job_id": None,
+                "correlation_id": None,
+                "details": {"exception_type": type(exc).__name__},
+                "occurrence_count": 1,
+                "from_cache": False,
+            }
+        ]
+        self.output_data["error_count"] = 1
+        self.output_data["warning_count"] = len(self.output_data.get("warnings", []))
+        self.output_data["timed_out"] = self.output_data.get("timed_out", False)
+
+    def record_manifests(self, paths: list[Any]) -> None:
+        """Record the provenance manifests the build wrote (issue #968)."""
+        self.output_data["provenance_manifests"] = [str(p) for p in paths]
+
+    def envelope(self) -> dict[str, Any]:
+        """The report document, with the always-present keys filled in."""
+        from clm.infrastructure.logging.log_paths import get_log_dir, get_worker_log_dir
+
+        data = dict(self.output_data)
+        data.setdefault("provenance_manifests", [])
+        data.setdefault("log_directory", str(get_log_dir()))
+        data.setdefault("worker_log_directory", str(get_worker_log_dir()))
+        return data
+
+
+class TeeOutputFormatter(OutputFormatter):
+    """Forward every formatter callback to a primary and a secondary formatter.
+
+    The *primary* owns the console (and decides ``should_show_*``); the
+    *secondary* — a :class:`JSONReportCollector` for ``--report FILE`` — only
+    records. Both receive every event so the collector's envelope matches
+    what a lone :class:`JSONOutputFormatter` would have produced.
+    """
+
+    def __init__(self, primary: OutputFormatter, secondary: OutputFormatter):
+        self.primary = primary
+        self.secondary = secondary
+
+    def show_startup_message(self, message: str) -> None:
+        self.primary.show_startup_message(message)
+        self.secondary.show_startup_message(message)
+
+    def show_build_start(
+        self, course_name: str, total_files: int, output_dirs: list[str] | None = None
+    ) -> None:
+        self.primary.show_build_start(course_name, total_files, output_dirs)
+        self.secondary.show_build_start(course_name, total_files, output_dirs)
+
+    def show_stage_start(
+        self, stage_name: str, stage_num: int, total_stages: int, num_jobs: int, num_cached: int = 0
+    ) -> None:
+        self.primary.show_stage_start(stage_name, stage_num, total_stages, num_jobs, num_cached)
+        self.secondary.show_stage_start(stage_name, stage_num, total_stages, num_jobs, num_cached)
+
+    def update_progress(
+        self, completed: int, total: int, active_workers: int = 0, cached: int = 0
+    ) -> None:
+        self.primary.update_progress(completed, total, active_workers, cached)
+        self.secondary.update_progress(completed, total, active_workers, cached)
+
+    def should_show_error(self, error: BuildError) -> bool:
+        return self.primary.should_show_error(error)
+
+    def show_error(self, error: BuildError) -> None:
+        self.primary.show_error(error)
+        self.secondary.show_error(error)
+
+    def should_show_warning(self, warning: BuildWarning) -> bool:
+        return self.primary.should_show_warning(warning)
+
+    def show_warning(self, warning: BuildWarning) -> None:
+        self.primary.show_warning(warning)
+        self.secondary.show_warning(warning)
+
+    def show_summary(self, summary: BuildSummary) -> None:
+        self.primary.show_summary(summary)
+        self.secondary.show_summary(summary)
+
+    def show_file_started(self, file_path: str, job_type: str, job_id: int | None = None) -> None:
+        self.primary.show_file_started(file_path, job_type, job_id)
+        self.secondary.show_file_started(file_path, job_type, job_id)
+
+    def show_file_completed(
+        self, file_path: str, job_type: str, job_id: int | None = None, success: bool = True
+    ) -> None:
+        self.primary.show_file_completed(file_path, job_type, job_id, success)
+        self.secondary.show_file_completed(file_path, job_type, job_id, success)
+
+    def show_cache_hit(self, file_path: str, job_type: str, detail: str | None = None) -> None:
+        self.primary.show_cache_hit(file_path, job_type, detail)
+        self.secondary.show_cache_hit(file_path, job_type, detail)
+
+    def show_rebuild_reason(self, file_path: str, job_type: str, reason: str) -> None:
+        self.primary.show_rebuild_reason(file_path, job_type, reason)
+        self.secondary.show_rebuild_reason(file_path, job_type, reason)
+
+    def cleanup(self) -> None:
+        self.primary.cleanup()
+        self.secondary.cleanup()
