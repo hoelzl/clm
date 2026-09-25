@@ -396,6 +396,45 @@ def test_malformed_ledger_is_reported_not_raised(course: _Course):
     assert not report.is_clean
 
 
+def test_unsplit_deck_is_reported_from_its_cells(course: _Course):
+    from tests.recordings.test_ledger import UNSPLIT
+
+    folder = course.topic.parent / "topic_020_u"
+    folder.mkdir()
+    deck = folder / "slides_u.py"
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    _git(course.root, "add", "-A")
+    commit = course.commit("unsplit")
+    members = rl.deck_members(deck, "de")
+    rl.record_part(
+        rl.ledger_path_for(deck),
+        "slides_u",
+        rl.LedgerPart(
+            part=1,
+            recorded_at="t",
+            course_id="c-de",
+            lang="de",
+            anchor=rl.anchor_for(commit, False),
+            members=members,
+            order=rl.id_order(members),
+        ),
+    )
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "none"
+    assert set(row.deck_files) == {"de", "en"}
+
+    deck.write_text(UNSPLIT.replace("Notiz", "Notiz, neu"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "notes"
+    deck.write_text(UNSPLIT.replace("x = 1", "x = 2"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "structural"
+    # An EN-only edit does not touch the DE recording.
+    deck.write_text(UNSPLIT.replace("# # Title", "# # Title, new"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "none"
+
+
 # ---------------------------------------------------------------------------
 # Acknowledgement
 # ---------------------------------------------------------------------------

@@ -112,6 +112,8 @@ def deck_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | Non
     from clm.slides.doc_identity import content_fingerprint
     from clm.slides.doc_lenses import DocLensError, load_bundle
 
+    if rl.is_unsplit_deck(deck_path):
+        return _unsplit_member_index(deck_path, lang)
     try:
         bundle = load_bundle(deck_path)
     except (DocLensError, OSError, UnicodeDecodeError):
@@ -130,6 +132,45 @@ def deck_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | Non
             role=member.role,
             layout=member.layout,
         )
+    return out
+
+
+def _unsplit_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | None:
+    """The single-file bilingual deck's members with kinds (see :func:`rl.unsplit_members`)."""
+    from clm.core.slide_text.slide_parser import parse_cells
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
+
+    try:
+        text = deck_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    fingerprints = rl.unsplit_members(text, lang, comment_token_for_path(deck_path))
+    out: dict[str, MemberInfo] = {}
+    ordinals: dict[str, int] = {}
+    for cell in parse_cells(text, comment_token_for_path(deck_path)):
+        meta = cell.metadata
+        if meta.lang not in (None, lang):
+            continue
+        kind = meta.cell_type if meta.cell_type in ("code", "j2") else "markdown"
+        if meta.slide_id:
+            key = f"id:{meta.slide_id}"
+        else:
+            ordinal = ordinals.get(kind, 0)
+            ordinals[kind] = ordinal + 1
+            key = f"cell:{kind}/{ordinal}"
+        if "voiceover" in meta.tags:
+            role = "voiceover"
+        elif "notes" in meta.tags:
+            role = "notes"
+        elif "subslide" in meta.tags:
+            role = "subslide"
+        elif "slide" in meta.tags:
+            role = "slide"
+        elif kind == "j2":
+            role = "header"
+        else:
+            role = "code" if kind == "code" else "aux"
+        out[key] = MemberInfo(fp=fingerprints[key], kind=kind, role=role, layout="inline")
     return out
 
 
@@ -174,6 +215,8 @@ def _class_from_key(key: str) -> str:
         if len(parts) == 3 and parts[1] == "code":
             return "structural"
         return "visible"
+    if scheme == "cell":
+        return "structural" if value.startswith("code/") else "visible"
     return "structural"
 
 
@@ -257,6 +300,10 @@ def find_deck_files(topic_dir: Path, deck_key: str) -> dict[str, Path]:
                 out[lang] = candidate
         if out:
             break
+        unsplit = topic_dir / f"{deck_key}{ext}"
+        if unsplit.is_file():
+            # One file serves both languages.
+            return dict.fromkeys(rl.RECORDABLE_LANGS, unsplit)
     return out
 
 

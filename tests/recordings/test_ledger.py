@@ -146,6 +146,35 @@ def test_deck_members_selects_recorded_language(tmp_path: Path):
     assert de_members["id:m1"] == content_fingerprint(m1.de)
 
 
+UNSPLIT = _build(
+    '# j2 from \'macros.j2\' import header\n# {{ header("Titel", "Title") }}\n\n',
+    '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Titel\n\n',
+    '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Title\n\n',
+    '# %% [markdown] lang="de" tags=["notes"]\n# Notiz\n\n',
+    _code("c1", "x = 1"),
+)
+
+
+def test_unsplit_deck_members_fall_back_to_cells(tmp_path: Path):
+    """A single-file bilingual deck has no split pair: its cells are the members."""
+    folder = tmp_path / "t"
+    folder.mkdir()
+    deck = folder / "slides_u.py"
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    assert rl.is_unsplit_deck(deck)
+
+    de = rl.deck_members(deck, "de")
+    en = rl.deck_members(deck, "en")
+    assert set(de) == {"cell:j2/0", "cell:j2/1", "id:s0", "cell:markdown/0", "id:c1"}
+    assert set(en) == {"cell:j2/0", "cell:j2/1", "id:s0", "id:c1"}  # the DE-only note is not EN
+    assert de["id:s0"] != en["id:s0"]  # each side's own title cell
+    assert de["id:c1"] == en["id:c1"]  # the shared code cell
+
+    # The fingerprint ignores the slide_id attribute, like a split member's.
+    deck.write_text(UNSPLIT.replace('slide_id="c1"', 'slide_id="c9"'), encoding="utf-8")
+    assert rl.deck_members(deck, "de")["id:c9"] == de["id:c1"]
+
+
 def test_deck_members_is_empty_without_a_twin(tmp_path: Path):
     folder = tmp_path / "t"
     folder.mkdir()
@@ -354,6 +383,22 @@ def test_deck_members_at_ref_reads_the_committed_pair(repo: Path):
     assert rl.deck_members_at_ref(de, v1, "de") == at_v1
     assert rl.deck_members_at_ref(de, v1, "de") != rl.deck_members(de, "de")
     assert rl.deck_members_at_ref(de, "0" * 40, "de") is None
+
+
+@needs_git
+def test_unsplit_deck_members_at_ref(repo: Path):
+    folder = repo / "slides" / "topic_u"
+    folder.mkdir(parents=True)
+    deck = folder / "slides_u.py"
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "v1")
+    v1 = _git(repo, "rev-parse", "HEAD")
+    at_v1 = rl.deck_members(deck, "de")
+    deck.write_text(UNSPLIT.replace("Notiz", "Notiz, neu"), encoding="utf-8")
+
+    assert rl.deck_members_at_ref(deck, v1, "de") == at_v1
+    assert rl.deck_members_at_ref(deck, v1, "de") != rl.deck_members(deck, "de")
 
 
 @needs_git

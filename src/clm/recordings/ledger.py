@@ -74,6 +74,7 @@ __all__ = [
     "id_order",
     "ignored_ledger_warning",
     "is_git_ignored",
+    "is_unsplit_deck",
     "ledger_path_for",
     "load",
     "part_identity",
@@ -82,6 +83,7 @@ __all__ = [
     "resolve_part_order",
     "save",
     "split_halves",
+    "unsplit_members",
 ]
 
 #: The envelope schema of ``recordings-ledger.json``.
@@ -257,18 +259,81 @@ def _members_of(deck: BilingualDeck, lang: Lang) -> dict[str, str]:
     return out
 
 
+def is_unsplit_deck(deck_path: Path) -> bool:
+    """A single-file bilingual deck (no ``.de``/``.en`` tag, no twin on disk)."""
+    from clm.core.slide_text.pairing import split_lang_tag
+
+    return split_lang_tag(deck_path) is None and split_halves(deck_path) is not None
+
+
+def unsplit_members(text: str, lang: str, comment_token: str = "#") -> dict[str, str]:
+    """Member fingerprints of a single-file bilingual deck for *lang*.
+
+    The bilingual document model (:mod:`clm.slides.bilingual_doc`) needs a
+    split pair; a deck that keeps both languages in one file falls back to
+    its percent-format cells: every cell whose ``lang`` attribute is *lang*
+    or absent is a member, keyed ``id:<slide_id>`` when it carries one,
+    else ``cell:<kind>/<ordinal>`` (ordinal among the id-less cells of that
+    kind, in file order). The fingerprint is the cell's bytes modulo the
+    ``slide_id`` attribute — the same :func:`content_fingerprint` as a split
+    member, so the ledger holds one hashing form.
+    """
+    from clm.core.slide_text.slide_parser import parse_cells
+    from clm.slides.bilingual_doc import SideCell
+    from clm.slides.doc_identity import content_fingerprint
+
+    side = _check_lang(lang)
+    out: dict[str, str] = {}
+    ordinals: dict[str, int] = {}
+    for index, cell in enumerate(parse_cells(text, comment_token)):
+        meta = cell.metadata
+        if meta.lang not in (None, side):
+            continue
+        kind = meta.cell_type if meta.cell_type in ("code", "j2") else "markdown"
+        if meta.slide_id:
+            key = f"id:{meta.slide_id}"
+        else:
+            ordinal = ordinals.get(kind, 0)
+            ordinals[kind] = ordinal + 1
+            key = f"cell:{kind}/{ordinal}"
+        lines = (cell.header, *cell.content.splitlines())
+        side_cell = SideCell(
+            lines=tuple(lines),
+            index=index,
+            line_number=cell.line_number,
+            part="deck",
+            lang_attr=meta.lang,
+            tags=tuple(meta.tags),
+            slide_id=meta.slide_id,
+            for_slide=meta.for_slide,
+            vo_anchor=None,
+            cell_type=kind,
+        )
+        out[key] = content_fingerprint(side_cell)
+    return out
+
+
 def deck_members(deck_path: Path, lang: str) -> dict[str, str]:
     """The recorded language's member fingerprints of the deck on disk.
 
-    ``{}`` when the deck is not a split pair with an existing twin or the
-    bundle fails the normalize precondition — the ledger then records an
-    entry without evidence rather than blocking a recording, and the report
-    treats it as ``unverifiable``. Raises ``ValueError`` for a *lang* that
-    names no side.
+    A split pair parses through the bilingual document model; a single-file
+    bilingual deck through :func:`unsplit_members`. ``{}`` when the deck is
+    a lone split half or the bundle fails the normalize precondition — the
+    ledger then records an entry without evidence rather than blocking a
+    recording, and the report treats it as ``unverifiable``. Raises
+    ``ValueError`` for a *lang* that names no side.
     """
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
     from clm.slides.doc_lenses import DocLensError, load_bundle
 
     side = _check_lang(lang)
+    if is_unsplit_deck(deck_path) and deck_path.is_file():
+        try:
+            text = deck_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("No member fingerprints for {}: {}", deck_path, exc)
+            return {}
+        return unsplit_members(text, side, comment_token_for_path(deck_path))
     try:
         bundle = load_bundle(deck_path)
     except (DocLensError, OSError, UnicodeDecodeError) as exc:
@@ -287,6 +352,7 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     ref, or the historical bundle fails to parse — "not recoverable", never a
     guess.
     """
+    from clm.core.slide_text.pairing import split_lang_tag
     from clm.core.utils.prog_lang_utils import comment_token_for_path
     from clm.slides.doc_lenses import parse_bundle
     from clm.slides.git_text import bundle_texts_at_ref
@@ -298,6 +364,14 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     de_path, en_path = halves
     de_text, en_text, de_comp, en_comp = bundle_texts_at_ref(de_path, en_path, ref)
     if de_text is None or en_text is None:
+        if split_lang_tag(deck_path) is None:
+            # A single-file bilingual deck at that ref.
+            from clm.slides.git_text import git_ref_text
+
+            text = git_ref_text(deck_path, ref)
+            if text is None:
+                return None
+            return unsplit_members(text, side, comment_token_for_path(deck_path))
         return None
     outcome = parse_bundle(
         de_text, en_text, de_comp, en_comp, comment_token=comment_token_for_path(de_path)
