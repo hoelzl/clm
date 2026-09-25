@@ -2293,6 +2293,8 @@ clm slides rename slides_30_task_templates.de.py slides_30_skills --dry-run
 clm slides rename slides_30_task_templates.de.py slides_30_skills
 ```
 
+The committed **recordings ledger** (`<topic>/.clm/recordings-ledger.json`, `clm info recordings`) is keyed by the same stem and is re-keyed in the same step (since {version}, #1007): the deck's recorded parts and its `ack` travel with the rename instead of reporting `orphaned` in `clm recordings report`. A stale entry already under the new stem, or an unreadable recordings ledger, refuses the rename before anything is touched. `--json` reports `recordings_ledger`, `recordings_ledger_entry` and `recordings_ledger_migrated`.
+
 ### `clm slides slug-report`
 
 *Added in CLM {version}.*
