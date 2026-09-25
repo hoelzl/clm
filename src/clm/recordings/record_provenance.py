@@ -40,6 +40,13 @@ class RecordProvenance:
     slide_digest: str | None = None
     git_commit: str | None = None
     git_dirty: bool = False
+    # Source anchor for the committed recordings ledger (#1004): the recorded
+    # language's deck file and its per-member content fingerprints at arm
+    # time. ``None`` when the deck could not be resolved through the course;
+    # ``members`` is ``{}`` when the file resolved but is not a parseable
+    # split pair (the ledger entry then reads as ``unverifiable``).
+    deck_path: Path | None = None
+    members: dict[str, str] | None = None
 
 
 def build_record_provenance(
@@ -61,13 +68,41 @@ def build_record_provenance(
     section_id, topic_id = _resolve_section_topic(course, section_name, deck_name, lang)
     git_commit, git_dirty = _resolve_git_info(spec_file)
     slide_digest = _resolve_slide_digest(spec_file, topic_id)
+    deck_path = _resolve_deck_file(course, section_name, deck_name, lang)
+    members = _resolve_members(deck_path, lang)
     return RecordProvenance(
         section_id=section_id,
         topic_id=topic_id,
         slide_digest=slide_digest,
         git_commit=git_commit,
         git_dirty=git_dirty,
+        deck_path=deck_path,
+        members=members,
     )
+
+
+def _resolve_deck_file(course: Any, section_name: str, deck_name: str, lang: str) -> Path | None:
+    resolver = getattr(course, "resolve_deck_file", None)
+    if resolver is None:
+        return None
+    try:
+        path = resolver(section_name, deck_name, lang)
+    except Exception as exc:  # pragma: no cover — defensive; resolver is total
+        logger.debug("Could not resolve deck file for {!r}/{!r}: {}", section_name, deck_name, exc)
+        return None
+    return Path(path) if path is not None else None
+
+
+def _resolve_members(deck_path: Path | None, lang: str) -> dict[str, str] | None:
+    if deck_path is None:
+        return None
+    try:
+        from clm.recordings.ledger import deck_members
+
+        return deck_members(deck_path, lang)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("Could not fingerprint deck {}: {}", deck_path, exc)
+        return {}
 
 
 def _resolve_section_topic(

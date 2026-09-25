@@ -56,6 +56,7 @@ from clm.core.utils.path_utils import is_image_file, is_in_dir
 from clm.core.utils.text_utils import Text
 
 if TYPE_CHECKING:
+    from clm.core.course_files.notebook_file import NotebookFile
     from clm.core.cross_references import CrossReferenceResolver
     from clm.core.topic_resolver import TopicMatch
 
@@ -438,6 +439,27 @@ class Course(NotebookMixin):
         simply skipped. Both companions of a split deck share one
         ``topic.id``, so which half matches does not change the result.
         """
+        found = self._find_deck_notebook(section_name, deck_name, lang)
+        if found is None:
+            return None, None
+        section, nb = found
+        return section.id, nb.topic.id
+
+    def resolve_deck_file(self, section_name: str, deck_name: str, lang: str) -> Path | None:
+        """The source file of the deck the recordings dashboard names.
+
+        Same lookup as :meth:`resolve_deck_topic`, returning the matching
+        notebook's on-disk source path (the ``.de``/``.en`` half whose title
+        matches in *lang* for a split deck). The recordings ledger (#1004)
+        keys on this path — a topic id alone is not a source anchor when a
+        topic id resolves to two directories (cohort-archive modules).
+        """
+        found = self._find_deck_notebook(section_name, deck_name, lang)
+        return found[1].source_path if found is not None else None
+
+    def _find_deck_notebook(
+        self, section_name: str, deck_name: str, lang: str
+    ) -> "tuple[Section, NotebookFile] | None":
         for section in self.sections:
             try:
                 if section.name[lang] != section_name:
@@ -447,10 +469,10 @@ class Course(NotebookMixin):
             for nb in section.notebooks:
                 try:
                     if nb.file_name(lang, "") == deck_name:
-                        return section.id, nb.topic.id
+                        return section, nb
                 except (KeyError, ValueError):
                     continue
-        return None, None
+        return None
 
     def add_file(self, path: Path, warn_if_no_topic: bool = True) -> Topic | None:
         for topic in self.topics:
