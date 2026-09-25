@@ -266,6 +266,21 @@ override; when omitted, the displayed label is derived from `weekday`. A
 grammar** as a bare `<topic>` (ids, `<include>`/`<dir-group>` children,
 attributes), and/or one or more `<activity>` elements (see below).
 
+##### Sections are weeks by convention, not by structure
+
+`clm export schedule` renders one `<section>` as one week because the
+certification listing wants a week/weekday grid; nothing in the build, the
+validator or the cohort calendar requires a section to be five teaching
+days. The calendar (`clm info calendar`) treats subsections as a flat
+sequence of teaching days and places them on consecutive dates, whatever
+the section length. A thematic block of three or six days is written as
+name-only subsections (`<subsection><name>…</name>…</subsection>`, one per
+teaching day, no `weekday=`); the schedule shows the name as the day label,
+the weekday checks below do not apply, and the calendar needs an explicit
+`pattern` only when *no* subsection in the course carries a `weekday=`.
+`weekday=` stays the right choice for sections that really are Mon–Fri
+weeks (issue #916).
+
 ##### Export visibility: the build / export split
 
 By default a topic is both **built** and **listed** in `clm export schedule` /

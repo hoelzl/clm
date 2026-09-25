@@ -204,6 +204,59 @@ A bucket reference is a **topic ID** or **deck-file stem** (e.g.
 when the spec is reordered; use them instead of week/weekday coordinates.
 Unknown or ambiguous references are reported as errors by `clm calendar check`.
 
+## Sections, weeks and teaching days
+
+CLM has two views of "when is this taught", and they deliberately use
+different time models (issue #916, decided 2026-09-25):
+
+- **`clm export schedule` is course-relative and renders one `<section>` as
+  one week.** That is a *presentation convention* for the certification
+  listing (AZAV wants a week/weekday grid), not a structural rule: a
+  section is a thematic block, and the week is what the schedule makes of
+  it. The day labels come from the declared `weekday=` tokens (or the
+  subsection `<name>`), never from real dates — a section that a cohort
+  starts on a Wednesday still lists "Montag" first, by design. For real
+  dates use the calendar.
+- **The cohort calendar is date-anchored and ignores section length.** It
+  consumes the schedule's subsections as a **flat sequence of buckets**
+  (one bucket per `<subsection>`, multi-weekday subsections span several
+  dates) and lays them on consecutive teaching dates. A section with three
+  or six subsections simply consumes three or six teaching dates; nothing
+  aligns sections to calendar weeks. The `plan_label` (`W4 Tuesday`) and
+  `section_title` in `calendar status --json` are the section-relative
+  coordinates carried along for drift reporting, not placement inputs.
+
+**A section that is not a Mon–Fri week** is expressed with name-only
+subsections, one per teaching day, and no `weekday=`:
+
+```xml
+<section>
+    <name><de>Block 7: Agenten</de><en>Block 7: Agents</en></name>
+    <topics>
+        <subsection><name><de>Tag 1</de><en>Day 1</en></name>
+            <topic>langgraph_intro</topic>
+        </subsection>
+        <subsection><name><de>Tag 2</de><en>Day 2</en></name>
+            <topic>langgraph_branching</topic>
+        </subsection>
+        <!-- … six days if the block needs six -->
+    </topics>
+</section>
+```
+
+`export schedule` shows the `<name>` as the day label; the calendar places
+each subsection on the next teaching date; `duplicate_weekday`,
+`weekday_out_of_order` and `--check-workdays` do not apply to name-only
+subsections. Two consequences: a course whose subsections carry **no**
+`weekday=` at all must set `pattern` explicitly in the calendar TOML (there
+is nothing to derive it from — `check` reports `no-teaching-weekdays`), and
+`weekday=` remains the right choice for courses whose sections really are
+Mon–Fri weeks, because it both labels the listing and derives the pattern.
+
+**Vocabulary**: `clm release week` selects a *section* (its docs say so);
+the name is historical — a section is a thematic block, a week is what the
+schedule or the calendar makes of it.
+
 ## Projection rules
 
 1. **Teaching dates** are generated from `start` forward on the days in
