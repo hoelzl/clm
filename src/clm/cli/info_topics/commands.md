@@ -87,7 +87,8 @@ Key options:
 | `--notebook-image TEXT` | Docker image for notebook workers. Full name, or a bare tag that expands against the service's default repo (`lite` → `docker.io/mhoelzl/clm-notebook-processor:lite`). See "Image-override caveats" below |
 | `--plantuml-image TEXT` | Docker image for PlantUML workers; same bare-tag shorthand, per service (CLM {version}, #690). See "Image-override caveats" below |
 | `--drawio-image TEXT` | Docker image for Draw.io workers; same bare-tag shorthand, per service (CLM {version}, #690). See "Image-override caveats" below |
-| `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode |
+| `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode. `json` prints one JSON document (the build envelope, see "JSON output and `--report`" below) on stdout instead of the progress display. |
+| `--report FILE` | Write the JSON build envelope to `FILE` when the build ends — **whatever the output mode** — so an agent can read a build a human ran with live progress (CLM {version}+, issue #968). Also written for a spec parse/validation failure, a timeout, an abort, and an exception that escapes before any summary. Parent directories are created; stdout and exit codes are unchanged. See "JSON output and `--report`" below. |
 | `-L, --language [de\|en]` | Generate only one language |
 | `--speaker-only` | Generate only the private (notes-bearing) outputs — both `trainer` and `recording` kinds. Skips public outputs (`code-along`, `completed`, `partial`). |
 | `--no-html` | Skip HTML generation for every topic, as if each carried `html="no"` in the spec. HTML is the only output format whose generation executes notebooks, so a `--no-html` build needs no Jupyter kernel — intended for the code-export compile CI and other kernel-free environments (CLM {version}). |
@@ -448,6 +449,71 @@ Two opt-in modes raise the strictness:
 `--ignore-cache` is recommended on both sides: a stale cache can mask
 the very diffs the verify is meant to detect. The cache requires
 complete HTTP-cassette coverage for sections that make LLM calls.
+
+#### JSON output and `--report`
+
+`clm build -O json` prints one JSON document — the **build envelope** — on
+stdout when the build ends, and `clm build --report FILE` (CLM {version}+,
+issue #968) writes the same envelope to `FILE` in *every* output mode, so the
+human keeps the live progress display and an agent (or a CI step) reads the
+structured result afterwards. Both are produced by the same code path and
+never drift; the file only adds `provenance_manifests`, `spec_file` and
+`report_written_at`. Diagnostics stay on stderr, and the exit code is exactly
+what the build earned (see "Exit codes" below) — including when the report
+itself could not be written (reported on stderr, never raised).
+
+```json
+{
+  "status": "failed",
+  "course_name": "Python Basics", "total_files": 42,
+  "output_dirs": ["python-basics-de", "python-basics-en"],
+  "stages": [{"name": "Notebooks", "stage_num": 1, "total_stages": 3,
+              "num_jobs": 40, "num_cached": 30, "completed": 40, "total": 40,
+              "cached_completed": 30}],
+  "duration_seconds": 71.4, "start_time": "…", "end_time": "…",
+  "files_processed": 42, "files_succeeded": 41, "files_failed": 1,
+  "errors": [{"error_type": "user", "category": "notebook_execution",
+              "severity": "error", "file_path": "slides/…/slides_010.py",
+              "message": "NameError: name 'x' is not defined",
+              "actionable_guidance": "…", "job_id": 17, "correlation_id": "…",
+              "details": {"cell_number": 4, "…": "…"},
+              "occurrence_count": 2, "from_cache": false}],
+  "warnings": [{"category": "…", "message": "…", "severity": "warning",
+                "file_path": "…", "occurrence_count": 1, "from_cache": false}],
+  "error_count": 1, "warning_count": 0,
+  "error_count_from_execution": 1, "error_count_from_cache": 0,
+  "aborted": false, "timed_out": false,
+  "flaky_files": [], "rebuild_reasons": {},
+  "output_dedup_count": 0, "output_large_file_collision_count": 0,
+  "output_conflicts": [],
+  "log_directory": "…/clm/Logs", "worker_log_directory": "…/clm/Logs/workers",
+  "provenance_manifests": ["…/output/shared/.clm-manifest.json"],
+  "spec_file": "…/course-specs/python.xml",
+  "report_written_at": "2026-09-25T14:03:11+00:00"
+}
+```
+
+`status` is one of:
+
+| `status` | Meaning |
+|---|---|
+| `success` | Build finished; no errors |
+| `failed` | Build finished with errors (`errors[]`; the exit code depends on `--fail-on-error`) |
+| `fatal` | Build finished with at least one fatal error |
+| `timed_out` | The job-stall detector / completion cap fired or the worker pool left orphaned jobs (issues #143/#617): the output tree is incomplete; exit 1 regardless of `--fail-on-error` (`timed_out: true`) |
+| `aborted` | Stage processing raised (`aborted: true`, one `build_aborted` error) — or, in the report file only, an exception escaped before any summary existed |
+| `interrupted` | Report file only: the build was interrupted (Ctrl-C / SIGTERM) before it finished |
+| `validation_failed` | The spec parsed but failed validation: `errors[]` carries one `spec_validation` entry per finding, `spec_file` the path; no build ran |
+| `error` | The spec could not be parsed (`error_type: "spec_parsing"`) or `--only-sections` named no section (`error_type: "section_selection"`): `file` and `message`; no build ran |
+
+`error_count_from_execution` / `error_count_from_cache` split the errors by
+provenance (issue #860): a cached error was *replayed*, not re-executed —
+each entry also carries `from_cache`. `flaky_files` lists decks that passed
+only after a retry (issue #330); `rebuild_reasons` is filled under
+`--explain-rebuilds`; `provenance_manifests` names the `.clm-manifest.json`
+files the build wrote (empty when the manifest was suppressed or the build
+was not a whole-course build). `clm kernel-triage` consumes the same envelope
+from its `-O json` subprocess.
 
 #### Exit codes
 

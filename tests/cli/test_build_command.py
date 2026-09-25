@@ -1138,7 +1138,7 @@ class TestBuildCliWrapper:
         monkeypatch.setattr(
             engine_module,
             "initialize_paths_and_course",
-            lambda config: (fake_course, [tmp_path / "out" / "En"], data_dir),
+            lambda config, **kwargs: (fake_course, [tmp_path / "out" / "En"], data_dir),
         )
 
         fake_lifecycle = MagicMock()
@@ -1294,7 +1294,7 @@ def _setup_mocked_build_pipeline(
     monkeypatch.setattr(
         engine_module,
         "initialize_paths_and_course",
-        lambda config: (fake_course, [tmp_path / "out" / "En"], data_dir),
+        lambda config, **kwargs: (fake_course, [tmp_path / "out" / "En"], data_dir),
     )
 
     fake_lifecycle = MagicMock()
