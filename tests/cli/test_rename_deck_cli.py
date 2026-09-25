@@ -185,6 +185,47 @@ class TestCacheAndGit:
         assert processed == {str(topic / "slides_new.de.py"), str(topic / "slides_new.en.py")}
         assert executed == {str(topic / "slides_new.de.py")}
 
+    def test_cache_rows_match_the_stored_spelling_not_the_cli_argument(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        """Review finding: ``PathMapping.old`` must be the path exactly as
+        stored. The build stores the course-root-derived spelling; the CLI
+        argument may differ in case (drive letter) or through a junction. The
+        mappings are built from the DB's own values, so a differently spelled
+        argument still migrates the rows — and keeps the stored spelling."""
+        from clm.infrastructure.database.cache_path_migration import _connect, _distinct_paths
+        from clm.infrastructure.database.db_operations import DatabaseManager
+        from tests.infrastructure.database.test_cache_path_migration import _result
+
+        topic = tmp_path / "topic_100_x"
+        de, _ = _write_pair(topic)
+        cache_db = tmp_path / "clm_cache.db"
+        stored_de = str(de).swapcase() if str(de)[1:3] == ":\\" else str(de)
+        # A spelling the resolver would never produce, but one the DB may hold.
+        stored_de = stored_de[0].swapcase() + stored_de[1:]
+        with DatabaseManager(cache_db) as m:
+            m.store_latest_result(stored_de, "h1", "corr", _result(), retain_count=3)
+
+        res = _invoke(
+            cli_runner, [str(de), "slides_new", "--json", "--no-validate"], cache_db=cache_db
+        )
+        assert res.exit_code == 0, res.output
+        payload = _json_payload(res.output)
+        conn = _connect(cache_db)
+        try:
+            processed = _distinct_paths(conn, "processed_files", "file_path")
+        finally:
+            conn.close()
+        if Path(stored_de).resolve() == de.resolve():
+            # Case-insensitive filesystem: the row is the deck's and migrates,
+            # keeping its own spelling.
+            assert payload["cache"]["rows_rewritten"] == 1
+            assert processed == [str(Path(stored_de).with_name("slides_new.de.py"))]
+        else:
+            # Case-sensitive filesystem: a different path, untouched.
+            assert payload["cache"]["rows_rewritten"] == 0
+            assert processed == [stored_de]
+
     def test_dry_run_touches_nothing_but_reports_the_cache(
         self, cli_runner: CliRunner, tmp_path: Path
     ):

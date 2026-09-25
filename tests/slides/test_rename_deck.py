@@ -58,12 +58,24 @@ class TestValidateNewStem:
             ('slides "x"', "not a usable stem"),
             ("slides_old", "already the deck"),
             ("new_without_prefix", "routing prefix"),
+            ("voiceover_new", "companion"),
         ],
     )
     def test_refusals(self, tmp_path: Path, stem: str, fragment: str):
         de, _ = _pair(tmp_path)
         with pytest.raises(DeckRenameError, match=fragment):
             validate_new_stem(stem, old_half=de)
+
+    def test_voiceover_prefix_refused_even_for_an_unprefixed_deck(self, tmp_path: Path):
+        """Review finding: ``apis`` → ``voiceover_apis`` passed the prefix guard
+        and turned the deck into something the tooling reads as a companion."""
+        de, _ = _pair(tmp_path, stem="apis")
+        with pytest.raises(DeckRenameError, match="companion"):
+            validate_new_stem("voiceover_apis", old_half=de)
+
+    def test_case_only_rename_is_not_a_noop(self, tmp_path: Path):
+        de, _ = _pair(tmp_path, stem="slides_Intro")
+        assert validate_new_stem("slides_intro", old_half=de) == "slides_intro"
 
     def test_unprefixed_deck_may_stay_unprefixed(self, tmp_path: Path):
         """``apis.de.py`` is a legal split half (prefix-agnostic pairing); a
@@ -92,6 +104,49 @@ class TestPlan:
         companions = {m.role: m.new for m in plan.companions}
         assert companions["de_companion"] == tmp_path / "voiceover_new.de.py"
         assert companions["en_companion"] == tmp_path / "voiceover_new.en.py"
+
+    def test_cassettes_move_with_their_half_in_every_layout(self, tmp_path: Path):
+        """Review finding: the cassette is keyed by the half's stem; left behind,
+        a replay build fails strict and a once build re-records live."""
+        de, en = _pair(tmp_path)
+        sidecar = tmp_path / ".clm" / "cassettes"
+        sidecar.mkdir(parents=True)
+        de_cassette = sidecar / "slides_old.de.http-cassette.yaml"
+        de_cassette.write_text("interactions: []\n", encoding="utf-8")
+        en_cassette = tmp_path / "slides_old.en.http-cassette.yaml"  # sibling layout
+        en_cassette.write_text("interactions: []\n", encoding="utf-8")
+
+        plan = plan_deck_rename(de, en, "slides_new")
+        cassettes = {m.role: (m.old, m.new) for m in plan.cassettes}
+        assert cassettes["de_cassette"] == (
+            de_cassette,
+            sidecar / "slides_new.de.http-cassette.yaml",
+        )
+        assert cassettes["en_cassette"] == (
+            en_cassette,
+            tmp_path / "slides_new.en.http-cassette.yaml",
+        )
+        apply_deck_rename(plan, use_git=False)
+        assert not de_cassette.exists() and not en_cassette.exists()
+        assert (sidecar / "slides_new.de.http-cassette.yaml").exists()
+        assert (tmp_path / "slides_new.en.http-cassette.yaml").exists()
+
+    def test_cassette_target_collision_refused(self, tmp_path: Path):
+        de, en = _pair(tmp_path)
+        (tmp_path / "slides_old.de.http-cassette.yaml").write_text("a", encoding="utf-8")
+        (tmp_path / "slides_new.de.http-cassette.yaml").write_text("b", encoding="utf-8")
+        with pytest.raises(DeckRenameError, match="http-cassette.yaml already exists"):
+            plan_deck_rename(de, en, "slides_new")
+
+    def test_case_only_rename_is_not_a_collision(self, tmp_path: Path):
+        """On a case-insensitive filesystem the target "exists" — it is the
+        source. ``git mv`` records such renames; the plan must not refuse."""
+        de, en = _pair(tmp_path, stem="slides_Intro")
+        plan = plan_deck_rename(de, en, "slides_intro")
+        assert plan.de is not None and plan.de.new.name == "slides_intro.de.py"
+        apply_deck_rename(plan, use_git=False)
+        names = sorted(p.name for p in tmp_path.iterdir() if p.is_file())
+        assert names == ["slides_intro.de.py", "slides_intro.en.py"]
 
     def test_extension_and_prefix_carry_over(self, tmp_path: Path):
         de, en = _pair(tmp_path, stem="topic_old", ext=".cs")

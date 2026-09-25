@@ -1,6 +1,6 @@
 - `clm slides rename PATH NEW_STEM` (#991) renames a split deck's file stem
-  atomically: both halves and their separated voiceover companions move
-  together (`git mv` inside a work tree), the deck's section in the per-topic
+  atomically: both halves, their separated voiceover companions and their
+  HTTP-replay cassettes move together (`git mv` inside a work tree), the deck's section in the per-topic
   sync ledger is re-keyed as a pure rename (the deck stays warm — `sync
   report` is clean afterwards), the build cache's path-keyed rows follow the
   files (the `course renumber` migration), and `clm validate` runs on the

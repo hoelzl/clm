@@ -15,6 +15,7 @@ renamed, but the post-rename validation reported errors; ``2`` usage error
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -163,10 +164,20 @@ def _resolve_pair(
 
 
 def _migrate_cache(ctx: click.Context, plan: DeckRenamePlan, *, dry_run: bool):
-    """Rewrite the cache rows keyed on the moved files (one transaction)."""
+    """Rewrite the cache rows keyed on the moved files (one transaction).
+
+    A ``PathMapping.old`` must be the path *exactly as stored* — the build
+    stores the course-root-derived path, which need not equal the resolved
+    CLI argument (a junction / ``subst`` drive, a lower-case drive letter).
+    So, like ``course renumber``'s ``plan_dir_rename``, the mappings are
+    built from the DB's own distinct values: every stored path that names one
+    of the moved files (compared as resolved, case-normalised paths) maps to
+    the same spelling with the new filename.
+    """
     from clm.infrastructure.database.cache_path_migration import (
         PathMapping,
         migrate_cache_paths,
+        stored_input_paths,
     )
 
     obj = ctx.obj or {}
@@ -176,7 +187,19 @@ def _migrate_cache(ctx: click.Context, plan: DeckRenamePlan, *, dry_run: bool):
     cache_db = Path(cache_db)
     if not cache_db.exists():
         return None
-    mappings = [PathMapping(str(m.old), str(m.new)) for m in plan.moves]
+
+    def _norm(path: Path) -> str:
+        try:
+            return os.path.normcase(str(path.resolve()))
+        except OSError:
+            return os.path.normcase(str(path))
+
+    by_old = {_norm(m.old): m for m in plan.moves}
+    mappings: list[PathMapping] = []
+    for stored in stored_input_paths(cache_db):
+        move = by_old.get(_norm(Path(stored)))
+        if move is not None:
+            mappings.append(PathMapping(stored, str(Path(stored).with_name(move.new.name))))
     return migrate_cache_paths(cache_db, mappings, dry_run=dry_run)
 
 

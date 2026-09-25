@@ -15,7 +15,12 @@ procedure with silent-failure modes:
   cold and a later ``confirm`` banks a possibly stale twin — the #572 footgun
   one level up from ``rename-id``;
 * the build cache keys its lookup rows on the absolute input path, so a
-  renamed deck re-executes although its payloads are unchanged.
+  renamed deck re-executes although its payloads are unchanged;
+* an HTTP-replay cassette is keyed by the half's stem too
+  (``<stem>.http-cassette.yaml`` in ``.clm/cassettes/``, the legacy
+  ``cassettes/`` / ``_cassettes/``, or as a sibling) — left behind, a
+  ``replay`` build fails strict and a ``once`` build silently re-records
+  against the live API.
 
 This module plans the whole move (so every refusal fires before anything is
 touched), executes it atomically enough — ``git mv`` when inside a work tree,
@@ -27,6 +32,7 @@ post-rename validation.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from attrs import field, frozen
@@ -62,7 +68,7 @@ class DeckRenameError(ValueError):
 class FileMove:
     """One file the rename moves, with its role for the report."""
 
-    role: str  # "de" | "en" | "de_companion" | "en_companion"
+    role: str  # "de" | "en" | "de_companion" | "en_companion" | "de_cassette" | "en_cassette"
     old: Path
     new: Path
 
@@ -90,6 +96,31 @@ class DeckRenamePlan:
     @property
     def companions(self) -> tuple[FileMove, ...]:
         return tuple(m for m in self.moves if m.role.endswith("_companion"))
+
+    @property
+    def cassettes(self) -> tuple[FileMove, ...]:
+        return tuple(m for m in self.moves if m.role.endswith("_cassette"))
+
+
+#: Where a half's HTTP-replay cassette may live, in the build's lookup order
+#: (``NotebookFile.cassette_path``): the ``.clm/cassettes/`` sidecar, the
+#: legacy top-level sidecars, then a sibling.
+_CASSETTE_DIRS = (Path(".clm") / "cassettes", Path("cassettes"), Path("_cassettes"), Path())
+
+
+def cassette_locations(half: Path) -> list[Path]:
+    """Every *existing* ``<stem>.http-cassette.yaml`` of ``half``, in lookup order."""
+    name = f"{half.stem}.http-cassette.yaml"
+    return [p for p in (half.parent / d / name for d in _CASSETTE_DIRS) if p.is_file()]
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """``a`` and ``b`` name the same existing file (a case-only rename on a
+    case-insensitive filesystem)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def validate_new_stem(new_stem: str, *, old_half: Path) -> str:
@@ -123,9 +154,17 @@ def validate_new_stem(new_stem: str, *, old_half: Path) -> str:
                 f'"{stem}" ends with the language tag ".{lang}" — pass the bare stem '
                 f'("{stem[: -len(lang) - 1]}"); both halves are renamed together.'
             )
+    if lowered.startswith("voiceover_"):
+        raise DeckRenameError(
+            f'"{stem}" starts with "voiceover_" — that prefix names a deck\'s narration '
+            "companion, and the slides tooling would stop treating the file as a deck."
+        )
     old_stem = deck_key_for(old_half)
     if stem == old_stem:
         raise DeckRenameError(f'"{stem}" is already the deck\'s stem — nothing to rename.')
+    # A case-only rename (``slides_Intro`` → ``slides_intro``) is a real rename
+    # git records; it just must not trip the collision check on a
+    # case-insensitive filesystem (see :func:`_same_file`).
     old_prefixed = old_stem.startswith(_ROUTING_PREFIXES)
     if old_prefixed and not stem.startswith(_ROUTING_PREFIXES):
         prefixes = " / ".join(f'"{p}"' for p in _ROUTING_PREFIXES)
@@ -181,10 +220,16 @@ def plan_deck_rename(
             # Same directory as the existing companion (sibling or voiceover/).
             new_companion = old_companion.with_name(companion_name(new_half))
             moves.append(FileMove(f"{role}_companion", old_companion, new_companion))
+        for old_cassette in cassette_locations(half):
+            # Each cassette stays in the sidecar layout it was in.
+            new_cassette = old_cassette.with_name(f"{new_half.stem}.http-cassette.yaml")
+            moves.append(FileMove(f"{role}_cassette", old_cassette, new_cassette))
 
-    # Collision refusal — every target, halves and companions alike.
+    # Collision refusal — every target: halves, companions and cassettes alike.
+    # A target that IS the source (case-only rename on a case-insensitive
+    # filesystem) is not a collision.
     for move in moves:
-        if move.new.exists():
+        if move.new.exists() and not _same_file(move.old, move.new):
             raise DeckRenameError(
                 f"{move.new.name} already exists in {move.new.parent} — renaming "
                 f'"{old_stem}" to "{stem}" would overwrite it. Choose an unused stem.'
@@ -196,7 +241,11 @@ def plan_deck_rename(
         tag = split_lang_tag(half)
         other_tag = "en" if tag == "de" else "de"
         twin_target = half.with_name(f"{stem}.{other_tag}{half.suffix}")
-        if twin_target.exists() and all(m.new != twin_target for m in moves):
+        if (
+            twin_target.exists()
+            and all(m.new != twin_target for m in moves)
+            and not any(_same_file(m.old, twin_target) for m in moves)
+        ):
             raise DeckRenameError(
                 f"{twin_target.name} already exists — the renamed {tag} half would pair "
                 f"with it; rename both halves together (drop --single) or pick another stem."

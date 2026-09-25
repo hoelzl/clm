@@ -2235,10 +2235,13 @@ new stem (`slides_30_skills`): the language tag and extension are kept, so
 `slides_30_task_templates.{de,en}.py` become `slides_30_skills.{de,en}.py`. In one
 step it:
 
-- moves both halves and their companions (`voiceover/voiceover_<stem>.{de,en}.<ext>`,
-  or the sibling layout — each companion stays in the layout it was in), with
-  `git mv` inside a work tree (100 % renames, history preserved), else a plain
-  rename;
+- moves both halves, their companions (`voiceover/voiceover_<stem>.{de,en}.<ext>`,
+  or the sibling layout — each companion stays in the layout it was in) **and
+  their HTTP-replay cassettes** (`<half>.http-cassette.yaml` in `.clm/cassettes/`,
+  the legacy `cassettes/` / `_cassettes/`, or as a sibling — keyed by the half's
+  stem, so a cassette left behind would make a `replay` build fail and a `once`
+  build re-record against the live API), with `git mv` inside a work tree
+  (100 % renames, history preserved), else a plain rename;
 - re-keys the deck's section in `<topic>/.clm/sync-ledger.json` as a **pure
   rename** — the recorded fingerprints are keyed by `slide_id` / position and
   never by the stem, so the deck stays warm: `clm slides sync report` is clean
@@ -2256,8 +2259,10 @@ companion name already exists, when a lone half's new twin name is taken by a
 file outside the rename, when a companion lives in both layouts (reconcile it
 first, as `clm validate` asks), when the ledger already holds a section under
 `NEW_STEM`, or when the stem is not bare (carries `.de`/`.en`, an extension or a
-path) or would drop the routing prefix (`slides_` / `topic_` / `project_` — the
-build discovers decks by it). **Course specs need no change**: `<topic>` elements
+path), starts with `voiceover_` (the companion prefix), or would drop the
+routing prefix (`slides_` / `topic_` / `project_` — the build discovers decks by
+it). A case-only rename (`slides_Intro` → `slides_intro`) is allowed. **Course
+specs need no change**: `<topic>` elements
 resolve by directory-name suffix and decks are discovered on disk. Built output
 filenames derive from the header *title*, not the stem, so a stem rename does not
 orphan files in release destinations.
@@ -2268,7 +2273,7 @@ orphan files in release destinations.
 | `--no-cache-migrate` | Leave the cache rows alone; the renamed deck re-executes once. |
 | `--no-validate` | Skip the post-rename `clm validate`. |
 | `--report-only`, `--dry-run` | Report every move, the ledger re-key and the cache rows that would be rewritten, touching nothing. |
-| `--json` | Emit a JSON report: `moves[]` (`role` = `de` / `en` / `de_companion` / `en_companion`, `old`, `new`), `git_mv`, `ledger` / `ledger_section` / `ledger_migrated`, `cache` (`rows_rewritten`, `dry_run`; `null` when no cache DB or `--no-cache-migrate`), `validation` (`errors[]`, `warning_count`; `null` when skipped), `warnings[]`. |
+| `--json` | Emit a JSON report: `moves[]` (`role` = `de` / `en` / `de_companion` / `en_companion` / `de_cassette` / `en_cassette`, `old`, `new`), `git_mv`, `ledger` / `ledger_section` / `ledger_migrated`, `cache` (`rows_rewritten`, `dry_run`; `null` when no cache DB or `--no-cache-migrate`), `validation` (`errors[]`, `warning_count`; `null` when skipped), `warnings[]`. |
 
 Exit codes: `0` renamed (or would rename); `1` renamed, but the post-rename
 validation reported errors (the rename has landed — fix the deck); `2` refused.

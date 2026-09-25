@@ -361,6 +361,28 @@ def _migrate_table(
     return TableMigration(table=table, rows_rewritten=rewritten, collisions_dropped=collisions)
 
 
+def stored_input_paths(cache_db_path: str | Path) -> list[str]:
+    """Every distinct input path stored in the path-keyed tables, verbatim.
+
+    For callers that rename *files* (``clm slides rename``, #991) and must
+    match ``PathMapping.old`` against the DB's own spelling, the way
+    :func:`plan_dir_rename` does for directories. Empty when the DB is absent.
+    """
+    cache_db_path = Path(cache_db_path)
+    if not cache_db_path.exists():
+        return []
+    conn = _connect(cache_db_path)
+    try:
+        seen: dict[str, None] = {}
+        for table, column in INPUT_PATH_COLUMNS.items():
+            if _table_exists(conn, table):
+                for stored in _distinct_paths(conn, table, column):
+                    seen.setdefault(stored, None)
+        return list(seen)
+    finally:
+        conn.close()
+
+
 def migrate_cache_paths(
     cache_db_path: str | Path,
     mappings: Iterable[PathMapping],
