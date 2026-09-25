@@ -254,6 +254,40 @@ def validate_output_target_path(
         )
 
 
+#: Where an included diagram source must land inside the consuming topic: the
+#: render target is derived from the virtual path's *grandparent*
+#: (``<topic>/<subdir>/<name>`` -> ``<topic>/img-generated/<name>.<ext>``), so
+#: any other ``as`` silently renders into the wrong directory (#987 design §5).
+DIAGRAM_INCLUDE_SUBDIRS = ("pu", "drawio")
+
+
+def _check_diagram_include_target(source: str, as_path: str, *, element_label: str) -> None:
+    """Reject a diagram-source ``<include>`` whose ``as`` lacks its diagram subdirectory.
+
+    Sharing a diagram between topics means including its *source* so the
+    consumer renders it through its own pipeline (`clm info spec-files`,
+    "Sharing a diagram between topics"). That only works when the virtual
+    path keeps the diagram subdirectory — ``as="drawio/<name>.drawio"`` for
+    a DrawIO source, ``as="pu/<name>.pu"`` for a PlantUML one (the name may
+    differ from the source's). A glob source is left alone (its targets are
+    directories, not files).
+    """
+    from clm.core.utils.path_utils import is_diagram_source
+
+    if any(ch in source for ch in "*?[") or not is_diagram_source(Path(source)):
+        return
+    subdir = "drawio" if Path(source).suffix == ".drawio" else "pu"
+    parts = Path(as_path).parts
+    if len(parts) == 2 and parts[0] == subdir:
+        return
+    expected = f"{subdir}/{Path(source).name}"
+    raise CourseSpecError(
+        f"{element_label}: <include> of the diagram source {source!r} targets "
+        f"'as={as_path}'. A diagram source must keep its subdirectory so the "
+        f"render lands in the consumer's img-generated/ — use as={expected!r}."
+    )
+
+
 def _parse_includes(parent: ETree.Element, *, element_label: str) -> list[IncludeSpec]:
     """Parse ``<include>`` children of a section or topic element.
 
@@ -283,6 +317,7 @@ def _parse_includes(parent: ETree.Element, *, element_label: str) -> list[Includ
             )
 
         optional = _parse_bool_attr(inc.attrib.get("optional"), attr_name="optional")
+        _check_diagram_include_target(source, as_path, element_label=element_label)
 
         if as_path in seen_keys:
             raise CourseSpecError(

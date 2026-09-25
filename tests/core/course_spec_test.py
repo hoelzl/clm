@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 
 import pytest
 
@@ -2353,3 +2354,58 @@ class TestJupyterLiteCrossValidation:
             target_format_is_jupyterlite=False,
         )
         assert spec.validate() == []
+
+
+# ---------------------------------------------------------------------------
+# Diagram-source includes must keep their subdirectory (#987 design §5)
+# ---------------------------------------------------------------------------
+
+
+def _topic_with_include(include_xml: str):
+    return CourseSpec.from_file(
+        io.StringIO(
+            f"""
+            <course>
+                <name><de>T</de><en>T</en></name>
+                <prog-lang>python</prog-lang>
+                <description><de></de><en></en></description>
+                <certificate><de></de><en></en></certificate>
+                <sections><section><name><de>S</de><en>S</en></name>
+                    <topics><topic id="t">{include_xml}</topic></topics>
+                </section></sections>
+            </course>
+            """
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "source, as_attr",
+    [
+        ("slides/module_100/topic_010/drawio/x.drawio", "drawio/x.drawio"),
+        ("slides/module_100/topic_010/pu/x.pu", "pu/x.pu"),
+        ("slides/module_100/topic_010/drawio/x.de.drawio", "drawio/x.de.drawio"),
+        ("slides/module_100/topic_010/drawio", "drawio"),  # a directory: not a diagram source
+        ("slides/module_100/topic_010/drawio/*.drawio", "drawio"),  # glob: left alone
+    ],
+)
+def test_parse_diagram_include_with_subdir_target_is_accepted(source, as_attr):
+    spec = _topic_with_include(f'<include source="{source}" as="{as_attr}"/>')
+    [inc] = spec.sections[0].topics[0].includes
+    assert inc.as_path == as_attr
+
+
+@pytest.mark.parametrize(
+    "source, as_attr, expected",
+    [
+        ("slides/module_100/topic_010/drawio/x.drawio", "x.drawio", "drawio/x.drawio"),
+        ("slides/module_100/topic_010/drawio/x.drawio", "img/x.drawio", "drawio/x.drawio"),
+        ("slides/module_100/topic_010/drawio/x.drawio", "a/drawio/x.drawio", "drawio/x.drawio"),
+        ("slides/module_100/topic_010/pu/x.pu", "drawio/x.pu", "pu/x.pu"),
+        ("slides/module_100/topic_010/pu/x.pu", None, "pu/x.pu"),  # default = basename
+    ],
+)
+def test_parse_diagram_include_without_subdir_target_is_rejected(source, as_attr, expected):
+    as_xml = "" if as_attr is None else f' as="{as_attr}"'
+    with pytest.raises(CourseSpecError, match=re.escape(f"as={expected!r}")):
+        _topic_with_include(f'<include source="{source}"{as_xml}/>')

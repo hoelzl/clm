@@ -29,7 +29,7 @@ from clm.core.topic_resolver import (
     find_slide_files,
     matches_for_binding,
 )
-from clm.core.utils.path_utils import is_private_dir_name
+from clm.core.utils.path_utils import is_diagram_source, is_private_dir_name
 
 
 @dataclass
@@ -779,20 +779,40 @@ def _validate_includes(
 
                 if inc.source not in seen_topic_dir_sources and _is_inside_topic_dir(inc):
                     seen_topic_dir_sources.add(inc.source)
-                    findings.append(
-                        SpecFinding(
-                            severity="warning",
-                            type="include_source_is_topic_dir",
-                            message=suffix(
-                                section_disabled,
-                                f"Include source '{inc.source}' resolves "
-                                f"inside a topic directory under 'slides/'. "
-                                f"This works but couples two topics' "
-                                f"contents — prefer a canonical location "
-                                f"outside 'slides/' (e.g. 'examples/...').",
-                            ),
+                    if is_diagram_source(Path(inc.source)):
+                        # Sharing a diagram means including the owning
+                        # topic's SOURCE (#987): the coupling is the intent,
+                        # and a diagram one topic authors has no canonical
+                        # home outside slides/. Informational only.
+                        findings.append(
+                            SpecFinding(
+                                severity="info",
+                                type="include_source_is_topic_dir",
+                                message=suffix(
+                                    section_disabled,
+                                    f"Include source '{inc.source}' is a diagram "
+                                    f"source owned by another topic under "
+                                    f"'slides/'; the consumer renders it into "
+                                    f"its own img-generated/ (the supported way "
+                                    f"to share a diagram between topics).",
+                                ),
+                            )
                         )
-                    )
+                    else:
+                        findings.append(
+                            SpecFinding(
+                                severity="warning",
+                                type="include_source_is_topic_dir",
+                                message=suffix(
+                                    section_disabled,
+                                    f"Include source '{inc.source}' resolves "
+                                    f"inside a topic directory under 'slides/'. "
+                                    f"This works but couples two topics' "
+                                    f"contents — prefer a canonical location "
+                                    f"outside 'slides/' (e.g. 'examples/...').",
+                                ),
+                            )
+                        )
 
                 if inc.source not in seen_dep_sources:
                     seen_dep_sources.add(inc.source)

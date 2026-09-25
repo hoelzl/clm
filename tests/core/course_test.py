@@ -1211,3 +1211,89 @@ def test_output_root_without_spec_targets_uses_default_structure(tmp_path):
     assert by_name["shared"].output_root == (out / "shared").resolve()
     assert by_name["speaker"].output_root == (out / "speaker").resolve()
     assert by_name["shared"].kinds == frozenset({"code-along", "completed"})
+
+
+# ---------------------------------------------------------------------------
+# Sharing a diagram between topics by including its SOURCE (#987)
+# ---------------------------------------------------------------------------
+
+
+def _diagram_share_course(tmp_path: Path):
+    """Owner topic authors ``drawio/cosine.drawio``; the consumer includes it."""
+    from clm.core.course_files.drawio_file import DrawIoFile
+    from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
+
+    owner_dir = _make_topic_dir(tmp_path, "module_100", "topic_010_owner")
+    consumer_dir = _make_topic_dir(tmp_path, "module_100", "topic_020_consumer")
+    source = owner_dir / "drawio" / "cosine.drawio"
+    source.parent.mkdir()
+    source.write_text("<mxfile/>", encoding="utf-8")
+
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <topics>
+          <topic>owner</topic>
+          <topic id="consumer">
+            <include source="slides/module_100/topic_010_owner/drawio/cosine.drawio"
+                     as="drawio/cosine.drawio"/>
+          </topic>
+        </topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    consumer = next(t for t in course.sections[0].topics if t.id == "consumer")
+    diagram = consumer.file_for_path(consumer_dir / "drawio" / "cosine.drawio")
+    render = consumer.file_for_path(consumer_dir / "img-generated" / "cosine.png")
+    assert isinstance(diagram, DrawIoFile)
+    assert isinstance(render, DuplicatedImageFile)
+    return course, consumer, source, diagram, render
+
+
+def test_included_diagram_source_renders_into_the_consumers_img_generated(tmp_path):
+    """An included ``.drawio`` is a DrawIoFile of the CONSUMER, read from the
+    owner's bytes, rendering into the consumer's own ``img-generated/`` (#987
+    design §2/§3.1 — the claimed-wired test for sharing a diagram source)."""
+    from clm.core.utils.execution_utils import COPY_GENERATED_IMAGES_STAGE
+
+    course, consumer, source, diagram, render = _diagram_share_course(tmp_path)
+
+    assert diagram.source_path == source
+    assert diagram.img_path == consumer.path / "img-generated" / "cosine.png"
+    assert diagram.source_outputs == frozenset({diagram.img_path})
+    # The render is registered as a generated image: its copy to output is
+    # scheduled after the conversion, never concurrently with it.
+    assert render.execution_stage == COPY_GENERATED_IMAGES_STAGE
+    # The owner keeps rendering into its own directory — one source, two renders.
+    owner = next(t for t in course.sections[0].topics if t.id == "owner")
+    owner_diagram = owner.file_for_path(source)
+    assert owner_diagram is not None
+    assert owner_diagram.img_path == owner.path / "img-generated" / "cosine.png"
+
+
+async def test_included_diagram_render_is_copied_to_the_consumers_output_img(tmp_path):
+    """The consumer's render ships as its output ``img/<name>.png``."""
+    from clm.core.operations.convert_drawio_file import ConvertDrawIoFileOperation
+
+    course, consumer, source, diagram, render = _diagram_share_course(tmp_path)
+
+    convert = await diagram.get_processing_operation(course.output_root)
+    assert isinstance(convert, ConvertDrawIoFileOperation)
+    assert convert.output_file == consumer.path / "img-generated" / "cosine.png"
+
+    # Stand in for the diagram worker: the render lands at the operation's target.
+    convert.output_file.parent.mkdir(parents=True, exist_ok=True)
+    convert.output_file.write_bytes(b"PNG-render")
+
+    copy = await render.get_processing_operation(course.output_root)
+    assert isinstance(copy, Concurrently)
+    targets = [op.output_file for op in copy.operations]
+    assert targets, "no copy scheduled for the consumer's render"
+    assert all(t.parts[-2:] == ("img", "cosine.png") for t in targets)
+    assert all(course.output_root in t.parents for t in targets)
+    async with PytestLocalOpsBackend() as backend:
+        await copy.execute(backend)
+    for target in targets:
+        assert target.read_bytes() == b"PNG-render"
