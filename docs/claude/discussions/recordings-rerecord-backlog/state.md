@@ -1,103 +1,129 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-09-25
-review-by: 2027-03-25
+updated: 2026-09-26
+review-by: 2027-03-26
 ---
 
 # State: recordings — from `drift` to a re-recording backlog (#907)
 
 The design is `docs/claude/design/recordings-rerecord-backlog.md` (decided
-2026-09-25, S8); the implementation issues are #1004 (ledger), #965 (the
-`report`/`ack` half, now unblocked), #1005 (seed + retire the PythonCourses
-tracker #360), #1006 (legacy inventory), #1007 (rename migration). This
-file carries the argument and where the agent's priors were corrected. S8
-was a one-owner-turn autonomous design session: the owner's brief is the
-single Owner block of the transcript, and the reasoning lives in the agent
-blocks and the design note.
+2026-09-25, S8). S9 (2026-09-25/26, one owner turn, autonomous) implemented
+the minimum that retires the tracker: #1004 (ledger, PR #1011), #965
+(`report`/`ack`, PR #1014), #1005 (`seed-ledger`, PR #1017), plus the
+deck-stem half of #1007 (PR #1016) and, from the sibling threads, #987 step 1
+(PR #1012 + PythonCourses `50c30395`), #1008 (PR #1015) and #1009 (PR #1013).
+hoelzl/PythonCourses#360 is closed; the seeded ledgers and the new AGENTS.md
+rule are in PythonCourses `940f3bec`. This file carries the argument and
+where the design bent under real data; the version-accurate mechanics are
+`clm info recordings` and `clm info recordings-agents`.
 
-## Settled (S8)
+## Settled (S8, unchanged)
 
-- **Source-anchored, committed, per topic.** The verdict comes from the
-  deck's source at `HEAD` versus per-member content fingerprints stored at
-  record time in `<topic>/.clm/recordings-ledger.json`; the build-output
-  digest is an optional secondary flag. The measurement that decided it
-  (design §3): on the 197 parts of `machine-learning-azav-de.json`, `drift`
-  is wrong-in-the-"changed"-direction for 22 of 84 answerable parts and
-  spec-bound `unknown` for 30 more, while the stamped `git_commit` answers
-  117 of 123 parts from the repo alone.
-- **The (a)–(d) order**: (c) first; (b) in its cheap five-class form
-  (`structural` / `visible` / `narration` / `notes` / `none` — the tracker's
-  own vocabulary); (d) as member-granular `ack`; (a) split into seeding from
-  the local state files (prerequisite, no video) and the 402-video inventory
-  (follow-up, `identify-rev` as the per-deck upgrade path).
-- **The minimum that retires #360**: ledger + `report` + `ack` +
-  `seed-ledger` run once on the two ML-AZAV state files; then the
-  course-repo `AGENTS.md` rule becomes "run `report`, `ack` what you keep".
-- **Non-goal reaffirmed**: no automatic re-record judgment. The
-  reasoning_effort one-liner in ~20 decks is `structural` by any rule and
-  cosmetic to the author; `ack` is the mechanism, not a threshold.
-- **`drift` retires into `report`** without a shim (the agent-toolkit
-  shaping rule; `drift` is one release old and agent-facing).
+- Source-anchored, committed, per topic (`<topic>/.clm/recordings-ledger.json`);
+  severity in the tracker's five-word vocabulary from the member-fingerprint
+  diff; member-granular `ack`; `drift` retired without a shim; no automatic
+  re-record judgment; the build-output digest only as the secondary
+  `built_output_changed` flag.
 
-## Corrections of the agent's priors (worth not rediscovering)
+## Where the design bent (S9 — all owner-visible on the issues and PRs)
 
-- The issue framed backfill (a) as "turn `identify-rev` output into
-  stamps". The dashboard-era state files already carry `git_commit` on
-  123/197 parts and `recorded_at` on all of them; `git rev-list -1
-  --before=<recorded_at>` pins the rest. `identify-rev` is only needed for
-  the video-only legacy inventory, and only where an mtime anchor is
-  doubtful.
-- The issue framed (c) as new machinery ("commit + slide-file fingerprints
-  at recording time"). The commit is already stamped; what is missing is
-  the **deck path** (the lecture key is display names, and a topic id
-  resolves to two directories for 6 parts because of the cohort-archive
-  module) and a **committed home** — the state file is machine-local.
-- `clm info recordings` does not exist (the brief asked for it). The
-  sources are `docs/user-guide/recordings.md` and the `clm recordings`
-  section of `clm info commands`; the `recordings-agents` topic arrives
-  with #965.
-- The "~400 legacy OBS videos" and the dashboard-era parts are **two
-  populations**: the inventory (`planning/video_to_slide_mapping.json`,
-  402 rows, 9 courses, already carrying an mtime-based `freshness`) versus
-  the state files (197 + 9 ML-AZAV parts since 2026-04-18, 37 + 22 + 12 in
-  the other courses). The tracker's subject is the second one.
+- **Part identity is `(course_id, part, lang)`**, not `(part, lang)`: two
+  cohorts recording the same deck keep separate entries (review finding on
+  #1004). One consequence seen in seeding: the same recording listed under
+  two section names in one state file collapses to one entry (the later
+  run wins) — six parts in `machine-learning-azav-de`.
+- **Evidence is taken when the recording stops**, not at arm time (a
+  retake inside the retake window never re-arms). Entries carry
+  `evidence: recorded | anchor`; a seeded entry is never reported as exact
+  (`recomputed` for a clean commit, `approximate` otherwise) and is never
+  written over a record-time entry.
+- **Member order is stored explicitly** (`order`): canonical sorted JSON
+  loses document order, which the "member order changed" rule needs. The
+  first report over the seeded repo read *every* deck as structural until
+  the rule used the stored list — the single most misleading artefact of
+  the session.
+- **Keys are handles, fingerprints are the evidence.** Slide ids were
+  stamped on most ML-AZAV decks *after* the 2026-04 recordings, so no key
+  survived although the bytes did: 40+ decks read "every member changed".
+  `report` now matches a member by fingerprint when its key no longer
+  lines up, pairs an edited-and-re-keyed member once, and counts only the
+  inserted cell when positional handles renumber.
+- **Single-file bilingual decks** exist in the ML-AZAV course; they and
+  split pairs that refuse normalization at the anchor (duplicate ids at the
+  time) use a cell-based member model (`id:` / `cell:<group>/<kind>/<n>`,
+  repeated ids kept as `id:x#2`), same fingerprint function.
+- **Time anchors look forward.** A course authored just in time is
+  recorded from a working tree whose edits land in the *next* commits, and
+  the week's section is often still disabled in the last commit before the
+  recording; `seed-ledger` tries the last commit before `recorded_at`, then
+  the first five after it, parses specs with disabled sections kept, and
+  resolves a renamed section by unique deck name or a renumbered deck by
+  unique title.
+- **`commits_since_anchor` follows renames** per bundle path (1 vs 10
+  commits on a renumbered topic). Pathspecs are topic-relative so
+  `voiceover/` companions count.
+- **An `unanchored` anchor kind** exists for a non-git checkout (the design
+  listed five kinds).
+- **An ack covers the languages it was written for**; a language recorded
+  later reads `unacknowledged`, not `drifted-since-ack`.
+- **`report` takes a path, not a course id**; the `drift` fallback to the
+  `recordings.courses` config entry is gone (documented in the migration
+  topic).
 
-## Open (owner, confirm once before #1004 starts)
+## The run (S9)
 
-- Per-topic `.clm/recordings-ledger.json` (sync-ledger precedent; needs one
-  gitignore exception per course repo) versus a course-level file. The
-  design chose per-topic for merge locality and rename migration.
-- `ack` is per **deck** entry (all parts), not per part. A part-level ack
-  was judged a finer knob than the author's workflow uses.
-- `drift` retiring without a shim (versus an alias for one release).
+| state file | parts | seeded | unresolved | ledgers |
+|---|---|---|---|---|
+| machine-learning-azav-de | 197 | 175 | 22 | 68 |
+| machine-learning-azav-2026-08-de | 9 | 9 | 0 | 5 |
+
+Anchors: 80 clean commits, 43 dirty, 74 chosen by `recorded_at`. The 22
+unresolved parts are deck-stem renames since the recording (for example
+`slides_010v_api_key_setup` → `slides_010_api_key_setup`) and two Git
+Quickstart decks absent at their anchor — listed, not guessed. First
+`clm recordings report .` over the tree: 115 recorded decks, 49 structural,
+33 visible, 33 none, with the tracker's own entries at the top
+(`intro_ai_coding`, `copilot_tools/mcp_servers`, `copilot_customization`,
+`agent_mode`, `pe_02a`, `setup_copilot`). One tracker belief was wrong: the
+tracker said `topic_0600` workshop "has no recording"; the state file has a
+part for it.
+
+## Open (owner)
+
+- None blocking. Whether the author wants the 22 stem-renamed parts
+  re-pointed by hand (`clm recordings ack` after re-seeding under the new
+  stem is not possible: the entry never existed) or re-recorded.
 
 ## Deferred / revisit conditions
 
-- Root cause of the 22 false `changed` verdicts — only if the secondary
-  `built_output_changed` flag proves noisy; otherwise drop the flag.
-- Finer prose-similarity ranking inside `visible` — only if the
-  `changed/total` count is not enough for the author's cosmetic calls.
-- Legacy inventory import and `identify-rev` re-anchoring (#1006).
+- #1006: `import-inventory` for the 402-video legacy inventory and
+  `identify-rev` re-anchoring — untouched in S9.
+- #1007 topic-rename half — waits for #1002 / `clm course mv`.
+- An MCP mirror of `report` (the agent-tasks "guide + mirror" rule) — not
+  requested; the CLI `--json` is the agent surface.
+- Root cause of the 22 false `drift` verdicts — moot; `drift` is gone and
+  the secondary flag stays optional.
+- Fuzzy stem mapping for renamed decks in `seed-ledger` — deliberately not
+  done (guessing); revisit only if the author asks for the 22 parts.
 
 ## Known weak points
 
-- The measurement is one course's state file and one manifest build;
-  "untouched" means no commit touched the **topic directory**, which
-  misses include/template changes that legitimately alter what students
-  see. The design accepts that as the secondary flag's job.
-- Severity keys members by `slide_id`; a deck without ids falls back to
-  positional identity, where the sync engine's cold-classification rules
-  apply — the design note does not spell this out.
-- 43 of 197 parts were recorded on a dirty tree; their stored fingerprints
-  will be exact going forward, but seeded entries for those parts carry
-  `commit-dirty` confidence and can only be as good as the commit.
-- The S8 transcript is thin (one owner block); the design note is the
-  primary record.
+- Seeded fingerprints are only as good as the anchor commit; 103 of 178
+  seeded parts are `approximate` (dirty or time anchors). The report says
+  so per part.
+- `seed-ledger` materialises one full worktree per distinct anchor commit
+  (~80 for the ML-AZAV file, ~20 minutes); acceptable for a one-off.
+- The title-only resolution fallback could in principle mis-resolve two
+  decks with identical titles in different sections; it applies only when
+  the section+name and name-across-sections lookups both fail and the title
+  is unique in the course.
+- The cell scheme classifies id-less removed members from the handle alone
+  (`code` → structural, else visible) — conservatively one class high for
+  id-less notes or narration cells.
 
 ## Next conversational boundary
 
-Implementation in order #1004 → #965 → #1005, each a resolve-issue pass
-with test-first and an adversarial review above ~150 non-test lines. The
-three confirm-once points above are the only owner input needed; if the
-owner is silent, proceed with the design as written.
+The owner's first real `report` / `ack` pass over PythonCourses. Then #1006
+if the legacy inventory still matters, and the topic-rename half of #1007
+when #1002 lands.
