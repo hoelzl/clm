@@ -448,6 +448,57 @@ def test_unsplit_deck_is_reported_from_its_cells(course: _Course):
     assert row.severity == "none"
 
 
+def test_ids_stamped_after_the_recording_do_not_read_as_drift(course: _Course):
+    """An id-less recording (cell scheme) against the same deck with ids stamped
+    and split since: every fingerprint still exists, so the deck is `none`."""
+    from tests.recordings.test_ledger import UNSPLIT
+
+    folder = course.topic.parent / "topic_020_u"
+    folder.mkdir()
+    deck = folder / "slides_u.py"
+    idless = UNSPLIT.replace(' slide_id="s0"', "").replace(' slide_id="c1"', "")
+    deck.write_text(idless, encoding="utf-8")
+    _git(course.root, "add", "-A")
+    commit = course.commit("id-less unsplit")
+    members = rl.deck_members(deck, "de")
+    assert all(k.startswith("cell:") for k in members)
+    rl.record_part(
+        rl.ledger_path_for(deck),
+        "slides_u",
+        rl.LedgerPart(
+            part=1,
+            recorded_at="t",
+            course_id="c-de",
+            lang="de",
+            anchor=rl.anchor_for(commit, False),
+            members=members,
+            order=[],
+            evidence="anchor",
+        ),
+    )
+    # Ids stamped, same bytes otherwise.
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "none", row.parts[0].changed_members
+    # A real edit still surfaces.
+    deck.write_text(UNSPLIT.replace("x = 1", "x = 2"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "structural"
+    assert row.parts[0].changed == 1
+
+
+def test_positional_member_moved_by_an_insert_is_not_drift(course: _Course):
+    """pos: handles renumber on an insert; the moved members match by fingerprint."""
+    course.record()
+    inserted = "# %% [markdown]\n# neu\n\n"  # a shared id-less cell, on both sides
+    de = DE_FULL.replace(_notes("n1", "de", "Notiz"), inserted + _notes("n1", "de", "Notiz"))
+    en = EN_FULL.replace(_notes("n1", "en", "Note"), inserted + _notes("n1", "en", "Note"))
+    course.write(de, en)
+    deck = course.deck()
+    assert deck.parts[0].changed == 1  # only the inserted cell
+    assert all(v == "visible" for v in deck.parts[0].changed_members.values())
+
+
 # ---------------------------------------------------------------------------
 # Acknowledgement
 # ---------------------------------------------------------------------------

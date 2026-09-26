@@ -209,16 +209,68 @@ def diff_members(
     head_keys = list(head)
     members: dict[str, str] = {}
 
-    added = [k for k in head_keys if k not in base]
-    removed = [k for k in base_keys if k not in head]
+    # Keys are handles, fingerprints are the evidence. A member whose key no
+    # longer lines up — ids stamped since the recording, a positional handle
+    # renumbered by an insert, a cell-scheme entry against a split pair — is
+    # unchanged when its fingerprint still occurs in the deck, and only then
+    # do the remaining unmatched keys count as added / removed / changed.
+    head_fps: dict[str, list[str]] = {}
+    for key, info in head.items():
+        head_fps.setdefault(info.fp, []).append(key)
+    base_fps: dict[str, list[str]] = {}
+    for key, fp in base.items():
+        base_fps.setdefault(fp, []).append(key)
+
+    matched_head: set[str] = set()
+    matched_base: set[str] = set()
+    for key in base_keys:  # 1. by key and fingerprint
+        current = head.get(key)
+        if current is not None and current.fp == base[key]:
+            matched_base.add(key)
+            matched_head.add(key)
+    for key in base_keys:  # 2. by fingerprint alone (re-keyed / moved)
+        if key in matched_base:
+            continue
+        for candidate in head_fps.get(base[key], []):
+            if candidate not in matched_head:
+                matched_base.add(key)
+                matched_head.add(candidate)
+                break
+
+    added = [k for k in head_keys if k not in matched_head and k not in base]
+    removed = [k for k in base_keys if k not in matched_base and k not in head]
+
+    # 3. A member that was edited AND re-keyed (ids stamped on an edited
+    # cell) shows up once as removed and once as added: pair leftovers of
+    # the same kind-class in document order and count each pair once, as
+    # a change of the current member.
+    def kind_of(key: str, info: MemberInfo | None) -> str:
+        if info is not None:
+            return info.kind
+        scheme, _, value = key.partition(":")
+        if scheme in ("pos", "cell"):
+            parts = value.rsplit("/", 2)
+            return parts[1] if len(parts) == 3 else "markdown"
+        return "markdown"
+
+    leftovers_added = list(added)
+    for old_key in list(removed):
+        old_kind = kind_of(old_key, None)
+        for new_key in leftovers_added:
+            if not old_key.startswith("id:") and kind_of(new_key, head[new_key]) == old_kind:
+                members[new_key] = _class_of(head[new_key])
+                leftovers_added.remove(new_key)
+                removed.remove(old_key)
+                added.remove(new_key)
+                break
     for key in added:
         members[key] = _class_from_key(key) if key.startswith("id:") else _class_of(head[key])
     for key in removed:
         members[key] = _class_from_key(key)
-    for key in base_keys:
-        info = head.get(key)
-        if info is not None and info.fp != base[key]:
-            members[key] = _class_of(info)
+    for key in base_keys:  # same key, different bytes, not found elsewhere
+        current = head.get(key)
+        if current is not None and key not in matched_base and key not in matched_head:
+            members[key] = _class_of(current)
 
     reordered = False
     if base_order:
