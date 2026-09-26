@@ -222,10 +222,11 @@ file's `course_id` is the course's `id` plus the recording language
 
 ## From `drift` to `report`
 
-`clm recordings drift` compares the build-output digest stamped in the local
-state file with the topic's digest in the current `.clm-manifest.json`. It is
-topic-granular, bound to whichever spec the manifest was built from, needs a
-build, and answers `unknown` for every part that predates digest stamping.
+`clm recordings drift` (removed) compared the build-output digest stamped in
+the local state file with the topic's digest in the current
+`.clm-manifest.json`. It was topic-granular, bound to whichever spec the
+manifest was built from, needed a build, and answered `unknown` for every part
+that predated digest stamping.
 Measured on a real course it was wrong in the "changed" direction for a
 quarter of the answerable parts.
 

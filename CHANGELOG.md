@@ -9,6 +9,293 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.30.0] - 2026-09-26
+
+**Breaking changes** (each has a before → after table in `clm info
+migration`): `clm recordings drift` is removed in favour of `clm recordings
+report`; `clm slides translate`, `polish` and `coverage` are agent toolkits
+whose bare forms no longer call a model (the in-process engines moved behind
+`autopilot`); `clm slides assign-ids --llm-suggest` is removed; `clm slides
+coverage-report` is renamed to `clm slides language-coverage`; the embedded
+harvest history verbs (`port`, `compare`, `backfill`,
+`compare-from-inventory`, `sync-at-rev`) and the MCP tools `harvest_compare`
+and `harvest_backfill_dry` are removed.
+
+### Added
+
+- **Committed per-topic recordings ledger (#1004, #907 step 1).** The recordings dashboard now writes `<topic>/.clm/recordings-ledger.json` beside the machine-local state file at record time: per recorded part, a source anchor (`{kind, commit, dirty}` — `commit`, `commit-dirty`, or `unanchored`) and the recorded language's per-member content fingerprints (the sync ledger's fingerprint function, under the same `hash_version` rule: entries under an older version are recomputed from the anchor commit or reported `unverifiable`, never trusted). Split decks share one entry per stem. CLM warns after every ledger write while git would ignore the file — add `!**/.clm/recordings-ledger.json` to each course repo's `.gitignore`. New `clm info recordings` topic documents the two stores, the schema, anchor kinds, severity classes and the `drift` → `report` transition. `Course.resolve_deck_file` complements `resolve_deck_topic`.
+
+- **`clm recordings seed-ledger COURSE_ID [--spec-file] [--course-root] [--lang] [--dry-run] [--json]` (#1005, #907 step 3).** Seeds the committed recordings ledger from a machine-local state file, no video analysis: anchor = the stamped git commit (`commit` / `commit-dirty`) or the last commit before `recorded_at` (`time`); deck = the lecture's `section::deck` display names resolved through the course as it was at that commit (a throwaway worktree), mapped onto the current tree; members = the deck's fingerprints at the anchor. Idempotent (`seeded` / `updated` / `unchanged`); unresolvable parts are listed with a reason, never guessed (exit 1). Ran once on the two ML-AZAV state files; the PythonCourses re-recording tracker (hoelzl/PythonCourses#360) retires in favour of `clm recordings report` + `ack`.
+
+- **`clm slides rename` re-keys the recordings ledger (#1007, #907 follow-up, deck-stem half).** The renamed deck's entry in `<topic>/.clm/recordings-ledger.json` (recorded parts and `ack`) moves to the new stem in the same step as the sync-ledger section and the cache rows, so the deck no longer reports `orphaned` in `clm recordings report` after a rename. A stale entry under the new stem, or an unreadable recordings ledger, refuses the rename up front. `--json` gains `recordings_ledger`, `recordings_ledger_entry`, `recordings_ledger_migrated`. The topic-rename half waits for #1002.
+
+- **`clm validate` (spec mode): `image_ref_missing` and `image_name_conflict` (#1008, #987 step 1b).** A deck that references `img/<name>` which nothing in its topic produces (no file in `img/`/`img-generated/`, no diagram source rendering to that name — full stem + `png`/`svg` — and no `<include>` providing it, per the spec being validated) is a warning, so a spec that forgets a diagram-source include fails `validate` instead of shipping a broken image. Two topics that collapse onto one section output `img/` with different bytes under one name (static copies, `img-generated/` renders, include-provided files; renders compared by the owner's committed render) are a warning that points at the diagram-source include recipe. Both carry `details` (`image`, `section`, `topic`, `referenced_in` / `providers`) in `--json`; spec findings now serialize a `details` object.
+
+- **`clm release section` — alias of `clm release week` (#1009, follow-up of #916).** Identical behaviour and options; both spellings are kept (no deprecation). Sections are weeks by the schedule's convention, not by structure, so the structural name is now available. Documented in `clm info commands` and `clm info releases`.
+
+- Extracted the agent-toolkit contract shared by `clm slides sync` and `clm
+  harvest` into one kit (#959, umbrella #970): `clm.slides.agent_task` owns
+  the envelope builder, freshness-token check, validator registry
+  (`harvest-bullets`, `sync-decisions`), accept-rejection payload, and the
+  0/1/2 exit-code constants; `clm.cli._default_verb_group` owns the two
+  bare-command-is-`report` Click groups. New `clm info agent-tasks` topic
+  documents the contract and is referenced from both `sync-agents` and
+  `harvest-agents`. No wire change: both toolkits' JSON contracts are
+  byte-identical.
+
+- **Model-free historical deck export (#960).** `harvest export-at-rev DECK
+  --rev SHA -o NEW_DIRECTORY [--json]` exports the historical deck, split
+  twin, and voiceover companions without processing recordings or changing
+  working-copy files. Port/compare tasks now read companion narration, and
+  comparison freshness includes companion content. Comparison artifacts and
+  rendering are separated from the legacy embedded judge.
+
+- Added the agent-first revision-history half of `clm harvest` (#960,
+  umbrella #970): `harvest task --kind port|compare --source FILE` frames
+  port/compare judgment per matched slide pair (deterministic
+  `match_slides` pairing, no model, no video). Port answers are the
+  standard `harvest-bullets` documents and land through the ordinary
+  `harvest accept` write path (id-keyed, companion-aware — replacing the
+  old index-keyed inline write); compare verdicts are validated by the new
+  `harvest compare-accept` (freshness via file-content fingerprints) and
+  written as the canonical compare-report JSON. Validators `harvest-bullets`
+  (now accepting `kind: "port"`) and the new `harvest-compare` register in
+  the shared kit's registry (#959). The embedded-LLM `port`/`compare` verbs
+  remain until the autopilot quarantine slice.
+
+- Added `clm harvest align report` / `align accept` (#960, umbrella #970):
+  the deterministic pipeline now keeps its judgement trail — per-segment
+  assignment records with overlap fractions and runner-ups (aligner), and
+  runner-up / sequential-override evidence on timeline entries (matcher).
+  `align report` frames uncertain assignments, unassigned segments, and
+  weak/overridden slide matches as reviewable items; `align accept` applies
+  agent-decided segment reassignments (freshness-guarded by an
+  `alignment_fingerprint`), re-derives the `[Revisited]` grouping, and
+  writes a full alignment file to feed back via `--alignment`. Older cache
+  entries decode unchanged (the new fields are additive).
+
+```added
+- `clm recordings status/jobs/backends/check --json`: machine-readable
+  output for the recordings read side (#965, surface half). Job rows are
+  full-fidelity (full ids, untruncated messages, full input/output paths);
+  `jobs poll --json` streams one compact JSON document per tick (JSON
+  Lines, `--watch` honored in both modes), `jobs wait --json` emits a
+  single `{outcome, job}` document, and the load-bearing exit codes
+  (0 ok / 1 failure / 2 timeout) are preserved in JSON mode — including
+  an already-failed `wait` target. Failure diagnostics go to stderr so
+  stdout stays parseable, and `jobs prune --json` requires `--yes` (the
+  interactive prompt cannot be kept off stdout). The `recordings report`
+  / acknowledgement verbs remain planned, gated on the #907
+  drift-semantics design.
+```
+
+- **`clm recordings report` / `clm recordings ack` — the re-recording backlog (#965, #907 step 2).** `report [PATH] [--all] [--json]` reads every committed recordings ledger under a course root, topic directory or deck file and classifies each recorded deck from the member-fingerprint diff against the working tree: `structural` / `visible` / `narration` / `notes` / `none` (or `unverifiable`), with `changed/total` counts, `changed_members`, the commits since the anchor that touched the deck, `orphaned` rows, `unrecorded` decks with `--all`, and an optional secondary `built_output_changed` flag when a manifest is at hand. `ack DECK [--note …]` banks "seen, not re-recording" at the deck's current fingerprints; the deck reads `acknowledged` until it moves further, then `drifted-since-ack`. No automatic re-record judgment. Exit codes load-bearing (0 clean / 1 attention / 2 error), diagnostics on stderr. Ledger parts and acks now store the id-bearing member `order` (the "member order changed" rule needs it; entries without it skip the rule). New `clm info recordings-agents` topic.
+
+- `clm calendar check`, `status` and `push` take `--json` (#966): `check`
+  emits its findings as rows with a stable `rule` code, the TOML key /
+  adjustment / projected segment they `anchor` to, and the projected `dates`;
+  `status` emits the same facts the text prints (`state`, `current`,
+  `reference`, `upcoming`, `drift_days`) plus `plan`, the whole projected
+  calendar; `push --dry-run --json` emits the insert/update/delete plan
+  before anything touches Google Calendar (and `push --json` the plan that
+  was applied). stdout carries one JSON document, diagnostics stay on
+  stderr, exit codes are unchanged. Part of #970.
+
+- `clm release status --json` and `clm release sync --json` (#967): `status`
+  emits one row per channel (released / pending / frozen / awaiting-sync
+  topic ids, ledger, destination, frozen-manifest path, stream); `sync
+  --dry-run --json` emits the promotion plan as rows (`copy` / `refreeze` /
+  `skip-frozen` / `skip-failed` topics with file counts, evergreen and
+  `--refreeze-skeleton` refreshes, the skeleton decision, and the `--push`
+  commit-message preview); a real `sync --json` adds the result. Multi-channel
+  runs emit one array element per channel in spec order; notes and warnings
+  go to stderr; exit codes are unchanged. Part of #970.
+
+- `clm build --report FILE` (#968) writes the JSON build envelope — the
+  document `--output-mode json` prints (`status`, `errors[]` with
+  `actionable_guidance`, `warnings[]`, `stages`, `flaky_files`,
+  `rebuild_reasons`, `output_conflicts`, the cache/execution error split,
+  `log_directory`) — to `FILE` when the build ends, whatever the output
+  mode, so an agent can read a build a human ran with live progress. The
+  file adds `provenance_manifests` (the `.clm-manifest.json` paths written),
+  `spec_file` and `report_written_at`, and is also written for a spec parse
+  / validation failure (`status: "error"` / `"validation_failed"`), a
+  timeout, an abort, and an exception that escapes before any summary
+  (`status: "aborted"`). The envelope now carries `timed_out` and reports
+  `status: "timed_out"` for a stall/cap abort or teardown orphans instead
+  of `"success"`. stdout is unchanged; exit codes are unchanged. Part of
+  #970.
+
+- `clm git status --json` (#969): one JSON array on stdout with one element
+  per visited repository — `kind` (`target` / `channel`), `name`, `language`,
+  `path`, `exists`, `initialized`, `branch`, `remote`, `ahead` / `behind`,
+  `dirty`, `untracked` and the `git status --porcelain` `changes` — across
+  `--target` / `--channel` / `--all-channels` / `--all`, shared destinations
+  collapsed as in the text output. The `--dry-run` header and its
+  `[dry-run] Would run:` stubs go to stderr so stdout stays one document;
+  exit codes are unchanged. Part of #970.
+
+- **Sharing a diagram between topics via `<include>` of its source (#987).** Including another topic's `drawio/x.drawio` / `pu/x.pu` as `drawio/x.drawio` / `pu/x.pu` renders it through the consumer's own pipeline into the consumer's `img-generated/` and ships it as its output `img/x.png` — now tested (claimed-wired) and documented as the supported pattern ("Sharing a diagram between topics" in `clm info spec-files`). A diagram-source include whose `as` lacks the matching `drawio/`/`pu/` subdirectory is a parse-time `CourseSpecError` (the render target derives from the virtual path's grandparent). `clm validate` reports `include_source_is_topic_dir` at **info** level for diagram sources (still a warning for any other cross-topic include).
+
+- `clm slides rename PATH NEW_STEM` (#991) renames a split deck's file stem
+  atomically: both halves, their separated voiceover companions and their
+  HTTP-replay cassettes move together (`git mv` inside a work tree), the deck's section in the per-topic
+  sync ledger is re-keyed as a pure rename (the deck stays warm — `sync
+  report` is clean afterwards), the build cache's path-keyed rows follow the
+  files (the `course renumber` migration), and `clm validate` runs on the
+  result. Refuses before touching anything on a name collision, a companion
+  present in both layouts, a ledger section already under the new stem, or a
+  non-bare stem. `--single`, `--no-cache-migrate`, `--no-validate`,
+  `--dry-run`, `--json`. Exit `1` when the post-rename validation reports
+  errors; `2` when refused.
+
+### Changed
+
+- `clm info commands` has a "narration toolchain at a glance" table naming the
+  one owning command per narration lifecycle stage (harvest, translate, sync,
+  voiceover extract/inline, coverage, id repair, language coverage) and which
+  of them are agent toolkits (#982, umbrella #970).
+- `clm info calendar` and `clm info spec-files` now state the schedule model
+  explicitly: `export schedule` renders a section as a week by convention,
+  the cohort calendar places subsections as a flat sequence of teaching days
+  regardless of section length, and a section that is not a Mon–Fri week is
+  written with name-only subsections (#916). Design notes for the two other
+  design-gated issues — the source-anchored re-recording backlog (#907,
+  `docs/claude/design/recordings-rerecord-backlog.md`) and sharing diagram
+  renders via source includes (#987,
+  `docs/claude/design/shared-diagram-renders.md`) — are recorded without
+  behaviour changes.
+
+- **`clm slides translate` becomes an agent toolkit (#961).** New verbs `task`
+  (frame the whole-deck cold start as a JSON task document — instructions,
+  per-cell inputs with the shared prose/code/title prompts, glossary,
+  answer schema, and `source_fingerprint` / `companion_fingerprint`
+  freshness tokens) and `accept` (validate shape + freshness + coverage and
+  write the twin and voiceover companion through the ordinary bootstrap
+  engine: EN-authority shared ids, ledger record). Neither calls a model or
+  needs an API key. Bare `translate SOURCE` is now the read-only `report`
+  verb: twin absent it reports the task counts and points at `task` (exit 1);
+  twin present it runs the read-only sync report as before. The in-process
+  OpenRouter bootstrap moved behind `translate autopilot` (same options,
+  key-gated). See `clm info sync-agents` → "Cold-starting a twin" and
+  `clm info migration`.
+
+- **`clm slides polish` becomes an agent toolkit (#962).** New verbs `task`
+  (frame the notes cleanup as a JSON task document — the level prompt as
+  instructions, one row per notes-carrying slide with its `id:`/`pos:`
+  handle and the slide's content in both language sides for context,
+  answer schema, and `source_fingerprint` / `twin_fingerprint` freshness
+  tokens) and `accept` (validate shape + freshness + coverage and write the
+  polished `tags=["notes"]` cells through the ordinary narrative writer,
+  atomically — byte-identical to the in-process path; the sync ledger stays
+  untouched so the next `slides sync report` frames the twin's update).
+  Neither calls a model, needs an API key, or needs the `[summarize]`
+  extra. Bare `polish SLIDES --lang` is now the read-only `report` verb:
+  it counts the notes a task would frame and points at `task` (exit 1).
+  The in-process LLM cleanup moved behind `polish autopilot` (same options,
+  key-gated on `$OPENAI_API_KEY`; the `verbatim` level stays key-free). See
+  `clm info sync-agents` → "Polishing speaker notes" and
+  `clm info migration`.
+
+- **`clm slides coverage` becomes an agent toolkit (#963).** New verbs
+  `report` (bare `coverage PATH` — frames the judgment read-only: one item
+  per (slide, lang) pair with its bullets, voiceover, and
+  `slide_hash`/`voiceover_hash` freshness tokens; cached verdicts surface;
+  no-voiceover pairs are findings; the judge's system prompt is embedded
+  verbatim; `--dump` stays) and `accept` (validator `coverage-verdicts`:
+  shape + per-pair freshness + coverage of exactly the pending pairs +
+  verbatim bullet texts, then banked into the same `CoverageCache` rows
+  the embedded judge wrote — the cache is the trust store). Neither calls
+  a model, needs a daemon, or imports the Ollama client. The in-process
+  Ollama judge moved behind `coverage autopilot` (cache-only fallback
+  preserved). Directory sweeps frame every deck in one document.
+- **`clm slides assign-ids --llm-suggest` removed; `accept` lands agent
+  titles (#963).** The Ollama title suggester flag (with `--llm-model` /
+  `--ollama-url` / `--llm-timeout` / `--cache-dir`) is gone without an
+  alias. The unchanged `--report-refusals --context --json` worklist is
+  the framing; new `assign-ids accept PATH --answers` takes
+  `{file, line, title, body}` rows (body echoed verbatim as the freshness
+  token), slugs titles through the engine's own slugifier, resolves
+  collisions against both halves of a split pair, keeps pair consistency
+  (divergent de/en id sets are rejected), and stamps atomically. Bare
+  `assign-ids PATH …` still mints (now the `run` verb); no verb imports
+  the Ollama client.
+- **`clm slides coverage-report` renamed to `clm slides language-coverage`
+  (#963).** The course-wide DE/EN completeness sweep joins the
+  `language-*` family and clears the near-collision with `coverage`'s new
+  `report` verb. No alias; options unchanged. See `clm info sync-agents`
+  → "Judging voiceover coverage" and `clm info migration`.
+
+- `clm slides suggest-sync` is a first-class verb on `clm slides --help`
+  again (#981). It had been hidden as "plumbing" for the pre-split layout —
+  but the unified bilingual layout (both languages in one `slides_x.py` /
+  `.cs`) is still authored: the whole C# course (236 decks) and part of the
+  Python course (59 decks) use it, and `clm slides sync` cannot read a unified
+  deck. The help text and `clm info commands` now state the boundary: unified
+  deck → `suggest-sync` (read-only suggestions vs git HEAD, MCP
+  `slides_suggest_sync`); split pair → `sync` (ledger-backed reconciliation
+  that writes, MCP `slides_sync_report`). No behaviour change.
+
+### Removed
+
+- **Retire top-level embedded-model harvest history verbs (#960).** `harvest
+  port`, `compare`, `backfill`, `compare-from-inventory`, and `sync-at-rev`
+  are removed without aliases; legacy execution is available only under
+  `harvest autopilot`. MCP's `harvest_backfill_dry` is also removed because
+  its dry run still invoked embedded models. The migration guide and
+  `clm info harvest-agents` describe the agent-driven replacements.
+
+- **Removed the MCP tool `harvest_compare`** (#960, umbrella #970): it was
+  the only MCP tool that invoked a model (the bullet-relation judge), which
+  violated the read-only, model-free mirror contract. The replacement is the
+  extended task mirror: `harvest_task` accepts `kind="port"` /
+  `kind="compare"` with a `source` argument (no videos), framing the same
+  tasks the CLI's `clm harvest task --kind port|compare --source FILE`
+  emits. See `clm info migration`.
+
+- **`clm recordings drift` removed (#965).** Replaced by `clm recordings report` — the build-output digest comparison was topic-granular, spec-bound, needed a build, and read `changed` for a quarter of the untouched parts it could answer. No alias; `clm info migration` has the mapping. The `slide_digest` stamp stays and feeds `report`'s secondary `built_output_changed` flag.
+
+### Fixed
+
+- `clm slides rename-id` now treats a deck's separated voiceover companions
+  (`voiceover/voiceover_*.{de,en}.*` or the sibling layout) as part of the
+  deck (#990): it rewrites `for_slide="OLD"` and `vo_anchor="id:OLD#n"` in
+  both companions, can rename an id that lives only in a companion cell, and
+  refuses a `NEW` that collides with a companion id. The recorded ledger
+  fingerprints are carried across the rewritten reference bytes for cells
+  sitting on their baseline, so a pure rename stays clean on the next `sync
+  report` instead of orphaning the narration (`validate` errors, a
+  `broken_owner` framing whose only answer was `remove`). The JSON report
+  gains `vo_anchor_hits` and a per-side `companions` block; the
+  `broken_owner` detail now names the rename path before `remove`.
+
+- `clm slides sync apply` no longer withholds the ledger record of every
+  landed member when the structural verify fails somewhere else in the pair
+  (#992). The post-write gate is now scoped per slide: a violation attributed
+  to a slide (an `id-asymmetry` from a hand-removed slide whose removal is
+  still a pending question, an orphaned voiceover companion cell) withholds
+  only that slide's group — its rows keep their file writes and old baseline,
+  carry a `(recording deferred: the structural verify failed on this member's
+  slide …)` reason suffix, and are listed in the new `verify_withheld` JSON
+  field — while every other landed member records in the same pass. A
+  deck-wide violation (`unify`, `order-parity`, an unprojectable companion
+  layout) still withholds everything. Before, one such violation re-framed
+  every freshly applied body as `verify_translation` on the next report and
+  cost a full `confirm` round. `ledger_recorded` can now be `true` beside a
+  non-empty `verify_violations`.
+
+- `clm slides sync report` frames the deck header member (`id:title`, the
+  `{{ header_de(...) }}` / `{{ header_en(...) }}` j2 line) with its macro
+  line in `de_body` / `en_body` (#993) — they were empty, since a single-line
+  j2 cell has no body below its delimiter, and agents had to guess that the
+  answer is the full macro line. The excerpt is now valid decision input for
+  header rows too (feed it back edited as the `body`, or answer the bare
+  title text). The second half of the report — an applied header body that
+  stayed framed on the next report — was the deck-wide structural gate of
+  #992 (fixed in 1.29.0, PR #995); a header body banks in the same apply,
+  now pinned by a regression test. Applies to the MCP `slides_sync_report`
+  tool as well.
+
 ## [1.29.0] - 2026-09-18
 
 ### Added
