@@ -124,6 +124,8 @@ part for it.
 
 ## Next conversational boundary
 
-The owner's first real `report` / `ack` pass over PythonCourses. Then #1006
+The owner's first real `report` / `ack` pass over PythonCourses. (S9's own
+save landed as PR #1018; PR #1017 for #1005 was still waiting on CI when
+the session closed.) Then #1006
 if the legacy inventory still matters, and the topic-rename half of #1007
 when #1002 lands.
