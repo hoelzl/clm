@@ -262,6 +262,26 @@ def test_commits_since_anchor_follow_a_topic_renumber(course: _Course):
     assert deck.parts[0].commits_since_anchor == [c2, c1]
 
 
+def test_commits_since_anchor_keep_history_order_within_one_second(
+    course: _Course, monkeypatch: pytest.MonkeyPatch
+):
+    """Commits sharing a timestamp (scripts, rebases, fast CI) stay newest first.
+
+    ``%ct`` has one-second resolution; ordering by it and breaking ties by
+    hash scrambled the list on CI. Six same-second commits leave a 1/720
+    chance that hash order happens to match history order.
+    """
+    course.record()
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00+0000")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+0000")
+    shas = []
+    for n in range(6):
+        course.write(DE_FULL.replace("DE eins", f"DE eins, v{n}"), EN_FULL)
+        shas.append(course.commit(f"edit {n}"))
+
+    assert course.deck().parts[0].commits_since_anchor == shas[::-1]
+
+
 def test_state_lookup_is_only_consulted_with_a_manifest(course: _Course):
     course.record()
     calls: list[str] = []

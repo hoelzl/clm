@@ -339,39 +339,49 @@ def _commits_since(anchor: str, paths: list[Path]) -> list[str] | None:
     """Commits after *anchor* that touched any of *paths* (newest first), or ``None``.
 
     One ``git log --follow`` per path (git follows renames for a single
-    pathspec only), unioned and ordered by commit time: a topic renumbered
-    since the recording keeps its pre-rename edits in the count. Pathspecs
+    pathspec only), unioned and ordered by position in ``git rev-list --topo-order
+    <anchor>..HEAD``: a topic renumbered since the recording keeps its
+    pre-rename edits in the count. Commit time is no ordering key: ``%ct``
+    has one-second resolution, so scripted or rebased commits tie. Pathspecs
     are given relative to the topic directory the command runs in, so a
     companion under ``voiceover/`` is matched too.
     """
     if not paths:
         return None
     cwd = paths[0].parent
-    stamped: dict[str, int] = {}
+    history = _git_lines(cwd, ["rev-list", "--topo-order", f"{anchor}..HEAD"])
+    if history is None:
+        return None
+    touched: set[str] = set()
     for p in paths:
         try:
             spec = p.resolve().relative_to(cwd.resolve()).as_posix()
         except ValueError:
             spec = p.resolve().as_posix()
-        try:
-            completed = subprocess.run(
-                ["git", "log", "--follow", "--format=%H %ct", f"{anchor}..HEAD", "--", spec],
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-        except (FileNotFoundError, OSError):
+        shas = _git_lines(cwd, ["log", "--follow", "--format=%H", f"{anchor}..HEAD", "--", spec])
+        if shas is None:
             return None
-        if completed.returncode != 0:
-            return None
-        for line in completed.stdout.splitlines():
-            sha, _, ts = line.partition(" ")
-            if sha:
-                stamped[sha] = int(ts or 0)
-    return sorted(stamped, key=lambda sha: (-stamped[sha], sha))
+        touched.update(shas)
+    return [sha for sha in history if sha in touched]
+
+
+def _git_lines(cwd: Path, args: list[str]) -> list[str] | None:
+    """Non-empty stdout lines of ``git <args>`` in *cwd*, or ``None`` on failure."""
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return [line for line in completed.stdout.splitlines() if line]
 
 
 def _bundle_paths(deck_files: dict[str, Path]) -> list[Path]:
