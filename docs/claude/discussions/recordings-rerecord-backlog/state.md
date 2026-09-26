@@ -14,7 +14,18 @@ the minimum that retires the tracker: #1004 (ledger, PR #1011), #965
 deck-stem half of #1007 (PR #1016) and, from the sibling threads, #987 step 1
 (PR #1012 + PythonCourses `50c30395`), #1008 (PR #1015) and #1009 (PR #1013).
 hoelzl/PythonCourses#360 is closed; the seeded ledgers and the new AGENTS.md
-rule are in PythonCourses `940f3bec`. This file carries the argument and
+rule are in PythonCourses `940f3bec`.
+
+**Correction (S10, 2026-09-26):** the S9 save recorded PR #1017 as shipped;
+it had not merged. Its unit jobs failed on CI because `_commits_since`
+ordered commits by `%ct` (one-second resolution) with a hash tie-break, so
+same-second commits came out in hash order. S10 fixed the ordering (position
+in `git rev-list --topo-order`) with a same-second regression test. Until
+#1017 merges, `master` lacks not only `seed-ledger` but also the report
+fixes the seeded PythonCourses ledgers depend on (stored member order,
+fingerprint matching after re-keying, the cell scheme) — a `report` from an
+older clm over those ledgers reproduces the "every deck structural"
+artefact. This file carries the argument and
 where the design bent under real data; the version-accurate mechanics are
 `clm info recordings` and `clm info recordings-agents`.
 

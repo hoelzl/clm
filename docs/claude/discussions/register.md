@@ -43,6 +43,10 @@ the reasons behind it are in `README.md`; the save procedure is
   calendar never looked at section length. The date-anchored
   `export schedule` shape was dropped as a duplicate of
   `calendar generate -f md|csv`. (S8)
+- The S9 save recorded #1005 (PR #1017) as shipped; the PR was open with
+  red unit jobs (`_commits_since` ordered by one-second `%ct`). An armed
+  auto-merge is not a merge — a save must check `gh pr view` state, not the
+  session's intent. Found and fixed on resume. (S10)
 
 - The initial S4 snapshot said no supported transcript source was available.
   OpenCode's export does expose the public dialogue; a manually reviewed
