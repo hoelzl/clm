@@ -413,9 +413,18 @@ local state file — a hint that templates, includes or a clm upgrade changed
 the rendered bytes, never a prerequisite.
 
 The former `clm recordings drift` command is retired in favour of `report`
-(see `clm info migration`). Recordings made before the ledger existed have no
-ledger entries yet; seeding them from the local state files is #1005. The
-full field reference is in `clm info commands`; the agent loop in
+(see `clm info migration`). Recordings made before the ledger existed are
+seeded once from the local state file:
+
+```bash
+clm recordings seed-ledger python-basics-de --spec-file course-specs/python-basics.xml --dry-run
+clm recordings seed-ledger python-basics-de --spec-file course-specs/python-basics.xml
+```
+
+Each part anchors on its stamped commit, or on the last commit before it was
+recorded, and stores the deck's fingerprints at that commit; parts whose deck
+cannot be resolved are listed, never guessed. Commit the ledgers afterwards.
+The full field reference is in `clm info commands`; the agent loop in
 `clm info recordings-agents`.
 
 ## Course Configuration

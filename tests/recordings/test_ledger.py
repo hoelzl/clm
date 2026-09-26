@@ -146,6 +146,79 @@ def test_deck_members_selects_recorded_language(tmp_path: Path):
     assert de_members["id:m1"] == content_fingerprint(m1.de)
 
 
+UNSPLIT = _build(
+    '# j2 from \'macros.j2\' import header\n# {{ header("Titel", "Title") }}\n\n',
+    '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Titel\n\n',
+    '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Title\n\n',
+    '# %% [markdown] lang="de" tags=["notes"]\n# Notiz\n\n',
+    _code("c1", "x = 1"),
+)
+
+
+def test_unsplit_deck_members_fall_back_to_cells(tmp_path: Path):
+    """A single-file bilingual deck has no split pair: its cells are the members."""
+    folder = tmp_path / "t"
+    folder.mkdir()
+    deck = folder / "slides_u.py"
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    assert rl.is_unsplit_deck(deck)
+
+    de = rl.deck_members(deck, "de")
+    en = rl.deck_members(deck, "en")
+    assert set(de) == {
+        "cell:header/j2/0",
+        "cell:header/j2/1",
+        "id:s0",
+        "cell:s0/markdown/0",
+        "id:c1",
+    }
+    assert set(en) == {"cell:header/j2/0", "cell:header/j2/1", "id:s0", "id:c1"}  # DE-only note
+    assert de["id:s0"] != en["id:s0"]  # each side's own title cell
+    assert de["id:c1"] == en["id:c1"]  # the shared code cell
+
+    # The fingerprint ignores the slide_id attribute, like a split member's.
+    deck.write_text(UNSPLIT.replace('slide_id="c1"', 'slide_id="c9"'), encoding="utf-8")
+    assert rl.deck_members(deck, "de")["id:c9"] == de["id:c1"]
+
+
+def test_unsplit_cell_ordinals_are_scoped_to_their_slide(tmp_path: Path):
+    """Inserting an id-less cell renumbers only its own group, like the split model."""
+    deck = (
+        '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# # A\n\n'
+        '# %% [markdown] lang="de"\n# a1\n\n'
+        '# %% [markdown] lang="de" tags=["slide"] slide_id="b"\n# # B\n\n'
+        '# %% [markdown] lang="de"\n# b1\n\n'
+    )
+    before = rl.unsplit_members(deck, "de")
+    inserted = deck.replace("# a1\n\n", '# a1\n\n# %% [markdown] lang="de"\n# a2\n\n')
+    after = rl.unsplit_members(inserted, "de")
+    assert before["cell:b/markdown/0"] == after["cell:b/markdown/0"]  # untouched group
+    assert set(after) - set(before) == {"cell:a/markdown/1"}
+
+
+def test_stale_single_file_beside_a_split_pair_is_not_an_unsplit_deck(tmp_path: Path):
+    de = _write_pair(tmp_path / "t")
+    stale = de.with_name("slides_t.py")
+    stale.write_text(UNSPLIT, encoding="utf-8")
+    assert not rl.is_unsplit_deck(stale)
+    assert rl.is_unsplit_deck(tmp_path / "t" / "slides_other.py")
+
+
+def test_seeded_evidence_is_never_reported_as_exact(tmp_path: Path):
+    for kind, dirty, expected in (
+        ("commit", False, "recomputed"),
+        ("commit-dirty", True, "approximate"),
+        ("time", False, "approximate"),
+    ):
+        part = _part(
+            anchor=rl.RecordingAnchor(kind=kind, commit="abc", dirty=dirty), evidence="anchor"
+        )
+        assert rl.resolve_part_members(part, tmp_path / "slides_t.de.py")[1] == expected
+    # Record-time evidence is exact even on a dirty tree.
+    part = _part(anchor=rl.anchor_for("abc", True))
+    assert rl.resolve_part_members(part, tmp_path / "slides_t.de.py")[1] == "recorded"
+
+
 def test_deck_members_is_empty_without_a_twin(tmp_path: Path):
     folder = tmp_path / "t"
     folder.mkdir()
@@ -357,6 +430,22 @@ def test_deck_members_at_ref_reads_the_committed_pair(repo: Path):
 
 
 @needs_git
+def test_unsplit_deck_members_at_ref(repo: Path):
+    folder = repo / "slides" / "topic_u"
+    folder.mkdir(parents=True)
+    deck = folder / "slides_u.py"
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "v1")
+    v1 = _git(repo, "rev-parse", "HEAD")
+    at_v1 = rl.deck_members(deck, "de")
+    deck.write_text(UNSPLIT.replace("Notiz", "Notiz, neu"), encoding="utf-8")
+
+    assert rl.deck_members_at_ref(deck, v1, "de") == at_v1
+    assert rl.deck_members_at_ref(deck, v1, "de") != rl.deck_members(deck, "de")
+
+
+@needs_git
 def test_unresolvable_anchor_commit_is_unverifiable(repo: Path):
     de = _write_pair(repo / "slides" / "topic_x")
     part = _part(hash_version=LEDGER_HASH_VERSION - 1, anchor=rl.anchor_for("0" * 40, False))
@@ -390,3 +479,21 @@ def test_ignored_check_outside_git_is_unknown_and_silent(tmp_path: Path):
     # Not a repository: no verdict, no warning — never a false alarm.
     assert rl.is_git_ignored(path) in (None, False)
     assert rl.ignored_ledger_warning(path) is None
+
+
+def test_stored_order_is_used_for_seeded_entries(tmp_path: Path):
+    """A seeded entry's members come back from sorted JSON; the order rule must
+    read the stored ``order``, never the map's (alphabetical) key order."""
+    path = tmp_path / ".clm" / "recordings-ledger.json"
+    part = _part(
+        members={"id:z": "1", "id:a": "2"},
+        order=["id:z", "id:a"],
+        anchor=rl.anchor_for("abc", True),
+        evidence="anchor",
+    )
+    rl.record_part(path, "slides_t", part)
+    loaded = rl.load(path).decks["slides_t"].parts[0]
+    assert list(loaded.members) == ["id:a", "id:z"]  # sorted on disk
+    members, status = rl.resolve_part_members(loaded, tmp_path / "slides_t.de.py")
+    assert status == "approximate"
+    assert rl.resolve_part_order(loaded, members, status) == ["id:z", "id:a"]

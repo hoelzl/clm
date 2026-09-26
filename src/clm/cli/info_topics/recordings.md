@@ -51,6 +51,12 @@ mode this guards against). An already-tracked ledger never warns.
 
 The build skips `.clm/` entirely, so the ledger is never a build input.
 
+Recordings made before the ledger existed are seeded once from the local
+state file with `clm recordings seed-ledger COURSE_ID` (`clm info commands`):
+the anchor is the stamped commit, or the last commit before `recorded_at`
+(`time`) for parts that predate stamping; the deck is resolved through the
+course at that commit; the members are the deck's fingerprints there.
+
 ### Schema
 
 ```json
@@ -88,6 +94,10 @@ The build skips `.clm/` entirely, so the ledger is never a build input.
   erases the first cohort's — those videos still ship to that cohort.
 - **`recorded_at`** matches the local state file's stamp (local time,
   seconds).
+- **`evidence`** says where `members` came from: `recorded` (the dashboard
+  fingerprinted the tree that was on screen — exact even on a dirty tree)
+  or `anchor` (seeded later from the anchor commit — only as good as the
+  commit; `report` shows such parts as `recomputed` or `approximate`).
 - **`course_id`** is the state-file course id the part was recorded under
   (`<spec slug>-<lang>`).
 - **`ack`** is the deck-level acknowledgement block: `{"at", "note",
@@ -131,9 +141,20 @@ recording showed — `members` is a sorted JSON object, so the "member order
 changed" rule needs it stored explicitly. An entry without `order` (written
 before the field existed) skips that rule; it is never guessed.
 
+A **single-file bilingual deck** (no `.de`/`.en` twin) has no bilingual
+document model; its members are its percent-format cells for the recorded
+language (cells with that `lang` attribute or none), keyed `id:<slide_id>`
+when the cell carries one, else `cell:<kind>/<ordinal>` (`markdown` /
+`code` / `j2`, ordinal among the id-less cells of that kind). The
+fingerprint function is the same. `report` classifies such cells by their
+tags (`notes`, `voiceover`) and kind.
+
+A split pair that does not normalize (duplicate ids, mismatched halves) is
+fingerprinted the same cell-wise way from the recorded half, and `report`
+compares a `cell:`-keyed entry cell-wise whatever the pair looks like now.
+
 An empty `members` map means the fingerprints could not be computed at
-record time (the deck was not a parseable `.de`/`.en` split pair); such an
-entry reports as `unverifiable`.
+record time (a lone split half); such an entry reports as `unverifiable`.
 
 `hash_version` is the sync ledger's fingerprint-function version, stamped
 per part (and per `ack`) and repeated on the envelope. The rule is the sync

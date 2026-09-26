@@ -16,7 +16,8 @@ is the `clm recordings` section of `clm info commands`.
 
 - A **recorded part** is a ledger entry: which commit the recording was
   made at (`anchor`), and the recorded language's per-member content
-  fingerprints (`members`, keyed `id:<slide_id>` / `pos:<group>/<kind>/<n>`).
+  fingerprints (`members`, keyed `id:<slide_id>` / `pos:<group>/<kind>/<n>`;
+  a single-file bilingual deck keys its id-less cells `cell:<kind>/<n>`).
   The machine-local state file holds the workflow (raw files, takes) and is
   never needed here.
 - **Severity is a diff, not a verdict.** Per part, the ledger's fingerprints
@@ -146,6 +147,9 @@ as a hint to look, never as a reason to re-record.
 - **`drift` is gone** — it compared build-output digests, needed a build, and
   was wrong in the "changed" direction for a quarter of the answerable
   parts; `report` replaces it (`clm info migration`).
-- **Seeding pre-ledger recordings** (`seed-ledger`) is #1005; until it ships,
-  recordings made before the ledger existed have no rows here.
+- **Recordings made before the ledger existed** have no rows until
+  `clm recordings seed-ledger COURSE_ID` has been run once on that
+  machine's state file (the machine that recorded; see `clm info commands`).
+  Seeded parts anchor on the stamped commit, or on the last commit before
+  `recorded_at` (`anchor.kind = time`) for the oldest ones.
 - **No MCP mirror yet** for `report`; the CLI `--json` is the agent surface.

@@ -249,6 +249,39 @@ def test_commits_since_anchor_count_only_the_deck_bundle(course: _Course):
     assert deck.parts[0].anchor["kind"] == "commit"
 
 
+def test_commits_since_anchor_follow_a_topic_renumber(course: _Course):
+    """Edits made under the topic's old directory count after a renumber."""
+    course.record()
+    course.write(DE_FULL.replace("DE eins", "DE eins, neu"), EN_FULL)
+    c1 = course.commit("edit before the renumber")
+    new_topic = course.topic.parent / "topic_020_t"
+    _git(course.root, "mv", str(course.topic), str(new_topic))
+    c2 = course.commit("renumber")
+    # The ledger moved with the topic directory; the deck is found under its new home.
+    deck = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_t")
+    assert deck.parts[0].commits_since_anchor == [c2, c1]
+
+
+def test_commits_since_anchor_keep_history_order_within_one_second(
+    course: _Course, monkeypatch: pytest.MonkeyPatch
+):
+    """Commits sharing a timestamp (scripts, rebases, fast CI) stay newest first.
+
+    ``%ct`` has one-second resolution; ordering by it and breaking ties by
+    hash scrambled the list on CI. Six same-second commits leave a 1/720
+    chance that hash order happens to match history order.
+    """
+    course.record()
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00+0000")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+0000")
+    shas = []
+    for n in range(6):
+        course.write(DE_FULL.replace("DE eins", f"DE eins, v{n}"), EN_FULL)
+        shas.append(course.commit(f"edit {n}"))
+
+    assert course.deck().parts[0].commits_since_anchor == shas[::-1]
+
+
 def test_state_lookup_is_only_consulted_with_a_manifest(course: _Course):
     course.record()
     calls: list[str] = []
@@ -394,6 +427,96 @@ def test_malformed_ledger_is_reported_not_raised(course: _Course):
     assert report.decks == []
     assert len(report.ledger_errors) == 1
     assert not report.is_clean
+
+
+def test_unsplit_deck_is_reported_from_its_cells(course: _Course):
+    from tests.recordings.test_ledger import UNSPLIT
+
+    folder = course.topic.parent / "topic_020_u"
+    folder.mkdir()
+    deck = folder / "slides_u.py"
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    _git(course.root, "add", "-A")
+    commit = course.commit("unsplit")
+    members = rl.deck_members(deck, "de")
+    rl.record_part(
+        rl.ledger_path_for(deck),
+        "slides_u",
+        rl.LedgerPart(
+            part=1,
+            recorded_at="t",
+            course_id="c-de",
+            lang="de",
+            anchor=rl.anchor_for(commit, False),
+            members=members,
+            order=rl.id_order(members),
+        ),
+    )
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "none"
+    assert set(row.deck_files) == {"de", "en"}
+
+    deck.write_text(UNSPLIT.replace("Notiz", "Notiz, neu"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "notes"
+    deck.write_text(UNSPLIT.replace("x = 1", "x = 2"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "structural"
+    # An EN-only edit does not touch the DE recording.
+    deck.write_text(UNSPLIT.replace("# # Title", "# # Title, new"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "none"
+
+
+def test_ids_stamped_after_the_recording_do_not_read_as_drift(course: _Course):
+    """An id-less recording (cell scheme) against the same deck with ids stamped
+    and split since: every fingerprint still exists, so the deck is `none`."""
+    from tests.recordings.test_ledger import UNSPLIT
+
+    folder = course.topic.parent / "topic_020_u"
+    folder.mkdir()
+    deck = folder / "slides_u.py"
+    idless = UNSPLIT.replace(' slide_id="s0"', "").replace(' slide_id="c1"', "")
+    deck.write_text(idless, encoding="utf-8")
+    _git(course.root, "add", "-A")
+    commit = course.commit("id-less unsplit")
+    members = rl.deck_members(deck, "de")
+    assert all(k.startswith("cell:") for k in members)
+    rl.record_part(
+        rl.ledger_path_for(deck),
+        "slides_u",
+        rl.LedgerPart(
+            part=1,
+            recorded_at="t",
+            course_id="c-de",
+            lang="de",
+            anchor=rl.anchor_for(commit, False),
+            members=members,
+            order=[],
+            evidence="anchor",
+        ),
+    )
+    # Ids stamped, same bytes otherwise.
+    deck.write_text(UNSPLIT, encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "none", row.parts[0].changed_members
+    # A real edit still surfaces.
+    deck.write_text(UNSPLIT.replace("x = 1", "x = 2"), encoding="utf-8")
+    row = next(d for d in rr.build_report(course.root).decks if d.deck == "slides_u")
+    assert row.severity == "structural"
+    assert row.parts[0].changed == 1
+
+
+def test_positional_member_moved_by_an_insert_is_not_drift(course: _Course):
+    """pos: handles renumber on an insert; the moved members match by fingerprint."""
+    course.record()
+    inserted = "# %% [markdown]\n# neu\n\n"  # a shared id-less cell, on both sides
+    de = DE_FULL.replace(_notes("n1", "de", "Notiz"), inserted + _notes("n1", "de", "Notiz"))
+    en = EN_FULL.replace(_notes("n1", "en", "Note"), inserted + _notes("n1", "en", "Note"))
+    course.write(de, en)
+    deck = course.deck()
+    assert deck.parts[0].changed == 1  # only the inserted cell
+    assert all(v == "visible" for v in deck.parts[0].changed_members.values())
 
 
 # ---------------------------------------------------------------------------

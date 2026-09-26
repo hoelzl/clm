@@ -618,6 +618,156 @@ def ack(deck: Path, note: str | None, as_json: bool):
         console.print(f"[dim]note: {escape(note)}[/dim]")
 
 
+@recordings_group.command("seed-ledger")
+@click.argument("course_id")
+@click.option(
+    "--spec-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Course spec XML the recordings were made from (default: the matching "
+    "recordings.courses config entry, else course-specs/<course-id-without-lang>.xml "
+    "under --course-root).",
+)
+@click.option(
+    "--course-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Course repository root (default: derived from the spec file).",
+)
+@click.option(
+    "--lang",
+    type=click.Choice(["de", "en"]),
+    default=None,
+    help="Recorded language (default: the -de/-en suffix of COURSE_ID).",
+)
+@click.option("--dry-run", is_flag=True, help="Resolve and report; write nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def seed_ledger(
+    course_id: str,
+    spec_file: Path | None,
+    course_root: Path | None,
+    lang: str | None,
+    dry_run: bool,
+    as_json: bool,
+):
+    """Seed the committed recordings ledger from a machine-local state file.
+
+    For every active take in ``<user-config>/clm/recordings/COURSE_ID.json``:
+    the anchor is the stamped git commit (``commit`` / ``commit-dirty``) or,
+    for parts recorded before stamping existed, the last commit before
+    ``recorded_at`` (``time``); the deck is the lecture's "section::deck"
+    display names resolved through the course as it was at that commit; the
+    members are the deck's fingerprints at that commit. No video analysis.
+
+    Idempotent — re-running changes nothing that already matches. Parts
+    whose deck cannot be resolved at the anchor, or no longer exists in the
+    current tree, are listed, never guessed. Exit ``0`` when every part is
+    seeded (or unchanged), ``1`` when some are unresolved, ``2`` on error.
+    """
+    from clm.recordings.seed import lang_of_course_id, seed_from_state
+    from clm.recordings.state import load_state
+
+    state = load_state(course_id)
+    if state is None:
+        _diagnostic(
+            f"[yellow]No recording state found for course '{course_id}'.[/yellow]",
+            json_mode=as_json,
+        )
+        raise SystemExit(2)
+
+    resolved_lang = lang or lang_of_course_id(course_id)
+    if resolved_lang is None:
+        _diagnostic(
+            "[red]Cannot tell the recorded language from the course id; pass --lang.[/red]",
+            json_mode=as_json,
+        )
+        raise SystemExit(2)
+
+    if spec_file is None:
+        spec_file = _configured_spec_for_course(course_id) or _configured_spec_for_course(
+            course_id[: -len(f"-{resolved_lang}")]
+            if course_id.endswith(f"-{resolved_lang}")
+            else course_id
+        )
+    if spec_file is None and course_root is not None:
+        base = (
+            course_id[: -len(f"-{resolved_lang}")]
+            if course_id.endswith(f"-{resolved_lang}")
+            else course_id
+        )
+        candidate = course_root / "course-specs" / f"{base}.xml"
+        spec_file = candidate if candidate.is_file() else None
+    if spec_file is None:
+        _diagnostic(
+            "[red]No spec file: pass --spec-file (or --course-root with a "
+            "course-specs/<course-id>.xml).[/red]",
+            json_mode=as_json,
+        )
+        raise SystemExit(2)
+    if course_root is None:
+        from clm.core.course_paths import resolve_course_paths
+
+        course_root, _ = resolve_course_paths(spec_file)
+
+    try:
+        result = seed_from_state(
+            state,
+            spec_file=spec_file,
+            course_root=course_root,
+            lang=resolved_lang,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        _diagnostic(f"[red]{escape(str(exc))}[/red]", json_mode=as_json)
+        raise SystemExit(2) from None
+
+    if as_json:
+        payload = result.to_dict()
+        payload["dry_run"] = dry_run
+        _emit_json(payload)
+    else:
+        table = Table(
+            title=f"Seeded ledger entries — {course_id}" + (" (dry run)" if dry_run else "")
+        )
+        table.add_column("Lecture", style="cyan")
+        table.add_column("Part", justify="right")
+        table.add_column("Anchor")
+        table.add_column("Status")
+        table.add_column("Deck / reason")
+        style = {"seeded": "green", "updated": "yellow", "unchanged": "dim", "unresolved": "red"}
+        for p in result.parts:
+            anchor = p.anchor.get("kind", "—")
+            if p.anchor.get("commit"):
+                anchor += f" {p.anchor['commit'][:8]}"
+            table.add_row(
+                escape(p.lecture_id),
+                str(p.part),
+                anchor,
+                f"[{style[p.status]}]{p.status}[/{style[p.status]}]",
+                escape(p.deck or p.reason or ""),
+            )
+        console.print(table)
+        counts = result.to_dict()["counts"]
+        console.print(
+            "[dim]"
+            + ", ".join(f"{n} {status}" for status, n in sorted(counts.items()))
+            + (
+                f"; {len(result.ledgers_written)} ledger file(s) written"
+                if not dry_run
+                else "; nothing written (dry run)"
+            )
+            + "[/dim]"
+        )
+    for path in result.ledgers_written:
+        from clm.recordings.ledger import ignored_ledger_warning
+
+        warning = ignored_ledger_warning(course_root / path)
+        if warning:
+            _diagnostic(f"[yellow]{escape(warning)}[/yellow]", json_mode=as_json)
+            break
+    raise SystemExit(1 if result.unresolved else 0)
+
+
 def _resolve_report_manifest(
     *,
     source: Path | None,
@@ -2044,3 +2194,16 @@ def sync_preset():
         f"{DEFAULT_MANAGED_PRESET_NAME!r}[/bold] in your CLM config "
         f"to reference this preset by name.[/dim]"
     )
+
+
+def _configured_spec_for_course(course_id: str) -> Path | None:
+    """Return the ``spec_file`` for *course_id* from the recordings config, if set."""
+    try:
+        from clm.infrastructure.config import get_config
+
+        for course in get_config().recordings.courses:
+            if course.id == course_id and course.spec_file:
+                return Path(course.spec_file)
+    except Exception:  # pragma: no cover — defensive
+        return None
+    return None

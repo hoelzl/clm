@@ -5320,6 +5320,48 @@ clm recordings ack DECK [OPTIONS]
 Exit `2` (nothing written) when the deck has no recorded part or cannot be
 fingerprinted. Warns when git would ignore the ledger.
 
+#### `clm recordings seed-ledger`
+
+Seed the committed recordings ledger from a machine-local state file — the
+recordings made before the ledger existed (`clm info recordings`, "Two
+stores"). No video analysis: for every active take in
+`<user-config>/clm/recordings/COURSE_ID.json` the anchor is the stamped git
+commit (`commit` / `commit-dirty`) or, for parts recorded before stamping
+existed, the last commit on the current branch before `recorded_at`
+(`time`) — and, when the deck is not found there (a course authored just in
+time is recorded from a working tree whose edits land in the next commits),
+the first commits after `recorded_at`, in order, up to five; the deck is the
+lecture's `"<section name>::<deck name>"` display names resolved through the
+course **as it was at that commit** (a throwaway `git worktree` of the
+anchor, disabled sections kept, so renames since then need no special case;
+a section renamed since resolves by a deck name that is unique in the
+course), then mapped onto the current tree (same path, else the topic's
+current directory by topic id); the members are the deck's fingerprints at
+the anchor. Seeded entries carry `"evidence": "anchor"`: `report` calls
+them `recomputed` (clean commit) or `approximate` (dirty or time anchor),
+never `recorded`, and `seed-ledger` never overwrites a record-time entry.
+
+```
+clm recordings seed-ledger COURSE_ID [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `COURSE_ID` | The state file's course id (`<project-slug>-<lang>`, as the dashboard names it) |
+| `--spec-file PATH` | The course spec the recordings were made from (default: the matching `recordings.courses` config entry, else `course-specs/<course-id-without-lang>.xml` under `--course-root`) |
+| `--course-root DIR` | Course repository root (default: derived from the spec file) |
+| `--lang de\|en` | Recorded language (default: the `-de`/`-en` suffix of `COURSE_ID`) |
+| `--dry-run` | Resolve and report every part; write nothing |
+| `--json` | Emit `{schema, tool, verb, course_id, lang, counts, ledgers_written, parts, dry_run}`; each part carries `status` (`seeded` / `updated` / `unchanged` / `unresolved`), `anchor`, `deck`, `ledger`, `members`, `reason` |
+
+Idempotent: an entry that already matches is `unchanged`; a differing one
+for the same `(course_id, part, lang)` is `updated`. Parts whose deck cannot
+be resolved at the anchor, or whose deck no longer exists in the current
+tree, are `unresolved` — listed with the reason, never guessed. Exit `0`
+when nothing is unresolved, `1` otherwise, `2` when the state file or spec
+is missing. Warns when git would ignore a written ledger. Run it once per
+course id, review with `clm recordings report`, commit the ledgers.
+
 #### `clm recordings compare`
 
 Generate an A/B audio comparison HTML page with embedded audio players

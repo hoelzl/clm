@@ -48,6 +48,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from attrs import frozen as frozen_dataclass
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -74,6 +75,7 @@ __all__ = [
     "id_order",
     "ignored_ledger_warning",
     "is_git_ignored",
+    "is_unsplit_deck",
     "ledger_path_for",
     "load",
     "part_identity",
@@ -83,6 +85,10 @@ __all__ = [
     "resolve_part_order",
     "save",
     "split_halves",
+    "UnsplitCell",
+    "unsplit_cells",
+    "unsplit_members",
+    "uses_cell_scheme",
 ]
 
 #: The envelope schema of ``recordings-ledger.json``.
@@ -138,6 +144,11 @@ class LedgerPart(BaseModel):
     #: it existed (the rule is then skipped, never guessed).
     order: list[str] = Field(default_factory=list)
     hash_version: int = HASH_VERSION
+    #: Where ``members`` came from: ``recorded`` — fingerprinted from the
+    #: tree that was on screen (the dashboard write path; exact even on a
+    #: dirty tree); ``anchor`` — recomputed from the anchor commit later
+    #: (seeding), which is only as good as the commit.
+    evidence: Literal["recorded", "anchor"] = "recorded"
 
 
 class DeckAck(BaseModel):
@@ -258,27 +269,153 @@ def _members_of(deck: BilingualDeck, lang: Lang) -> dict[str, str]:
     return out
 
 
+def is_unsplit_deck(deck_path: Path) -> bool:
+    """A single-file bilingual deck: no ``.de``/``.en`` tag and no split twin on disk.
+
+    A stale ``slides_x.py`` beside ``slides_x.de.py`` / ``slides_x.en.py``
+    is **not** an unsplit deck — the pair is the deck.
+    """
+    from clm.core.slide_text.pairing import split_lang_tag
+
+    if split_lang_tag(deck_path) is not None:
+        return False
+    halves = split_halves(deck_path)
+    return halves is not None and not any(h.exists() for h in halves)
+
+
+@frozen_dataclass
+class UnsplitCell:
+    """One member of a single-file bilingual deck: its key, kind, role and fingerprint."""
+
+    key: str
+    kind: str  # markdown | code | j2
+    role: str  # header | slide | subslide | voiceover | notes | code | aux
+    fingerprint: str
+
+
+def unsplit_cells(text: str, lang: str, comment_token: str = "#") -> list[UnsplitCell]:
+    """The members of a single-file bilingual deck for *lang*, in file order.
+
+    The bilingual document model (:mod:`clm.slides.bilingual_doc`) needs a
+    split pair; a deck that keeps both languages in one file falls back to
+    its percent-format cells: every cell whose ``lang`` attribute is *lang*
+    or absent is a member, keyed ``id:<slide_id>`` when it carries one,
+    else ``cell:<group>/<kind>/<ordinal>`` — *group* is the ``slide_id`` of
+    the nearest id-bearing cell above (``header`` before the first), so an
+    inserted id-less cell only renumbers its own group, exactly like the
+    split model's ``pos:`` handles. The fingerprint is the cell's bytes
+    modulo the ``slide_id`` attribute — the same :func:`content_fingerprint`
+    as a split member, so the ledger holds one hashing form. This is the
+    ONE keying rule; the ledger map and the report index both derive from
+    it.
+    """
+    from clm.core.slide_text.slide_parser import parse_cells
+    from clm.slides.bilingual_doc import SideCell
+    from clm.slides.doc_identity import content_fingerprint
+
+    side = _check_lang(lang)
+    out: list[UnsplitCell] = []
+    group = "header"
+    ordinals: dict[tuple[str, str], int] = {}
+    seen_ids: dict[str, int] = {}
+    for index, cell in enumerate(parse_cells(text, comment_token)):
+        meta = cell.metadata
+        if meta.lang not in (None, side):
+            continue
+        kind = meta.cell_type if meta.cell_type in ("code", "j2") else "markdown"
+        if meta.slide_id:
+            # A repeated id (the very defect that makes a pair refuse to
+            # normalize) keeps every occurrence: ``id:x``, ``id:x#2``, …
+            n = seen_ids.get(meta.slide_id, 0) + 1
+            seen_ids[meta.slide_id] = n
+            key = f"id:{meta.slide_id}" if n == 1 else f"id:{meta.slide_id}#{n}"
+            group = meta.slide_id
+        else:
+            ordinal = ordinals.get((group, kind), 0)
+            ordinals[(group, kind)] = ordinal + 1
+            key = f"cell:{group}/{kind}/{ordinal}"
+        if "voiceover" in meta.tags:
+            role = "voiceover"
+        elif "notes" in meta.tags:
+            role = "notes"
+        elif "subslide" in meta.tags:
+            role = "subslide"
+        elif "slide" in meta.tags:
+            role = "slide"
+        elif kind == "j2":
+            role = "header"
+        else:
+            role = "code" if kind == "code" else "aux"
+        side_cell = SideCell(
+            lines=(cell.header, *cell.content.splitlines()),
+            index=index,
+            line_number=cell.line_number,
+            part="deck",
+            lang_attr=meta.lang,
+            tags=tuple(meta.tags),
+            slide_id=meta.slide_id,
+            for_slide=meta.for_slide,
+            vo_anchor=None,
+            cell_type=kind,
+        )
+        out.append(UnsplitCell(key, kind, role, content_fingerprint(side_cell)))
+    return out
+
+
+def unsplit_members(text: str, lang: str, comment_token: str = "#") -> dict[str, str]:
+    """``{key: fingerprint}`` of :func:`unsplit_cells` — the ledger's map form."""
+    return {c.key: c.fingerprint for c in unsplit_cells(text, lang, comment_token)}
+
+
 def deck_members(deck_path: Path, lang: str) -> dict[str, str]:
     """The recorded language's member fingerprints of the deck on disk.
 
-    ``{}`` when the deck is not a split pair with an existing twin or the
-    bundle fails the normalize precondition — the ledger then records an
-    entry without evidence rather than blocking a recording, and the report
-    treats it as ``unverifiable``. Raises ``ValueError`` for a *lang* that
-    names no side.
+    A split pair parses through the bilingual document model; a single-file
+    bilingual deck through :func:`unsplit_members`. ``{}`` when the deck is
+    a lone split half or the bundle fails the normalize precondition — the
+    ledger then records an entry without evidence rather than blocking a
+    recording, and the report treats it as ``unverifiable``. Raises
+    ``ValueError`` for a *lang* that names no side.
     """
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
     from clm.slides.doc_lenses import DocLensError, load_bundle
 
     side = _check_lang(lang)
+    if is_unsplit_deck(deck_path) and deck_path.is_file():
+        try:
+            text = deck_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("No member fingerprints for {}: {}", deck_path, exc)
+            return {}
+        return unsplit_members(text, side, comment_token_for_path(deck_path))
     try:
         bundle = load_bundle(deck_path)
     except (DocLensError, OSError, UnicodeDecodeError) as exc:
         logger.debug("No member fingerprints for {}: {}", deck_path, exc)
         return {}
     if bundle.outcome.deck is None:
-        logger.debug("No member fingerprints for {}: bundle refused normalization", deck_path)
-        return {}
+        # The pair does not normalize (duplicate ids, mismatched halves …):
+        # fall back to the recorded half's cells so the recording still has
+        # evidence. Entries keyed ``cell:`` are compared cell-wise by the
+        # report, whatever the pair looks like at HEAD.
+        logger.debug("{} refused normalization; using the cell scheme", deck_path)
+        half = (
+            deck_path
+            if deck_path.is_file()
+            else (bundle.de_path if side == "de" else bundle.en_path)
+        )
+        try:
+            return unsplit_members(
+                half.read_text(encoding="utf-8"), side, comment_token_for_path(half)
+            )
+        except (OSError, UnicodeDecodeError):
+            return {}
     return _members_of(bundle.outcome.deck, side)
+
+
+def uses_cell_scheme(members: dict[str, str]) -> bool:
+    """Whether a member map was produced by the cell scheme (:func:`unsplit_cells`)."""
+    return any(key.startswith("cell:") for key in members)
 
 
 def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] | None:
@@ -288,6 +425,7 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     ref, or the historical bundle fails to parse — "not recoverable", never a
     guess.
     """
+    from clm.core.slide_text.pairing import split_lang_tag
     from clm.core.utils.prog_lang_utils import comment_token_for_path
     from clm.slides.doc_lenses import parse_bundle
     from clm.slides.git_text import bundle_texts_at_ref
@@ -299,12 +437,21 @@ def deck_members_at_ref(deck_path: Path, ref: str, lang: str) -> dict[str, str] 
     de_path, en_path = halves
     de_text, en_text, de_comp, en_comp = bundle_texts_at_ref(de_path, en_path, ref)
     if de_text is None or en_text is None:
+        if split_lang_tag(deck_path) is None:
+            # A single-file bilingual deck at that ref.
+            from clm.slides.git_text import git_ref_text
+
+            text = git_ref_text(deck_path, ref)
+            if text is None:
+                return None
+            return unsplit_members(text, side, comment_token_for_path(deck_path))
         return None
     outcome = parse_bundle(
         de_text, en_text, de_comp, en_comp, comment_token=comment_token_for_path(de_path)
     )
     if outcome.deck is None:
-        return None
+        half_text = de_text if side == "de" else en_text
+        return unsplit_members(half_text, side, comment_token_for_path(de_path))
     return _members_of(outcome.deck, side)
 
 
@@ -313,14 +460,17 @@ def resolve_part_order(
 ) -> list[str] | None:
     """The recorded id-member order matching :func:`resolve_part_members`' result.
 
-    Stored order for a ``recorded`` entry (``None`` when the entry predates
-    the field), document order of the recomputed map otherwise.
+    The stored ``order`` whenever the entry's own members were used (they
+    come back from sorted JSON and carry no order); the document order of
+    the recomputed map when the members were re-read from the anchor
+    commit; ``None`` when nothing trustworthy is known (the rule is skipped).
     """
-    if status == "recorded":
-        return list(part.order) or None
-    if status in ("recomputed", "approximate"):
+    if status == "unverifiable":
+        return None
+    if members is not part.members and part.hash_version != HASH_VERSION:
+        # Recomputed from git: the map is in document order.
         return id_order(members)
-    return None
+    return list(part.order) or None
 
 
 def resolve_part_members(
@@ -329,7 +479,10 @@ def resolve_part_members(
     """The trustworthy member fingerprints of *part* — the ``hash_version`` rule.
 
     * recorded under the current :data:`HASH_VERSION` and non-empty →
-      ``(members, "recorded")``;
+      ``(members, "recorded")`` — unless the entry's ``evidence`` is
+      ``anchor`` (seeded from a commit): then ``"recomputed"`` for a clean
+      ``commit`` anchor and ``"approximate"`` for any other kind, because
+      a dirty or time-chosen commit under-describes what was shown;
     * otherwise, with a commit anchor → recomputed from the deck at that
       commit: ``(members, "recomputed")`` for a clean anchor, ``(members,
       "approximate")`` for a ``commit-dirty`` one (the commit under-describes
@@ -339,7 +492,10 @@ def resolve_part_members(
       fingerprint function would compute differently.
     """
     if part.hash_version == HASH_VERSION and part.members:
-        return dict(part.members), "recorded"
+        if part.evidence == "anchor":
+            exact = part.anchor.kind == "commit" and not part.anchor.dirty
+            return part.members, ("recomputed" if exact else "approximate")
+        return part.members, "recorded"
     if part.anchor.commit:
         recomputed = deck_members_at_ref(deck_path, part.anchor.commit, part.lang)
         if recomputed:

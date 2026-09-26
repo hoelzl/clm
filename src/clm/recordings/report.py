@@ -112,6 +112,8 @@ def deck_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | Non
     from clm.slides.doc_identity import content_fingerprint
     from clm.slides.doc_lenses import DocLensError, load_bundle
 
+    if rl.is_unsplit_deck(deck_path):
+        return _unsplit_member_index(deck_path, lang)
     try:
         bundle = load_bundle(deck_path)
     except (DocLensError, OSError, UnicodeDecodeError):
@@ -131,6 +133,20 @@ def deck_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | Non
             layout=member.layout,
         )
     return out
+
+
+def _unsplit_member_index(deck_path: Path, lang: str) -> dict[str, MemberInfo] | None:
+    """The single-file bilingual deck's members with kinds (:func:`rl.unsplit_cells`)."""
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
+
+    try:
+        text = deck_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return {
+        c.key: MemberInfo(fp=c.fingerprint, kind=c.kind, role=c.role, layout="inline")
+        for c in rl.unsplit_cells(text, lang, comment_token_for_path(deck_path))
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +190,9 @@ def _class_from_key(key: str) -> str:
         if len(parts) == 3 and parts[1] == "code":
             return "structural"
         return "visible"
+    if scheme == "cell":
+        parts = value.rsplit("/", 2)
+        return "structural" if len(parts) == 3 and parts[1] == "code" else "visible"
     return "structural"
 
 
@@ -190,16 +209,68 @@ def diff_members(
     head_keys = list(head)
     members: dict[str, str] = {}
 
-    added = [k for k in head_keys if k not in base]
-    removed = [k for k in base_keys if k not in head]
+    # Keys are handles, fingerprints are the evidence. A member whose key no
+    # longer lines up — ids stamped since the recording, a positional handle
+    # renumbered by an insert, a cell-scheme entry against a split pair — is
+    # unchanged when its fingerprint still occurs in the deck, and only then
+    # do the remaining unmatched keys count as added / removed / changed.
+    head_fps: dict[str, list[str]] = {}
+    for key, info in head.items():
+        head_fps.setdefault(info.fp, []).append(key)
+    base_fps: dict[str, list[str]] = {}
+    for key, fp in base.items():
+        base_fps.setdefault(fp, []).append(key)
+
+    matched_head: set[str] = set()
+    matched_base: set[str] = set()
+    for key in base_keys:  # 1. by key and fingerprint
+        current = head.get(key)
+        if current is not None and current.fp == base[key]:
+            matched_base.add(key)
+            matched_head.add(key)
+    for key in base_keys:  # 2. by fingerprint alone (re-keyed / moved)
+        if key in matched_base:
+            continue
+        for candidate in head_fps.get(base[key], []):
+            if candidate not in matched_head:
+                matched_base.add(key)
+                matched_head.add(candidate)
+                break
+
+    added = [k for k in head_keys if k not in matched_head and k not in base]
+    removed = [k for k in base_keys if k not in matched_base and k not in head]
+
+    # 3. A member that was edited AND re-keyed (ids stamped on an edited
+    # cell) shows up once as removed and once as added: pair leftovers of
+    # the same kind-class in document order and count each pair once, as
+    # a change of the current member.
+    def kind_of(key: str, info: MemberInfo | None) -> str:
+        if info is not None:
+            return info.kind
+        scheme, _, value = key.partition(":")
+        if scheme in ("pos", "cell"):
+            parts = value.rsplit("/", 2)
+            return parts[1] if len(parts) == 3 else "markdown"
+        return "markdown"
+
+    leftovers_added = list(added)
+    for old_key in list(removed):
+        old_kind = kind_of(old_key, None)
+        for new_key in leftovers_added:
+            if not old_key.startswith("id:") and kind_of(new_key, head[new_key]) == old_kind:
+                members[new_key] = _class_of(head[new_key])
+                leftovers_added.remove(new_key)
+                removed.remove(old_key)
+                added.remove(new_key)
+                break
     for key in added:
         members[key] = _class_from_key(key) if key.startswith("id:") else _class_of(head[key])
     for key in removed:
         members[key] = _class_from_key(key)
-    for key in base_keys:
-        info = head.get(key)
-        if info is not None and info.fp != base[key]:
-            members[key] = _class_of(info)
+    for key in base_keys:  # same key, different bytes, not found elsewhere
+        current = head.get(key)
+        if current is not None and key not in matched_base and key not in matched_head:
+            members[key] = _class_of(current)
 
     reordered = False
     if base_order:
@@ -257,28 +328,48 @@ def find_deck_files(topic_dir: Path, deck_key: str) -> dict[str, Path]:
                 out[lang] = candidate
         if out:
             break
+        unsplit = topic_dir / f"{deck_key}{ext}"
+        if unsplit.is_file():
+            # One file serves both languages.
+            return dict.fromkeys(rl.RECORDABLE_LANGS, unsplit)
     return out
 
 
 def _commits_since(anchor: str, paths: list[Path]) -> list[str] | None:
     """Commits after *anchor* that touched any of *paths* (newest first), or ``None``.
 
-    Pathspecs are given relative to the topic directory the command runs
-    in, so a companion under ``voiceover/`` is matched (a bare file name
-    would silently miss it).
+    One ``git log --follow`` per path (git follows renames for a single
+    pathspec only), unioned and ordered by position in ``git rev-list --topo-order
+    <anchor>..HEAD``: a topic renumbered since the recording keeps its
+    pre-rename edits in the count. Commit time is no ordering key: ``%ct``
+    has one-second resolution, so scripted or rebased commits tie. Pathspecs
+    are given relative to the topic directory the command runs in, so a
+    companion under ``voiceover/`` is matched too.
     """
     if not paths:
         return None
     cwd = paths[0].parent
-    specs: list[str] = []
+    history = _git_lines(cwd, ["rev-list", "--topo-order", f"{anchor}..HEAD"])
+    if history is None:
+        return None
+    touched: set[str] = set()
     for p in paths:
         try:
-            specs.append(p.resolve().relative_to(cwd.resolve()).as_posix())
+            spec = p.resolve().relative_to(cwd.resolve()).as_posix()
         except ValueError:
-            specs.append(p.resolve().as_posix())
+            spec = p.resolve().as_posix()
+        shas = _git_lines(cwd, ["log", "--follow", "--format=%H", f"{anchor}..HEAD", "--", spec])
+        if shas is None:
+            return None
+        touched.update(shas)
+    return [sha for sha in history if sha in touched]
+
+
+def _git_lines(cwd: Path, args: list[str]) -> list[str] | None:
+    """Non-empty stdout lines of ``git <args>`` in *cwd*, or ``None`` on failure."""
     try:
         completed = subprocess.run(
-            ["git", "log", "--format=%H", f"{anchor}..HEAD", "--", *specs],
+            ["git", *args],
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -290,7 +381,7 @@ def _commits_since(anchor: str, paths: list[Path]) -> list[str] | None:
         return None
     if completed.returncode != 0:
         return None
-    return completed.stdout.split()
+    return [line for line in completed.stdout.splitlines() if line]
 
 
 def _bundle_paths(deck_files: dict[str, Path]) -> list[Path]:
@@ -448,6 +539,18 @@ def _report_deck(
     any_half = next(iter(deck_files.values()))
     bundle_paths = _bundle_paths(deck_files)
     head_by_lang: dict[str, dict[str, MemberInfo] | None] = {}
+    cells_by_lang: dict[str, dict[str, MemberInfo] | None] = {}
+
+    def head_index(lang: str, members: dict[str, str]) -> dict[str, MemberInfo] | None:
+        """The deck's current index in the scheme the entry was recorded in."""
+        if rl.uses_cell_scheme(members):
+            if lang not in cells_by_lang:
+                cells_by_lang[lang] = _unsplit_member_index(deck_files.get(lang, any_half), lang)
+            return cells_by_lang[lang]
+        if lang not in head_by_lang:
+            head_by_lang[lang] = deck_member_index(any_half, lang)
+        return head_by_lang[lang]
+
     commits_by_anchor: dict[str, list[str] | None] = {}
     parts: list[PartReport] = []
     for part in sorted(entry.parts, key=rl.part_identity):
@@ -456,10 +559,8 @@ def _report_deck(
             # A hand-edited or foreign entry: report it, never let it abort the run.
             head, base, status = None, None, "unverifiable"
         else:
-            if part.lang not in head_by_lang:
-                head_by_lang[part.lang] = deck_member_index(any_half, part.lang)
-            head = head_by_lang[part.lang]
             base, status = rl.resolve_part_members(part, any_half)
+            head = head_index(part.lang, base or {})
         if base is None or head is None:
             severity, changed, total, changed_members = "unverifiable", 0, len(part.members), {}
         else:
@@ -500,17 +601,18 @@ def _report_deck(
     if ack is not None:
         if ack.hash_version != rl.HASH_VERSION:
             ack_state = "stale-ack"
-        elif any(not _ack_map(ack, lang)[0] for lang in head_by_lang):
+        elif any(not _ack_map(ack, lang)[0] for lang in {p.lang for p in entry.parts}):
             # A language recorded after the ack was written is not covered by
             # it: the deck is unacknowledged again (re-run `ack`), not drifted.
             ack_state = "unacknowledged"
         else:
             since: list[str] = []
-            for lang, head in head_by_lang.items():
+            for lang in sorted({p.lang for p in entry.parts}):
+                ack_members, ack_order = _ack_map(ack, lang)
+                head = head_index(lang, ack_members)
                 if head is None:
                     since.append("unverifiable")
                     continue
-                ack_members, ack_order = _ack_map(ack, lang)
                 since.append(diff_members(ack_members, head, ack_order).severity)
             severity_since_ack = _max_severity(since) if since else "none"
             ack_state = "acknowledged" if severity_since_ack == "none" else "drifted-since-ack"
