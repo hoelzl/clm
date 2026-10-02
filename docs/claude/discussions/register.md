@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-09-26
-review-by: 2027-03-26
+updated: 2026-10-02
+review-by: 2027-04-02
 ---
 # Register: discussions index
 
@@ -22,6 +22,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | `recordings-rerecord-backlog` (S9) | Implementation of the S8 decision, autonomous: #1004 ledger (PR #1011), #965 report/ack (PR #1014), #1005 seed-ledger (PR #1017), #1007 deck-stem half (PR #1016); hoelzl/PythonCourses#360 closed, ledgers seeded in PythonCourses `940f3bec`. The design bent under real data in eight places (stored member order, fingerprint matching after id stamping, cell scheme for single-file decks, forward-looking time anchors, …) — all in `state.md`. Sibling threads in the same session: #987 step 1 (PR #1012 + PythonCourses `50c30395`), #1008 (PR #1015), #1009 (PR #1013). | S9 |
 | `shared-diagram-renders` | #987: sharing generated diagram renders — include the diagram *source* per consuming topic (the code path exists, untested), validator carve-out + `as` prefix check, `image_ref_missing` / `image_name_conflict` as the safety net; topic-level declaration deferred with a revisit condition | Decided — design note written; #987 = step 1, #1008 = step 1b | `docs/claude/design/shared-diagram-renders.md`; issue #1008 | S8 (transcript under `recordings-rerecord-backlog`) |
 | `schedule-section-week` | #916: sections are weeks by *convention* for `export schedule`; the calendar already places subsections as a flat sequence; non-week sections are name-only subsections — written into `clm info calendar` / `clm info spec-files`; `release section` alias accepted, the other shapes rejected as duplicates of existing mechanisms | Decided — docs landed with the S8 save; #916 closes on merge | info topics `calendar.md`, `spec-files.md`; issue #1009 | S8 (transcript under `recordings-rerecord-backlog`) |
+| `typing-replay` | Replaying code-along → completed cell edits as simulated typing in recording notebooks (C++ first): editor transactions instead of key events, a line-step plan checked by replay, step and hacker modes behind a global switch, an override-only sidecar keyed by slide id + fingerprint; spike built and verified in the browser the same session | Active — spike verified (no live kernel); step 1 is #1023 (variant shape open); packaging + Docker dogfood next | `docs/claude/design/typing-replay.md`; spike repo `jupyterlab-clm-typing` (local, `94d81f7`); issue #1023 | S11 |
 
 ### Dropped threads / corrections worth keeping
 
@@ -47,6 +48,21 @@ the reasons behind it are in `README.md`; the save procedure is
   red unit jobs (`_commits_since` ordered by one-second `%ct`). An armed
   auto-merge is not a merge — a save must check `gh pr view` state, not the
   session's intent. Found and fixed on resume. (S10)
+- The agent first proposed emitting typing *plans* at build time (with an
+  agent-authored sidecar per tricky cell). Building the spike showed that a
+  plan recomputed at load time from `(start, target)` and checked by replay
+  covers the common cases, so clm only needs to emit the two texts, and the
+  sidecar shrinks to optional overrides. The owner's proposal to reuse
+  slide-id sync for the sidecar holds for that smaller sidecar. (S11)
+- The spike's hacker mode first disarmed itself when the script ran out;
+  over-typing then leaked keys into the cell. Fixed by staying armed and
+  swallowing keys until Shift+Enter/Esc. This is a recording-specific
+  invariant, recorded in the design doc. (S11)
+- The S11 conversation (owner and agent alike) said "the recording
+  notebooks" as if they were code-along. `RecordingOutput` is completed +
+  notes + voiceover, and the public `code-along` kind must not carry
+  solutions, so step 1 became a new private recording code-along variant.
+  This was found while filing #1023, after the last owner turn. (S11)
 
 - The initial S4 snapshot said no supported transcript source was available.
   OpenCode's export does expose the public dialogue; a manually reviewed
@@ -130,6 +146,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S8 | 2026-09-25 | `recordings-rerecord-backlog/transcripts/2026-09-25-s8.md` | 2.13 MB → 13 kchar (167:1) | 1 / 6 (one-owner-turn autonomous design session; 116 tool stubs) | Claude Code session `294de972-4d44-4c5b-b9e7-73168a6a6815.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, main checkout; docs written in worktree `design-907-987-916`) | content through the design-note, issue and comment work for #907 / #987 / #916 (three threads from one session); the save itself is covered by the three state files |
 | S9 | 2026-09-25/26 | `recordings-rerecord-backlog/transcripts/2026-09-25-s9.md` | 6.68 MB → 35 kchar (192:1) | 1 / 39 (one-owner-turn autonomous implementation session; 268 tool stubs, 2 harness-authored turns dropped) | Claude Code session `fa157537-e0aa-465d-adaf-ed286cdc900b.jsonl` (slug `C--Users-tc-Programming-Python-Projects-clm`, main checkout; worktrees `issue-987-diagram-includes`, `issue-1008-image-checks`, `issue-1009-release-section`, `issue-1007-ledger-rename` for the sibling issues) | content through 2026-09-26 02:28 (the seven PRs, four adversarial reviews, the PythonCourses migration and seeding, the #360 closure); this save itself is covered by the state file |
 | S9 (save extension) | 2026-09-26 | `recordings-rerecord-backlog/transcripts/2026-09-25-s9.md` | 6.96 MB → 38 kchar (184:1) | 1 / 42 (278 tool stubs, 3 harness-authored turns dropped) | same Claude Code session `fa157537-e0aa-465d-adaf-ed286cdc900b.jsonl` | content through 2026-09-26 03:18 — extends the row above with the first save itself (PR #1018, merged) and the closing recap; supersedes the earlier boundary |
+| S11 | 2026-10-02 | `typing-replay/transcripts/2026-10-02-s11.md` | 5.25 MB → 23 kchar (229:1) | 3 / 25 (95 tool stubs, 1 harness-authored turn dropped) | Claude Code session `6206a73a-1f92-4816-a421-5dc6a9b8e9f1.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, main checkout; save written in worktree `save-typing-replay`) | content through 2026-10-02 05:53 (the brainstorm, the owner's four answers, the spike build and browser verification, the save request); the design doc, this save and the step-1 issue are covered by the state file |
 
 ### Deliberately skipped
 
@@ -141,3 +158,5 @@ the reasons behind it are in `README.md`; the save procedure is
 | 2026-09-06 … 2026-09-13 | `83a877dc…` (#917 investigation, 3 owner turns), `0260bc6b…` (#793, 1 turn), `8ad64f38…` / `c0890feb…` / `4fdc59b9…` (#928 phases 1–3 in the `issue-928-cpp-ide-export` worktree slug, 8/2/4 turns) | Task sessions recorded in their PRs and the #928 handover; the #928 design argument is the S1 candidate already noted above — not re-triaged at S8 |
 | 2026-09-25 | `ca62afc6…` (0 owner turns), `942bdc7f…` (4 owner turns, issue triage that led to the autonomous backlog run), `c787e1f0…` and `63c0dc34…` (3 owner turns each, skill-driven implementation of #968/#969/#981/#993/#991) | The empty one has nothing to save; the two implementation sessions are task work recorded in PRs #998–#1001 and #1003; the triage session is a candidate (the prioritisation argument for the backlog order), not triaged at S8 |
 | 2026-09-25 (at S9) | the same unsaved Claude sessions the S8 audit listed, plus the two July Hermes reviews | Nothing new to triage at S9; the S8 verdicts stand (the 2026-09-18 prioritisation session `8c80e928…` and the 2026-09-25 triage session `942bdc7f…` remain candidates) |
+| 2026-09-26 (at S11) | `dcf272be…` (5 owner turns; the S10 resume that found PR #1017 unmerged and fixed `_commits_since` ordering) | Number S10 is used by the corrections above and by `recordings-rerecord-backlog/state.md`, but the session has no transcript row: its substance landed in the corrected state file and the #1017 fix. Candidate for a later save if the resume argument is needed |
+| 2026-09-28 | `22c90a9b…` (0 owner turns) | Empty session; nothing to save |
