@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-10-02
-review-by: 2027-04-02
+updated: 2026-10-03
+review-by: 2027-04-03
 ---
 
 # State: typing replay for recording notebooks
@@ -10,7 +10,8 @@ review-by: 2027-04-02
 Mechanism, data contract, verification log, landmines and roadmap live in
 `docs/claude/design/typing-replay.md`. The extension is
 **hoelzl/jupyterlab-clm-typing** (public, MIT), checked out at
-`~/Programming/Python/Projects/jupyterlab-clm-typing`. This file keeps only the
+`~/Programming/Python/Projects/jupyterlab-clm-typing`. Its `vscode/`
+directory holds the VS Code player (S12). This file keeps only the
 conversational position.
 
 ## Settled (S11, 2026-10-02)
@@ -63,6 +64,42 @@ conversational position.
   was never pushed, and its local tags were removed. The edit is left
   uncommitted in the PythonCourses checkout.
 
+## Settled (S12, 2026-10-02/03): the VS Code player
+
+- **A separate extension, in the same repo** (agent's proposal, owner: "Your
+  proposed layout is fine"). It is not part of jupyter-slide-nav, which stays
+  a generic Marketplace extension built on RISE/nbconvert metadata. It lives
+  in `vscode/` and imports the shared `src/planner.ts`/`player.ts`, so the
+  two players can't drift apart. An npm package for the shared code waits for
+  a third consumer.
+- **The owner doesn't use VSCodeVim**, so the conflict over the `type`
+  command doesn't apply.
+- **Alt+N always enters edit mode** (owner bug report → 0.1.1). In command
+  mode after Shift+Enter, Alt+N used to leave the cell "half-armed": Enter
+  typed the script, but `A` inserted a cell.
+- **Command-mode keys while armed re-enter edit mode and type** (0.1.2). The
+  agent offered this, laid out its consequences when the owner asked, and the
+  owner accepted: "It sounds good." The accepted cost is that single-key
+  notebook shortcuts need a disarm first. The more conservative variant (any
+  command-mode key disarms and is dropped) was rejected: it changes the
+  symptom without removing it. The owner verified the fix by hand; the German
+  layout wasn't tested, but the bindings use physical key codes.
+- **CI plus GitHub releases, not the Marketplace** (owner request). The
+  `.vsix` ships as GitHub releases `vscode-v<version>` from a manual
+  workflow. A Marketplace listing only makes sense if others should use it.
+- **Recording profile:** the owner is setting one up with inline suggestions
+  (Copilot ghost text) turned off.
+
+## Shipped after the conversation (S12, within the owner's asks)
+
+- hoelzl/jupyterlab-clm-typing PR #1 (player plus the 0.1.1 fix; the owner
+  merged it), #2 (command-mode keys, 0.1.2) and #3 (CI and the release
+  workflow) are merged. Release `vscode-v0.1.2` was cut by the new workflow.
+- **clm 1.31.0 released** (owner request; PR #1030, PyPI and GitHub Release)
+  with #1023.
+- The design doc's §6 item 5 records the player as done (clm PR #1032,
+  merged).
+
 ## Open / deferred
 
 - **0.5.6 must ship extension 0.1.1.** The other agent owns it: fold
@@ -73,7 +110,6 @@ conversational position.
   the override sidecar, deferred past V1 by the owner.
 - **Voiceover "trigger the next step" marker:** the owner's first step
   toward synchronized and eventually automated recordings. Not designed.
-- **VS Code player** for Python: proposed, not discussed further.
 - **#1026**, the public-kind set (separate, small).
 
 ## Weak points to keep in mind
@@ -83,10 +119,18 @@ conversational position.
   focus moves elsewhere, keys are still swallowed until Esc.
 - The extension's `scripts/merge_typing.py` pairs by output cell id, which is
   positional. It is a dev stand-in only; use clm's `recording-code-along`.
+- VS Code: no test presses real keys. The keybinding paths (armed keys in
+  edit mode, command-mode keys, Esc) were checked only by the owner's manual
+  run and a unit test of `package.json`. The German layout wasn't checked by
+  hand.
+- VS Code: slide-nav's spacer cells and Toggle Slide View, combined with an
+  armed cell, are untested.
 
 ## Next boundary
 
-The owner tries a real recording from a `recording-code-along` notebook
-(listed on the private `speaker` target), with the cheat sheet on screen, and
-reports which mode works and which start→completed cells were typed in an
-awkward order. Those cells are the input for the override sidecar (step 3).
+The owner tries real recordings from a `recording-code-along` notebook
+(listed on the private `speaker` target): C++ in JupyterLab with the cheat
+sheet on screen, and Python in VS Code with the new recording profile. The
+owner reports which mode works and which start→completed cells were typed in
+an awkward order. Those cells are the input for the override sidecar
+(step 3).
