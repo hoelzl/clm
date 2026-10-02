@@ -45,15 +45,29 @@ conversational position.
   misses `partial`.
 - The cam-notebook images come from PythonCourses `docker/cam-notebooks`
   (owner pointer, confirmed). The extension is pinned there by commit
-  (PythonCourses `4e09d7d`). All four 0.5.4 images were built and verified
-  locally. **Not pushed to Docker Hub**: the agent asked, and there is no
-  answer yet.
+  (PythonCourses `4e09d7d`). All four 0.5.4 images, with extension 0.1.0,
+  were built and verified; another agent pushed them, and the owner moved
+  `cam-cpp` to 0.5.4 (now port 8892).
+- **Extension 0.1.1** (`3cac2b0`, owner request): Ctrl+Enter and Alt+Enter
+  also leave hacker mode, like Shift+Enter. Verified with real keys in
+  `cam-cpp` and installed there by hand.
+- **On-screen cheat sheet** (owner request): private artifact
+  https://claude.ai/artifact/9gUrMUj3EMgj3uPVqwFHUG. It covers the replay keys,
+  hacker mode, running cells, the RISE fork's slideshow keys, and a four-step
+  recording flow.
+- **The 0.1.1 image update was handed off.** The agent found that a pin change
+  in `base` re-uploads gigabytes. It drafted a last-layer `TYPING_UPDATE_REF`
+  install, measured at about 160 kB per push, and built 0.5.5-cpp/polyglot
+  locally. The owner then said another agent is releasing 0.5.6, which
+  rebuilds the lower layers anyway and takes over the Dockerfile commit. 0.5.5
+  was never pushed, and its local tags were removed. The edit is left
+  uncommitted in the PythonCourses checkout.
 
 ## Open / deferred
 
-- **Push the 0.5.4 images** and move the `latest`/`cpp`/`polyglot`/`python-ml`
-  tags? This is the owner's decision. The owner's running `cam-cpp`
-  container still runs 0.5.2-cpp with a hand-installed extension.
+- **0.5.6 must ship extension 0.1.1.** The other agent owns it: fold
+  `TYPING_UPDATE_REF` into `TYPING_REF` = `3cac2b0`, or keep the last-layer
+  slot for future updates. Check the 0.5.6 images afterwards.
 - **Real recordings:** decide between step and hacker mode.
 - **Edit order for start→completed cells** (attribute a → method b → …):
   the override sidecar, deferred past V1 by the owner.
@@ -73,5 +87,6 @@ conversational position.
 ## Next boundary
 
 The owner tries a real recording from a `recording-code-along` notebook
-(listed on the private `speaker` target), using an image with the extension,
-and reports which mode works.
+(listed on the private `speaker` target), with the cheat sheet on screen, and
+reports which mode works and which start→completed cells were typed in an
+awkward order. Those cells are the input for the override sidecar (step 3).
