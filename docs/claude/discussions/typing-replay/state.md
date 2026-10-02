@@ -10,7 +10,7 @@ review-by: 2027-04-02
 The design and the verified spike results are in
 `docs/claude/design/typing-replay.md`. The spike itself is a standalone
 JupyterLab 4 extension at `~/Programming/Python/Projects/jupyterlab-clm-typing`
-(local git repo, commit `94d81f7`, **no remote yet**). This file keeps only
+(GitHub: hoelzl/jupyterlab-clm-typing, private). This file keeps only
 the conversational position.
 
 ## Settled (S11, 2026-10-02)
@@ -59,9 +59,13 @@ the conversational position.
 
 Step 1 is #1023. Filing it corrected a premise of the conversation: the
 `recording` kind is completed + notes + voiceover, not code-along, and the
-public `code-along` kind must not carry solutions. So step 1 is a new
-**private recording code-along** variant. Its shape (new kind vs. attribute),
-formats, notes/voiceover and `alt` handling are open owner decisions listed in
-the issue. The next conversation
-is either that implementation, or packaging plus a dogfood recording on a real
-C++ deck.
+public `code-along` kind must not carry solutions. The owner then decided
+(2026-10-02, after the S11 transcript boundary): a new opt-in
+**`recording-code-along`** output kind, notebook only, with no notes,
+voiceover or `alt` cells. It is the notebook that is recorded; the
+`recording` notebook guides the narration. The issue body holds the decisions
+and acceptance criteria.
+
+The spike extension now lives at **hoelzl/jupyterlab-clm-typing** (private
+GitHub repo, `master`). The next conversation is either the #1023
+implementation, or packaging plus a dogfood recording on a real C++ deck.
