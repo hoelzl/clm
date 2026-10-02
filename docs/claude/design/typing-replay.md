@@ -1,10 +1,11 @@
 # Typing replay for recording notebooks
 
-**Status**: SPIKE VERIFIED 2026-10-02. Nothing is implemented in clm yet;
-step 1 is issue #1023 (see §6). | **Created**: 2026-10-02
-**Spike**: standalone JupyterLab 4 extension at
-`~/Programming/Python/Projects/jupyterlab-clm-typing` (local git repo, no
-remote yet). Its README has the run instructions and the verification log.
+**Status**: SPIKE VERIFIED 2026-10-02; step-1 decisions settled. Nothing is
+implemented in clm yet; step 1 is issue #1023 (see §3, §6). | **Created**: 2026-10-02
+**Spike**: standalone JupyterLab 4 extension, GitHub
+hoelzl/jupyterlab-clm-typing (private), checked out locally at
+`~/Programming/Python/Projects/jupyterlab-clm-typing`. Its README has the run
+instructions and the verification log.
 **Related**: `docs/claude/discussions/typing-replay/state.md` (the argument),
 the RISE fork (`~/Programming/Python/Projects/JupyterLabRise`, submodule
 `rise/` → github.com/hoelzl/rise).
@@ -87,16 +88,21 @@ reads better on video).
 
 ## 3. Data contract (proposed for clm step 1)
 
-**Which notebook carries it.** The existing `recording` kind
-(`RecordingOutput` in `src/clm/workers/notebook/output_spec.py`) is *not* a
-code-along notebook. It is completed + `notes` + `voiceover` (it deletes `start`
-cells), and its executed HTML is the cache source that Trainer, Completed and
-Partial HTML reuse. The `code-along` kind is public, so typing targets in it
-would ship the solutions to students. Step 1 therefore needs a **new private
-notebook variant**: code-along cell contents plus the typing metadata, routed
-to the private toplevel like `trainer`/`recording`. The S11 conversation
-assumed "the recording notebooks" already were code-along; this was found
-while filing the step-1 issue.
+**Which notebook carries it — decided (owner, 2026-10-02, #1023).** A new
+private output kind, working name **`recording-code-along`**, notebook format
+only, opt-in via the course spec. While recording, the trainer uses two
+notebooks: the existing `recording` notebook (completed + `notes` +
+`voiceover`) guides the narration, and the `recording-code-along` notebook is
+the one that is recorded and shown to students. So it must look exactly like
+the public `code-along` notebook: no `notes`, `voiceover` or `alt` cells.
+The only difference is the typing metadata.
+
+Why not an existing kind: `RecordingOutput` (`src/clm/workers/notebook/
+output_spec.py`) deletes `start` cells, and its executed HTML is the cache
+source for Trainer/Completed/Partial HTML. The `code-along` kind is public, so
+typing targets in it would ship the solutions to students. The S11
+conversation first assumed "the recording notebooks" already were
+code-along; this was found while filing #1023.
 
 That notebook writes, on each code cell whose completed source differs from
 its code-along source:
@@ -153,9 +159,8 @@ emit plans in V1.
 
 ## 6. Roadmap
 
-1. clm: emit a private recording code-along notebook carrying
-   `metadata.clm.typing` (#1023; the variant's shape is an open owner decision
-   listed there).
+1. clm: the opt-in `recording-code-along` output kind carrying
+   `metadata.clm.typing` (#1023, decisions settled).
 2. Package the extension for pip, install it in the Docker image, and dogfood
    on a real C++ deck with a live kernel. Compare the two modes in real
    recordings.
