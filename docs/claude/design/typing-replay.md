@@ -230,4 +230,16 @@ so clm doesn't emit plans in V1.
    private artifact https://claude.ai/artifact/9gUrMUj3EMgj3uPVqwFHUG.
 3. The sidecar overrides from §4 (edit order) with `clm validate` stale
    detection.
-4. The voiceover "trigger the next step" marker, then a VS Code player.
+4. The voiceover "trigger the next step" marker.
+5. **VS Code player — spike done 2026-10-02, ahead of order.** It lives in the
+   same repo as `vscode/` (the owner chose this over adding it to
+   jupyter-slide-nav, which stays generic) and imports the shared
+   `src/planner.ts`/`player.ts`, so both players run identical plans. Edits
+   go through `TextEditor.edit()`, which bypasses auto-close and on-Enter
+   indent. Hacker mode registers VS Code's `type` command only while armed.
+   An integration suite (`@vscode/test-electron`) covers both modes. The owner
+   tested it on real notebooks. LANDMINE: in notebook command mode,
+   `activeTextEditor` still points at the cell's editor, and
+   `notebook.cell.edit` toggles out of edit mode when the cell is already
+   editing. To enter edit mode, use `showTextDocument(cell.document)`.
+   PR hoelzl/jupyterlab-clm-typing#1.
