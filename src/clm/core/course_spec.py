@@ -33,6 +33,7 @@ class OutputKind(Enum):
     COMPLETED = "completed"
     TRAINER = "trainer"
     RECORDING = "recording"
+    RECORDING_CODE_ALONG = "recording-code-along"  # Opt-in (#1023).
     SPEAKER = "speaker"  # Deprecated alias for RECORDING.
 
 
@@ -1108,8 +1109,20 @@ class DirGroupSpec:
 # DeprecationWarning logged at parse time (see :func:`_normalize_output_kind`).
 # Removal target: CLM 1.8 (originally planned for 1.6, then 1.7 — slipped to align
 # with the Phase 0 CLI-alias removal so users see a single deprecation cliff).
+#
+# ``recording-code-along`` (#1023) is valid but opt-in: it is excluded from the
+# "build everything" default (``output_target.ALL_KINDS``) and is only built
+# when a target lists it.
 VALID_KINDS: frozenset[str] = frozenset(
-    {"code-along", "completed", "trainer", "recording", "speaker", "partial"}
+    {
+        "code-along",
+        "completed",
+        "trainer",
+        "recording",
+        "recording-code-along",
+        "speaker",
+        "partial",
+    }
 )
 
 
@@ -1263,6 +1276,13 @@ class OutputTargetSpec:
                         f"Invalid format '{fmt}' in target '{self.name}'. "
                         f"Valid values: {sorted(VALID_FORMATS)}"
                     )
+            # ``recording-code-along`` (#1023) is built in notebook format only;
+            # without ``notebook`` the target would silently build none of it.
+            if "recording-code-along" in (self.kinds or []) and "notebook" not in self.formats:
+                errors.append(
+                    f"Target '{self.name}' lists kind 'recording-code-along', which is "
+                    "built in 'notebook' format only, but its <formats> omit 'notebook'"
+                )
 
         # Validate languages
         if self.languages:

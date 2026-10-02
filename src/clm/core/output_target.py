@@ -17,13 +17,18 @@ from clm.core.course_spec import (
     OutputTargetSpec,
     validate_output_target_path,
 )
+from clm.core.utils.path_utils import kind_supports_format
 
 # ``speaker`` is preserved in :data:`VALID_KINDS` as a deprecated input alias
 # so existing course specs continue to parse, but we exclude it from the
 # default "build everything" set: spec parsing already normalizes ``speaker``
 # to ``recording``, and we don't want a default target to redundantly emit
 # both the alias and its replacement.
-_DEFAULT_KINDS_EXCLUDED = frozenset({"speaker"})
+#
+# ``recording-code-along`` (#1023) is opt-in, like the ``jupyterlite`` format:
+# it is a recording aid (code-along cells plus typing-replay metadata) that a
+# course only builds when a target lists it explicitly.
+_DEFAULT_KINDS_EXCLUDED = frozenset({"speaker", "recording-code-along"})
 
 if TYPE_CHECKING:
     pass
@@ -184,9 +189,9 @@ class OutputTarget:
     def should_generate(self, lang: str, fmt: str, kind: str) -> bool:
         """Check if this output combination should be generated for this target.
 
-        All format/kind combinations are valid - there are no special restrictions
-        on which formats can be generated for which kinds. This gives users full
-        control via their output target configuration.
+        All format/kind combinations are valid except for notebook-only kinds
+        (``recording-code-along``, #1023), which are generated in notebook
+        format only — see :func:`clm.core.utils.path_utils.kind_supports_format`.
 
         Args:
             lang: Language code (e.g., "de", "en")
@@ -197,7 +202,10 @@ class OutputTarget:
             True if this combination should be generated for this target
         """
         return (
-            self.includes_language(lang) and self.includes_format(fmt) and self.includes_kind(kind)
+            self.includes_language(lang)
+            and self.includes_format(fmt)
+            and self.includes_kind(kind)
+            and kind_supports_format(kind, fmt)
         )
 
     def effective_jupyterlite_config(self) -> JupyterLiteConfig | None:

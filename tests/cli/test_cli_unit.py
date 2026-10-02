@@ -620,7 +620,8 @@ class TestOutputFiltering:
 
         # Course should have kinds filter set to both private kinds.
         assert course.output_languages is None
-        assert course.output_kinds == ["trainer", "recording"]
+        # recording-code-along (#1023) only narrows targets that opt into it.
+        assert course.output_kinds == ["trainer", "recording", "recording-code-along"]
 
     def test_combined_filters_reduce_root_dirs(self):
         """language=de + ``--speaker-only`` → trainer/ and speaker/ tiers, de only."""
@@ -640,7 +641,8 @@ class TestOutputFiltering:
         # Course should have both filters set; ``--speaker-only`` now selects
         # both private kinds so trainer and recording are both built.
         assert course.output_languages == ["de"]
-        assert course.output_kinds == ["trainer", "recording"]
+        # recording-code-along (#1023) only narrows targets that opt into it.
+        assert course.output_kinds == ["trainer", "recording", "recording-code-along"]
 
     def test_no_html_skips_html_for_all_topics(self):
         """--no-html flips skip_html on every topic before course creation"""

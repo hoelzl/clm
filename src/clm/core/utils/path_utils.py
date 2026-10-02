@@ -445,6 +445,7 @@ class Kind(StrEnum):
     COMPLETED = "completed"
     TRAINER = "trainer"
     RECORDING = "recording"
+    RECORDING_CODE_ALONG = "recording-code-along"
     SPEAKER = "speaker"  # Deprecated alias for RECORDING; removed in CLM 1.8.
     PARTIAL = "partial"
 
@@ -452,7 +453,21 @@ class Kind(StrEnum):
 # Kinds that land under the private (``speaker/``) toplevel directory rather
 # than the public one. ``speaker`` is the deprecated input alias for
 # ``recording`` — still accepted, still routed to the private toplevel.
-PRIVATE_KINDS: frozenset[str] = frozenset({"trainer", "recording", "speaker"})
+# ``recording-code-along`` (#1023) looks like code-along but carries the
+# solutions as typing-replay metadata, so it must never be public.
+PRIVATE_KINDS: frozenset[str] = frozenset(
+    {"trainer", "recording", "recording-code-along", "speaker"}
+)
+
+# Kinds generated in notebook format only. Typing replay (#1023) needs a live
+# notebook; an HTML or code rendering of ``recording-code-along`` would just be
+# the code-along output under a private path.
+NOTEBOOK_ONLY_KINDS: frozenset[str] = frozenset({"recording-code-along"})
+
+
+def kind_supports_format(kind: str, format_: str) -> bool:
+    """Whether outputs of *kind* are generated in *format_*."""
+    return kind not in NOTEBOOK_ONLY_KINDS or str(format_) == "notebook"
 
 
 def ext_for(format_: str | Format, prog_lang: str) -> str:
@@ -524,8 +539,8 @@ def output_specs(
         languages: List of languages to generate (default: ["de", "en"])
         kinds: List of output kinds to generate (default: all kinds)
             Valid values: "code-along", "completed", "trainer", "recording",
-            "partial". "speaker" is accepted as a deprecated alias for
-            "recording".
+            "recording-code-along" (opt-in, notebook only), "partial".
+            "speaker" is accepted as a deprecated alias for "recording".
         target: OutputTarget for filtering (if provided, overrides languages/kinds)
 
     Yields:
@@ -570,6 +585,8 @@ def output_specs(
         "speaker" in effective_kinds and "recording" not in effective_kinds
     ):
         kind_dirs.append(Kind.RECORDING)
+    if "recording-code-along" in effective_kinds:
+        kind_dirs.append(Kind.RECORDING_CODE_ALONG)
     if "partial" in effective_kinds:
         kind_dirs.append(Kind.PARTIAL)
 
@@ -581,6 +598,8 @@ def output_specs(
     for lang_dir in lang_dirs:
         for format_dir in format_dirs:
             for kind_dir in kind_dirs:
+                if not kind_supports_format(kind_dir, format_dir):
+                    continue
                 yield OutputSpec(
                     course=course,
                     language=lang_dir,

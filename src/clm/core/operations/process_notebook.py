@@ -16,6 +16,7 @@ from clm.core.messaging.correlation_ids import new_correlation_id, note_correlat
 from clm.core.messaging.notebook_classes import NotebookPayload
 from clm.core.operation import Operation
 from clm.core.utils.path_utils import (
+    PRIVATE_KINDS,
     is_ignored_file_for_output,
     is_image_file,
     is_image_source_file,
@@ -328,7 +329,7 @@ class ProcessNotebookOperation(Operation):
                 break
         else:
             # Fallback to computing from output_root if pattern not found
-            is_speaker = self.kind in ("trainer", "recording", "speaker")
+            is_speaker = self.kind in PRIVATE_KINDS
             course_dir = output_path_for(
                 course.output_root, is_speaker, self.language, course_dir_name
             )

@@ -311,9 +311,19 @@ class TestValidConstants:
         ``speaker`` is preserved as a deprecated input alias for one release
         so legacy course specs continue to parse; spec parsing normalizes it
         to ``recording`` before any downstream consumer sees it.
+        ``recording-code-along`` (#1023) is valid but opt-in (excluded from
+        ``ALL_KINDS``).
         """
         assert VALID_KINDS == frozenset(
-            {"code-along", "completed", "trainer", "recording", "speaker", "partial"}
+            {
+                "code-along",
+                "completed",
+                "trainer",
+                "recording",
+                "recording-code-along",
+                "speaker",
+                "partial",
+            }
         )
 
     def test_valid_formats(self):

@@ -689,6 +689,27 @@ class TestProcessJupyterLiteForTargets:
             assert op.target_name == "playground"  # type: ignore[attr-defined]
             assert op.config.kernel == "pyodide"  # type: ignore[attr-defined]
 
+    def test_recording_code_along_is_never_bundled(self, course_root, captured_ops):
+        """#1023 review: the kind carries solutions as typing metadata, so it
+        must stay out of the browser site even when the target lists it."""
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(
+                    name="playground",
+                    path="./playground",
+                    kinds=["code-along", "recording-code-along"],
+                    formats=["notebook", "jupyterlite"],
+                ),
+            ],
+            course_jupyterlite=JupyterLiteConfig(kernel="pyodide"),
+        )
+        asyncio.run(course.process_jupyterlite_for_targets(_RecordingBackend()))
+        assert captured_ops
+        for op in captured_ops:
+            assert set(op.notebook_trees) == {"code-along"}  # type: ignore[attr-defined]
+            assert op.kinds == ["code-along"]  # type: ignore[attr-defined]
+
     def test_target_level_config_overrides_course_level(self, course_root, captured_ops):
         course = self._course(
             course_root,
