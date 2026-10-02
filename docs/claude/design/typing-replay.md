@@ -1,11 +1,15 @@
 # Typing replay for recording notebooks
 
-**Status**: SPIKE VERIFIED 2026-10-02; step-1 decisions settled. Nothing is
-implemented in clm yet; step 1 is issue #1023 (see §3, §6). | **Created**: 2026-10-02
-**Spike**: standalone JupyterLab 4 extension, GitHub
-hoelzl/jupyterlab-clm-typing (private), checked out locally at
-`~/Programming/Python/Projects/jupyterlab-clm-typing`. Its README has the run
-instructions and the verification log.
+**Status**: STEPS 1–2 SHIPPED 2026-10-02. clm emits the opt-in
+`recording-code-along` kind (#1023, PR #1027). The extension is packaged and
+installed in the cam-notebook images (0.5.4), and it was verified against a live
+xcpp20 kernel. Not yet done: real recordings, then steps 3–4 (§6).
+| **Created**: 2026-10-02
+**Extension**: GitHub hoelzl/jupyterlab-clm-typing (public, MIT), checked out
+at `~/Programming/Python/Projects/jupyterlab-clm-typing`. Install with
+`pip install git+https://github.com/hoelzl/jupyterlab-clm-typing` (the prebuilt
+labextension is committed, so no Node is needed). Its README has the dev
+workflow and the verification log.
 **Related**: `docs/claude/discussions/typing-replay/state.md` (the argument),
 the RISE fork (`~/Programming/Python/Projects/JupyterLabRise`, submodule
 `rise/` → github.com/hoelzl/rise).
@@ -82,11 +86,25 @@ running** (Docker Desktop was down). Checked in the browser:
 The RISE fork runs the slideshow as a separate app in an iframe. That app's
 page config listed the extension, and typing worked there.
 
-**Not yet verified:** a live xeus-cpp kernel in the Docker image, installing
-the extension into that image, and real recording ergonomics (which mode
-reads better on video).
+**Live kernel (2026-10-02, `cam-notebook:0.5.2-cpp`, Notebook 7.6 /
+JupyterLab 4.6.1, xcpp20).** The wheel was pip-installed into the running
+container, and the extension loaded on page reload without a server restart.
+Two CppCourses decks ("Member Functions", "Structs und Klassen") were tested,
+first through the extension repo's stand-in `scripts/merge_typing.py`, then
+as clm-built `recording-code-along` notebooks:
 
-## 3. Data contract (proposed for clm step 1)
+- Every cell was typed and then run in order with no compile errors, after a
+  fresh kernel restart. That covered the struct→class rewrite of `MyComplex`
+  in 22 step-mode steps and the `c.re = 3` → `c.set_re(3)` in-place edits.
+- Hacker mode took about 100 real key presses plus a real Shift+Enter.
+- A deck's *first* cell can be a start/completed pair (`struct Point` gains
+  `distance`). Running it without typing it makes later cells fail to
+  compile, so a recording must type it.
+
+**Still unverified:** real recording ergonomics (which mode reads better on
+video), and slide navigation with an armed cell.
+
+## 3. Data contract (implemented, #1023)
 
 **Which notebook carries it — decided (owner, 2026-10-02, #1023).** A new
 private output kind, working name **`recording-code-along`**, notebook format
@@ -113,9 +131,36 @@ its code-along source:
 ```
 
 The cell's source stays the code-along source. Other output kinds never
-carry the key. A `start` cell and the `completed` cell that follows it merge
-into one cell (start source, completed target). The player computes the plan at load time, so clm doesn't
-emit plans in V1.
+carry the key. A `start` cell and its `completed` cell merge into one cell
+(start source, completed target). The player computes the plan at load time,
+so clm doesn't emit plans in V1.
+
+**Implementation** (`RecordingCodeAlongOutput` in
+`src/clm/workers/notebook/output_spec.py`; tests in
+`tests/workers/notebook/test_recording_code_along.py` and
+`tests/core/test_recording_code_along_kind.py`):
+
+- The metadata is attached in `annotate_cells`, on the full source cell list
+  before filtering.
+- Pairing mirrors the validator: the next same-language `completed` cell,
+  whatever sits in between (kept, blanked or `del` cells), unless another
+  `start` comes first.
+- The kind is opt-in (excluded from `ALL_KINDS` and the default targets) and
+  notebook-only (`kind_supports_format`, enforced in `output_specs` and
+  `OutputTarget.should_generate`). It is never bundled into JupyterLite, and a
+  target that lists it without `notebook` fails validation.
+- The private routing sets now all read `PRIVATE_KINDS`. Without that, a target
+  listing only this kind got no private image copies.
+
+**Landmines found while implementing:**
+
+- clm output cell ids are **positional** (`CellIdGenerator.set_cell_id(cell,
+  index)`). Pairing code-along and completed *outputs* by id only works by
+  coincidence; pair by source tags.
+- Every real target is **explicit** (`OutputTarget.from_spec` → `skip_toplevel`),
+  so `PRIVATE_KINDS` routing to a `speaker/` toplevel never applies. Privacy
+  depends only on which target lists the kind: list it on a private target
+  such as `speaker`. The info topic `clm info spec-files` says so.
 
 ## 4. Decisions (owner, S11)
 
@@ -159,11 +204,14 @@ emit plans in V1.
 
 ## 6. Roadmap
 
-1. clm: the opt-in `recording-code-along` output kind carrying
-   `metadata.clm.typing` (#1023, decisions settled).
-2. Package the extension for pip, install it in the Docker image, and dogfood
-   on a real C++ deck with a live kernel. Compare the two modes in real
-   recordings.
+1. **Done:** clm emits the opt-in `recording-code-along` output kind carrying
+   `metadata.clm.typing` (#1023, PR #1027).
+2. **Done except recordings:** the extension is pip-installable and pinned by
+   commit in PythonCourses `docker/cam-notebooks`, next to the RISE pin
+   (`TYPING_REF` in `Dockerfile.split`, a literal SHA in `Dockerfile`;
+   PythonCourses `4e09d7d`). The 0.5.4 images were built locally; pushing them
+   to Docker Hub is the owner's call. Verified with a live kernel (§2).
+   **Still to do:** compare the two modes in real recordings.
 3. The sidecar overrides from §4 (edit order) with `clm validate` stale
    detection.
 4. The voiceover "trigger the next step" marker, then a VS Code player.
