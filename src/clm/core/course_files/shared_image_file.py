@@ -111,7 +111,7 @@ class SharedImageFile(CourseFile):
             if this isn't the right stage.
         """
         from clm.core.operations.copy_file import CopyFileOperation
-        from clm.core.utils.path_utils import output_path_for
+        from clm.core.utils.path_utils import PRIVATE_KINDS, output_path_for
 
         # Only run in our designated stage
         if stage is not None and stage != self.execution_stage:
@@ -124,12 +124,10 @@ class SharedImageFile(CourseFile):
             languages = self.course.output_languages or ["de", "en"]
 
         # Determine audiences based on target or course output configuration.
-        # ``trainer``/``recording`` (and the deprecated ``speaker`` alias) all
-        # land under the private toplevel directory.
-        private_kinds = {"trainer", "recording", "speaker"}
+        # Every kind in ``PRIVATE_KINDS`` lands under the private toplevel.
         public_kinds = {"code-along", "completed", "partial"}
         if target is not None:
-            has_speaker = bool(target.kinds & private_kinds)
+            has_speaker = bool(target.kinds & PRIVATE_KINDS)
             has_public = bool(target.kinds & public_kinds)
             is_speaker_options = []
             if has_public:
@@ -141,7 +139,7 @@ class SharedImageFile(CourseFile):
                 is_speaker_options = [False, True]
         else:
             output_kinds = self.course.output_kinds
-            if output_kinds and set(output_kinds).issubset(private_kinds):
+            if output_kinds and set(output_kinds).issubset(PRIVATE_KINDS):
                 is_speaker_options = [True]
             else:
                 # Generate both public and speaker outputs

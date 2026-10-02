@@ -62,7 +62,7 @@ from clm.core.course_spec import (
     SectionSelection,
 )
 from clm.core.messaging.correlation_ids import all_correlation_ids
-from clm.core.utils.path_utils import output_path_for
+from clm.core.utils.path_utils import PRIVATE_KINDS, output_path_for
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 
@@ -611,9 +611,12 @@ def initialize_paths_and_course(
     # preserved as a CLI flag for backwards compatibility but now selects
     # both private kinds (``trainer`` and ``recording``) so it remains
     # meaningful — narrowing it to ``recording`` alone would silently drop
-    # the trainer deck.
+    # the trainer deck. ``recording-code-along`` (#1023) is private too; the
+    # list only narrows each target's kinds (``with_cli_filters``
+    # intersects), so it keeps that opt-in kind where a target lists it and
+    # never adds it where none does.
     output_languages = [config.language] if config.language else None
-    output_kinds = ["trainer", "recording"] if config.speaker_only else None
+    output_kinds = ["trainer", "recording", "recording-code-along"] if config.speaker_only else None
 
     if output_languages:
         logger.info(f"Generating output for language(s): {output_languages}")
@@ -737,7 +740,7 @@ def initialize_paths_and_course(
                             skip_toplevel=target.is_explicit,
                         )
                     )
-                if target.kinds & {"trainer", "recording", "speaker"}:
+                if target.kinds & PRIVATE_KINDS:
                     root_dirs.append(
                         output_path_for(
                             target.output_root,

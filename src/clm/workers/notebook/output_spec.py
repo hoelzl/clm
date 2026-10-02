@@ -7,6 +7,7 @@ output that should be generated.
 - `OutputSpec`: The abstract base class of all output types.
 - `CompletedOutput`: The output type for artefacts that contain all public contents.
 - `CodeAlongOutput`: The output type for artefacts meant for live coding or workshops.
+- `RecordingCodeAlongOutput`: Private code-along notebook carrying typing-replay metadata (#1023).
 - `TrainerOutput`: Private output for trainers — keeps speaker notes, strips voiceover.
 - `RecordingOutput`: Private output for video recording — keeps both notes and voiceover.
 - `SpeakerOutput`: Deprecated alias for ``RecordingOutput`` (removed in CLM 1.8).
@@ -25,8 +26,10 @@ from clm.core.utils.prog_lang_utils import jupytext_format_for, suffix_for
 from .utils.jupyter_utils import (
     Cell,
     get_tags,
+    has_tag,
     is_cell_included_for_language,
     is_code_cell,
+    is_starting_cell,
     set_tags,
 )
 
@@ -370,6 +373,71 @@ class CodeAlongOutput(OutputSpec):
 
 
 @define
+class RecordingCodeAlongOutput(CodeAlongOutput):
+    """Private code-along notebook for video recording, with typing metadata (#1023).
+
+    The trainer records this notebook and students see it on video, so its
+    cells are exactly those of :class:`CodeAlongOutput`. In addition, every
+    code cell whose completed source differs carries ``metadata.clm.typing =
+    {"start": <code-along source>, "target": <completed source>}``, which the
+    jupyterlab-clm-typing extension replays as simulated typing. The
+    narration lives in the separate ``recording`` notebook. Built in notebook
+    format only (the build's output enumeration enforces this) and private,
+    because the targets are the solutions.
+    """
+
+    def get_target_subdir_fragment(self) -> str:
+        return "recording-code-along"
+
+    def annotate_cells(self, cells: Iterable[Cell]) -> None:
+        """Attach typing targets, pairing by source tags (not output cell ids).
+
+        Runs on the full source cell list, before the code-along filter blanks
+        answer cells and deletes ``completed`` cells. Pairing mirrors the
+        validator (``_check_tags``): among cells of the output language, a
+        ``start`` cell's target is the next ``completed`` code cell, whatever
+        cells (kept, blanked or ``del``) sit in between, unless another
+        ``start`` comes first. The validator owns the error for a dangling
+        ``start``; here it simply gets no target.
+        """
+        cells_list = [c for c in cells if is_cell_included_for_language(c, self.language)]
+        for i, cell in enumerate(cells_list):
+            if not is_code_cell(cell) or not self.is_cell_included(cell):
+                continue
+            if is_starting_cell(cell):
+                partner = _completed_partner(cells_list[i + 1 :])
+                if partner is not None:
+                    _set_typing(cell, _cell_source(cell), _cell_source(partner))
+            elif not self.is_cell_contents_included(cell):
+                _set_typing(cell, "", _cell_source(cell))
+
+
+def _completed_partner(following: list[Cell]) -> Cell | None:
+    """The ``completed`` code cell that closes a ``start``, if any."""
+    for cell in following:
+        if not is_code_cell(cell):
+            continue
+        if has_tag(cell, "completed"):
+            return cell
+        if is_starting_cell(cell):
+            return None
+    return None
+
+
+def _cell_source(cell: Cell) -> str:
+    source = cell.get("source", "")
+    return "".join(source) if isinstance(source, list) else str(source)
+
+
+def _set_typing(cell: Cell, start: str, target: str) -> None:
+    """Record a typing target unless there is nothing to type."""
+    if not target.strip() or target == start:
+        return
+    metadata = cell.setdefault("metadata", {})
+    metadata.setdefault("clm", {})["typing"] = {"start": start, "target": target}
+
+
+@define
 class TrainerOutput(OutputSpec):
     """Output spec for trainers teaching the course.
 
@@ -545,13 +613,14 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
     Traceback (most recent call last):
     ...
     ValueError: Unknown spec type: 'MySpecialSpec'.
-    Valid spec types are 'completed', 'code-along', 'trainer', 'recording', or 'partial'.
+    Valid spec types are 'completed', 'code-along', 'trainer', 'recording', 'recording-code-along', or 'partial'.
     """
     spec_type: (
         type[CompletedOutput]
         | type[CodeAlongOutput]
         | type[TrainerOutput]
         | type[RecordingOutput]
+        | type[RecordingCodeAlongOutput]
         | type[PartialOutput]
     )
     match kind.lower():
@@ -563,6 +632,8 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
             spec_type = TrainerOutput
         case "recording":
             spec_type = RecordingOutput
+        case "recording-code-along":
+            spec_type = RecordingCodeAlongOutput
         case "speaker":
             warnings.warn(
                 "Output kind 'speaker' is deprecated; use 'recording' (notes + "
@@ -578,7 +649,7 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
             raise ValueError(
                 f"Unknown spec type: {kind!r}.\n"
                 "Valid spec types are 'completed', 'code-along', 'trainer', "
-                "'recording', or 'partial'."
+                "'recording', 'recording-code-along', or 'partial'."
             )
     spec = spec_type(*args, **kwargs)
     return spec

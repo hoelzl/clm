@@ -52,7 +52,12 @@ from clm.core.utils.execution_utils import (
 )
 from clm.core.utils.file import File
 from clm.core.utils.notebook_mixin import NotebookMixin
-from clm.core.utils.path_utils import is_image_file, is_in_dir
+from clm.core.utils.path_utils import (
+    PRIVATE_KINDS,
+    is_image_file,
+    is_in_dir,
+    kind_supports_format,
+)
 from clm.core.utils.text_utils import Text
 
 if TYPE_CHECKING:
@@ -834,6 +839,11 @@ class Course(NotebookMixin):
                     for language in sorted(target.languages):
                         notebook_trees: dict[str, Path] = {}
                         for kind in sorted(target.kinds):
+                            # Never bundle a notebook-only kind into the browser
+                            # site: ``recording-code-along`` carries the
+                            # solutions as typing metadata (#1023).
+                            if not kind_supports_format(kind, "jupyterlite"):
+                                continue
                             notebook_spec = OutputSpec(
                                 course=self,
                                 language=language,
@@ -860,7 +870,7 @@ class Course(NotebookMixin):
                             output_dir=jl_output_dir,
                             target_name=target.name,
                             language=language,
-                            kinds=sorted(target.kinds),
+                            kinds=sorted(notebook_trees),
                             config=config,
                         )
                         tg.create_task(op.execute(backend))
@@ -888,10 +898,11 @@ class Course(NotebookMixin):
             for dir_group in self.dir_groups:
                 for target in self.output_targets:
                     # Determine which output types to generate based on target
-                    # kinds. ``trainer``/``recording`` (and deprecated
-                    # ``speaker``) all map to the private toplevel.
+                    # kinds. Every kind in ``PRIVATE_KINDS`` (trainer,
+                    # recording, recording-code-along, deprecated speaker)
+                    # maps to the private toplevel.
                     has_public = bool(target.kinds & {"code-along", "completed", "partial"})
-                    has_speaker = bool(target.kinds & {"trainer", "recording", "speaker"})
+                    has_speaker = bool(target.kinds & PRIVATE_KINDS)
                     is_speaker_options: list[bool] = []
                     if has_public:
                         is_speaker_options.append(False)

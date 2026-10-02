@@ -33,6 +33,7 @@ TEXT_MAPPINGS = {
     "completed": Text(de="Completed", en="Completed"),
     "trainer": Text(de="Trainer", en="Trainer"),
     "recording": Text(de="Recording", en="Recording"),
+    "recording-code-along": Text(de="Recording-Code-Along", en="Recording-Code-Along"),
     "speaker": Text(de="Speaker", en="Speaker"),
     "partial": Text(de="Partial", en="Partial"),
     "slides": Text(de="Folien", en="Slides"),

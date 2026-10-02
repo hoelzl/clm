@@ -55,6 +55,12 @@ EXECUTION_REQUIREMENTS: dict[tuple[str, str], ExecutionRequirement] = {
     ("html", "recording"): ExecutionRequirement.POPULATES_CACHE,
     ("notebook", "recording"): ExecutionRequirement.NONE,  # Just filtered, no execution
     ("code", "recording"): ExecutionRequirement.NONE,
+    # Recording code-along (#1023): code-along cells plus typing metadata,
+    # notebook only (see path_utils.NOTEBOOK_ONLY_KINDS); never executed. The
+    # html/code entries keep the table total over VALID_KINDS x formats.
+    ("html", "recording-code-along"): ExecutionRequirement.NONE,
+    ("notebook", "recording-code-along"): ExecutionRequirement.NONE,
+    ("code", "recording-code-along"): ExecutionRequirement.NONE,
     # Trainer: reuses cache (subset of Recording — strips voiceover only).
     ("html", "trainer"): ExecutionRequirement.REUSES_CACHE,
     ("notebook", "trainer"): ExecutionRequirement.NONE,
