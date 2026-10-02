@@ -63,9 +63,12 @@ avoids:
   - **hacker**: the hotkey arms the cell. Each plain key press then types the
     next 1–3 script characters, and the real keys are swallowed. After the
     script ends the cell stays armed and keeps swallowing keys, so over-typing
-    can't leak characters into it. Shift+Enter (run), Esc or the hotkey
-    disarms it. The spike originally disarmed itself at the end, and the
-    over-typed characters landed in the cell.
+    can't leak characters into it. Every run-cell chord (Shift, Ctrl, Alt or
+    Cmd + Enter) disarms it and still runs the cell; this needs 0.1.1 or later
+    (0.1.0 only knew Shift+Enter; the owner asked for the rest). Esc or the
+    hotkey disarms it without running. Arrow keys and Space are swallowed too,
+    so press Esc before navigating slides. The spike originally disarmed itself
+    at the end, and the over-typed characters landed in the cell.
 - **Controls:** finish the cell, undo a step (restores the snapshot taken
   before the step), reset the cell.
 
@@ -209,9 +212,22 @@ so clm doesn't emit plans in V1.
 2. **Done except recordings:** the extension is pip-installable and pinned by
    commit in PythonCourses `docker/cam-notebooks`, next to the RISE pin
    (`TYPING_REF` in `Dockerfile.split`, a literal SHA in `Dockerfile`;
-   PythonCourses `4e09d7d`). The 0.5.4 images were built locally; pushing them
-   to Docker Hub is the owner's call. Verified with a live kernel (§2).
+   PythonCourses `4e09d7d`). The 0.5.4 images, with extension 0.1.0, are on
+   Docker Hub. Extension **0.1.1** (`3cac2b0`) goes out with the 0.5.6 images,
+   which another agent owns. Verified with a live kernel (§2).
    **Still to do:** compare the two modes in real recordings.
+
+   **Image-layer cost of an extension bump.** A pin change in the `base` stage
+   invalidates every layer built on it: the C++ toolchain, .NET and the ML stack.
+   Rebuilt layers are not byte-identical, so the push re-uploads gigabytes. The
+   cheap pattern is to install the update as the **last layer** of each target.
+   That was measured for 0.5.5-cpp: 20 of 21 layers kept their digests, and the
+   new data was a 156 kB extension layer plus a 4 kB `WORKDIR` layer. It is
+   drafted as `TYPING_UPDATE_REF` (uncommitted PythonCourses edit, handed to
+   the 0.5.6 agent). When a release rebuilds the lower layers anyway, fold the
+   update into `TYPING_REF`.
+   **On-screen cheat sheet** for recording (all keys, including the RISE fork's):
+   private artifact https://claude.ai/artifact/9gUrMUj3EMgj3uPVqwFHUG.
 3. The sidecar overrides from §4 (edit order) with `clm validate` stale
    detection.
 4. The voiceover "trigger the next step" marker, then a VS Code player.
