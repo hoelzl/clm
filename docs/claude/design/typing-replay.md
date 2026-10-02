@@ -3,13 +3,19 @@
 **Status**: STEPS 1–2 SHIPPED 2026-10-02. clm emits the opt-in
 `recording-code-along` kind (#1023, PR #1027). The extension is packaged and
 installed in the cam-notebook images (0.5.4), and it was verified against a live
-xcpp20 kernel. Not yet done: real recordings, then steps 3–4 (§6).
+xcpp20 kernel. The VS Code player (§6 item 5) is merged in the same repo,
+tested by hand on real notebooks, and released as a `.vsix` on GitHub. Not yet
+done: real recordings, then steps 3–4 (§6).
 | **Created**: 2026-10-02
 **Extension**: GitHub hoelzl/jupyterlab-clm-typing (public, MIT), checked out
 at `~/Programming/Python/Projects/jupyterlab-clm-typing`. Install with
 `pip install git+https://github.com/hoelzl/jupyterlab-clm-typing` (the prebuilt
 labextension is committed, so no Node is needed). Its README has the dev
-workflow and the verification log.
+workflow and the verification log. The VS Code player is in `vscode/` (its
+own README has install, release and test instructions). Install the `.vsix`
+from the latest `vscode-v*` GitHub release with `code --install-extension`.
+CI (`.github/workflows/ci.yml`) runs the shared planner/player tests, both
+extensions' typechecks, and the VS Code unit and integration suites.
 **Related**: `docs/claude/discussions/typing-replay/state.md` (the argument),
 the RISE fork (`~/Programming/Python/Projects/JupyterLabRise`, submodule
 `rise/` → github.com/hoelzl/rise).
@@ -195,6 +201,9 @@ so clm doesn't emit plans in V1.
   of the RISE fork. It works in notebook view and in the slideshow, and keeps
   the fork a look-port that is easy to rebase. A VS Code player for Python can
   reuse the plan format later, using `WorkspaceEdit` on the cell document.
+  (Built 2026-10-02 as `vscode/` in the same repo, sharing the planner and
+  player code itself, not only the format; it edits through `TextEditor.edit()`.
+  See §6 item 5.)
 
 ## 5. Rejected alternatives
 
@@ -231,15 +240,31 @@ so clm doesn't emit plans in V1.
 3. The sidecar overrides from §4 (edit order) with `clm validate` stale
    detection.
 4. The voiceover "trigger the next step" marker.
-5. **VS Code player — spike done 2026-10-02, ahead of order.** It lives in the
+5. **Done: VS Code player** (2026-10-02/03, ahead of order). It lives in the
    same repo as `vscode/` (the owner chose this over adding it to
-   jupyter-slide-nav, which stays generic) and imports the shared
-   `src/planner.ts`/`player.ts`, so both players run identical plans. Edits
-   go through `TextEditor.edit()`, which bypasses auto-close and on-Enter
-   indent. Hacker mode registers VS Code's `type` command only while armed.
-   An integration suite (`@vscode/test-electron`) covers both modes. The owner
-   tested it on real notebooks. LANDMINE: in notebook command mode,
-   `activeTextEditor` still points at the cell's editor, and
-   `notebook.cell.edit` toggles out of edit mode when the cell is already
-   editing. To enter edit mode, use `showTextDocument(cell.document)`.
-   PR hoelzl/jupyterlab-clm-typing#1.
+   jupyter-slide-nav, which stays generic). It imports the shared
+   `src/planner.ts`/`player.ts`, so both players run identical plans.
+   - Edits go through `TextEditor.edit()`, which bypasses auto-close and
+     on-Enter indent. A `CellPort` keeps the desired text and selection and
+     applies them in one coalescing flush loop, so the synchronous player
+     drives the asynchronous editor in order.
+   - Hacker mode registers VS Code's `type` command only while a cell is
+     armed. Keys that bypass `type` (Enter, Backspace, Tab, arrows) are bound
+     while armed. While armed, printable keys in command mode re-enter edit
+     mode on the armed cell and type the script (0.1.2). The bindings use
+     physical key codes, so every layout is covered. So `A` in command mode
+     never inserts a cell, but single-key notebook shortcuts need a disarm
+     first.
+   - Released as GitHub releases `vscode-v<version>` with the `.vsix`
+     attached. The manual workflow `release-vscode.yml` reruns CI first and
+     never overwrites a release. CI runs the unit tests and the
+     `@vscode/test-electron` integration suite under xvfb.
+   - Recording setup: turn off inline suggestions (Copilot ghost text) in the
+     recording profile, since they react to programmatic edits. VSCodeVim (or
+     any extension that owns `type`) and hacker mode exclude each other.
+   - LANDMINE: in notebook command mode, `activeTextEditor` still points at
+     the cell's editor, and `notebook.cell.edit` toggles out of edit mode
+     when the cell is already editing. To enter edit mode, use
+     `showTextDocument(cell.document, {selection})`.
+   - PRs hoelzl/jupyterlab-clm-typing#1 (player), #2 (command-mode keys),
+     #3 (CI + releases).
