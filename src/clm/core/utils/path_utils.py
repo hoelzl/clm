@@ -9,7 +9,7 @@ live in :mod:`clm.infrastructure.utils.path_utils`.
 
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -285,6 +285,34 @@ def split_lang_suffix(input_path: Path) -> str | None:
         if stem.endswith(f".{lang}"):
             return lang
     return None
+
+
+def asset_lang_tag(input_path: Path) -> str | None:
+    """Return ``"de"`` / ``"en"`` if a course asset is language-scoped (#1034).
+
+    An asset (image, video, data file) whose name carries a language segment
+    immediately before its final extension — ``breakout.de.mp4``,
+    ``diagram.en.png`` — ships only to that language's outputs. Only the
+    languages CLM builds match, so ``model.v2.png`` or ``x.fr.png`` stay
+    unscoped; a multi-part tail like ``x.de.tar.gz`` does not match either.
+    """
+    name = input_path.name
+    stem = name[: -len(input_path.suffix)] if input_path.suffix else name
+    for lang in SPLIT_LANG_SUFFIXES:
+        if stem.endswith(f".{lang}") and len(stem) > len(lang) + 1:
+            return lang
+    return None
+
+
+def asset_output_languages(input_path: Path, languages: Iterable[str]) -> list[str]:
+    """The subset of ``languages`` an asset at ``input_path`` is copied into.
+
+    The one placement rule shared by the asset copy operations and the
+    provenance manifest: both must agree, or a release copies paths the build
+    never wrote (cf. #664 review finding H1).
+    """
+    tag = asset_lang_tag(input_path)
+    return [lang for lang in languages if tag is None or lang == tag]
 
 
 def slide_family_key(input_path: Path) -> str | None:
@@ -608,6 +636,26 @@ def output_specs(
                     root_dir=root_dir,
                     skip_toplevel=skip_toplevel,
                 )
+
+
+def asset_output_specs(
+    asset_path: Path,
+    course: "Course",
+    root_dir: Path,
+    languages: list[str] | None = None,
+    kinds: list[str] | None = None,
+    target: "OutputTarget | None" = None,
+) -> Iterator["OutputSpec"]:
+    """The :func:`output_specs` a per-variant topic asset is copied into.
+
+    Same arguments as :func:`output_specs`, filtered by the asset's placement
+    rules: a language-tagged asset (``x.de.mp4``) reaches only its language
+    (#1034). ``DataFile``/``DuplicatedImageFile`` copies and the provenance
+    manifest both enumerate through here so they cannot drift apart.
+    """
+    for spec in output_specs(course, root_dir, languages=languages, kinds=kinds, target=target):
+        if asset_output_languages(asset_path, [spec.language]):
+            yield spec
 
 
 def path_to_prog_lang(path: Path) -> str:

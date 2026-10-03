@@ -111,7 +111,11 @@ class SharedImageFile(CourseFile):
             if this isn't the right stage.
         """
         from clm.core.operations.copy_file import CopyFileOperation
-        from clm.core.utils.path_utils import PRIVATE_KINDS, output_path_for
+        from clm.core.utils.path_utils import (
+            PRIVATE_KINDS,
+            asset_output_languages,
+            output_path_for,
+        )
 
         # Only run in our designated stage
         if stage is not None and stage != self.execution_stage:
@@ -122,6 +126,8 @@ class SharedImageFile(CourseFile):
             languages = list(target.languages)
         else:
             languages = self.course.output_languages or ["de", "en"]
+        # A language-tagged image (``x.de.png``) reaches only its language (#1034).
+        languages = asset_output_languages(self.path, languages)
 
         # Determine audiences based on target or course output configuration.
         # Every kind in ``PRIVATE_KINDS`` lands under the private toplevel.
