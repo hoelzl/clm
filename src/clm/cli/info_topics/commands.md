@@ -631,8 +631,11 @@ would put statements and mid-file `#include`s at namespace scope) but a
   storage duration. Tag a code cell **`global`** to force it to namespace scope.
 - **Bare display expressions** (`i1` on its own line, relying on the
   kernel's auto-display) become `CLM_DISPLAY(i1);`, which prints
-  `i1 = 10` — the expression text is the label — or `<unprintable value>`
-  when no `operator<<` exists. The macro comes from the vendored support
+  `i1 = 10`; the expression text is the label. A type's own `operator<<`
+  is used when it exists. Otherwise standard containers print as `{1, 2, 3}`
+  (maps as `{k: v}`), pairs and tuples as `(a, b)`, an optional as its value or
+  `nullopt`, and a scoped enum as its underlying value, recursively. Anything
+  else prints `<unprintable value>`. The macro comes from the vendored support
   header `clm/display.hpp` (`#include <clm/display.hpp>` at the top of the
   deck), which the generated CMake project copies into `include/` and puts
   on the include path, so students never see the template code behind it.
