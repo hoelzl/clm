@@ -33,7 +33,8 @@ xeus-cpp kernel prints nothing for a cell that is not terminated by `;`, so
 every code cell ends with `;` and a value is displayed by the `SHOW` macro
 of `clm/display.hpp` (`#include <clm/display.hpp>` once per deck; the header
 is installed in the notebook worker image and vendored by the C++ code
-export, where `SHOW(i1);` prints `i1 = 10`). `clm slides cpp-show` converts
+export, where `SHOW(i1);` prints `i1 = 10`; standard containers, pairs,
+tuples, optionals and scoped enums print too, e.g. `v = {1, 2, 3}`). `clm slides cpp-show` converts
 a deck that still relies on bare expressions. Never put a `SHOW` in a
 `global` cell — it is ill-formed at namespace scope.
 
