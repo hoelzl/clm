@@ -417,6 +417,9 @@ def _validate_dir_group_destinations(
     for lang in ("de", "en"):
         dest_map: dict[str, list[str]] = {}
         for dg in spec.dictionaries:
+            if not dg.output_languages([lang]):
+                # ``<dir-group lang="…">`` for the other language (#1031).
+                continue
             name = dg.name[lang]
             if dg.subdirs:
                 for subdir in dg.subdirs:

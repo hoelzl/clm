@@ -1,6 +1,6 @@
 # Language-Scoped Outputs (#1031, #1034) — Handover
 
-**Created**: 2026-10-03 | **Updated**: 2026-10-03 | **Status**: Phase 1 in progress
+**Created**: 2026-10-03 | **Updated**: 2026-10-03 | **Status**: Phases 1–2 done; Phase 3 in progress
 | **Issues**: https://github.com/hoelzl/clm/issues/1031 (`<dir-group lang>`),
 https://github.com/hoelzl/clm/issues/1034 (language-suffixed assets). The design
 review that this document implements is the first comment on each issue.
@@ -71,8 +71,15 @@ them as colliding. The issue's bullet about this is moot.
   `Course.process_dir_group_for_targets`) and by
   `provenance_manifest._enumerate_dir_group_outputs`.
 - **The manifest filter is required for correctness.** A `de`/`en` pair with the
-  same `<name>` would otherwise have both groups walk both language folders on
-  disk, so every file is claimed twice, once with the wrong owner.
+  same `<name>` would otherwise have each group walk both language folders on
+  disk and claim the other's files. Correction found during implementation:
+  enumeration-level duplicates are normal (explicit targets collapse public and
+  speaker onto one folder, and `build_provenance_manifest` deduplicates by path,
+  keeping the first). So for two *global* groups the final manifest happened to
+  come out the same either way. The visible harm is **ownership**: when the pair
+  is topic-scoped to different topics, the first group to walk a path stamps its
+  section/topic onto the other group's files. The design-review comment on #1031
+  overstated this as "every file claimed twice".
 - `clm validate`'s `duplicate_dir_group_destination` (`_validate_dir_group_destinations`
   in `slides/spec_validator.py`) already runs per language. Groups whose `lang`
   doesn't match the language being checked are skipped there. Result: a `de`+`en`
@@ -125,7 +132,7 @@ the Breakout deck: language-tagged markdown cells with
 
 ## 3. Phase Breakdown
 
-### Phase 1 — Asset language suffix + shared placement helper (#1034 part 1) — IN PROGRESS
+### Phase 1 — Asset language suffix + shared placement helper (#1034 part 1) — DONE
 - `asset_lang_tag`, `asset_output_languages`, and the `asset_output_specs`
   generator (wraps `output_specs` and applies the language filter, plus the D5
   filter in Phase 4) in `path_utils`.
@@ -135,7 +142,7 @@ the Breakout deck: language-tagged markdown cells with
   only their asset; manifest parity (copy ops == manifest entries) for all three
   classes.
 
-### Phase 2 — `<dir-group lang>` (#1031) — TODO
+### Phase 2 — `<dir-group lang>` (#1031) — DONE
 - Spec parse + `CourseSpec.validate()` error; `DirGroup.output_languages`;
   copy + manifest; `_validate_dir_group_destinations` per-language skip.
 - Tests: spec parse/validation; pair builds to the right trees; unset+de warns for
@@ -158,7 +165,17 @@ the Breakout deck: language-tagged markdown cells with
 
 ## 4. Current Status
 
-Phase 1 started 2026-10-03.
+- **Phase 1 (done):** `asset_lang_tag` / `asset_output_languages` /
+  `asset_output_specs` in `path_utils`, used by the three asset classes and the
+  manifest. Tests: `tests/core/test_language_scoped_assets.py` (placement fails
+  without the fix; manifest parity for duplicated + shared modes).
+- **Phase 2 (done):** `DirGroupSpec.lang` + `output_languages`, a
+  `CourseSpec.validate()` error for unknown values, the `DirGroup.output_languages`
+  filter in copy + manifest, and a per-language skip in
+  `_validate_dir_group_destinations`. Tests: `tests/core/test_dir_group_lang.py`,
+  `TestDuplicateDirGroupDestination` (2 new cases),
+  `tests/build/test_dir_group_lang_e2e.py` (unset→`de` rebuild sweeps the EN copy
+  and the manifest agrees).
 
 ## 5. Next Steps
 

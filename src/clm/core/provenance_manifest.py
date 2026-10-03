@@ -249,7 +249,10 @@ def _enumerate_dir_group_outputs(
         spec = dir_group.spec
         section_id = spec.section_id if spec is not None else None
         topic_id = spec.topic_id if spec is not None else None
-        for lang in target.languages:
+        # A ``lang``-scoped dir-group (#1031) is enumerated for its language
+        # only: a ``de``/``en`` pair sharing one ``<name>`` would otherwise
+        # claim each other's files.
+        for lang in dir_group.output_languages(target.languages):
             for is_speaker in (False, True):
                 for out_dir in dir_group.output_dirs(
                     is_speaker, lang, target.output_root, skip_toplevel=target.is_explicit
