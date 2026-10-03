@@ -1,1 +1,0 @@
-- **No `img/` video/audio in code outputs.** Video and audio files under a topic's `img/` / `img-generated/` are no longer copied into the code-format outputs, which can't display them. This saves 2 of the 6 per-language copies of every embedded video. Images and media outside `img/` (e.g. `data/speech.wav`) are still copied (#1034).

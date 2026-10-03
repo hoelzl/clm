@@ -384,6 +384,7 @@ Each directory group specifies a set of directories to copy to the output.
 | `<subdirs>` | No | List of subdirectories to copy (if omitted, copies entire path) |
 | `include-root-files` | No | Attribute to include files from the base path (default: `false`) |
 | `recursive` | No | Attribute to control recursive directory copying (default: `true`) |
+| `lang` | No | `de` or `en`: copy the group into that language's output only (default: every language) |
 
 #### Basic Usage
 
@@ -410,6 +411,28 @@ Copy only specific subdirectories:
     </subdirs>
 </dir-group>
 ```
+
+#### Language-Specific Directories
+
+To ship a different source tree per language (for example, an example project
+built from a German prompt for the German course and one built from an English
+prompt for the English course), give two groups the same `<name>` and a `lang`
+attribute:
+
+```xml
+<dir-group lang="de">
+    <name>Code/BreakoutCopilot</name>
+    <path>examples/BreakoutCopilot/de</path>
+</dir-group>
+<dir-group lang="en">
+    <name>Code/BreakoutCopilot</name>
+    <path>examples/BreakoutCopilot/en</path>
+</dir-group>
+```
+
+Topic assets follow a related file-name rule: `img/demo.de.mp4` or
+`img/diagram.en.png` is copied only into that language's output. See
+`clm info spec-files` and `clm info slide-format` for details.
 
 #### Including Root Files with Subdirectories
 
