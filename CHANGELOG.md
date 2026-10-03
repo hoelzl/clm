@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.32.0] - 2026-10-03
+
+### Added
+
+- **`<dir-group lang="de|en">`.** Ships a dir-group to one output language only: for example, a German example project for the DE course and an English one for the EN course under the same `<name>`. Unset copies into every language as before; an unknown value is a spec error. `clm validate`'s `duplicate_dir_group_destination` compares destinations per language, and the provenance manifest lists each scoped tree under its language only (#1031).
+- **Language-tagged topic assets.** A file named `<stem>.de.<ext>` / `<stem>.en.<ext>` (`img/breakout.de.mp4`, `img/embeddings.en.png`) is copied only into that language's outputs, in both `--image-mode`s and for diagram renders. The provenance manifest follows the same rule (#1034).
+- **`image_ref_wrong_language` validation.** `clm validate` (spec mode) warns with `image_ref_wrong_language` when a shared cell, a cell of the other language, or the other split half references a language-tagged asset. Code references such as `Video("img/x.de.mp4")` count (#1034).
+
+### Changed
+
+- **No `img/` video/audio in code outputs.** Video and audio files under a topic's `img/` / `img-generated/` are no longer copied into the code-format outputs, which can't display them. This saves 2 of the 6 per-language copies of every embedded video. Images and media outside `img/` (e.g. `data/speech.wav`) are still copied (#1034).
+
 ## [1.31.0] - 2026-10-02
 
 ### Added
