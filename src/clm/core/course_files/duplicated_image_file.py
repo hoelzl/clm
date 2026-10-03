@@ -118,6 +118,7 @@ class DuplicatedImageFile(CourseFile):
             )
             for lang, _, _, output_dir in asset_output_specs(
                 self.path,
+                self.relative_path,
                 self.course,
                 target_dir,
                 languages=self.course.output_languages,

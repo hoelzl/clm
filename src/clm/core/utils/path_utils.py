@@ -182,6 +182,41 @@ GENERATED_IMG_DIR = "img-generated"
 IMG_DIRS = frozenset({"img", GENERATED_IMG_DIR})
 
 
+#: Video and audio formats. Under a topic's ``img/`` they are display media
+#: (``<video src="img/…">``, ``Video("img/…")``) that only the notebook and
+#: HTML formats can show, so the code format does not get a copy (#1034).
+#: Outside ``img/`` (e.g. ``data/speech.wav``) they may be code input and are
+#: copied as usual.
+MEDIA_FILE_EXTENSIONS = frozenset(
+    {
+        ".mp4",
+        ".webm",
+        ".ogv",
+        ".mov",
+        ".m4v",
+        ".mkv",
+        ".avi",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".oga",
+        ".m4a",
+        ".aac",
+        ".flac",
+        ".opus",
+    }
+)
+
+
+def is_display_media(relative_path: Path) -> bool:
+    """True for a topic-relative video/audio file under ``img/`` or ``img-generated/``."""
+    return (
+        bool(relative_path.parts)
+        and relative_path.parts[0] in IMG_DIRS
+        and relative_path.suffix.lower() in MEDIA_FILE_EXTENSIONS
+    )
+
+
 def render_file_name(source_stem: str, image_format: str) -> str:
     """The file name a diagram source renders to: the source's FULL stem + the format.
 
@@ -640,6 +675,7 @@ def output_specs(
 
 def asset_output_specs(
     asset_path: Path,
+    relative_path: Path,
     course: "Course",
     root_dir: Path,
     languages: list[str] | None = None,
@@ -648,12 +684,19 @@ def asset_output_specs(
 ) -> Iterator["OutputSpec"]:
     """The :func:`output_specs` a per-variant topic asset is copied into.
 
-    Same arguments as :func:`output_specs`, filtered by the asset's placement
-    rules: a language-tagged asset (``x.de.mp4``) reaches only its language
-    (#1034). ``DataFile``/``DuplicatedImageFile`` copies and the provenance
-    manifest both enumerate through here so they cannot drift apart.
+    Same arguments as :func:`output_specs` plus the asset's topic-relative
+    path, filtered by the asset placement rules (#1034):
+
+    * a language-tagged asset (``x.de.mp4``) reaches only its language;
+    * display media (:func:`is_display_media`) skip the code format.
+
+    ``DataFile``/``DuplicatedImageFile`` copies and the provenance manifest
+    both enumerate through here so they cannot drift apart.
     """
+    skip_code = is_display_media(relative_path)
     for spec in output_specs(course, root_dir, languages=languages, kinds=kinds, target=target):
+        if skip_code and spec.format == Format.CODE:
+            continue
         if asset_output_languages(asset_path, [spec.language]):
             yield spec
 

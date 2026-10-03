@@ -171,7 +171,7 @@ def enumerate_expected_outputs(
             # ``asset_output_specs`` applies the same placement rules as the
             # copy (a ``x.de.mp4`` reaches DE only, #1034).
             for lang, _fmt, _kind, output_dir in asset_output_specs(
-                file.path, course, target.output_root, target=target
+                file.path, file.relative_path, course, target.output_root, target=target
             ):
                 try:
                     out_path = file.output_dir(output_dir, lang) / rel_path

@@ -29,7 +29,12 @@ TAGGED_ASSETS = {
     "img/chart.en.png": "en",
     "data/table.en.csv": "en",
 }
-UNTAGGED_ASSETS = ["img/clip.mp4", "img/model.v2.png", "data/data.final.csv"]
+UNTAGGED_ASSETS = [
+    "img/clip.mp4",
+    "img/model.v2.png",
+    "data/data.final.csv",
+    "data/speech.wav",
+]
 
 
 class TestAssetLangTag:
@@ -130,3 +135,44 @@ class TestPlacement:
         """The release pipeline copies by manifest: parity is load-bearing."""
         course = _course(tmp_path, course_1_spec, image_mode)
         assert _manifest_asset_paths(course) == _copy_targets(course)
+
+
+class TestCodeFormatMedia:
+    """Display video/audio (under ``img/``) skip the code format; data media don't.
+
+    The code format (jupytext ``py:light``) cannot show a video; images stay,
+    because a ``py:light`` file can be reopened as a notebook and code cells
+    read images (``Image.open("img/...")``).
+    """
+
+    def _code_dirs(self, course) -> list[Path]:
+        from clm.core.utils.path_utils import Format, output_specs
+
+        return [
+            spec.output_dir
+            for target in course.output_targets
+            for spec in output_specs(course, target.output_root, target=target)
+            if spec.format == Format.CODE
+        ]
+
+    def _in_code_dir(self, path: Path, code_dirs: list[Path]) -> bool:
+        return any(path.is_relative_to(d) for d in code_dirs)
+
+    def test_img_video_is_not_copied_into_code_outputs(self, tmp_path, course_1_spec):
+        course = _course(tmp_path, course_1_spec, "duplicated")
+        code_dirs = self._code_dirs(course)
+        assert code_dirs, "course_1 must build the code format for this test to mean anything"
+        written = _copy_targets(course)
+
+        for name in ("clip.mp4", "clip.de.mp4"):
+            copies = [p for p in written if p.name == name]
+            assert copies, name
+            assert not any(self._in_code_dir(p, code_dirs) for p in copies), name
+
+    def test_images_and_data_media_still_reach_code_outputs(self, tmp_path, course_1_spec):
+        course = _course(tmp_path, course_1_spec, "duplicated")
+        code_dirs = self._code_dirs(course)
+        written = _copy_targets(course)
+
+        for name in ("model.v2.png", "speech.wav", "data.final.csv"):
+            assert any(self._in_code_dir(p, code_dirs) for p in written if p.name == name), name
