@@ -1,6 +1,6 @@
 # Language-Scoped Outputs (#1031, #1034) — Handover
 
-**Created**: 2026-10-03 | **Updated**: 2026-10-03 | **Status**: Phases 1–2 done; Phase 3 in progress
+**Created**: 2026-10-03 | **Updated**: 2026-10-03 | **Status**: Phases 1–5 implemented on the branch; PR open
 | **Issues**: https://github.com/hoelzl/clm/issues/1031 (`<dir-group lang>`),
 https://github.com/hoelzl/clm/issues/1034 (language-suffixed assets). The design
 review that this document implements is the first comment on each issue.
@@ -47,10 +47,19 @@ finding H1).
   which filters an iterable of languages. Both the copy classes and
   `provenance_manifest` call it. A parity test asserts copy targets == manifest
   entries.
-- **Migration:** a corpus scan (2026-10-03) of the `slides/` trees in PythonCourses,
-  ml-course, advanced-ml-course and ml-for-programmers found no language-tagged
-  assets apart from HTTP cassettes, which never reach output. No existing build
-  changes. A note still goes into `clm info migration`.
+- **Migration:** a full corpus scan (2026-10-03) of the `slides/` trees in
+  PythonCourses, ml-course, advanced-ml-course, ml-for-programmers, CSharpCourses,
+  CppCourses and JavaCourses found tagged assets only in PythonCourses, in three
+  topics: the `embeddings.de/en` diagram twins (two RAG topics), the
+  `Agent-in-a-Nutshell.de/en` PlantUML twins, and `README.de/en.md` in the
+  `topic_1000_docker_deployment/fastapi-service` example project. Every diagram is
+  referenced only from its own language's split half, so the change only removes
+  copies nobody links to, and each language now gets one README. `clm validate` on
+  `machine-learning-azav.xml` and `machine-learning-azav-2026-04.xml` reports zero
+  `image_ref_wrong_language`. (An earlier scan that reported "nothing but
+  cassettes" was cut off by `head`; the design-review comment on #1034 repeats that
+  mistake.) CppCourses' module-level `ws_*.de/en.cpp` files sit outside topic
+  directories and are unreferenced, so they're not affected.
 - **Rejected:** a spec-level declaration of per-language assets. The file-name
   convention matches split decks and voiceover companions, and needs no spec edit
   per asset.
@@ -149,11 +158,11 @@ the Breakout deck: language-tagged markdown cells with
   DE only; pair is clean; manifest has each file once with the right owner;
   switching unset→`de` removes the stale EN tree on rebuild.
 
-### Phase 3 — `image_ref_wrong_language` validator (D4) — TODO
+### Phase 3 — `image_ref_wrong_language` validator (D4) — DONE
 
-### Phase 4 — Skip display video/audio in code outputs (D5) — TODO
+### Phase 4 — Skip display video/audio in code outputs (D5) — DONE
 
-### Phase 5 — Docs + changelog + PR — TODO
+### Phase 5 — Docs + changelog + PR — DONE
 - `clm info spec-files`: `<dir-group>` `lang` row + example; a line near the
   image/asset notes about the `.de`/`.en` suffix.
 - `clm info slide-format`: assets section (language-suffixed assets, the
@@ -176,11 +185,27 @@ the Breakout deck: language-tagged markdown cells with
   `TestDuplicateDirGroupDestination` (2 new cases),
   `tests/build/test_dir_group_lang_e2e.py` (unset→`de` rebuild sweeps the EN copy
   and the manifest agrees).
+- **Phase 3 (done):** `_wrong_language_image_refs` + `image_ref_wrong_language`
+  in `_validate_images`. Tests: `TestImageRefWrongLanguage` in
+  `tests/slides/test_spec_validator_images.py`.
+- **Phase 4 (done):** `MEDIA_FILE_EXTENSIONS`, `is_display_media`; the filter
+  lives in `asset_output_specs` (which now takes the topic-relative path), so the
+  manifest follows it. Tests: `TestCodeFormatMedia` in
+  `tests/core/test_language_scoped_assets.py`.
+- **Phase 5 (done):** `clm info spec-files` (dir-group `lang` row + section,
+  language-scoped assets paragraph, validator row), `clm info slide-format`
+  ("Language-specific assets"), `clm info migration` entry, three `changelog.d/`
+  fragments.
 
 ## 5. Next Steps
 
-Finish Phase 1, then work through Phases 2–5 in order. One PR for both issues is
-fine (they share the helper). Close #1031 and #1034 from it.
+- Land the PR (closes #1031 and #1034).
+- Downstream (PythonCourses, no clm change): switch the Copilot intro deck to
+  `img/breakout.de.mp4` / `img/breakout.en.mp4` in language-tagged markdown
+  `<video>` cells, and move the Breakout example projects into a
+  `<dir-group lang>` pair.
+- Follow-up candidate (D6): shared-mode classification for video, so one copy per
+  language root. Only markdown `<video>` references are rewritten today.
 
 ## 6. Key Files
 

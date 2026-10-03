@@ -1,0 +1,2 @@
+- **Language-tagged topic assets.** A file named `<stem>.de.<ext>` / `<stem>.en.<ext>` (`img/breakout.de.mp4`, `img/embeddings.en.png`) is copied only into that language's outputs, in both `--image-mode`s and for diagram renders. The provenance manifest follows the same rule (#1034).
+- **`image_ref_wrong_language` validation.** `clm validate` (spec mode) warns with `image_ref_wrong_language` when a shared cell, a cell of the other language, or the other split half references a language-tagged asset. Code references such as `Video("img/x.de.mp4")` count (#1034).

@@ -533,6 +533,7 @@ Copy additional directories (e.g., code examples) to output.
 | `<subdirs>` | No | Specific subdirectories to copy (omit to copy all). Same rule as `<path>`: course-relative, no `..`. |
 | `include-root-files` | No | Also copy files from base path (default: `false`) |
 | `recursive` | No | Recurse into subdirectories (default: `true`) |
+| `lang` | No | `de` or `en`: copy this dir-group into that language's output only (since {version}). Unset (the default) copies it into every language. Any other value is a spec error. |
 
 `<name>` accepts both shapes of the bilingual-or-simple convention:
 
@@ -545,6 +546,31 @@ If only one of `<de>`/`<en>` is given, the other language falls back to
 it. Any other child element, or text mixed with `<de>`/`<en>` children,
 is a spec error (before CLM {version}, such names were silently read as
 empty, dumping the group at the output root).
+
+#### Language-scoped dir-groups
+
+Use `lang` to ship a *different* source tree per language: for example, an
+example project generated from a German prompt for the DE course and one from
+an English prompt for the EN course. These are two different projects, not
+translations of one. Give both groups the same `<name>`:
+
+```xml
+<dir-group lang="de">
+    <name>Code/BreakoutCopilot</name>
+    <path>examples/BreakoutCopilot/de</path>
+</dir-group>
+<dir-group lang="en">
+    <name>Code/BreakoutCopilot</name>
+    <path>examples/BreakoutCopilot/en</path>
+</dir-group>
+```
+
+A bilingual `<name>` works inside a scoped group (only that language's name is
+used). A `de`/`en` pair on one destination is not a duplicate-destination
+conflict. An unscoped group plus a `lang="de"` group on the same destination
+*is* one, for DE only. Changing a group to `lang="de"` removes the EN copy that
+an earlier build left behind (stray-file sweep), and the provenance manifest
+lists each language's tree only under that language.
 
 #### Selective subdirectories with root files
 
@@ -576,7 +602,9 @@ source resolves to the same destination through several `<dir-group>`s
 duplicate copies are skipped. Two dir-groups copying *different* sources
 to the same destination are a spec conflict — the surviving content would
 be nondeterministic. `clm validate` warns about both shapes
-(`duplicate_dir_group_destination`).
+(`duplicate_dir_group_destination`). Destinations are compared per
+language, so `<dir-group lang="…">` groups only collide within their own
+language.
 
 ### `<include>`
 
@@ -728,9 +756,10 @@ same-name collisions — a structure pass, no build:
 | Category | Severity | When it fires |
 |----------|----------|---------------|
 | `image_ref_missing` | Warning | A deck of the topic references `img/<name>` and nothing in the topic produces it: no file in `img/` or `img-generated/`, no diagram source in `pu/`/`drawio/` whose render name (full stem + `png`/`svg`, so `embed.de.drawio` → `embed.de.png`) matches, no `<include>` providing it (a file or directory included as `img/…`, or a diagram source included as `pu/…`/`drawio/…`). `details`: `image`, `topic`, `section`, `referenced_in`. |
+| `image_ref_wrong_language` | Warning | A cell references a language-scoped asset (`img/<stem>.de.<ext>` / `.en.`, which ships only to that language, CLM {version}) but the cell also reaches another language: an untagged shared cell, a cell with the other `lang`, or the other split half. Any `img/…` path in the cell counts, including code like `Video("img/x.de.mp4")`. `details`: `image`, `image_lang`, `cell_lang` (`null` for a shared cell), `deck`, `line`, `topic`, `section`. |
 | `image_name_conflict` | Warning | Two providers that collapse onto one section output `img/` supply the same name with different bytes — files in `img/` and `img-generated/` of any topic in the section, include-provided files, and diagram renders (compared by the source owner's committed render, else by the source bytes). A topic's own committed render of its own source is one provider, not two. `details`: `image`, `section`, `providers` (topic, source, content key). The suggestion points at "Sharing a diagram between topics". |
 
-Both are per section (topics only share an output `img/` inside one
+`image_ref_missing` and `image_name_conflict` are per section (topics only share an output `img/` inside one
 section) and only for topics the spec resolves unambiguously.
 
 ### `<output-targets>`
@@ -1282,7 +1311,22 @@ the source's **full stem** plus the image format: a language-suffixed source
 twins produce distinct files and slides reference the suffixed name (CLM
 {version}, #855; older versions collapsed both onto one `embeddings.png`).
 Keep committing the renders (a machine without the diagram toolchain needs
-them). Transitional
+them).
+
+**Language-scoped assets (CLM {version}, #1034).** A topic asset whose file
+name carries `.de` or `.en` right before its final extension (`img/breakout.de.mp4`,
+`img/embeddings.en.png`, `data/table.de.csv`) is copied **only** into that
+language's outputs. This applies in both `--image-mode`s and to diagram renders,
+so `embeddings.de.drawio` → `embeddings.de.png` reaches DE only. Every other
+asset (`model.v2.png`, `x.fr.png`, `x.de.tar.gz`) is copied into every language
+as before. Reference a tagged asset only from cells of its language: a
+`lang="de"` cell or the `.de` split half. `clm validate` warns about any other
+reference (`image_ref_wrong_language`). Video and audio files under `img/` /
+`img-generated/` are display media and are not copied into the **code** format
+outputs (which can't show them). Images, and media outside `img/` (e.g.
+`data/speech.wav`, which code may read), are still copied.
+
+Transitional
 rule for unmigrated repos: a diagram whose committed render still sits at the
 legacy `<topic>/img/<stem>.<ext>` location keeps rendering **there**; run
 `clm course migrate-generated-images` (see `clm info commands`) to move the

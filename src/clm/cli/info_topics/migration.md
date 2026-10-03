@@ -2,6 +2,31 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Language-tagged assets ship to their language only; no `img/` video in code outputs (#1034, {version})
+
+**Output change, no spec change.** A topic asset named `<stem>.de.<ext>` or
+`<stem>.en.<ext>` (`img/breakout.de.mp4`, `img/embeddings.en.png`,
+`README.de.md`) used to be copied into **every** language's output. It is now
+copied only into its own language. Typical existing cases are diagram twins
+(`embeddings.de.drawio` / `embeddings.en.drawio`, see #855) and per-language
+READMEs inside a topic's example project. Slides that already reference each
+twin from its own language need no change; the other language's output simply
+loses the copy it never linked to.
+
+Check before upgrading: run `clm validate <course.xml>`. An
+`image_ref_wrong_language` warning means a shared cell (or the other language)
+references a tagged asset, and that link would now be broken in the other
+language. Move the reference into a cell of the asset's language, or rename the
+asset without the suffix.
+
+Also new: video/audio files under a topic's `img/` (or `img-generated/`) are no
+longer copied into the **code** format outputs (`Python/…` etc.). Images, and
+media elsewhere (e.g. `data/speech.wav`), are still copied. The stray-file sweep
+removes the old copies on the next full build.
+
+New in the spec (additive): `<dir-group lang="de|en">` ships a dir-group to one
+language only. See `clm info spec-files`.
+
 ## `clm recordings drift` removed; `clm recordings report` replaces it (#965, {version})
 
 **Breaking for scripts invoking `recordings drift`.** `drift` compared the
