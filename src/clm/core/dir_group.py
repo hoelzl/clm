@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -57,6 +58,17 @@ class DirGroup:
             recursive=spec.recursive,
             spec=spec,
         )
+
+    def output_languages(self, languages: Iterable[str]) -> list[str]:
+        """The subset of ``languages`` this dir-group is copied into.
+
+        A ``<dir-group lang="de">`` reaches DE only (#1031). The copy and the
+        provenance manifest both go through here, so a ``de``/``en`` pair
+        sharing one ``<name>`` is enumerated once per language, not twice.
+        """
+        if self.spec is None:
+            return list(languages)
+        return self.spec.output_languages(languages)
 
     @property
     def output_root(self) -> Path:
@@ -191,7 +203,9 @@ class DirGroup:
         from clm.core.operations.copy_dir_group import CopyDirGroupOperation
 
         # Default to all languages if not specified
-        langs_to_copy = languages if languages is not None else frozenset({"de", "en"})
+        langs_to_copy = self.output_languages(
+            languages if languages is not None else frozenset({"de", "en"})
+        )
 
         # Default to both public and speaker if not specified
         speaker_options = is_speaker_options if is_speaker_options is not None else [False, True]

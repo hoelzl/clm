@@ -378,6 +378,48 @@ class TestDuplicateDirGroupDestination:
 
         assert result.findings == []
 
+    def test_lang_scoped_pair_on_one_destination_is_clean(self, tmp_path):
+        """``<dir-group lang>`` (#1031): a de/en pair sharing a name is the intended use."""
+        result = self._validate(
+            tmp_path,
+            """\
+            <dir-groups>
+              <dir-group lang="de">
+                <name>Code/Breakout</name>
+                <path>examples/Breakout/de</path>
+              </dir-group>
+              <dir-group lang="en">
+                <name>Code/Breakout</name>
+                <path>examples/Breakout/en</path>
+              </dir-group>
+            </dir-groups>""",
+            dirs=["examples/Breakout/de", "examples/Breakout/en"],
+        )
+
+        assert result.findings == []
+
+    def test_unscoped_and_scoped_group_conflict_for_that_language_only(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            """\
+            <dir-groups>
+              <dir-group>
+                <name>Code/Breakout</name>
+                <path>examples/Breakout/shared</path>
+              </dir-group>
+              <dir-group lang="de">
+                <name>Code/Breakout</name>
+                <path>examples/Breakout/de</path>
+              </dir-group>
+            </dir-groups>""",
+            dirs=["examples/Breakout/shared", "examples/Breakout/de"],
+        )
+
+        dups = [f for f in result.findings if f.type == "duplicate_dir_group_destination"]
+        assert len(dups) == 1
+        assert "different sources" in dups[0].message
+        assert "(language: de)" in dups[0].message
+
 
 class TestCombinedFindings:
     """Multiple issues in a single spec."""

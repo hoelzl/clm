@@ -46,6 +46,8 @@ from clm.core.cpp_export_files import companion_output_files
 from clm.core.image_registry import get_relative_img_path
 from clm.core.utils.path_utils import (
     PRIVATE_KINDS,
+    asset_output_languages,
+    asset_output_specs,
     ext_for,
     is_ignored_file_for_output,
     is_ignored_path_in_output_tree,
@@ -166,8 +168,10 @@ def enumerate_expected_outputs(
                 if isinstance(file, DuplicatedImageFile)
                 else file.relative_path
             )
-            for lang, _fmt, _kind, output_dir in output_specs(
-                course, target.output_root, target=target
+            # ``asset_output_specs`` applies the same placement rules as the
+            # copy (a ``x.de.mp4`` reaches DE only, #1034).
+            for lang, _fmt, _kind, output_dir in asset_output_specs(
+                file.path, file.relative_path, course, target.output_root, target=target
             ):
                 try:
                     out_path = file.output_dir(output_dir, lang) / rel_path
@@ -195,7 +199,7 @@ def enumerate_expected_outputs(
             # owning topic enumerates first — inherent to shared mode, where the
             # bytes physically exist once per course dir.
             rel_img_path = get_relative_img_path(file.path)
-            for lang in target.languages:
+            for lang in asset_output_languages(file.path, target.languages):
                 try:
                     dir_name = course.output_dir_name[lang]
                 except (KeyError, TypeError) as e:
@@ -245,7 +249,10 @@ def _enumerate_dir_group_outputs(
         spec = dir_group.spec
         section_id = spec.section_id if spec is not None else None
         topic_id = spec.topic_id if spec is not None else None
-        for lang in target.languages:
+        # A ``lang``-scoped dir-group (#1031) is enumerated for its language
+        # only: a ``de``/``en`` pair sharing one ``<name>`` would otherwise
+        # claim each other's files.
+        for lang in dir_group.output_languages(target.languages):
             for is_speaker in (False, True):
                 for out_dir in dir_group.output_dirs(
                     is_speaker, lang, target.output_root, skip_toplevel=target.is_explicit

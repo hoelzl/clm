@@ -1047,6 +1047,11 @@ class DirGroupSpec:
     # (issue #208); the output placement itself is unchanged.
     section_id: str | None = None
     topic_id: str | None = None
+    # Output language this dir-group is scoped to (``lang="de"``/``"en"``,
+    # #1031): ``None`` copies it into every language, like before. Same
+    # semantics as ``<channel lang>`` (#293); an unknown value is reported by
+    # :meth:`CourseSpec.validate`.
+    lang: str | None = None
 
     @classmethod
     def from_element(
@@ -1101,7 +1106,16 @@ class DirGroupSpec:
             recursive=recursive,
             section_id=section_id,
             topic_id=topic_id,
+            lang=element.get("lang", "").strip() or None,
         )
+
+    def output_languages(self, languages: Iterable[str]) -> list[str]:
+        """The subset of ``languages`` this dir-group is copied into (#1031).
+
+        The one rule the copy (:class:`clm.core.dir_group.DirGroup`), the
+        provenance manifest and ``clm validate``'s destination check share.
+        """
+        return [lang for lang in languages if self.lang is None or lang == self.lang]
 
 
 # Valid values for output target configuration. ``speaker`` is the deprecated
@@ -2548,6 +2562,14 @@ class CourseSpec:
             List of validation error messages (empty if valid)
         """
         errors: list[str] = []
+
+        for dir_group in self.dictionaries:
+            if dir_group.lang is not None and dir_group.lang not in VALID_LANGUAGES:
+                errors.append(
+                    f"<dir-group> '{dir_group.name.en or dir_group.name.de or dir_group.path}': "
+                    f"invalid lang {dir_group.lang!r}. "
+                    f"Valid values: {sorted(VALID_LANGUAGES)}"
+                )
 
         # Validate output targets
         target_names: set[str] = set()

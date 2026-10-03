@@ -252,6 +252,33 @@ Voiceover companions (e.g., `voiceover_basics.de.py` / `voiceover_basics.en.py`)
 follow the same pattern; their cells use `for_slide` instead of `slide_id` to
 reference the slide they narrate.
 
+## Language-specific assets (`img/x.de.mp4`)
+
+An asset in the topic whose name carries `.de` / `.en` right before its final
+extension ships **only** to that language's output (since {version}). Use this
+for a demo video recorded once per language, or a diagram with German or English
+labels. Reference each variant from a cell of its own language:
+
+```python
+# %% [markdown] lang="de"
+# <video src="img/breakout.de.mp4" controls width="100%"></video>
+
+# %% [markdown] lang="en"
+# <video src="img/breakout.en.mp4" controls width="100%"></video>
+```
+
+A language-forked code-cell pair (`Video("img/breakout.de.mp4")` in a `lang="de"`
+cell, and the same for EN) works too. Markdown `<video>` tags are preferred,
+because `--image-mode shared` rewrites their paths. In a split pair, each half
+references its own variant. A shared (untagged) cell or the other language's cell
+referencing a tagged asset gets a broken link in the other output, and
+`clm validate <course.xml>` warns about it (`image_ref_wrong_language`).
+Diagram twins follow the same rule: `embeddings.de.drawio` renders to
+`img/embeddings.de.png`, which reaches DE only.
+
+Video and audio under `img/` are not copied into the code-format outputs
+(`Python/…`), which can't display them. Images still are.
+
 ## Validation and normalization
 
 | Command | What it does |

@@ -6,7 +6,7 @@ from attrs import define
 from clm.core.course_file import CourseFile
 from clm.core.operation import Concurrently, NoOperation, Operation
 from clm.core.utils.execution_utils import LAST_EXECUTION_STAGE
-from clm.core.utils.path_utils import is_ignored_file_for_output, output_specs
+from clm.core.utils.path_utils import asset_output_specs, is_ignored_file_for_output
 
 if TYPE_CHECKING:
     from clm.core.output_target import OutputTarget
@@ -42,7 +42,9 @@ class DataFile(CourseFile):
                 input_file=self,
                 output_file=self.output_dir(output_dir, lang) / self.relative_path,
             )
-            for lang, _, _, output_dir in output_specs(
+            for lang, _, _, output_dir in asset_output_specs(
+                self.path,
+                self.relative_path,
                 self.course,
                 target_dir,
                 languages=self.course.output_languages,

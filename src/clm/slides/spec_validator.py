@@ -33,9 +33,11 @@ from clm.core.topic_resolver import (
 )
 from clm.core.utils.path_utils import (
     GENERATED_IMG_DIR,
+    asset_lang_tag,
     is_diagram_source,
     is_private_dir_name,
     render_file_name,
+    split_lang_suffix,
 )
 
 
@@ -417,6 +419,9 @@ def _validate_dir_group_destinations(
     for lang in ("de", "en"):
         dest_map: dict[str, list[str]] = {}
         for dg in spec.dictionaries:
+            if not dg.output_languages([lang]):
+                # ``<dir-group lang="…">`` for the other language (#1031).
+                continue
             name = dg.name[lang]
             if dg.subdirs:
                 for subdir in dg.subdirs:
@@ -1089,6 +1094,58 @@ def _image_refs(text: str) -> set[str]:
     return refs
 
 
+#: Any ``img/…`` path in a cell, quoted or not: ``<img src="img/x.de.png">``,
+#: ``![](img/x.de.png)``, ``Video("img/x.de.mp4")``. Broader than
+#: :func:`_image_refs` on purpose — it only feeds the language check, which
+#: fires for language-tagged names alone, so a loose match adds no noise.
+_ANY_IMG_PATH_REGEX = re.compile(r"(?<![\w/.-])(?:\./)?img/([^\s\"'()<>\[\]]+)")
+
+
+@dataclass(frozen=True)
+class _WrongLanguageRef:
+    image: str
+    image_lang: str
+    cell_lang: str | None  # ``None``: a shared (untagged) cell
+    deck: str
+    line: int
+
+
+def _wrong_language_image_refs(deck: Path, text: str) -> list[_WrongLanguageRef]:
+    """References to a language-tagged asset from a cell of another language (#1034).
+
+    ``img/x.de.mp4`` ships only to the DE output, so a cell that also reaches
+    EN — an untagged shared cell, or an ``lang="en"`` cell — links to a file
+    the EN output does not have. A split half (``slides_x.de.py``) has its
+    file's language for every cell.
+    """
+    from clm.core.slide_text.slide_parser import parse_cells
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
+
+    file_lang = split_lang_suffix(deck)
+    try:
+        cells = parse_cells(text, comment_token_for_path(deck))
+    except (KeyError, ValueError):
+        return []
+    refs: list[_WrongLanguageRef] = []
+    for cell in cells:
+        cell_lang = file_lang or cell.metadata.lang or None
+        for match in _ANY_IMG_PATH_REGEX.finditer(cell.content):
+            name = match.group(1).rstrip(".,;:").split("?", 1)[0].split("#", 1)[0]
+            image_lang = asset_lang_tag(Path(name))
+            if image_lang is None or image_lang == cell_lang:
+                continue
+            refs.append(
+                _WrongLanguageRef(
+                    image=name,
+                    image_lang=image_lang,
+                    cell_lang=cell_lang,
+                    deck=deck.name,
+                    line=cell.line_number,
+                )
+            )
+    return refs
+
+
 def _files_below(root: Path) -> dict[str, Path]:
     """``{relative posix name: path}`` for every file under *root* (empty if absent)."""
     if not root.is_dir():
@@ -1333,6 +1390,43 @@ def _validate_images(
                     continue
                 for name in _image_refs(text):
                     referenced.setdefault(name, []).append(deck.name)
+                for ref in _wrong_language_image_refs(deck, text):
+                    where = (
+                        "a shared cell"
+                        if ref.cell_lang is None
+                        else f'a lang="{ref.cell_lang}" cell'
+                    )
+                    findings.append(
+                        SpecFinding(
+                            severity="warning",
+                            type="image_ref_wrong_language",
+                            topic_id=topic_spec.id,
+                            section=section_name,
+                            message=suffix(
+                                section_disabled,
+                                f"Topic '{topic_spec.id}': {ref.deck} line {ref.line}: "
+                                f"{where} references 'img/{ref.image}', which ships only "
+                                f"to the '{ref.image_lang}' output — the link is broken "
+                                f"in every other language.",
+                            ),
+                            suggestion=(
+                                f'Move the reference into a lang="{ref.image_lang}" cell '
+                                f"(and reference the other language's variant from its own "
+                                f"cell), or drop the .{ref.image_lang} suffix if the asset is "
+                                f"meant for every language."
+                            ),
+                            matches=[ref.deck],
+                            details={
+                                "image": ref.image,
+                                "image_lang": ref.image_lang,
+                                "cell_lang": ref.cell_lang,
+                                "deck": ref.deck,
+                                "line": ref.line,
+                                "topic": topic_spec.id,
+                                "section": section_name,
+                            },
+                        )
+                    )
             for name in sorted(referenced):
                 if name in images.satisfied:
                     continue

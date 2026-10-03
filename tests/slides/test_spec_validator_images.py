@@ -379,3 +379,79 @@ def test_reference_in_either_render_format_is_satisfied(tmp_path):
     spec_file = _spec(tmp_path, "<topic>intro</topic>")
 
     assert _findings(validate_spec(spec_file, tmp_path / "slides"), "image_ref_missing") == []
+
+
+# ---------------------------------------------------------------------------
+# image_ref_wrong_language (#1034)
+# ---------------------------------------------------------------------------
+
+
+class TestImageRefWrongLanguage:
+    """``img/x.de.mp4`` ships to DE only, so only a DE cell may reference it."""
+
+    def _validate(self, tmp_path, files: dict[str, str]):
+        topic = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        (topic / "img").mkdir()
+        for name in ("clip.de.mp4", "clip.en.mp4", "chart.de.png", "plain.png"):
+            (topic / "img" / name).write_bytes(name.encode())
+        for name, text in files.items():
+            (topic / name).write_text(text, encoding="utf-8")
+        return validate_spec(_spec(tmp_path, "<topic>intro</topic>"), tmp_path / "slides")
+
+    def test_matching_language_cells_are_clean(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.py": (
+                    '# %% [markdown] lang="de"\n# <img src="img/chart.de.png">\n\n'
+                    '# %% lang="de"\nVideo("img/clip.de.mp4")\n\n'
+                    '# %% lang="en"\nVideo("img/clip.en.mp4")\n\n'
+                    '# %% [markdown]\n# <img src="img/plain.png">\n'
+                ),
+            },
+        )
+        assert _findings(result, "image_ref_wrong_language") == []
+
+    def test_shared_and_other_language_cells_warn(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.py": (
+                    '# %% [markdown]\n# Title\n# <img src="img/chart.de.png">\n\n'
+                    '# %% lang="en"\nVideo("img/clip.de.mp4")\n'
+                ),
+            },
+        )
+        found = _findings(result, "image_ref_wrong_language")
+        assert [(f.details["image"], f.details["cell_lang"]) for f in found] == [
+            ("chart.de.png", None),
+            ("clip.de.mp4", "en"),
+        ]
+        assert all(f.severity == "warning" for f in found)
+        assert "a shared cell" in found[0].message
+        assert 'a lang="en" cell' in found[1].message
+        assert found[0].details["line"] == 1
+
+    def test_split_half_takes_its_file_language(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.de.py": '# %%\nVideo("img/clip.de.mp4")\n',
+                "slides_intro.en.py": '# %%\nVideo("img/clip.de.mp4")\n',
+            },
+        )
+        found = _findings(result, "image_ref_wrong_language")
+        assert [(f.details["deck"], f.details["cell_lang"]) for f in found] == [
+            ("slides_intro.en.py", "en")
+        ]
+
+    def test_untagged_lookalike_names_are_ignored(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.py": (
+                    '# %%\nload("img/model.v2.png", "img/x.fr.png", "data/x.de.csv")\n'
+                )
+            },
+        )
+        assert _findings(result, "image_ref_wrong_language") == []

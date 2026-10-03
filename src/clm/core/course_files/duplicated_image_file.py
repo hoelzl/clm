@@ -23,7 +23,7 @@ from clm.core.utils.execution_utils import (
     COPY_GENERATED_IMAGES_STAGE,
     FIRST_EXECUTION_STAGE,
 )
-from clm.core.utils.path_utils import output_specs
+from clm.core.utils.path_utils import asset_output_specs
 
 if TYPE_CHECKING:
     from clm.core.output_target import OutputTarget
@@ -116,7 +116,9 @@ class DuplicatedImageFile(CourseFile):
                 input_file=self,
                 output_file=self.output_dir(output_dir, lang) / self.output_relative_path,
             )
-            for lang, _, _, output_dir in output_specs(
+            for lang, _, _, output_dir in asset_output_specs(
+                self.path,
+                self.relative_path,
                 self.course,
                 target_dir,
                 languages=self.course.output_languages,
