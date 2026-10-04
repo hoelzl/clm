@@ -44,6 +44,12 @@ test-workspace/
 
 # Build and distribution
 **/build
+# ...but not the `clm.build` package (mirrors `!src/clm/build/` in .gitignore).
+# Excluded, the image's clm has no `clm.build`, so `clm build` run inside the
+# image dies with `ModuleNotFoundError: No module named 'clm.build'`. A
+# re-include is last-match-wins for its whole subtree, so re-exclude bytecode.
+!src/clm/build
+src/clm/build/__pycache__
 **/dist
 **/*.whl
 **/*.tar.gz

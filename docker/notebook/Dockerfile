@@ -67,6 +67,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         unzip \
         git \
         build-essential \
+        # Builds the C++ code export (the generated CMake projects under
+        # Slides/Cpp/*) with build-essential's g++; see docker/README.md.
+        cmake \
         # Required for .NET on Debian
         libicu-dev
 
@@ -107,6 +110,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         unzip \
         git \
         build-essential \
+        # Builds the C++ code export (see the lite base above).
+        cmake \
     && add-apt-repository ppa:dotnet/backports
 
 # Full base (arm64): there is no nvidia/cuda arm64 image. For Apple Silicon
