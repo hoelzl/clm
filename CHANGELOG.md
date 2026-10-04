@@ -9,6 +9,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.34.0] - 2026-10-04
+
+### Added
+
+- **The notebook worker image can build the C++ code export.** Both variants
+  now install `cmake` next to the g++ they already had, so the CMake projects
+  `clm build` writes under `Slides/Cpp/{Completed,Code-Along}/` compile inside
+  the image (`cmake -S <dir> -B <dir>/.build && cmake --build <dir>/.build`).
+  A trainer who builds with Docker workers no longer needs a host toolchain to
+  check that an export compiles.
+
+### Fixed
+
+- **`clm build` works inside the notebook worker image.** The clm installed in
+  the notebook worker image lacked the `clm.build` package, because
+  `.dockerignore`'s `**/build` (meant for build artifacts) also matched
+  `src/clm/build/`. Running `clm build` inside the image failed with
+  `ModuleNotFoundError: No module named 'clm.build'`. The package is now
+  re-included, mirroring the `!src/clm/build/` exception that `.gitignore`
+  already had.
+
 ## [1.33.0] - 2026-10-03
 
 ### Changed
