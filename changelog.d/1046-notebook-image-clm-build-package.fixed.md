@@ -1,4 +1,4 @@
-- Fixed: the clm installed in the notebook worker image lacked the
+- **`clm build` works inside the notebook worker image.** The clm installed in the notebook worker image lacked the
   `clm.build` package, because `.dockerignore`'s `**/build` (meant for build
   artifacts) also matched `src/clm/build/`. Running `clm build` inside the
   image failed with `ModuleNotFoundError: No module named 'clm.build'`. The

@@ -3,5 +3,4 @@
   `clm build` writes under `Slides/Cpp/{Completed,Code-Along}/` compile inside
   the image (`cmake -S <dir> -B <dir>/.build && cmake --build <dir>/.build`).
   A trainer who builds with Docker workers no longer needs a host toolchain to
-  check that an export compiles. The disabled CppCourses CI gate did exactly
-  this on a GitHub runner.
+  check that an export compiles.
