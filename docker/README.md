@@ -119,3 +119,16 @@ Two variants, each multi-architecture (linux/amd64 and linux/arm64):
 - External deps: .NET SDK, Deno, IJava
 - Python deps: PyTorch, FastAI, Jupyter, scientific stack (full variant)
 - Jupyter kernels: Python, C++, C#, Java, TypeScript
+- C++ toolchain: the system g++ (`build-essential`) and `cmake`. With them the
+  image can compile the C++ code export, so no host toolchain is needed:
+
+  ```bash
+  # <out> = a clm output tree; <dir> = e.g. "<course>/Slides/Cpp/Completed"
+  docker run --rm -v "<out>:/w" -w /w mhoelzl/clm-notebook-processor:lite \
+    sh -c 'cmake -S "<dir>" -B /tmp/b && cmake --build /tmp/b --parallel'
+  ```
+
+  `/opt/conda/bin` comes first on `PATH` but holds no `c++`, so CMake picks the
+  system g++. Keep it that way: a conda clang there compiles the export, but
+  its binaries fail at run time against the conda `libstdc++` (the
+  cam-notebook `cpp` image in PythonCourses pins `CXX` for exactly this).
