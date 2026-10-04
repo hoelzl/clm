@@ -111,8 +111,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         git \
         build-essential \
         # Builds the C++ code export (see the lite base above).
-        cmake \
-    && add-apt-repository ppa:dotnet/backports
+        cmake
 
 # Full base (arm64): there is no nvidia/cuda arm64 image. For Apple Silicon
 # (and other arm64 hosts) the full variant reuses the multi-arch base-lite
