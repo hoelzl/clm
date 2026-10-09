@@ -4932,3 +4932,110 @@ class TestSharedTagMirrorHeaderParity:
         en_lines = deck.en_path.read_text(encoding="utf-8").splitlines()
         assert '# %% [markdown] lang="en" tags=["notes"] slide_id="s0-m"' in en_lines
         deck.assert_converged()
+
+
+class TestDuplicateBodyPoolApply:
+    """Regression tests for #1051 and #1054, end to end through the real
+    structural verify.
+
+    Byte-identical un-id'd cells in one pool were paired by the span stages
+    of the differ's per-side alignment instead of by occurrence order, so
+    apply executed rows against the wrong twins: #1051 removed a DE cell
+    (``mirror_remove`` beside an unconfirmable one-sided ``verify_cold``) and
+    wrote a half that failed ``cannot align DE/EN cells``; #1054 propagated
+    "edits" into the wrong slots and reordered the DE cells.
+    """
+
+    @staticmethod
+    def _gate(deck: _Deck):
+        from clm.slides.sync_verify import gate_projected_pair
+
+        return lambda: gate_projected_pair(deck.de_path, deck.en_path, "#")
+
+    @staticmethod
+    def _vo(lang: str) -> str:
+        return (
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="vo-assign"\n'
+            f"#\n# - Narration {lang}\n\n"
+        )
+
+    def _vo_parts(self, lang: str, *, moved: bool) -> tuple[str, ...]:
+        code = [_code("x = 0"), _code("print(x)"), _code("print(x := 10)"), _code("print(x)")]
+        cells = code + [self._vo(lang)] if moved else code[:2] + [self._vo(lang)] + code[2:]
+        return (
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "Titel" if lang == "de" else "Title"),
+            *cells,
+            _slide("next", lang, "N"),
+        )
+
+    @pytest.mark.parametrize("adopt", ["de", "en"])
+    def test_1051_voiceover_moved_past_duplicates_converges(self, tmp_path: Path, adopt: str):
+        deck = _Deck(
+            tmp_path,
+            _build(*self._vo_parts("de", moved=False)),
+            _build(*self._vo_parts("en", moved=False)),
+        )
+        deck.record()
+        deck.write_en(*self._vo_parts("en", moved=True))
+        _, diff = deck.diff()
+        keys = [i.key for i in diff.items if i.action == "pool_placement_divergence"]
+        assert keys == ["pos:intro/code/2", "pos:intro/code/3"], [
+            (i.key, i.action) for i in diff.items
+        ]
+        assert not any(i.action in ("mirror_remove", "verify_cold") for i in diff.items)
+
+        outcome = deck.apply(
+            {key: doc_apply.Decision(key=key, choice=adopt) for key in keys},
+            verify_gate=self._gate(deck),
+        )
+        assert outcome.error is None, outcome.to_payload()
+        assert _statuses(outcome) == dict.fromkeys(keys, "applied")
+        assert outcome.verify_violations == [], outcome.verify_violations
+        for path in (deck.de_path, deck.en_path):
+            # No cell lost or duplicated on either half.
+            assert path.read_text(encoding="utf-8").count("print(x)\n") == 2
+        moved = adopt == "en"
+        assert deck.de_path.read_text(encoding="utf-8") == _build(
+            *self._vo_parts("de", moved=moved)
+        )
+        assert deck.en_path.read_text(encoding="utf-8") == _build(
+            *self._vo_parts("en", moved=moved)
+        )
+        deck.assert_converged()
+
+    @staticmethod
+    def _keep_parts(lang: str, *, keep: bool) -> tuple[str, ...]:
+        tag = ' tags=["keep"]' if keep else ""
+        bodies = ["v.append(1)", "print(len(v))", "v.append(2)", "print(len(v))", "print(v[1])"]
+        decl_tags = '["subslide", "keep"]' if keep else '["subslide"]'
+        return (
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "Titel" if lang == "de" else "Title"),
+            f'# %% tags={decl_tags} slide_id="decl"\nv = []\n\n',
+            *[f"# %%{tag}\n{body}\n\n" for body in bodies],
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="vo-use"\n'
+            f"#\n# - Narration {lang}\n\n",
+        )
+
+    def test_1054_keep_removed_from_duplicate_run_mirrors_tags_in_place(self, tmp_path: Path):
+        deck = _Deck(
+            tmp_path,
+            _build(*self._keep_parts("de", keep=True)),
+            _build(*self._keep_parts("en", keep=True)),
+        )
+        deck.record()
+        deck.write_en(*self._keep_parts("en", keep=False))
+        _, diff = deck.diff()
+        assert {i.action for i in diff.items} == {"mirror_tags"}, [
+            (i.key, i.action) for i in diff.items
+        ]
+
+        outcome = deck.apply(verify_gate=self._gate(deck))
+        assert outcome.all_applied, outcome.to_payload()
+        assert outcome.verify_violations == [], outcome.verify_violations
+        # DE keeps its order and drops the tags, exactly like EN.
+        assert deck.de_path.read_text(encoding="utf-8") == _build(
+            *self._keep_parts("de", keep=False)
+        )
+        deck.assert_converged()
