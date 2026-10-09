@@ -22,12 +22,16 @@ file into its canonical via the existing ``merge_staging_into_canonical``.
 The tag header is stripped before recording or forwarding upstream.
 
 Untagged traffic (a client stack the tag bootstrap does not patch, or a
-kernel that somehow bypassed it) falls back to the single
-``clm_cassette_path`` catch-all so strict ``replay`` mode still returns a
-non-retryable 404 instead of escaping to the network — and triggers a
-once-per-build :data:`UNTAGGED_FLOW_SENTINEL` warning that the manager
-relays into the build log, because catch-all routing means the topic's
-canonical cassette is silently out of the loop.
+kernel that somehow bypassed it) triggers a once-per-build
+:data:`UNTAGGED_FLOW_SENTINEL` warning that the manager relays into the
+build log, because the topic's canonical cassette is out of the loop for
+it. The single ``clm_cassette_path`` catch-all is machine-local scratch
+under the jobs-DB ``mitm/`` dir that persists across builds and is never
+merged or committed, so it is a forensic record and never a replay source
+(issue #1055): in a recording mode an untagged flow is forwarded and
+recorded there; in a strict mode (``replay``/``once``) it is refused with
+the non-retryable 404 miss response. A build must not depend on what an
+earlier local build happened to record into that file.
 """
 
 from __future__ import annotations
@@ -117,6 +121,11 @@ _SERVE_DROP_HEADERS = frozenset({"content-length", "transfer-encoding"})
 # the build log (see ``MitmproxyManager._handle_output_line``). Keep the two
 # in lockstep.
 UNTAGGED_FLOW_SENTINEL = "CLM-HTTP-REPLAY-UNTAGGED"
+
+# The kernel client stacks the tag bootstrap
+# (``notebook_processor._HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE``) patches, named in
+# the untagged-flow warning and refusal so an author can tell what to switch to.
+_TAGGED_CLIENTS = "httpx, httpx2, requests and aiohttp"
 
 # Status synthesized for a strict-replay miss. It MUST be a status the LLM
 # SDKs do NOT retry, so a stale-cassette miss fails on the first attempt — the
@@ -327,7 +336,7 @@ class ClmReplayAddon:
         # ``once``/``refresh`` strictness is resolved per target in
         # ``_modes_for`` (``once`` depends on whether the target cassette
         # already exists), so there is nothing to existence-check or unlink
-        # here — ``clm_cassette_path`` is only the build-scratch catch-all.
+        # here — ``clm_cassette_path`` is only the machine-local catch-all.
 
         # Forensic trace (issue #165 P5). The ``proxy.ready`` event records the
         # listen port so the analyzer can tell a worker's connect-to-proxy from
@@ -386,38 +395,43 @@ class ClmReplayAddon:
             self._trace_request(flow, tag, "ignored")
             return
 
-        if tag is None and not self._warned_untagged:
-            # A kernel client stack the tag bootstrap does not patch (anything
-            # other than httpx/requests/aiohttp — e.g. urllib.request, raw
-            # urllib3/http.client, or a subprocess honouring HTTP(S)_PROXY)
-            # reached the proxy untagged. Its traffic is matched/recorded
-            # against the build's catch-all cassette, NOT the topic's canonical
-            # cassette, so record/replay is silently broken for it — exactly
-            # the failure mode that hid the missing ``requests`` patch. Warn
-            # loudly, once per build (the first flow names the culprit; a
-            # per-flow warning would flood the log on a chatty deck).
-            self._warned_untagged = True
-            logger.warning(
-                "%s: %s %s reached the replay proxy without an X-CLM-Cassette "
-                "routing tag; it is matched/recorded against the build's "
-                "catch-all cassette instead of the topic's canonical cassette. "
-                "Only httpx, requests and aiohttp clients are tag-routed by "
-                "the kernel bootstrap. Further untagged flows this build are "
-                "not logged.",
-                UNTAGGED_FLOW_SENTINEL,
-                flow.request.method,
-                flow.request.pretty_url,
-            )
+        if not tag:
+            # An untagged flow (issue #1055): a kernel client stack the tag
+            # bootstrap does not patch (anything other than
+            # httpx/httpx2/requests/aiohttp — e.g. urllib.request, raw
+            # urllib3/http.client, or a subprocess honouring HTTP(S)_PROXY), or
+            # a blank tag. No topic cassette can match it. The catch-all it
+            # would otherwise use is machine-local scratch under the jobs-DB
+            # ``mitm/`` dir, persisting across builds and courses, never merged
+            # or committed — so it is a forensic record, NEVER a replay source:
+            # serving from it replayed whatever an earlier local build happened
+            # to record there (a live ``429 credit_balance_exhausted``
+            # included) and made a build depend on machine history.
+            #
+            # * Strict modes (``replay``/``once``, and unknown modes, which
+            #   ``_modes_for`` treats as strict) refuse it with the
+            #   non-retryable miss response — decided from the mode alone, so
+            #   neither the catch-all's existence nor its configuration changes
+            #   the outcome, and nothing is loaded first.
+            # * Recording modes forward it upstream and record it into the
+            #   catch-all (below), without ever serving from it.
+            strict = not self._modes_for(cassette_existed=True)[1]
+            self._warn_untagged_once(flow, strict)
+            if strict:
+                flow.response = self._untagged_refusal_response(flow)
+                self._trace_request(flow, tag, "miss", filtered=filtered)
+                return
 
         target = self._target_for(tag)
         if target is None:
             self._trace_request(flow, tag, "passthrough")
-            return  # untagged with no catch-all configured -> pass through
+            return  # untagged, recording mode, no catch-all configured
 
         self._ensure_loaded(target)
         serve, record, _overwrite = self._modes_for(target.cassette_existed)
 
-        if serve:
+        # Only a tagged topic cassette is a replay source (see above).
+        if serve and target.is_staging:
             chosen = self._select_serve_index(target.recorded, filtered, target.served)
             if chosen is not None:
                 target.served.add(chosen)
@@ -494,6 +508,40 @@ class ClmReplayAddon:
             },
         )
 
+    def _warn_untagged_once(self, flow: http.HTTPFlow, strict: bool) -> None:
+        """Log the :data:`UNTAGGED_FLOW_SENTINEL` warning for the first untagged flow.
+
+        The topic cassette is out of the loop for such a flow — the failure
+        mode that hid the missing ``requests`` (PR #354) and ``httpx2`` (#1055)
+        patches — so warn loudly, but once per build: the first flow names the
+        culprit, and a per-flow warning would flood the log on a chatty deck.
+        The text says what actually happens to the flow in this mode.
+        """
+        if self._warned_untagged:
+            return
+        self._warned_untagged = True
+        if strict:
+            outcome = (
+                "strict replay refuses it with a clm_replay_miss 404 instead of "
+                "contacting the real server"
+            )
+        else:
+            outcome = (
+                "it is forwarded to the real server and recorded only into the "
+                "machine-local catch-all cassette, never into the topic's cassette, "
+                "and is never replayed"
+            )
+        logger.warning(
+            "%s: %s %s reached the replay proxy without an X-CLM-Cassette routing "
+            "tag; %s. Only %s clients are tag-routed by the kernel bootstrap. "
+            "Further untagged flows this build are not logged.",
+            UNTAGGED_FLOW_SENTINEL,
+            flow.request.method,
+            flow.request.pretty_url,
+            outcome,
+            _TAGGED_CLIENTS,
+        )
+
     # -- tracing ---------------------------------------------------------
 
     def _trace_request(
@@ -508,7 +556,9 @@ class ClmReplayAddon:
         """Emit one ``proxy.request`` forensic event for this flow.
 
         ``action`` is the addon's decision for the request: ``served`` (cassette
-        hit), ``miss`` (strict-replay 404), ``ignored`` (ignore_hosts, forwarded
+        hit), ``miss`` (strict-replay 404 — including an untagged flow refused
+        in a strict mode, which has ``has_tag`` false and no ``cassette``; issue
+        #1055), ``ignored`` (ignore_hosts, forwarded
         not recorded), ``forward`` (recording mode, will hit upstream) or
         ``passthrough`` (untagged, no catch-all). The analyzer uses these as the
         interception-evidence stream that replaces the (now-dark) ``vcr`` stream.
@@ -710,6 +760,28 @@ class ClmReplayAddon:
         method = flow.request.method
         url = flow.request.pretty_url
         message = f"clm_replay_miss: no recorded interaction for {method} {url} in cassette {target.canonical}"
+        return self._miss_response(method, url, message, {"cassette": str(target.canonical)})
+
+    def _untagged_refusal_response(self, flow: http.HTTPFlow) -> http.Response:
+        # Same non-retryable, SDK-shaped 404 as a strict-replay miss (and the
+        # same ``clm_replay_miss`` marker, so response() never records it), but
+        # the message names the actual cause: the request reached the proxy
+        # without a routing tag, so no topic cassette could ever match it.
+        # Not a 502: every LLM SDK retries 5xx, which amplifies one refusal into
+        # a stalled build (issue #165 P3).
+        method = flow.request.method
+        url = flow.request.pretty_url
+        message = (
+            f"clm_replay_miss: {method} {url} reached the HTTP-replay proxy without an "
+            "X-CLM-Cassette routing tag, so it cannot be matched against the topic's "
+            "cassette; strict replay refuses it instead of contacting the real server. "
+            f"Only {_TAGGED_CLIENTS} clients are tag-routed by the kernel bootstrap; "
+            "make this request through one of them."
+        )
+        return self._miss_response(method, url, message, {"untagged": True})
+
+    @staticmethod
+    def _miss_response(method: str, url: str, message: str, extra: dict[str, Any]) -> http.Response:
         return http.Response.make(
             _REPLAY_MISS_STATUS,
             json.dumps(
@@ -722,7 +794,7 @@ class ClmReplayAddon:
                     "clm_replay_miss": True,
                     "method": method,
                     "url": url,
-                    "cassette": str(target.canonical),
+                    **extra,
                 }
             ).encode(),
             {"Content-Type": "application/json", "Connection": "close"},
