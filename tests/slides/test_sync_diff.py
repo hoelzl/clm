@@ -2937,6 +2937,50 @@ class TestDuplicateBodyPoolAlignment:
             ("pos:intro/code/3", "pool_placement_divergence"),
         ]
 
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("print(x := 10)", "print(x := 11)"),
+            ("print(x)\n\n# %% [markdown]", "print(x)  # e\n\n# %% [markdown]"),
+        ],
+        ids=["edited-unique", "edited-duplicate"],
+    )
+    def test_1051_move_plus_edit_frames_placement_not_removal(self, old: str, new: str):
+        """#1051 review: the moved cell also EDITED on the moving half is
+        pinned on neither half by fingerprint, so its span is only taught by
+        the other half. A span-constrained miss must fall back to the
+        whole-pool stage (a cross-span pairing → placement frame), never read
+        as ``mirror_remove`` + a one-sided ``verify_cold``."""
+        base = self._ledger_base(self._vo_deck("de", moved=False), self._vo_deck("en", moved=False))
+        en = self._vo_deck("en", moved=True)
+        assert old in en
+        diff = _diff(base, self._vo_deck("de", moved=False), en.replace(old, new, 1))
+        actions = {action for _, action in self._rows(diff)}
+        assert "mirror_remove" not in actions and "verify_cold" not in actions, self._rows(diff)
+        assert ("pos:intro/code/2", "pool_placement_divergence") in self._rows(diff)
+
+    def test_span_less_slot_moved_across_a_sync_point_stays_a_placement(self):
+        """#1051 review: a slot edited on BOTH halves has no span; the
+        position rule must not confine it to its neighbours' span when one
+        half moved it across a sync point — that turned the (correct)
+        placement frame into ``remove_vs_edit`` + a one-sided cold row."""
+
+        def deck(lang: str, cells: list[str]) -> str:
+            return _build(
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("s0", lang, "T"),
+                *(_idd_code("sp", c[3:]) if c.startswith("ID:") else _code(c) for c in cells),
+            )
+
+        before = ["a = 1", "b = 1", "c = 1", "ID:d = 0", "d = 1"]
+        base = self._ledger_base(deck("de", before), deck("en", before))
+        diff = _diff(
+            base,
+            deck("de", ["a = 1", "b = 2", "c = 1", "ID:d = 0", "d = 1"]),
+            deck("en", ["a = 1", "c = 1", "ID:d = 0", "b = 3", "d = 1"]),
+        )
+        assert self._rows(diff) == [("pos:s0/code/1", "pool_placement_divergence")]
+
     @staticmethod
     def _keep_deck(lang: str, *, keep: bool) -> str:
         tag = ' tags=["keep"]' if keep else ""

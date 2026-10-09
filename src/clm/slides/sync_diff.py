@@ -41,6 +41,7 @@ import-cleanliness test (design §12.5).
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import Counter
 from difflib import SequenceMatcher
 from typing import Literal
@@ -361,14 +362,14 @@ def _split_observations(
 @frozen
 class _PoolCell:
     """One half's cell in a positional pool, as the alignment sees it:
-    its content fingerprint, the parsed member carrying it, the sync
-    point it sits under on that half (:meth:`_Differ._build_span_index`),
-    and its document position on that half (``(part, cell index)``)."""
+    its content fingerprint, the parsed member carrying it, the sync point
+    it sits under on that half (:meth:`_Differ._build_span_index`), and the
+    part it lives in."""
 
     fp: str
     member: Member
     span: str
-    at: tuple[str, int]
+    part: str
 
 
 def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | None:
@@ -2972,19 +2973,22 @@ class _Differ:
         localized_pool = any(m.langness == "localized" for m in members) or any(
             e.langness == "localized" for e in base_entries
         )
+        # Each half's cells in that half's DOCUMENT order (deck part, then
+        # companion part): the alignment's occurrence pairing, its reorder
+        # test and its pool-edge spans all read positions on one half, and
+        # the merged member order is DE-biased (#1051 review).
         per_side: dict[Lang, list[_PoolCell]] = {"de": [], "en": []}
-        for member in members:
-            for lang in _SIDES:
-                cell = member.side(lang)
-                if cell is not None:
-                    per_side[lang].append(
-                        _PoolCell(
-                            content_fingerprint(cell),
-                            member,
-                            self._span_of(lang, cell),
-                            (cell.part, cell.index),
-                        )
-                    )
+        for lang in _SIDES:
+            placed = [
+                (cell.part != "deck", cell.index, member, cell)
+                for member in members
+                if (cell := member.side(lang)) is not None
+            ]
+            placed.sort(key=lambda e: (e[0], e[1]))
+            per_side[lang] = [
+                _PoolCell(content_fingerprint(cell), member, self._span_of(lang, cell), cell.part)
+                for _, _, member, cell in placed
+            ]
 
         # ``absent`` marks a base slot whose side never existed — it takes
         # no part in that side's alignment (a phantom slot could steal a
@@ -3275,7 +3279,11 @@ class _Differ:
            the half's first / last span at a pool edge, agree): the residue
            holds its cell too, and aligning the sparse known-span slots
            against it alone married every later slot to the wrong twin
-           (#1054 — a ``replace`` block of unequal length pairs by position);
+           (#1054 — a ``replace`` block of unequal length pairs by position).
+           A slot this stage leaves ``missing`` on a half rejoins stage 3:
+           its span was taught, not proven there, so its cell may sit across
+           a sync point (a move, framed as a placement divergence) rather
+           than be gone;
         3. the residue with no span evidence aligns positionally over the
            whole pool — the half with more fingerprint matches (the better
            witness of the base layout; ``de`` on a tie) goes first and its
@@ -3364,6 +3372,23 @@ class _Differ:
                 # "delete": base slots stay "missing"; "insert" and the
                 # surplus of a "replace" stay unused — the side's news.
 
+        # Pool-edge spans per half, for by_span's edge rule — only when the
+        # half's pool cells all sit in one part (span handles are per part:
+        # "" before the first sync point means a different place in each).
+        edge_spans: dict[Lang, tuple[str, str] | None] = {}
+        for lang in _SIDES:
+            cells = per_side[lang]
+            one_part = len({c.part for c in cells}) == 1
+            edge_spans[lang] = (cells[0].span, cells[-1].span) if cells and one_part else None
+        #: Slots a span-constrained alignment left ``missing`` on a half: the
+        #: span was learned from the other half (or admitted by position), not
+        #: proven on this one, so the cell may sit in another span — a move
+        #: across a sync point. They rejoin the whole-pool stage 3, where a
+        #: cross-span pairing frames ``pool_placement_divergence``; reading
+        #: them as removed made one moved cell a ``mirror_remove`` plus an
+        #: unconfirmable one-sided ``verify_cold`` (#1051, review).
+        unproven: dict[Lang, set[int]] = {lang: set() for lang in _SIDES}
+
         def by_span(lang: Lang) -> dict[str, list[int]]:
             # A span-less slot joins span S when S is the only span its
             # ordinal position admits on this half: the spans of the nearest
@@ -3372,37 +3397,42 @@ class _Differ:
             # alone against a residue that also holds such a slot's cell
             # married every later slot to the wrong twin (#1054). A slot
             # between two DIFFERENT spans stays span-less (stage 3).
-            cells = sorted(per_side[lang], key=lambda c: c.at)
-            first_span = cells[0].span if cells else None
-            last_span = cells[-1].span if cells else None
             known = [i for i in side_slots[lang] if i in slot_span]
+            edges = edge_spans[lang]
             grouped: dict[str, list[int]] = {}
             for i in side_slots[lang]:
-                if i in settled[lang]:
+                if i in settled[lang] or i in unproven[lang]:
                     continue
                 if i in slot_span:
                     grouped.setdefault(slot_span[i], []).append(i)
                     continue
-                before = [k for k in known if k < i]
-                after = [k for k in known if k > i]
-                lo = slot_span[before[-1]] if before else first_span
-                hi = slot_span[after[0]] if after else last_span
-                if known and lo is not None and lo == hi:
+                if not known:
+                    continue
+                at = bisect_left(known, i)
+                lo = slot_span[known[at - 1]] if at > 0 else (edges[0] if edges else None)
+                hi = slot_span[known[at]] if at < len(known) else (edges[1] if edges else None)
+                if lo is not None and lo == hi:
                     grouped.setdefault(lo, []).append(i)
             return grouped
 
-        # Stage 2: known spans, both halves.
-        for lang in _SIDES:
+        def span_stage(lang: Lang) -> None:
             for span, slots in by_span(lang).items():
                 match(lang, slots, residue(lang, span), learn=False)
+                for i in slots:
+                    if status[lang][i][0] == "missing":
+                        settled[lang].discard(i)
+                        unproven[lang].add(i)
+
+        # Stage 2: known spans, both halves.
+        for lang in _SIDES:
+            span_stage(lang)
 
         # Stage 3: the span-less residue, witness first.
         first: Lang = max(_SIDES, key=lambda lang: (len(pairs[lang]), lang == "de"))
         second: Lang = "en" if first == "de" else "de"
         unknown = [i for i in side_slots[first] if i not in settled[first]]
         match(first, unknown, residue(first, None), learn=True)
-        for span, slots in by_span(second).items():
-            match(second, slots, residue(second, span), learn=False)
+        span_stage(second)
         unknown = [i for i in side_slots[second] if i not in settled[second]]
         match(second, unknown, residue(second, None), learn=False)
 
