@@ -110,6 +110,7 @@ _HOISTED_CATEGORIES = frozenset(
         "member_fn_def",
         "member_var_def",
         "alias_def",
+        "concept_def",
         "namespace_def",
         "using_directive",
         "preproc_other",
