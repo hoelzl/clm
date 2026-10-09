@@ -3046,3 +3046,125 @@ class TestDuplicateBodyPoolAlignment:
             ("pos:s0/code/0", "record_symmetric_edit"),
             ("pos:s0/code/2", "record_remove"),
         ]
+
+
+class TestCrossedSyncPointsFrameNoPlacement:
+    """#1052: a positional cell whose spans differ only by way of id'd cells
+    the halves order differently is no placement question — which of two
+    crossing cells is "in place" is the ``order`` row's question. Framing
+    ``pool_placement_divergence`` beside the ``mirror_order`` made two order
+    authorities: one-order-authority deferred the mirror, the placement
+    answer re-homed the cell against the pre-mirror order, and the written
+    halves failed the order-parity verify. Crossed sync points still
+    delimit spans for the alignment (the #906 protection)."""
+
+    @staticmethod
+    def _vo(lang: str, slug: str, text: str) -> str:
+        return (
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{slug}"\n'
+            f"#\n# - {text} {lang}\n\n"
+        )
+
+    def _deck(self, lang: str, order: list[str]) -> str:
+        cells = {
+            "a": self._vo(lang, "vo-a", "A"),
+            "b": self._vo(lang, "vo-b", "B"),
+            "s": self._vo(lang, "vo-s", "S"),
+            "code": _code("c = Color.RED"),
+            "code2": _code("c = Color.GREEN"),
+        }
+        return _build(
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "T"),
+            _idd_code("enum-def", "Color = 1"),
+            *(cells[name] for name in order),
+            _slide("next", lang, "N"),
+        )
+
+    def _diff_from(self, base: list[str], de: list[str], en: list[str]) -> DeckDiff:
+        snapshot = _snapshot(self._deck("de", base), self._deck("en", base))
+        snapshot.complete = False
+        return _diff(snapshot, self._deck("de", de), self._deck("en", en))
+
+    def test_swap_around_a_positional_cell_frames_only_the_order(self):
+        """Regression test for #1052."""
+        diff = self._diff_from(["a", "code", "b"], ["a", "code", "b"], ["b", "code", "a"])
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/order.deck/0", "mirror_order")
+        ]
+
+    def test_swap_with_an_edit_keeps_the_edit_row(self):
+        # Round-3 review: the slot's own evidence is not held back.
+        diff = self._diff_from(["a", "code", "b"], ["a", "code", "b"], ["b", "code2", "a"])
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/code/0", "propagate_shared_edit"),
+            ("pos:intro/order.deck/0", "mirror_order"),
+        ]
+
+    def test_uncrossed_id_pair_still_frames_a_placement(self):
+        # Neighbour: id'd cells both halves order alike, so a one-sided move
+        # of the positional cell across one is a placement question.
+        diff = self._diff_from(["a", "code", "b"], ["a", "code", "b"], ["a", "b", "code"])
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/code/0", "pool_placement_divergence")
+        ]
+
+    def test_move_across_an_uncrossed_sync_point_still_frames(self):
+        # Round-3 review: a crossed pair elsewhere does not excuse a move
+        # across an UNCROSSED sync point (vo-s) — the spans still differ
+        # once the crossed pair is set aside.
+        diff = self._diff_from(
+            ["a", "b", "code", "s"], ["a", "b", "code", "s"], ["b", "a", "s", "code"]
+        )
+        actions = [(i.key, i.action) for i in diff.items]
+        assert ("pos:intro/code/0", "pool_placement_divergence") in actions, actions
+
+    def test_exempt_pool_banks_nothing_and_holds_its_move_row(self):
+        """Round-4 review: a slot exempted by crossing was paired across the
+        crossed cells, so its pool is frozen for the pass (``shifted_pools``)
+        and the pool's own reorder waits for the order row instead of
+        co-executing beside the scope mirror."""
+        cells = {"c1": _code("c1 = 1"), "c2": _code("c2 = 2")}
+
+        def deck(lang: str, order: list[str]) -> str:
+            return _build(
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("intro", lang, "T"),
+                *(cells.get(n) or self._vo(lang, f"vo-{n}", n.upper()) for n in order),
+            )
+
+        base_order = ["a", "c1", "b", "c2"]
+        snapshot = _snapshot(deck("de", base_order), deck("en", base_order))
+        snapshot.complete = False
+        diff = _diff(snapshot, deck("de", base_order), deck("en", ["b", "c2", "c1", "a"]))
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/pool.code/0", "pool_pairing_shifted"),
+            ("pos:intro/order.deck/0", "mirror_order"),
+        ]
+        assert ("intro", "code") in diff.shifted_pools
+
+    def test_crossed_sync_points_still_delimit_spans_for_the_alignment(self):
+        """#1052 review: dropping crossed sync points from the span index
+        (the first fix) let one unrelated long-range id'd move strip the
+        #906 protection — EN's edit was written into a removed slot before
+        the id'd cell it sits behind."""
+
+        def deck(lang: str, cells: list[str]) -> str:
+            return _build(
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("intro", lang, "T"),
+                *(
+                    _idd_code(f"c{c[0].lower()}", f"{c[0].lower()} = 1") if c in "ABC" else _code(c)
+                    for c in cells
+                ),
+            )
+
+        before = ["A", "p1 = 1", "B", "p2 = 1", "C"]
+        base = _snapshot(deck("de", before), deck("en", before))
+        base.complete = False
+        diff = _diff(base, deck("de", before), deck("en", ["C", "A", "B", "p2 = 2"]))
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/code/0", "mirror_remove"),
+            ("pos:intro/code/1", "propagate_shared_edit"),
+            ("pos:intro/order.deck/0", "mirror_order"),
+        ]

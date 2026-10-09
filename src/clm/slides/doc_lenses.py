@@ -300,16 +300,19 @@ def _companion_pool_key(cell: SideCell) -> _PairClass:
     return _PairClass(base.kind, base.role, base.localized, _bare(cell.for_slide))
 
 
-def _uncrossed_pairs(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+def uncrossed_pairs(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """The id pairs no other pair crosses — the ones both halves place alike
     relative to every other id-paired cell.
 
     Id-paired cells the halves order *differently* bracket nothing: their
     brackets would cross, and which of two crossing pairs is "in place" is
-    exactly the order divergence the differ frames (an `order_decision`
-    on the id-keyed scope, a placement frame on any positional cell caught
-    between them). Choosing one of them here would turn that framed
-    question into a silent pool split.
+    exactly the order divergence the differ frames (a `mirror_order` or
+    `order_decision` on the id-keyed scope). Choosing one of them here would
+    turn that framed question into a silent pool split. The differ applies
+    this same predicate to its own sync points (``sync_diff._Differ.
+    _crossed_sync_points``, #1052): a positional cell whose placement differs
+    only by way of a crossed pair frames no placement question beside the
+    order row.
     """
     return [
         (de_i, en_i)
@@ -681,11 +684,11 @@ class _Parser:
         rows then wrote the twin into the wrong span — a structurally valid
         deck whose code ran before its own definition). Only the sync
         points both halves order alike bracket spans
-        (:func:`_uncrossed_pairs`); the rest are order divergence for the
+        (:func:`uncrossed_pairs`); the rest are order divergence for the
         differ to report, never a pairing constraint.
         """
         pair_map = self._region_pair_map(de_idxs, en_idxs, part)
-        chain = _uncrossed_pairs(sorted(pair_map.items()))
+        chain = uncrossed_pairs(sorted(pair_map.items()))
         spans: list[tuple[list[int], list[int]]] = []
         de_cursor = en_cursor = 0
         for de_i, en_i in chain:

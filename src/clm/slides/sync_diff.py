@@ -86,6 +86,7 @@ from clm.slides.doc_identity import (
 from clm.slides.doc_identity import (
     pair_signature as _pair_sig,
 )
+from clm.slides.doc_lenses import uncrossed_pairs
 from clm.slides.sync_wire import WIRE_SCHEMA
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
@@ -703,6 +704,16 @@ class _Differ:
         #: (lang, part, cell index) → the handle of the nearest preceding
         #: sync point on that half (see :meth:`_build_span_index`, #906)
         self._spans: dict[tuple[Lang, str, int], str] = {}
+        #: The same index over the UNCROSSED sync points only, when some
+        #: sync point is crossed (see :meth:`_slot_spans`, #1052)
+        self._uncrossed_spans: dict[tuple[Lang, str, int], str] | None = None
+        #: (group, kind) pools where a slot's span difference was explained
+        #: by crossed sync points alone (#1052) → the crossed handles. The
+        #: slot's pairing crossed those cells, so the pool banks nothing and
+        #: its own move row waits for the order row (one authority per pass).
+        self._crossed_exempt_pools: dict[tuple[str, str], str] = {}
+        #: Rendered handles of the crossed sync points (:meth:`_crossed_sync_points`)
+        self._crossed_handles: set[str] = set()
 
     # -- plumbing ---------------------------------------------------------
 
@@ -871,7 +882,11 @@ class _Differ:
                 + split_observations
                 + self._uniform_drift_observation()
             ),
-            shifted_pools=frozenset(self._shifted_pools) if ledger_mode else frozenset(),
+            shifted_pools=(
+                frozenset(self._shifted_pools) | frozenset(self._crossed_exempt_pools)
+                if ledger_mode
+                else frozenset()
+            ),
         )
 
     def _uniform_drift_observation(self) -> list[Observation]:
@@ -2945,6 +2960,10 @@ class _Differ:
         ``add`` item instead of a cascade of false edits (the W10 shape).
         """
         assert self.base is not None
+        # After the id members (their Y5 stamp verdicts feed the crossing
+        # test), before any slot is classified (#1052).
+        crossed = self._crossed_sync_points()
+        self._uncrossed_spans = self._build_span_index(skip=crossed) if crossed else None
         pools: dict[tuple[str, str], list[Member]] = {}
         for member, group in pos_members:
             if id(member) in self.absorbed_pos:
@@ -3123,6 +3142,15 @@ class _Differ:
             de_state, de_member = status["de"][idx]
             en_state, en_member = status["en"][idx]
             self.matched_base_keys.add(entry.key)
+            spans = self._slot_spans(de_member, en_member)
+            if spans is not None:
+                crossed = self._crossed_only(de_member, en_member, spans)
+                if crossed:
+                    # #1052: the spans differ only by way of id'd cells the
+                    # halves order differently — the order row's question,
+                    # not a placement one (see _crossed_only).
+                    self._crossed_exempt_pools.setdefault((group, kind), crossed)
+                    spans = None
             self._classify_pool_slot(
                 group,
                 entry,
@@ -3131,11 +3159,17 @@ class _Differ:
                 de_member,
                 en_member,
                 shift_cause=shift_cause,
-                spans=self._slot_spans(de_member, en_member),
+                spans=spans,
             )
 
         self._classify_pool_news(group, news["de"], news["en"], localized_pool)
-        self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=shift_cause)
+        move_cause = shift_cause
+        if move_cause is None and (group, kind) in self._crossed_exempt_pools:
+            move_cause = (
+                f"the reorder of {self._crossed_exempt_pools[(group, kind)]} "
+                f"(this pass's order row)"
+            )
+        self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=move_cause)
 
     def _emit_pool_shift_frame(
         self,
@@ -3450,7 +3484,7 @@ class _Differ:
 
     # -- sync points ---------------------------------------------------------------
 
-    def _build_span_index(self) -> dict[tuple[Lang, str, int], str]:
+    def _build_span_index(self, skip: set[int] | None = None) -> dict[tuple[Lang, str, int], str]:
         """Per ``(lang, part, cell index)``: the handle of the nearest
         preceding **sync point** on that half, ``""`` before the first.
 
@@ -3463,6 +3497,9 @@ class _Differ:
         positional twin cannot sit before a sync point on one half and
         after it on the other; whichever cross-side pairing does is a
         placement divergence to frame, never to execute against (#906).
+
+        ``skip`` names (by ``id()``) sync points to leave out — the crossed
+        ones, for the uncrossed index :meth:`_slot_spans` consults.
         """
         anchor_index, _ = self._anchor_brackets()
         streams: dict[tuple[Lang, str], list[tuple[int, Member]]] = {}
@@ -3475,11 +3512,41 @@ class _Differ:
         for (lang, part), entries in streams.items():
             current = ""
             for index, member in sorted(entries, key=lambda e: e[0]):
-                if self._is_sync_point(member, part, anchor_index):
+                if (skip is None or id(member) not in skip) and self._is_sync_point(
+                    member, part, anchor_index
+                ):
                     current = member.key.render()
                     continue
                 spans[(lang, part, index)] = current
         return spans
+
+    def _crossed_sync_points(self) -> set[int]:
+        """``id()`` of the sync points the halves order differently relative
+        to another sync point of the same order scope — the lens's predicate
+        (:func:`~clm.slides.doc_lenses.uncrossed_pairs`) over the scopes and
+        the evidence :meth:`_compare_order` compares: per (group token,
+        part), with Y5 unverified stamp pairings left out as it leaves them
+        out. A crossing found here is one the pass's order row frames.
+        """
+        anchor_index, _ = self._anchor_brackets()
+        scopes: dict[tuple[str, str], dict[tuple[int, int], Member]] = {}
+        for member, group in self._id_members:
+            de, en = member.de, member.en
+            if de is None or en is None or not self._is_sync_point(member, de.part, anchor_index):
+                continue
+            if member.key.render() in self._unverified_stamp_pairings:
+                continue
+            token = _member_group_token(member, group)
+            scopes.setdefault((token, de.part), {})[(de.index, en.index)] = member
+        crossed: set[int] = set()
+        self._crossed_handles = set()
+        for points in scopes.values():
+            kept = set(uncrossed_pairs(sorted(points)))
+            for pair, member in points.items():
+                if pair not in kept:
+                    crossed.add(id(member))
+                    self._crossed_handles.add(member.key.render())
+        return crossed
 
     def _is_sync_point(
         self, member: Member, part: str, anchor_index: dict[Lang, list[tuple[int, str]]]
@@ -3506,6 +3573,36 @@ class _Differ:
             return None
         de_span, en_span = self._span_of("de", de_cell), self._span_of("en", en_cell)
         return None if de_span == en_span else (de_span, en_span)
+
+    def _crossed_only(
+        self, de_member: Member | None, en_member: Member | None, spans: tuple[str, str]
+    ) -> str | None:
+        """The crossed sync points that alone explain a slot's span
+        difference (rendered for a detail), else ``None``.
+
+        Spans that differ but agree once the **crossed** sync points — id'd
+        cells the halves order differently — are set aside are no placement
+        question: which of two crossing cells is "in place" is the pass's
+        ``order`` row's question (the lens draws no span on them either),
+        and a placement row beside it was a second order authority —
+        one-order-authority deferred the mirror and the placement answer
+        re-homed the cell against the pre-mirror order (#1052). The slot
+        then classifies on its content; crossed sync points still delimit
+        the alignment's spans, so the #906 protection holds; and a
+        placement that still differs once the order agrees frames on the
+        next pass against now-uncrossed sync points.
+        """
+        if self._uncrossed_spans is None:
+            return None
+        assert de_member is not None and en_member is not None
+        de_cell, en_cell = de_member.de, en_member.en
+        assert de_cell is not None and en_cell is not None
+        de_u = self._uncrossed_spans.get(("de", de_cell.part, de_cell.index), "")
+        en_u = self._uncrossed_spans.get(("en", en_cell.part, en_cell.index), "")
+        if de_u != en_u:
+            return None
+        crossed = sorted(span for span in spans if span in self._crossed_handles)
+        return ", ".join(crossed) or None
 
     def _classify_pool_slot(
         self,
