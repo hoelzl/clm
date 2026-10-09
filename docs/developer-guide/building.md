@@ -152,6 +152,12 @@ clm docker push plantuml-converter
 clm docker push --help
 ```
 
+`clm docker push` publishes every tag `clm docker build` created for the
+service. For `notebook-processor` that is both variants: lite as `:VERSION`,
+`:VERSION-lite`, `:latest` and `:lite`; full as `:VERSION-full` and `:full`.
+It pushes nothing for a service unless all its tags exist locally, so build
+both notebook variants (`clm docker build notebook`) before pushing.
+
 ### Manual Push
 
 You can also push manually:

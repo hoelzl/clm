@@ -3921,6 +3921,13 @@ Build and push CLM Docker images.
 | `docker pull` | Pull images from Docker Hub |
 | `docker push` | Push images to Docker Hub |
 
+`docker push` publishes every tag `docker build` creates for a service:
+`:VERSION` and `:latest` for plantuml/drawio; for `notebook-processor` both
+variants -- lite as `:VERSION`, `:VERSION-lite`, `:latest`, `:lite` and full
+as `:VERSION-full`, `:full`. `:latest` is the **lite** image. If any of those
+tags is missing locally, nothing is pushed for that service (build both
+notebook variants with `clm docker build notebook` first).
+
 ### `clm provision`
 
 Provision environments clm runs *against* (as opposed to clm's own venv).

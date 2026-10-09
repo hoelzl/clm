@@ -432,6 +432,84 @@ class TestPushService:
             assert push_service("plantuml-converter", "1.0.0") is False
 
 
+def _built_tags(mock_run_docker: MagicMock) -> set[str]:
+    """Collect every ``-t`` tag passed to the mocked ``docker buildx build`` calls."""
+    tags: set[str] = set()
+    for call in mock_run_docker.call_args_list:
+        cmd = call[0][0]
+        tags.update(cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-t")
+    return tags
+
+
+def _pushed_tags(mock_run_docker: MagicMock) -> list[str]:
+    """Collect the image references passed to the mocked ``docker push`` calls."""
+    return [call[0][0][1] for call in mock_run_docker.call_args_list if call[0][0][0] == "push"]
+
+
+class TestPushPushesEveryBuiltTag:
+    """Regression tests for #1043: push must publish every tag ``build`` creates.
+
+    The notebook build tags six references across two variants; push used to
+    publish only ``:VERSION`` and ``:latest``, so ``:VERSION-lite``,
+    ``:VERSION-full``, ``:lite`` and ``:full`` never reached Docker Hub. The
+    tests derive the expected set from the build path, so a tag added to one
+    side but not the other fails here.
+    """
+
+    def test_notebook_push_matches_build_tags(
+        self, fake_project_root: Path, mock_run_docker: MagicMock
+    ) -> None:
+        docker_path = fake_project_root / "docker" / "notebook"
+        assert build_notebook(None, "1.0.0", docker_path) is True
+        built = _built_tags(mock_run_docker)
+        image = f"{REGISTRY}/{HUB_NAMESPACE}/clm-notebook-processor"
+        assert built == {
+            f"{image}:{tag}"
+            for tag in ("1.0.0", "1.0.0-lite", "latest", "lite", "1.0.0-full", "full")
+        }
+
+        mock_run_docker.reset_mock()
+        with patch("subprocess.run") as mock_inspect:
+            mock_inspect.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert push_service("notebook-processor", "1.0.0") is True
+
+        pushed = _pushed_tags(mock_run_docker)
+        assert sorted(pushed) == sorted(built)
+
+    @pytest.mark.parametrize("short_name", ["plantuml", "drawio"])
+    def test_single_variant_push_matches_build_tags(
+        self, short_name: str, fake_project_root: Path, mock_run_docker: MagicMock
+    ) -> None:
+        docker_path = fake_project_root / "docker" / short_name
+        assert build_service(short_name, "1.0.0", docker_path) is True
+        built = _built_tags(mock_run_docker)
+
+        mock_run_docker.reset_mock()
+        with patch("subprocess.run") as mock_inspect:
+            mock_inspect.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert push_service(SERVICE_NAME_MAP[short_name], "1.0.0") is True
+
+        assert sorted(_pushed_tags(mock_run_docker)) == sorted(built)
+
+    def test_notebook_push_refuses_when_a_variant_is_missing(
+        self, mock_run_docker: MagicMock, captured_console: StringIO
+    ) -> None:
+        """Only lite built locally: push nothing rather than half a release."""
+        image = f"{REGISTRY}/{HUB_NAMESPACE}/clm-notebook-processor"
+
+        def inspect(cmd, **kwargs):
+            missing = cmd[-1] in (f"{image}:1.0.0-full", f"{image}:full")
+            return subprocess.CompletedProcess(cmd, 1 if missing else 0, "", "")
+
+        with patch("subprocess.run", side_effect=inspect):
+            assert push_service("notebook-processor", "1.0.0") is False
+
+        mock_run_docker.assert_not_called()
+        out = captured_console.getvalue()
+        assert f"{image}:1.0.0-full" in out
+        assert "clm docker build notebook" in out
+
+
 class TestPullService:
     def test_successful_pull(self, mock_run_docker: MagicMock) -> None:
         assert pull_service("plantuml-converter", "latest") is True
@@ -678,8 +756,9 @@ class TestDockerPushCli:
             result = CliRunner().invoke(docker_push, [])
 
         assert result.exit_code == 0
-        # 3 services × 2 tags = 6 docker pushes
-        assert mock_run_docker.call_count == 6
+        # plantuml + drawio push 2 tags each; notebook pushes all 6 variant
+        # tags (#1043).
+        assert mock_run_docker.call_count == 10
 
     def test_push_unknown_service_fails(
         self, fake_project_root: Path, captured_console: StringIO

@@ -107,7 +107,9 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
+- `docker.io/mhoelzl/clm-notebook-processor:1.34.1` (default)
 - `docker.io/mhoelzl/clm-notebook-processor:1.34.1-lite`
+- `docker.io/mhoelzl/clm-notebook-processor:latest` (default)
 - `docker.io/mhoelzl/clm-notebook-processor:lite`
 
 **Base Image:** `python:3.12-slim` (multi-arch: amd64, arm64)
@@ -140,9 +142,7 @@ docker build -f docker/notebook/Dockerfile \
 courses on Apple Silicon (arm64, CPU-only).
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-notebook-processor:1.34.1` (default)
 - `docker.io/mhoelzl/clm-notebook-processor:1.34.1-full`
-- `docker.io/mhoelzl/clm-notebook-processor:latest`
 - `docker.io/mhoelzl/clm-notebook-processor:full`
 
 **Base Image:**
@@ -155,8 +155,10 @@ docker build -f docker/notebook/Dockerfile \
   --build-arg VARIANT=full \
   -t docker.io/mhoelzl/clm-notebook-processor:full .
 
-# Or simply (full is the default):
-docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-processor .
+# The Dockerfile's VARIANT build-arg defaults to full, so this also builds
+# the full image -- but note that the *published* default tags (:VERSION,
+# :latest) are the lite image, not the full one:
+docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-processor:full .
 ```
 
 **What's Included:**
@@ -234,8 +236,12 @@ All images use the Hub namespace (`docker.io/mhoelzl/clm-*`) for consistency:
 - `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Notebook (with variants):**
-- **Full (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.34.1`, `:full`, `:1.34.1-full`
-- **Lite:** `docker.io/mhoelzl/clm-notebook-processor:lite`, `:1.34.1-lite`
+- **Lite (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.34.1`, `:lite`, `:1.34.1-lite`
+- **Full:** `docker.io/mhoelzl/clm-notebook-processor:full`, `:1.34.1-full`
+
+`clm docker build notebook` creates all six notebook tags, and
+`clm docker push notebook-processor` publishes all six. Push refuses to start
+unless every tag exists locally, so build both variants before pushing.
 
 ### BuildKit Cache Mounts
 
