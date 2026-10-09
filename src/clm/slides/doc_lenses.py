@@ -308,11 +308,11 @@ def uncrossed_pairs(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
     brackets would cross, and which of two crossing pairs is "in place" is
     exactly the order divergence the differ frames (a `mirror_order` or
     `order_decision` on the id-keyed scope). Choosing one of them here would
-    turn that framed question into a silent pool split. The differ's span
-    index applies this same predicate to its sync points
-    (``sync_diff._Differ._uncrossed_sync_points``, #1052), so a positional
-    cell caught between crossed pairs frames no placement row of its own
-    beside the order row.
+    turn that framed question into a silent pool split. The differ applies
+    this same predicate to its own sync points (``sync_diff._Differ.
+    _build_span_index``, #1052): a positional cell whose placement differs
+    only by way of a crossed pair is suspended while the order row lands,
+    never framed as a placement question beside it.
     """
     return [
         (de_i, en_i)

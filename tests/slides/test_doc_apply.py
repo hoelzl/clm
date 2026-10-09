@@ -5048,9 +5048,9 @@ class TestOrderMirrorAroundPositionalCells:
     Two id'd cells swapped around a positional cell framed a placement row
     beside the mechanical ``mirror_order``; one-order-authority deferred the
     mirror, the placement answer re-homed the DE cell against the pre-mirror
-    order, and DE was written with a divergent id order. Now the crossed id
-    pair is no sync point (the lens's rule): only the order row frames and
-    lands, and where the positional cell's placement still differs once the
+    order, and DE was written with a divergent id order. Now the slot is
+    suspended while the crossed id'd cells move, the order row lands on its
+    own, and where the positional cell's placement still differs once the
     id'd order agrees, the next pass frames that placement as its own
     question (never a mechanical guess at it).
     """
@@ -5105,9 +5105,13 @@ class TestOrderMirrorAroundPositionalCells:
             if i.action == "translate_edit"
         }
         outcome = deck.apply(decisions, verify_gate=self._gate(deck))
-        assert outcome.all_applied, outcome.to_payload()
+        assert outcome.error is None, outcome.to_payload()
         assert outcome.verify_violations == [], outcome.verify_violations
-        assert "mirror_order" in {r.action for r in outcome.results}
+        statuses = {(r.action, r.status) for r in outcome.results}
+        assert ("mirror_order", "applied") in statuses, outcome.to_payload()
+        # Only the suspension waits; nothing is rejected, failed or deferred.
+        assert {status for _, status in statuses} <= {"applied", "recorded", "pending"}
+        assert {a for a, st in statuses if st == "pending"} <= {"pool_pairing_shifted"}
 
     def _placement_pass(self, deck: _Deck, adopt: str) -> None:
         """Pass 2: the id'd order agrees; a positional cell the halves still

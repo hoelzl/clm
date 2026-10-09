@@ -3048,14 +3048,15 @@ class TestDuplicateBodyPoolAlignment:
         ]
 
 
-class TestCrossedIdPairsAreNotSyncPoints:
-    """#1052: two id'd cells the halves order differently bracket nothing —
-    the lens's rule (``_uncrossed_pairs``), now the differ's too. Counting
-    them as sync points framed a ``pool_placement_divergence`` for the
-    positional cell between them beside the ``mirror_order`` row; the
-    placement answer then executed against the pre-mirror order while the
-    one-order-authority rule deferred the mirror, and the written halves
-    failed the order-parity verify."""
+class TestCrossedSyncPointsDeferPlacement:
+    """#1052: a positional cell between two id'd cells the halves order
+    differently is not a placement question while the order row moves them.
+    Framing ``pool_placement_divergence`` beside the ``mirror_order`` made
+    two order authorities: one-order-authority deferred the mirror, the
+    placement answer re-homed the cell against the pre-mirror order, and the
+    written halves failed the order-parity verify. The slot is suspended
+    (``pool_pairing_shifted``, answerless, pool-freezing) so the order row
+    lands; crossed sync points still delimit spans for the alignment."""
 
     @staticmethod
     def _vo(lang: str, slug: str, text: str) -> str:
@@ -3083,21 +3084,51 @@ class TestCrossedIdPairsAreNotSyncPoints:
         base.complete = False
         return base
 
-    def test_swap_around_a_positional_cell_frames_only_the_order(self):
+    def test_swap_around_a_positional_cell_suspends_the_slot(self):
         """Regression test for #1052."""
         diff = _diff(
             self._base(), self._deck("de", ["a", "code", "b"]), self._deck("en", ["b", "code", "a"])
         )
-        assert [(i.key, i.action) for i in diff.items] == [
-            ("pos:intro/order.deck/0", "mirror_order")
-        ]
+        rows = [(i.key, i.action, doc_apply.item_resolution(i)) for i in diff.items]
+        assert [(k, a) for k, a, _ in rows] == [
+            ("pos:intro/code/0", "pool_pairing_shifted"),
+            ("pos:intro/order.deck/0", "mirror_order"),
+        ], rows
+        assert rows[0][2] == "manual"  # answerless: never a second order authority
+        assert "id:vo-a, id:vo-b" in diff.items[0].detail
 
-    def test_uncrossed_id_pair_still_delimits_a_span(self):
-        # Neighbour: id'd cells both halves order alike stay sync points, so
-        # a one-sided move of the positional cell across one still frames.
+    def test_uncrossed_id_pair_still_frames_a_placement(self):
+        # Neighbour: id'd cells both halves order alike, so a one-sided move
+        # of the positional cell across one is a placement question.
         diff = _diff(
             self._base(), self._deck("de", ["a", "code", "b"]), self._deck("en", ["a", "b", "code"])
         )
         assert [(i.key, i.action) for i in diff.items] == [
             ("pos:intro/code/0", "pool_placement_divergence")
+        ]
+
+    def test_crossed_sync_points_still_delimit_spans_for_the_alignment(self):
+        """#1052 review: dropping crossed sync points from the span index
+        (the first fix) let one unrelated long-range id'd move strip the
+        #906 protection — EN's edit was written into a removed slot before
+        the id'd cell it sits behind."""
+
+        def deck(lang: str, cells: list[str]) -> str:
+            return _build(
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("intro", lang, "T"),
+                *(
+                    _idd_code(f"c{c[0].lower()}", f"{c[0].lower()} = 1") if c in "ABC" else _code(c)
+                    for c in cells
+                ),
+            )
+
+        before = ["A", "p1 = 1", "B", "p2 = 1", "C"]
+        base = _snapshot(deck("de", before), deck("en", before))
+        base.complete = False
+        diff = _diff(base, deck("de", before), deck("en", ["C", "A", "B", "p2 = 2"]))
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/code/0", "mirror_remove"),
+            ("pos:intro/code/1", "propagate_shared_edit"),
+            ("pos:intro/order.deck/0", "mirror_order"),
         ]

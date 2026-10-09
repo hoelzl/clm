@@ -299,7 +299,12 @@ slots' cross-side pairings are order guesses; every pool row that is not
 provably at base on both sides is suspended for the pass. Carries **no**
 answers: resolve the transition the detail names (answer its framed row,
 or complete/revert it in the files), then re-report — untouched slots
-re-derive mechanically and nothing is banked meanwhile, #826),
+re-derive mechanically and nothing is banked meanwhile, #826. The same
+answerless frame holds back a positional cell that sits between id'd cells
+the halves order differently: its placement is that pass's `order` row's
+question, so let the order row land (a mechanical `mirror_order` does on
+its own), then re-report — a placement that still differs then frames as
+`pool_placement_divergence`, #1052),
 `pool_placement_divergence` (the halves place a positional cell on
 different sides of an id-keyed sibling. An id-keyed member present on both
 halves is a *sync point*: positional cells pair and align only inside the
