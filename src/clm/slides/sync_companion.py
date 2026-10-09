@@ -104,9 +104,9 @@ class ProjectedPair:
         return self.representation is not Representation.PLAIN
 
 
-def _half_state(deck_path: Path, deck_text: str) -> _HalfState:
+def _half_state(deck_path: Path, deck_text: str, companion: Path | None) -> _HalfState:
     return _HalfState(
-        companion=resolve_companion(deck_path),
+        companion=companion,
         # Voiceover-only (never notes): inline notes beside a voiceover companion is
         # the sanctioned steady state, not a partial split (see module docstring).
         has_inline_voiceover=has_voiceover_cells_text(deck_text, comment_token_for_path(deck_path)),
@@ -143,7 +143,9 @@ _CROSS_LANGUAGE_REFUSAL = (
 )
 
 
-def _inline_half(deck_path: Path, deck_text: str, companion: Path | None) -> tuple[str, list[str]]:
+def _inline_half(
+    deck_path: Path, deck_text: str, companion_text: str | None
+) -> tuple[str, list[str]]:
     """Return ``(inlined_text, unmatched_for_slide_ids)`` for one half.
 
     A half with no companion projects to itself with no unmatched cells. The
@@ -151,9 +153,8 @@ def _inline_half(deck_path: Path, deck_text: str, companion: Path | None) -> tup
     mutates a caller's cell objects — the projection is safe in a non-mutating read
     mode (design §5.7).
     """
-    if companion is None:
+    if companion_text is None:
         return deck_text, []
-    companion_text = companion.read_text(encoding="utf-8")
     result = inline_pair_text(deck_text, companion_text, comment_token_for_path(deck_path))
     unmatched = [c.metadata.for_slide or _NO_FOR_SLIDE for c in result.unmatched]
     return result.inlined_text, unmatched
@@ -161,6 +162,11 @@ def _inline_half(deck_path: Path, deck_text: str, companion: Path | None) -> tup
 
 #: Placeholder for an unmatched companion cell that carries no ``for_slide``.
 _NO_FOR_SLIDE = "<no for_slide>"
+
+
+def _pending(deck_path: Path) -> Path:
+    """A stand-in companion path for a companion that exists only in memory."""
+    return deck_path.with_name(f"<pending companion of {deck_path.name}>")
 
 
 def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> ProjectedPair:
@@ -174,8 +180,52 @@ def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> Pr
     cell that no longer resolves to a slide also carries a ``refusal`` (total
     transform — never drop narration).
     """
-    de = _half_state(de_path, de_text)
-    en = _half_state(en_path, en_text)
+    de_companion = resolve_companion(de_path)
+    en_companion = resolve_companion(en_path)
+    return project_texts(
+        de_path,
+        en_path,
+        de_text,
+        en_text,
+        de_companion.read_text(encoding="utf-8") if de_companion is not None else None,
+        en_companion.read_text(encoding="utf-8") if en_companion is not None else None,
+        de_companion_path=de_companion,
+        en_companion_path=en_companion,
+    )
+
+
+def project_texts(
+    de_path: Path,
+    en_path: Path,
+    de_text: str,
+    en_text: str,
+    de_companion_text: str | None,
+    en_companion_text: str | None,
+    *,
+    de_companion_path: Path | None = None,
+    en_companion_path: Path | None = None,
+) -> ProjectedPair:
+    """:func:`project_pair` over in-memory texts — the files need not exist yet.
+
+    A half "has a companion" exactly when its companion text is not ``None``
+    (an empty companion file is still a companion, as on disk). The deck
+    paths only pick the comment token; nothing is read. This is what lets
+    ``sync apply`` run the structural verify over the bundle it is ABOUT to
+    write (#1051) with the same projection the post-write verify reads from
+    disk. ``*_companion_path`` only fill :attr:`ProjectedPair.de_companion` /
+    ``en_companion`` (a stand-in path is used for a companion that is not on
+    disk yet).
+    """
+    de = _half_state(
+        de_path,
+        de_text,
+        None if de_companion_text is None else (de_companion_path or _pending(de_path)),
+    )
+    en = _half_state(
+        en_path,
+        en_text,
+        None if en_companion_text is None else (en_companion_path or _pending(en_path)),
+    )
     representation = _classify(de, en)
 
     if representation is Representation.PLAIN:
@@ -197,8 +247,8 @@ def project_pair(de_path: Path, en_path: Path, de_text: str, en_text: str) -> Pr
         )
 
     # SEPARATED: inline each half that has a companion.
-    de_inlined, de_unmatched = _inline_half(de_path, de_text, de.companion)
-    en_inlined, en_unmatched = _inline_half(en_path, en_text, en.companion)
+    de_inlined, de_unmatched = _inline_half(de_path, de_text, de_companion_text)
+    en_inlined, en_unmatched = _inline_half(en_path, en_text, en_companion_text)
     refusal: str | None = None
     unmatched = de_unmatched + en_unmatched
     owners: tuple[str, ...] = ()

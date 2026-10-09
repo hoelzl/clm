@@ -329,22 +329,21 @@ def run_apply_v3(
     ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
     ledger = doc_ledger.load(ledger_path)
 
-    # The structural write-gate on the TRUST store (design §5): landed file
-    # mutations stay (review them with git), but a member of a slide that
-    # fails the structural verify is never recorded as verified — same gate
-    # `record` applies, over the same companion-inlined projection `verify`
-    # reads (D8). apply runs it after the write and scopes it per slide
-    # (#992): the failing slide's members are withheld, the rest is
-    # recorded. Lazy import: sync_verify still loads v2 modules.
-    def verify_gate() -> list:
-        from clm.slides.sync_verify import gate_projected_pair
+    # The structural write gate (design §5, D8): the same gate `record`
+    # applies, over the same companion-inlined projection `verify` reads.
+    # apply runs it over the projected finals BEFORE writing (#1051) and
+    # withholds the changes of any slide group that would fail it — so a
+    # write never adds a structural violation — and once more over the
+    # written files before recording, scoped per slide (#992). Lazy import:
+    # sync_verify still loads v2 modules.
+    from clm.slides.sync_verify import apply_verify_gate
 
-        return gate_projected_pair(
-            bundle.de_path,
-            bundle.en_path,
-            bundle.comment_token,
-            allow_diverged_companion=allow_diverged_companion,
-        )
+    verify_gate = apply_verify_gate(
+        bundle.de_path,
+        bundle.en_path,
+        bundle.comment_token,
+        allow_diverged_companion=allow_diverged_companion,
+    )
 
     outcome = doc_apply.apply_deck(
         bundle,
@@ -398,26 +397,53 @@ def run_apply_v3(
     for violation in verify_violations:
         click.echo(f"verify: {violation}", err=True)
     if verify_violations:
-        withheld = outcome.verify_withheld
-        if outcome.ledger_changed:
-            scope = (
-                f"{len(withheld)} landed item(s) on the failing slide(s) were "
-                f"written but NOT recorded into the ledger ({', '.join(withheld)}); "
-                "the other landed items were recorded"
-                if withheld
-                else "no landed item is on the failing slide(s); every landed item was recorded"
-            )
-        else:
-            scope = "applied changes were written but NOT recorded into the ledger"
         click.echo(
-            f"structural verify failed — {scope}; fix the pair, then re-run "
-            "`report` (or `sync record`). If the divergence is in a voiceover "
-            "companion and is intentional, `--allow-diverged-companion` records "
-            "it anyway (logged)",
+            f"structural verify failed — {_withheld_scope(outcome)}; fix the pair, "
+            "then re-run `report` (or `sync record`). If the divergence is in a "
+            "voiceover companion and is intentional, `--allow-diverged-companion` "
+            "records it anyway (logged)",
             err=True,
         )
     _echo_rejections(rejected)
     return exit_code
+
+
+def _withheld_scope(outcome: doc_apply.ApplyOutcome) -> str:
+    """What the structural verify held back, for the human apply summary.
+
+    Since #1051 a row on a slide whose changes would fail the verify is not
+    WRITTEN (its reason starts ``withheld:``); a row the post-write verify
+    keeps out of the ledger (#992 — the pair already failed there) was
+    written, or for a record-only row simply not recorded. Keyed on the
+    reason, not the status: a withheld record-only row also reads
+    ``deferred``.
+    """
+    withheld = set(outcome.verify_withheld)
+    held = [r for r in outcome.results if r.key in withheld]
+    unwritten = sorted({r.key for r in held if r.reason.startswith("withheld:")})
+    unrecorded = sorted(
+        {r.key for r in held if not r.reason.startswith("withheld:")} - set(unwritten)
+    )
+    parts = []
+    if unwritten:
+        parts.append(
+            f"{len(unwritten)} item(s) whose changes would fail it were NOT written "
+            f"({', '.join(unwritten)})"
+        )
+    if unrecorded:
+        parts.append(
+            f"{len(unrecorded)} landed item(s) on slide(s) that already failed it were "
+            f"written but NOT recorded into the ledger ({', '.join(unrecorded)})"
+        )
+    if not parts:
+        if outcome.ledger_changed:
+            return "every landed item was recorded"
+        if outcome.wrote:
+            return "applied changes were written but NOT recorded into the ledger"
+        return "nothing was written or recorded"
+    return "; ".join(parts) + (
+        "; the other landed items were recorded" if outcome.ledger_changed else ""
+    )
 
 
 def _echo_rejections(rejected: list[doc_apply.ItemResult]) -> None:

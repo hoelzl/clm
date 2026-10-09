@@ -17,6 +17,10 @@ Write discipline:
   (:func:`~clm.slides.doc_lenses.parse_bundle`): a refusal aborts the whole
   write, leaving every file untouched — the executor can never write a bundle
   the lens cannot read back.
+* The structural verify (the CLI's ``verify_gate``) also judges the mutated
+  bundle before the write (#1051): a slide group whose changes would add a
+  violation is recomputed without them, and an unattributable new violation
+  writes nothing — a write never adds a structural violation.
 * Writes go through :func:`~clm.infrastructure.utils.path_utils.atomic_write_all`
   (≤4 files per deck), the same boundary ``split``/``unify`` use.
 * P8 stays load-bearing: this module executes only what the differ *emitted*
@@ -38,9 +42,13 @@ import-cleanliness test (design §12.5).
 
 from __future__ import annotations
 
+import copy
+import inspect
 import json
+import logging
 import re
-from collections.abc import Callable, Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -100,6 +108,7 @@ __all__ = [
     "SYNC_DECISIONS_VALIDATOR",
     "ApplyOutcome",
     "Decision",
+    "FileTexts",
     "ItemResult",
     "apply_deck",
     "decision_vocabulary",
@@ -107,7 +116,10 @@ __all__ = [
     "load_decision_document",
     "parse_decision_rows",
     "parse_decisions",
+    "VerifyGate",
 ]
+
+logger = logging.getLogger(__name__)
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
 _SLIDE_ID_ATTR_RE = re.compile(r'\s*slide_id="[^"]*"')
@@ -560,9 +572,13 @@ class ItemResult:
     action: str
     #: applied  — a file mutation landed (and was recorded)
     #: recorded — a ledger-only record landed
-    #: deferred — a record-only row whose ledger write was deferred because
-    #:            the member still carries an unresolved sibling item (#615);
-    #:            nothing happened — the row re-frames on the next report
+    #: deferred — nothing happened this pass, for the reason given: a
+    #:            record-only row whose member still carries an unresolved
+    #:            sibling item (#615); a row held back by a sequencing rule
+    #:            (#824, #885); a mechanical row depending on an unresolved
+    #:            framed row on its handle, or a row on a slide whose changes
+    #:            would fail the structural verify (#1051). It re-derives or
+    #:            re-frames on the next report
     #: pending  — framed item without a decision (untouched residue)
     #: already_applied — the answered member frames nothing now: the effect
     #:            this decision asks for already holds (a sibling pass, an
@@ -604,12 +620,24 @@ class StructuralViolation(Protocol):
     def slide_id(self) -> str | None: ...
 
 
-#: ``verify_gate``: the post-write structural verify, run by :func:`apply_deck`
-#: after the files are written and before anything is recorded. An empty
-#: result means "safe to record"; each violation withholds the recording of
-#: the slide group it names (``slide_id``), or of every landed member when it
-#: names none (#992).
-VerifyGate = Callable[[], Sequence[StructuralViolation]]
+#: The text of each bundle file, keyed ``(lang, part)`` with part ``deck`` or
+#: ``companion`` — exactly what :meth:`DeckEmitter.emit_all` returns (``None``
+#: = that file does not exist).
+FileTexts = Mapping[tuple[Lang, str], str | None]
+
+
+class VerifyGate(Protocol):
+    """The structural verify :func:`apply_deck` runs (the CLI's projected gate).
+
+    Called with the bundle's ``texts`` it judges those in-memory texts — the
+    projected finals apply is ABOUT to write (#1051); called with no argument
+    it judges the files on disk — the post-write check. An empty result means
+    "safe"; each violation names the slide it is attributed to
+    (``slide_id``), or names none when it is deck-wide.
+    """
+
+    def __call__(self, texts: FileTexts | None = None) -> Sequence[StructuralViolation]: ...
+
 
 _GATE_DEFERRAL_SLIDE = (
     " (recording deferred: the structural verify failed on this member's slide"
@@ -636,10 +664,16 @@ class ApplyOutcome:
     #: the ledger without touching any file. False when the structural verify
     #: withheld every landed item (#992): nothing to persist.
     ledger_changed: bool = False
-    #: What the ``verify_gate`` returned after the write (empty without a gate).
+    #: The structural violations that shaped this pass (empty without a
+    #: gate): those the pre-write verify found in the projected finals and
+    #: withheld changes over (#1051), then what the post-write verify found
+    #: on disk — violations the pair already carried (#992).
     verify_violations: list[StructuralViolation] = field(factory=list)
-    #: Handles of landed items whose recording the gate withheld — their file
-    #: mutation stays; the ledger keeps their old baseline (#992).
+    #: Handles the structural verify held back: rows whose changes were NOT
+    #: written because they would fail it (status ``deferred``, #1051), and
+    #: landed rows on a slide that already failed it, written but not
+    #: recorded (status ``applied``, #992). Each ledger entry keeps its old
+    #: baseline.
     verify_withheld: list[str] = field(factory=list)
 
     def count(self, status: str) -> int:
@@ -1358,17 +1392,28 @@ class _Executor(DeckEmitter):
 # ---------------------------------------------------------------------------
 
 
+def _pos_key_parts(key: str) -> tuple[str, str, str] | None:
+    """``(group, marker, kind)`` of a ``pos:`` handle, else ``None``.
+
+    ``pos:<group>/<kind>/<n>`` has marker ``""``; the pool and scope order
+    handles ``pos:<group>/pool.<kind>/…`` / ``pos:<group>/order.<part>/…``
+    carry ``"pool."`` / ``"order."``. The one parser of the handle grammar.
+    """
+    if not key.startswith("pos:"):
+        return None
+    group, kind, _ordinal = key.split(":", 1)[1].rsplit("/", 2)
+    for marker in ("pool.", "order."):
+        if kind.startswith(marker):
+            return group, marker, kind[len(marker) :]
+    return group, "", kind
+
+
 def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
     """The ``(group, kind)`` pool an applied pos-keyed item belongs to."""
-    key = item.key
-    if key.startswith("pos:"):
-        body = key.split(":", 1)[1]
-        group, kind, _ordinal = body.rsplit("/", 2)
-        for marker in ("pool.", "order."):
-            if kind.startswith(marker):
-                return None
-        return group, kind
-    return None
+    parts = _pos_key_parts(item.key)
+    if parts is None or parts[1]:
+        return None
+    return parts[0], parts[2]
 
 
 #: Removal-family rows whose presence in a pool means the pool's positional
@@ -2266,68 +2311,63 @@ def _match_decision(rows: list[Decision], item: DiffItem, matched: set[int]) -> 
     return fallback
 
 
-def apply_deck(
+@define
+class _Holds:
+    """What a pass must NOT execute — grown round by round (#1051).
+
+    ``dependents`` (rule C): mechanical rows that depend on a framed row the
+    same pass leaves unresolved, keyed by their index in ``diff.items``.
+    ``groups`` (B2): slide groups whose projected changes failed the
+    structural verify. ``everything``: a deck-wide (or unplaceable)
+    violation — nothing may be executed or recorded. Each value is the
+    reason the held rows report.
+    """
+
+    dependents: dict[int, str] = field(factory=dict)
+    groups: dict[str, str] = field(factory=dict)
+    everything: str | None = None
+
+
+@define
+class _Pass:
+    """One execution of the diff over a fresh copy of the parsed deck."""
+
+    ex: _Executor
+    deck: BilingualDeck
+    diff: DeckDiff
+    outcome: ApplyOutcome
+    landed: list[tuple[DiffItem, str]]
+    unresolved_items: list[DiffItem]
+    deferred_pool_scopes: set[tuple[str, str]]
+    #: Each diff item's status this pass, by its index in ``diff.items``.
+    status: dict[int, str]
+
+
+def _execute_pass(
     bundle: LoadedBundle,
     deck: BilingualDeck,
     diff: DeckDiff,
-    ledger: TopicLedger,
-    deck_key: str,
+    rows: list[Decision],
     *,
-    decisions: dict[str, Decision] | None = None,
-    decision_rows: list[Decision] | None = None,
-    only_members: set[str] | None = None,
-    dry_run: bool = False,
-    commit: str | None = None,
-    verify_gate: VerifyGate | None = None,
-) -> ApplyOutcome:
-    """Apply a deck's diff per item; update ``ledger`` in memory.
+    holds: _Holds,
+    item_groups: list[str | None],
+    only_members: set[str] | None,
+    incoherent_pools: set[tuple[str, str]],
+    preamble_frameable: frozenset[str],
+    dry_run: bool,
+) -> _Pass:
+    """Execute every row of ``diff`` that ``holds`` does not hold back.
 
-    Mechanical rows execute unconditionally (subject to ``only_members``);
-    framed rows execute only with a valid decision, otherwise they stay
-    ``pending``. On success the mutated bundle is re-parsed (abort on
-    refusal), written atomically, and every landed item is recorded into
-    ``ledger`` — which the **caller** persists.
-
-    ``verify_gate`` is the structural verify the CLI runs over the written
-    pair (``gate_projected_pair``). It runs after the write and before the
-    recording, and it is **member-scoped** (#992): a violation naming a slide
-    withholds the recording of that slide's group only — the harvest
-    per-slide doctrine, "a corruption elsewhere in the deck must not block
-    recording the one slide an agent just reconciled" — while a violation
-    naming no slide (``unify``, ``order-parity``, an unprojectable layout)
-    withholds every landed item, as the whole-deck save refusal always did.
-    Withheld items keep their file mutation and their old ledger baseline;
-    they are listed in ``ApplyOutcome.verify_withheld`` and their result
-    reason says so. Without a gate nothing is withheld.
+    Mutates ``deck``'s members in place (through the executor's streams), so
+    each round of :func:`apply_deck` hands in a fresh copy.
     """
-    decisions = decisions or {}
-    # One internal representation. ``decisions`` (handle -> answer) is the
-    # convenience form every caller used before schema 4 and cannot hold two
-    # answers for one member; ``decision_rows`` is the full document. Rows win
-    # when both are given.
-    rows = list(decision_rows) if decision_rows is not None else list(decisions.values())
     matched: set[int] = set()
     outcome = ApplyOutcome(dry_run=dry_run)
     ex = _Executor(bundle=bundle, deck=deck, comment_token=bundle.comment_token)
-    originals = ex.emit_all()
-    # The preamble-frameability verdict for unmatched decisions must describe
-    # the PRE-apply baseline the ``diff`` was computed from — derive it at
-    # entry, immune to wherever the apply loop later records landed items
-    # into ``ledger``.
-    deck_ledger = ledger.decks.get(deck_key)
-    preamble_frameable = _preamble_frameable_parts(
-        deck, baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
-    )
-
-    # Positional entries are recorded per pool (ordinals renumber together),
-    # so a lone `confirm` on one pos-keyed cold member would silently bless
-    # its still-unverified pool siblings. Require the whole pool's cold items
-    # to be confirmed in the same document.
-    incoherent_pools = _incoherent_pool_confirms(diff, {row.key: row for row in rows})
-
     ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
-    unresolved_items: list[DiffItem] = []  # pending / rejected / failed
+    unresolved_items: list[DiffItem] = []  # pending / rejected / failed / held
+    status: dict[int, str] = {}
     # #885 "one order authority per pass": while an `order_decision` is
     # framed — answered or not — no mechanical `mirror_order` may co-execute.
     # The field failure: an answered scope decision ("adopt DE's order")
@@ -2350,7 +2390,21 @@ def apply_deck(
     #: _frozen_pools and the row carries no member, #885 review I1).
     deferred_pool_scopes: set[tuple[str, str]] = set()
     seen_decisions: set[str] = set()
-    for _, item in ordered:
+
+    def _defer(index: int, item: DiffItem, reason: str) -> None:
+        unresolved_items.append(item)
+        # A deferred POOL mirror must freeze its pool: the pool-handle key
+        # contributes nothing to _frozen_pools (`_pool_scope` skips pool.
+        # markers) and the row carries no member, so a landed same-pool
+        # sibling would otherwise re-record the cursor-married snapshot the
+        # deferral exists to keep out of the ledger (#885 review I1).
+        scope = _pool_handle_scope(item)
+        if scope is not None:
+            deferred_pool_scopes.add(scope)
+        status[index] = "deferred"
+        outcome.results.append(ItemResult(item.key, item.action, "deferred", reason))
+
+    for index, item in ordered:
         if only_members is not None and item.key not in only_members:
             unresolved_items.append(item)  # a skipped pool sibling must not be blessed
             answered = _match_decision(rows, item, matched) is not None
@@ -2359,6 +2413,7 @@ def apply_deck(
                 # not then classify it: the answer was neither stale nor
                 # already satisfied — the filter simply did not run it.
                 seen_decisions.add(item.key)
+            status[index] = "skipped"
             outcome.results.append(
                 ItemResult(
                     item.key,
@@ -2378,6 +2433,20 @@ def apply_deck(
                 # mechanical row executes on its own and must leave the answer
                 # for its sibling, or the sibling silently stays pending.
                 matched.add(id(decision))
+        executes = item.action in MECHANICAL_ACTIONS or decision is not None
+        # #1051 B2: the structural verify over this deck's projected finals
+        # failed on this row's slide group (or deck-wide) — none of the
+        # group's rows may execute, so the write never carries bytes that
+        # fail the verify. An unanswered framed row stays plain `pending`.
+        group_hold = holds.everything or holds.groups.get(item_groups[index] or "")
+        if executes and group_hold is not None:
+            _defer(index, item, group_hold)
+            if item.key not in outcome.verify_withheld:  # keys repeat across rows
+                outcome.verify_withheld.append(item.key)
+            continue
+        if index in holds.dependents:
+            _defer(index, item, holds.dependents[index])
+            continue
         try:
             if (
                 decision is not None
@@ -2392,36 +2461,23 @@ def apply_deck(
                 )
             if item.action in _RECORD_ONLY:
                 landed.append((item, "apply"))
+                status[index] = "recorded"
                 outcome.results.append(ItemResult(item.key, item.action, "recorded", item.detail))
             elif item.action in MECHANICAL_ACTIONS:
                 if item.action == "mirror_order" and open_order_handles:
-                    unresolved_items.append(item)
-                    if "/pool." in item.key:
-                        # A deferred POOL mirror must freeze its pool: the
-                        # pool-handle key contributes nothing to
-                        # _frozen_pools (`_pool_scope` skips pool. markers)
-                        # and the row carries no member, so a landed
-                        # same-pool sibling would otherwise re-record the
-                        # cursor-married snapshot the deferral exists to
-                        # keep out of the ledger (#885 review I1).
-                        body = item.key.split(":", 1)[1]
-                        group, tail, _ = body.rsplit("/", 2)
-                        deferred_pool_scopes.add((group, tail[len("pool.") :]))
                     named_order_handles = ", ".join(open_order_handles[:3])
-                    outcome.results.append(
-                        ItemResult(
-                            item.key,
-                            item.action,
-                            "deferred",
-                            f"an order question is framed this pass "
-                            f"({named_order_handles}) — one order authority "
-                            f"per pass: answer it, re-report, and this mirror "
-                            f"re-derives from the settled order",
-                        )
+                    _defer(
+                        index,
+                        item,
+                        f"an order question is framed this pass "
+                        f"({named_order_handles}) — one order authority "
+                        f"per pass: answer it, re-report, and this mirror "
+                        f"re-derives from the settled order",
                     )
                     continue
                 _execute_mechanical(ex, item)
                 landed.append((item, "apply"))
+                status[index] = "applied"
                 outcome.results.append(ItemResult(item.key, item.action, "applied", item.detail))
             elif decision is not None:
                 blocker = (
@@ -2435,21 +2491,18 @@ def apply_deck(
                     # pairing anchors the walk on a cross-paired member).
                     # Defer: the pool freeze keeps the row unbanked, and the
                     # next pass re-pairs the pool so the keep lands in order.
-                    unresolved_items.append(item)
-                    outcome.results.append(
-                        ItemResult(
-                            item.key,
-                            item.action,
-                            "deferred",
-                            f"the pool's pairing is shifted by the earlier "
-                            f"{blocker.action} row {blocker.key} — resolve that row "
-                            f"first, re-run report, then answer this one (a shifted "
-                            f"pool takes one keep per pass)",
-                        )
+                    _defer(
+                        index,
+                        item,
+                        f"the pool's pairing is shifted by the earlier "
+                        f"{blocker.action} row {blocker.key} — resolve that row "
+                        f"first, re-run report, then answer this one (a shifted "
+                        f"pool takes one keep per pass)",
                     )
                 else:
                     _execute_decision(ex, item, decision, bundle.comment_token)
                     landed.append((item, "agent"))
+                    status[index] = "applied"
                     outcome.results.append(
                         ItemResult(
                             item.key,
@@ -2461,6 +2514,7 @@ def apply_deck(
             else:
                 assert item.action in FRAMED_ACTIONS
                 unresolved_items.append(item)
+                status[index] = "pending"
                 outcome.results.append(
                     ItemResult(
                         item.key,
@@ -2487,56 +2541,373 @@ def apply_deck(
                     if decision is not None
                     else "answer that order question, re-report, and this row re-derives"
                 )
-                unresolved_items.append(item)
-                outcome.results.append(
-                    ItemResult(
-                        item.key,
-                        item.action,
-                        "deferred",
-                        f"{exc} — the pair's order is contested and framed as "
-                        f"{open_order_handles[0]} this pass: {remedy}",
-                    )
+                _defer(
+                    index,
+                    item,
+                    f"{exc} — the pair's order is contested and framed as "
+                    f"{open_order_handles[0]} this pass: {remedy}",
                 )
                 continue
-            status = "rejected" if decision is not None else "failed"
+            result_status = "rejected" if decision is not None else "failed"
             unresolved_items.append(item)
-            outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
+            status[index] = result_status
+            outcome.results.append(ItemResult(item.key, item.action, result_status, str(exc)))
     for row in rows:
         if id(row) not in matched and row.key not in seen_decisions:
             outcome.results.append(_unmatched_decision_result(row, deck, diff, preamble_frameable))
+    return _Pass(
+        ex=ex,
+        deck=deck,
+        diff=diff,
+        outcome=outcome,
+        landed=landed,
+        unresolved_items=unresolved_items,
+        deferred_pool_scopes=deferred_pool_scopes,
+        status=status,
+    )
 
-    if not landed:
-        return outcome
 
-    finals = ex.emit_all()
-    changed = {key for key in finals if finals[key] != originals[key]}
-    final_deck = deck
-    if changed:
-        parse = parse_bundle(
-            finals[("de", "deck")] or "",
-            finals[("en", "deck")] or "",
-            finals[("de", "companion")],
-            finals[("en", "companion")],
-            comment_token=bundle.comment_token,
+def _pool_handle_scope(item: DiffItem) -> tuple[str, str] | None:
+    """The ``(group, kind)`` pool a pool-handle row (``…/pool.<kind>/…``) orders."""
+    parts = _pos_key_parts(item.key)
+    if parts is None or parts[1] != "pool.":
+        return None
+    return parts[0], parts[2]
+
+
+def _row_handles(item: DiffItem) -> set[str]:
+    """Every handle a row touches: its own, and its member's and twin's."""
+    return {item.key} | {h.key.render() for h in (item.member, item.twin) if h is not None}
+
+
+def _dependent_rows(items: list[DiffItem], status: dict[int, str]) -> dict[int, str]:
+    """Rule C (#1051): landed mutating mechanical rows that must defer instead.
+
+    A mechanical row whose handle — its own, its member's, or the twin it
+    moves or removes — also carries a framed row this pass leaves unresolved
+    (pending, rejected, deferred, skipped) is a dependent of that framed
+    row: executing it alone acts on half a question. The filed shape framed
+    ``mirror_remove`` and an unconfirmable ``verify_cold`` on one handle;
+    apply removed the DE cell, the cold row was rejected, and the written
+    half had lost a cell. A pool-handle ``mirror_order`` depends on every
+    framed row of its pool. Same shape as #885's keep-defer: the row defers
+    with a reason naming the framed handle and re-derives next pass.
+    """
+    open_framed = [
+        (item, status.get(index, "pending"))
+        for index, item in enumerate(items)
+        if item.action in FRAMED_ACTIONS and status.get(index) != "applied"
+    ]
+    if not open_framed:
+        return {}
+    dependents: dict[int, str] = {}
+    for index, item in enumerate(items):
+        if status.get(index) != "applied" or item.action not in MECHANICAL_ACTIONS:
+            continue
+        handles = _row_handles(item)
+        pool = _pool_handle_scope(item)
+        for framed, framed_status in open_framed:
+            if handles & _row_handles(framed) or (pool is not None and _pool_scope(framed) == pool):
+                dependents[index] = (
+                    f"depends on the framed {framed.action} row {framed.key}, which is "
+                    f"{framed_status} this pass — answer it (or reconcile it by hand), "
+                    f"re-report, and this row re-derives"
+                )
+                break
+    return dependents
+
+
+#: Deck-wide kinds identified by their kind alone: ``order-parity`` spells
+#: out the whole common id sequence (any id'd cell added elsewhere changes
+#: the message), and a deck-wide ``companion-refusal`` lists every unplaced
+#: narration owner (resolving one changes it). Either way the pair already
+#: fails that check as a whole; the other checks still run on it.
+_KIND_KEYED = frozenset({"order-parity", "companion-refusal"})
+
+
+def _violation_key(violation: StructuralViolation) -> tuple[str, str | None, str]:
+    """A violation's identity for "did the pair already have it?" (#1051).
+
+    A slide-attributed violation is its kind on its (bare) slide. A deck-wide
+    one is its kind plus its ``locus`` — for ``unify``, the message with each
+    line reference replaced by the offending cell's bytes, so a fault that
+    merely moved keeps its key while a fault on any other cell (or on a cell
+    the pass changed) gets a new one — falling back to the exact message
+    (a moved fault then reads as new: the safe direction). See
+    :data:`_KIND_KEYED` for the two kinds keyed by kind alone.
+    """
+    if violation.slide_id is not None:
+        return violation.kind, strip_preserve_marker(violation.slide_id), ""
+    if violation.kind in _KIND_KEYED:
+        return violation.kind, None, ""
+    return violation.kind, None, getattr(violation, "locus", None) or violation.message
+
+
+def _unexplained(
+    violations: Sequence[StructuralViolation],
+    known: Counter[tuple[str, str | None, str]],
+) -> list[StructuralViolation]:
+    """The ``violations`` that ``known`` (a multiset of keys) does not account for."""
+    remaining = Counter(known)
+    out: list[StructuralViolation] = []
+    for violation in violations:
+        key = _violation_key(violation)
+        if remaining[key] > 0:
+            remaining[key] -= 1
+        else:
+            out.append(violation)
+    return out
+
+
+def _describe(violation: StructuralViolation) -> str:
+    return f"[{violation.kind}] {violation.message}"
+
+
+def _withhold_verdict(
+    violations: Sequence[StructuralViolation],
+    baseline: Counter[tuple[str, str | None, str]],
+    holds: _Holds,
+    members_with_group: list[tuple[str, Member]],
+) -> list[StructuralViolation]:
+    """Grow ``holds`` from one round's projected violations (#1051 B2).
+
+    Returns the violations the pass introduced — empty means accept.
+
+    Only a violation the pass INTRODUCES holds anything back — one the
+    pre-apply pair does not carry (``baseline``, compared as a multiset of
+    :func:`_violation_key`). Then:
+
+    * one naming a slide withholds that slide's group — every group holding
+      a member it names, as the #992 recording gate scoped it; a deck-wide
+      ``unify`` finding names the slides of the cells it points at
+      (``slide_groups``) and is scoped the same way;
+    * a deck-wide one naming no cell, or one naming an id neither parse can
+      place, withholds everything (#992's fail-safe, now applied to the
+      write);
+    * one naming only groups already withheld cannot be the withheld rows'
+      doing — some other group's change caused it — so everything is
+      withheld.
+
+    A violation the pair already carried is no reason to hold a write back:
+    the pass did not cause it, a deck-wide one would otherwise block every
+    unrelated row (P7), and a slide whose fix takes two passes could never
+    take the first (removing a narrated slide orphans its companion cell
+    until the next pass frames that cell's ``broken_owner``). The #992
+    post-write gate still keeps such a slide — or, deck-wide, the whole
+    pass — out of the ledger.
+    """
+    introduced = _unexplained(violations, baseline)
+    if not introduced:
+        return []
+    fresh = False
+    for violation in introduced:
+        if violation.slide_id is not None:
+            named = {strip_preserve_marker(violation.slide_id)}
+        else:
+            # A deck-wide finding the verify could pin to cells (``unify``)
+            # names their slides: withhold those first — a re-located fault
+            # the pair already had then re-keys back and the rest is written.
+            # A finding that names no cell withholds everything.
+            named = set(getattr(violation, "slide_groups", ()) or ())
+            if not named:
+                holds.everything = _WITHHELD_DECK.format(_describe(violation))
+                return introduced
+        groups, unplaceable = _gate_blocked_groups(named, members_with_group)
+        if unplaceable:
+            holds.everything = _WITHHELD_DECK.format(_describe(violation))
+            return introduced
+        for group in sorted(groups):
+            if group not in holds.groups:
+                holds.groups[group] = _WITHHELD_SLIDE.format(_describe(violation))
+                fresh = True
+    if not fresh:
+        holds.everything = _WITHHELD_DECK.format(
+            f"{_describe(introduced[0])} — it persists with its slide's own changes "
+            "withheld, so a change elsewhere caused it"
         )
-        if parse.refusal is not None or parse.deck is None:
-            reasons = (
-                "; ".join(f"[{r.code}] {r.detail}" for r in parse.refusal.reasons)
-                if parse.refusal
-                else "no deck"
-            )
-            outcome.error = (
-                f"the mutated bundle failed the re-parse gate ({reasons}) — nothing was written"
-            )
-            for i, result in enumerate(outcome.results):
-                if result.status in ("applied", "recorded"):
-                    outcome.results[i] = ItemResult(
-                        result.key, result.action, "failed", "aborted by the re-parse gate"
-                    )
+    return introduced
+
+
+_WITHHELD_SLIDE = (
+    "withheld: this pass's changes would make the structural verify fail on "
+    "this member's slide ({}) — nothing on that slide was written or recorded; "
+    "fix or answer what it names, re-report, and this row re-derives"
+)
+_WITHHELD_DECK = (
+    "withheld: this pass's changes would make the structural verify fail "
+    "deck-wide ({}) — nothing was written or recorded; fix or answer what it "
+    "names, re-report, and this row re-derives"
+)
+
+
+def apply_deck(
+    bundle: LoadedBundle,
+    deck: BilingualDeck,
+    diff: DeckDiff,
+    ledger: TopicLedger,
+    deck_key: str,
+    *,
+    decisions: dict[str, Decision] | None = None,
+    decision_rows: list[Decision] | None = None,
+    only_members: set[str] | None = None,
+    dry_run: bool = False,
+    commit: str | None = None,
+    verify_gate: VerifyGate | None = None,
+) -> ApplyOutcome:
+    """Apply a deck's diff per item; update ``ledger`` in memory.
+
+    Mechanical rows execute unconditionally (subject to ``only_members``);
+    framed rows execute only with a valid decision, otherwise they stay
+    ``pending``. On success the mutated bundle is re-parsed (abort on
+    refusal), written atomically, and every landed item is recorded into
+    ``ledger`` — which the **caller** persists.
+
+    The pass is settled BEFORE anything is written (#1051), in rounds over
+    a fresh copy of the parsed deck:
+
+    * **Dependent rows (rule C).** A mechanical row whose handle (its own,
+      its member's, or the twin it moves or removes) also carries a framed
+      row the pass leaves unresolved — unanswered, rejected, deferred — is
+      deferred with a reason naming that handle.
+    * **Pre-write verify (B2).** ``verify_gate`` (the CLI's projected
+      structural verify, :class:`VerifyGate`) judges the projected finals.
+      A violation the pass INTRODUCES (one the pre-apply pair does not
+      carry) withholds the *mutations* of the slide group it names — not
+      just their recording, as #992 did after the write — and the pass is
+      recomputed without them. An introduced violation naming no slide, or
+      an id neither parse can place, or one that persists once its own
+      groups are withheld, withholds everything: nothing is written. Each
+      round holds back at least one more row or group, so the loop is
+      bounded.
+
+    So a write never adds a structural violation: a pair that passed the
+    verify before ``apply`` passes it after. Held rows read ``deferred``
+    with their reason (the verify-withheld ones are also listed in
+    ``ApplyOutcome.verify_withheld``) and re-derive or re-frame on the next
+    report. After the write the gate runs once more, over the files on disk
+    and scoped as in #992: a violation the pair already carried keeps the
+    members it names (all of them, when deck-wide) out of the ledger while
+    their writes stand, and one the pre-write verify somehow missed is
+    logged and treated the same way. Without a gate the verify withholds
+    nothing.
+    """
+    decisions = decisions or {}
+    # One internal representation. ``decisions`` (handle -> answer) is the
+    # convenience form every caller used before schema 4 and cannot hold two
+    # answers for one member; ``decision_rows`` is the full document. Rows win
+    # when both are given.
+    rows = list(decision_rows) if decision_rows is not None else list(decisions.values())
+    _require_texts_gate(verify_gate)
+    # Each round executes over its own deep copy of the parsed deck and diff
+    # (one copy keeps the diff items' member references pointing into that
+    # deck): the executor mutates members in place, a round must not see an
+    # earlier round's mutations, and the caller's deck stays the untouched
+    # parse — never a state that was not written. ~5 ms on the largest
+    # corpus deck.
+    pristine_groups = _members_with_group(deck)
+    pristine_member_groups = {member.key.render(): token for token, member in pristine_groups}
+    item_groups = [_item_group(item, pristine_member_groups) for item in diff.items]
+    originals = DeckEmitter(deck=deck).emit_all()
+    # The preamble-frameability verdict for unmatched decisions must describe
+    # the PRE-apply baseline the ``diff`` was computed from — derive it at
+    # entry, immune to wherever the apply loop later records landed items
+    # into ``ledger``.
+    deck_ledger = ledger.decks.get(deck_key)
+    preamble_frameable = _preamble_frameable_parts(
+        deck, baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
+    )
+
+    # Positional entries are recorded per pool (ordinals renumber together),
+    # so a lone `confirm` on one pos-keyed cold member would silently bless
+    # its still-unverified pool siblings. Require the whole pool's cold items
+    # to be confirmed in the same document.
+    incoherent_pools = _incoherent_pool_confirms(diff, {row.key: row for row in rows})
+
+    holds = _Holds()
+    #: Violations the pre-write verify found and withheld changes over.
+    withholding: list[StructuralViolation] = []
+    #: What the pre-write verify says about the finals that ARE written.
+    projected: list[StructuralViolation] = []
+    baseline: Counter[tuple[str, str | None, str]] | None = None
+    while True:
+        round_deck, round_diff = copy.deepcopy((deck, diff))
+        current = _execute_pass(
+            bundle,
+            round_deck,
+            round_diff,
+            rows,
+            holds=holds,
+            item_groups=item_groups,
+            only_members=only_members,
+            incoherent_pools=incoherent_pools,
+            preamble_frameable=preamble_frameable,
+            dry_run=dry_run,
+        )
+        outcome = current.outcome
+        dependents = _dependent_rows(current.diff.items, current.status)
+        if dependents:
+            holds.dependents.update(dependents)
+            continue
+        if not current.landed:
+            outcome.verify_violations = _dedupe_violations(withholding)
             return outcome
-        final_deck = parse.deck
+        finals = current.ex.emit_all()
+        changed = {key for key in finals if finals[key] != originals[key]}
+        final_deck = current.deck
+        if changed:
+            parse = parse_bundle(
+                finals[("de", "deck")] or "",
+                finals[("en", "deck")] or "",
+                finals[("de", "companion")],
+                finals[("en", "companion")],
+                comment_token=bundle.comment_token,
+            )
+            if parse.refusal is not None or parse.deck is None:
+                reasons = (
+                    "; ".join(f"[{r.code}] {r.detail}" for r in parse.refusal.reasons)
+                    if parse.refusal
+                    else "no deck"
+                )
+                outcome.error = (
+                    f"the mutated bundle failed the re-parse gate ({reasons}) — nothing was written"
+                )
+                for i, result in enumerate(outcome.results):
+                    if result.status in ("applied", "recorded"):
+                        outcome.results[i] = ItemResult(
+                            result.key, result.action, "failed", "aborted by the re-parse gate"
+                        )
+                outcome.verify_violations = _dedupe_violations(withholding)
+                return outcome
+            final_deck = parse.deck
+        if verify_gate is None or not changed:
+            projected = []
+            break
+        projected = list(verify_gate(finals))
+        if not projected:
+            break
+        if baseline is None:
+            baseline = Counter(_violation_key(v) for v in verify_gate(originals))
+        introduced = _withhold_verdict(
+            projected, baseline, holds, _members_with_group(final_deck) + pristine_groups
+        )
+        if not introduced:
+            break
+        # Only what the pass introduced is a reason it held changes back; a
+        # violation the pair already had is reported by the post-write verify.
+        withholding.extend(introduced)
+
+    landed = current.landed
+    unresolved_items = current.unresolved_items
+    deferred_pool_scopes = current.deferred_pool_scopes
+    diff = current.diff
 
     if dry_run:
+        # What the post-write verify would see: the projected finals when the
+        # pass changes a file, else the pair as it stands (only ledger rows
+        # land, and a real run would still gate their recording on it).
+        if verify_gate is not None and not changed:
+            projected = list(verify_gate(originals))
+        outcome.verify_violations = _dedupe_violations(withholding + projected)
         return outcome
 
     if changed:
@@ -2544,32 +2915,41 @@ def apply_deck(
             outcome.written_paths = write_changed_files(bundle, finals, changed)
         except OSError as exc:
             outcome.error = f"write failed: {exc}"
+            outcome.verify_violations = _dedupe_violations(withholding)
             return outcome
         outcome.wrote = True
 
-    # The structural verify runs over the WRITTEN pair, before any recording
-    # (#992). Its verdict is scoped per slide group below, never per deck —
-    # except for a violation that names no slide.
-    outcome.verify_violations = list(verify_gate()) if verify_gate is not None else []
+    # The post-write verify over the files ON DISK, before any recording
+    # (#992). Belt and braces: the pre-write verify already judged these
+    # exact bytes, so anything new here means the projection and the disk
+    # disagree — it is reported and keeps the members it names out of the
+    # ledger, never silently ignored. It also carries the violations the
+    # pair already had before this pass (an unresolved divergence), which
+    # the #992 scoping keeps out of the ledger while the pass's other,
+    # verified writes land.
+    written_violations = list(verify_gate()) if verify_gate is not None else []
+    if changed and verify_gate is not None:
+        expected = Counter(_violation_key(v) for v in projected)
+        for violation in _unexplained(written_violations, expected):
+            logger.warning(
+                "sync apply: the written pair fails a structural check the "
+                "pre-write verify of the same bytes did not report — %s",
+                _describe(violation),
+            )
+    outcome.verify_violations = _dedupe_violations(withholding + written_violations)
     # Handle -> group token, over BOTH parses: a member the pass removed is
     # known only to the pre-apply one. The verify names ids verbatim (a
     # ``!`` preserve marker included); the deck keys them bare.
-    members_with_group = _members_with_group(final_deck) + _members_with_group(deck)
+    members_with_group = _members_with_group(final_deck) + pristine_groups
     member_groups = {member.key.render(): token for token, member in members_with_group}
     gate_blocked_groups, gate_unresolved = _gate_blocked_groups(
-        {
-            strip_preserve_marker(v.slide_id)
-            for v in outcome.verify_violations
-            if v.slide_id is not None
-        },
+        {strip_preserve_marker(v.slide_id) for v in written_violations if v.slide_id is not None},
         members_with_group,
     )
     # Fail-safe: a violation the engine cannot place (no slide, or a named id
     # neither parse knows) withholds everything, exactly as the pre-#992
     # whole-deck refusal did — never a silent no-op gate.
-    gate_blocks_all = bool(gate_unresolved) or any(
-        v.slide_id is None for v in outcome.verify_violations
-    )
+    gate_blocks_all = bool(gate_unresolved) or any(v.slide_id is None for v in written_violations)
 
     # Ledger updates for landed items — renames/migrations first, then the rest.
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
@@ -2627,7 +3007,7 @@ def apply_deck(
                 )
                 break
 
-    withheld_keys: set[str] = set()
+    withheld_keys: set[str] = set(outcome.verify_withheld)
     recorded_any = False
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
         if item.key in unresolved_keys:
@@ -2711,6 +3091,40 @@ def apply_deck(
     # deferred by the sibling rule — the caller's save is then a no-op).
     outcome.ledger_changed = recorded_any or not outcome.verify_violations
     return outcome
+
+
+def _require_texts_gate(verify_gate: VerifyGate | None) -> None:
+    """Refuse, before anything executes, a gate that cannot judge texts.
+
+    Until #1051 a gate was a zero-argument callable run after the write; one
+    of that shape would now fail mid-pass on the first pre-write call.
+    """
+    if verify_gate is None:
+        return
+    try:
+        signature = inspect.signature(verify_gate)
+        signature.bind({})  # the pre-write call, over the projected texts
+        signature.bind()  # the post-write call, over the files on disk
+    except TypeError as exc:
+        raise TypeError(
+            "verify_gate must accept the bundle's file texts as its one optional "
+            "argument (see doc_apply.VerifyGate; since #1051 it judges the "
+            "projected finals before the write) — got a callable that does not"
+        ) from exc
+    except ValueError:  # no signature available (a builtin): trust it
+        return
+
+
+def _dedupe_violations(violations: list[StructuralViolation]) -> list[StructuralViolation]:
+    """``violations`` in order, each ``(kind, slide_id, message)`` once."""
+    seen: set[tuple[str, str | None, str]] = set()
+    out: list[StructuralViolation] = []
+    for violation in violations:
+        key = (violation.kind, violation.slide_id, violation.message)
+        if key not in seen:
+            seen.add(key)
+            out.append(violation)
+    return out
 
 
 def _item_group(item: DiffItem, member_groups: dict[str, str]) -> str | None:
