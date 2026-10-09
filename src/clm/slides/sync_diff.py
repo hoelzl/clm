@@ -361,12 +361,14 @@ def _split_observations(
 @frozen
 class _PoolCell:
     """One half's cell in a positional pool, as the alignment sees it:
-    its content fingerprint, the parsed member carrying it, and the sync
-    point it sits under on that half (:meth:`_Differ._build_span_index`)."""
+    its content fingerprint, the parsed member carrying it, the sync
+    point it sits under on that half (:meth:`_Differ._build_span_index`),
+    and its document position on that half (``(part, cell index)``)."""
 
     fp: str
     member: Member
     span: str
+    at: tuple[str, int]
 
 
 def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | None:
@@ -2976,7 +2978,12 @@ class _Differ:
                 cell = member.side(lang)
                 if cell is not None:
                     per_side[lang].append(
-                        _PoolCell(content_fingerprint(cell), member, self._span_of(lang, cell))
+                        _PoolCell(
+                            content_fingerprint(cell),
+                            member,
+                            self._span_of(lang, cell),
+                            (cell.part, cell.index),
+                        )
                     )
 
         # ``absent`` marks a base slot whose side never existed — it takes
@@ -3249,14 +3256,26 @@ class _Differ:
         cell is provably the slot's — fingerprint identity — and then
         constrains the other half. Stages, per §3.3's discipline:
 
-        1. fingerprints unique on both sides match directly on each half —
-           wherever they sit, so a non-adjacent reorder is a *move*, never
-           an edit+remove+add cascade — and teach the slot's span (halves
-           that disagree teach nothing: the slot frames as a placement
-           divergence downstream);
+        1. fingerprints whose multiplicity is unchanged on a half (the base
+           pool and the current pool carry the same number of cells with
+           that fingerprint) match directly on that half — the k-th base
+           occurrence to the k-th current one, wherever they sit, so a
+           non-adjacent reorder is a *move*, never an edit+remove+add
+           cascade — and teach the slot's span (halves that disagree teach
+           nothing: the slot frames as a placement divergence downstream).
+           Byte-identical twins are interchangeable, so occurrence order is
+           the only pairing they admit; leaving them to the positional
+           stages below mis-paired them (#1051: a duplicate learned the
+           other half's span and read as removed + new);
         2. slots with a known span align positionally (``SequenceMatcher``:
            equal blocks = untouched duplicates, replace = edits, delete =
-           removals) against that span's residue only, on both halves;
+           removals) against that span's residue only, on both halves. A
+           span-less slot joins a span's alignment when its ordinal position
+           admits only that span on the half (its known-span neighbours, or
+           the half's first / last span at a pool edge, agree): the residue
+           holds its cell too, and aligning the sparse known-span slots
+           against it alone married every later slot to the wrong twin
+           (#1054 — a ``replace`` block of unequal length pairs by position);
         3. the residue with no span evidence aligns positionally over the
            whole pool — the half with more fingerprint matches (the better
            witness of the base layout; ``de`` on a tie) goes first and its
@@ -3290,15 +3309,20 @@ class _Differ:
         def slot_fp(lang: Lang, i: int) -> str:
             return base_entries[i].side_fp(lang) or ""
 
-        # Stage 1: unique fingerprints, anywhere in the pool.
+        # Stage 1: fingerprints of unchanged multiplicity, anywhere in the
+        # pool, in occurrence order (#1051, #1054).
         for lang in _SIDES:
             cells = per_side[lang]
             base_count = Counter(slot_fp(lang, i) for i in side_slots[lang])
-            cur_count = Counter(c.fp for c in cells)
+            occurrences: dict[str, list[int]] = {}
+            for j, c in enumerate(cells):
+                occurrences.setdefault(c.fp, []).append(j)
+            taken: Counter[str] = Counter()
             for i in side_slots[lang]:
                 fp = slot_fp(lang, i)
-                if fp and base_count[fp] == 1 and cur_count.get(fp) == 1:
-                    j = next(j for j, c in enumerate(cells) if c.fp == fp)
+                if fp and base_count[fp] == len(occurrences.get(fp, ())):
+                    j = occurrences[fp][taken[fp]]
+                    taken[fp] += 1
                     status[lang][i] = ("same", cells[j].member)
                     used[lang].add(j)
                     settled[lang].add(i)
@@ -3341,10 +3365,30 @@ class _Differ:
                 # surplus of a "replace" stay unused — the side's news.
 
         def by_span(lang: Lang) -> dict[str, list[int]]:
+            # A span-less slot joins span S when S is the only span its
+            # ordinal position admits on this half: the spans of the nearest
+            # known-span slots before and after it (the half's first / last
+            # span at a pool edge) are both S. Aligning the known-span slots
+            # alone against a residue that also holds such a slot's cell
+            # married every later slot to the wrong twin (#1054). A slot
+            # between two DIFFERENT spans stays span-less (stage 3).
+            cells = sorted(per_side[lang], key=lambda c: c.at)
+            first_span = cells[0].span if cells else None
+            last_span = cells[-1].span if cells else None
+            known = [i for i in side_slots[lang] if i in slot_span]
             grouped: dict[str, list[int]] = {}
             for i in side_slots[lang]:
-                if i not in settled[lang] and i in slot_span:
+                if i in settled[lang]:
+                    continue
+                if i in slot_span:
                     grouped.setdefault(slot_span[i], []).append(i)
+                    continue
+                before = [k for k in known if k < i]
+                after = [k for k in known if k > i]
+                lo = slot_span[before[-1]] if before else first_span
+                hi = slot_span[after[0]] if after else last_span
+                if known and lo is not None and lo == hi:
+                    grouped.setdefault(lo, []).append(i)
             return grouped
 
         # Stage 2: known spans, both halves.

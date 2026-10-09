@@ -2885,3 +2885,120 @@ class TestColdDetailStampRemedy:
         ]
         assert "normalize --stamp-ids" not in row.detail
         assert "by hand" in row.detail
+
+
+class TestDuplicateBodyPoolAlignment:
+    """#1051 / #1054: the pool's per-side alignment pinned only fingerprints
+    UNIQUE in the pool, so byte-identical twins (``print(x)`` twice) fell to
+    the span-constrained positional stages, which mis-paired them:
+
+    * #1051 — a duplicate learned its span from the other half, so after a
+      one-sided move of an id'd sibling its cell sat outside the span it was
+      looked for in: one slot read as ``mirror_remove`` + an unconfirmable
+      one-sided ``verify_cold`` on the same handle, instead of a placement
+      divergence like its unique neighbour.
+    * #1054 — stage 2 aligned only the known-span slots against a span
+      residue that also held the duplicates' cells, so a ``replace`` block of
+      unequal length married every later slot to the wrong twin and a pure
+      tag change read as ``propagate_shared_edit``.
+    """
+
+    @staticmethod
+    def _ledger_base(de: str, en: str) -> DeckBaseline:
+        base = _snapshot(de, en)
+        base.complete = False
+        return base
+
+    @staticmethod
+    def _rows(diff: DeckDiff) -> list[tuple[str, str]]:
+        return [(i.key, i.action) for i in diff.items]
+
+    @staticmethod
+    def _vo_deck(lang: str, *, moved: bool) -> str:
+        vo = (
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="vo-assign"\n'
+            f"#\n# - Narration {lang}\n\n"
+        )
+        code = [_code("x = 0"), _code("print(x)"), _code("print(x := 10)"), _code("print(x)")]
+        cells = code + [vo] if moved else code[:2] + [vo] + code[2:]
+        return _build(
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "T"),
+            *cells,
+            _slide("next", lang, "N"),
+        )
+
+    def test_1051_move_past_duplicates_frames_placement_not_removal(self):
+        """Regression test for #1051."""
+        base = self._ledger_base(self._vo_deck("de", moved=False), self._vo_deck("en", moved=False))
+        diff = _diff(base, self._vo_deck("de", moved=False), self._vo_deck("en", moved=True))
+        assert self._rows(diff) == [
+            ("pos:intro/code/2", "pool_placement_divergence"),
+            ("pos:intro/code/3", "pool_placement_divergence"),
+        ]
+
+    @staticmethod
+    def _keep_deck(lang: str, *, keep: bool) -> str:
+        tag = ' tags=["keep"]' if keep else ""
+        bodies = ["v.append(1)", "print(len(v))", "v.append(2)", "print(len(v))", "print(v[1])"]
+        return _build(
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "T"),
+            _idd_code("decl", "v = []"),
+            *[f"# %%{tag}\n{body}\n\n" for body in bodies],
+        )
+
+    def test_1054_tag_change_on_duplicate_run_stays_a_tag_change(self):
+        """Regression test for #1054."""
+        de = self._keep_deck("de", keep=True)
+        base = self._ledger_base(de, self._keep_deck("en", keep=True))
+        diff = _diff(base, de, self._keep_deck("en", keep=False))
+        assert self._rows(diff) == [(f"pos:intro/code/{i}", "mirror_tags") for i in range(5)]
+        for item in diff.items:
+            # Each row acts on the cell at its own slot on both halves.
+            assert item.member is not None and item.twin is None
+            assert item.member.de is not None and item.member.en is not None
+            assert item.member.de.body == item.member.en.body
+
+    def test_span_less_slot_between_known_slots_joins_their_span(self):
+        """The #1054 mechanism without duplicates: a slot edited on BOTH
+        halves is pinned on neither, so it has no span — and EN's edits pin
+        nothing at all. Stage 2 then aligned DE-taught slots 0 and 2 alone
+        against EN's three cells, writing EN's ``q`` over DE's ``r``."""
+        cell = '# %% tags=["keep"]\n{} = {}\n\n'
+        de0 = _build(HEADER_DE, _slide("s0", "de", "T"), *(cell.format(n, 1) for n in "pqr"))
+        en0 = _build(HEADER_EN, _slide("s0", "en", "T"), *(cell.format(n, 1) for n in "pqr"))
+        base = self._ledger_base(de0, en0)
+        de = de0.replace("q = 1", "q = 2")
+        en = en0.replace("p = 1", "p = 3").replace("q = 1", "q = 3")
+        en = en.replace('# %% tags=["keep"]\nr = 1', "# %%\nr = 1")
+        diff = _diff(base, de, en)
+        assert self._rows(diff) == [
+            ("pos:s0/code/0", "propagate_shared_edit"),
+            ("pos:s0/code/1", "conflict_shared"),
+            ("pos:s0/code/2", "mirror_tags"),
+        ]
+
+    def test_span_less_edge_slot_keeps_positional_order(self):
+        """Neighbour: a span-less slot at the pool edge joins the edge span
+        only when it is the half's first / last span — otherwise the
+        positional order across the residue decides. Here the first slot
+        (merged with the removed third) pairs with the first cell, and the
+        removed slot is the third (the CppCourses ``pointers_to_struct``
+        shape)."""
+
+        def deck(lang: str, cells: list[str]) -> str:
+            return _build(
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("s0", lang, "T"),
+                *(_code(c) for c in cells),
+            )
+
+        before = ["import a", "class P: pass", "import b", "def f(p): pass"]
+        after = ["import a\nimport b", "class P: pass", "def f(p): pass"]
+        base = _snapshot(deck("de", before), deck("en", before))
+        diff = _diff(base, deck("de", after), deck("en", after))
+        assert sorted(self._rows(diff)) == [
+            ("pos:s0/code/0", "record_symmetric_edit"),
+            ("pos:s0/code/2", "record_remove"),
+        ]
