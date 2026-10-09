@@ -13,7 +13,8 @@ Slides routinely carry several narrative cells (one per code cell), so an
 answer is a list of per-member ``updates``: each names an existing
 narrative member of the slide, or creates a new one (``"member": null``,
 optionally placed ``"after"`` an existing narrative member; default at the
-end of the slide group).
+end of the slide group, before a trailing ``answer``/``alt`` solution). A
+created member is always a ``voiceover`` cell (#1057).
 
 ``--record`` banks each written member into the sync consistency ledger
 with provenance ``harvest:<video-fingerprint>`` under the §6
@@ -78,6 +79,14 @@ __all__ = [
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
 _NARRATIVE_ROLES = ("voiceover", "notes")
+# Harvest curates *spoken* narration, so a created member is always a
+# voiceover cell — never `notes`, live-trainer hints that never reach the
+# recording (#1057: a deck-majority role vote turned narration into notes).
+_NEW_MEMBER_ROLE = "voiceover"
+# Reference-solution cells a workshop slide ends with (#1057): the spoken
+# part closes before them. A trailing ``completed`` cell counts together with
+# its ``start`` cell (see :func:`_trailing_solution_count`).
+_SOLUTION_TAGS = frozenset({"answer", "alt"})
 _BULLET_PREFIX = re.compile(r"^-\s+")
 
 
@@ -110,7 +119,9 @@ class Answer:
 class AcceptOutcome:
     item: str
     applied: bool = False
-    members: list[dict[str, Any]] = field(factory=list)  # {"member","created"}
+    # {"member", "created"}; a created member also carries "role", "layout"
+    # and per-side "vo_anchor" (#1057) so an agent can check them on --dry-run.
+    members: list[dict[str, Any]] = field(factory=list)
     written_paths: list[Path] = field(factory=list)
     recorded: bool = False
     record_refused: list[str] = field(factory=list)
@@ -311,18 +322,111 @@ def _mint_vo_id(taken: set[str], owner: str) -> str:
     return candidate
 
 
-def _narrative_conventions(deck: BilingualDeck) -> tuple[str, str]:
-    """(role, layout) for a new vo member: follow the deck's majority
-    convention; default ("voiceover", "companion")."""
-    roles: dict[str, int] = {}
+def _new_member_layout(deck: BilingualDeck) -> str:
+    """The layout for a new vo member (#1057): the deck's majority among its
+    **voiceover** cells only, ``companion`` when it has none yet.
+
+    ``notes`` do not vote: they stay inline by default even in decks whose
+    voiceover lives in a companion, so counting them drags new narration
+    inline. (The role is not voted at all — see :data:`_NEW_MEMBER_ROLE`.)"""
     layouts: dict[str, int] = {}
     for member in deck.members():
-        if member.role in _NARRATIVE_ROLES:
-            roles[member.role] = roles.get(member.role, 0) + 1
+        if member.role == "voiceover":
             layouts[member.layout] = layouts.get(member.layout, 0) + 1
-    role = max(roles, key=roles.__getitem__) if roles else "voiceover"
-    layout = max(layouts, key=layouts.__getitem__) if layouts else "companion"
-    return role, layout
+    return max(layouts, key=layouts.__getitem__) if layouts else "companion"
+
+
+def _trailing_solution_count(content_tags: list[tuple[str, ...] | list[str]]) -> int:
+    """How many trailing content cells of a slide group form its reference
+    solution (#1057) — the cells a new narration default-places *above*.
+
+    ``content_tags`` are the tags of the group's non-narrative cells after
+    the slide-start, in document order. ``answer``/``alt`` cells count, and a
+    ``completed`` cell counts together with the ``start`` cell it completes,
+    so the narration never splits the pair the normalizer joins by
+    adjacency."""
+    n = len(content_tags)
+    i = n - 1
+    while i >= 0:
+        tags = content_tags[i]
+        if not _SOLUTION_TAGS.isdisjoint(tags):
+            i -= 1
+        elif "completed" in tags:
+            i -= 1
+            if i >= 0 and "start" in content_tags[i]:
+                i -= 1
+        else:
+            break
+    return n - 1 - i
+
+
+@define
+class _SideCells:
+    """One deck half split into raw cells, parsed once per accept."""
+
+    cells: list[Any]  # list[RawCell]
+    id_map: dict[str, list[int]]
+
+    @classmethod
+    def parse(cls, deck_text: str, comment_token: str) -> _SideCells:
+        from clm.core.slide_text.raw_cells import split_cells
+        from clm.core.slide_text.voiceover_merge import build_slide_id_to_cell_map
+
+        _preamble, cells = split_cells(deck_text, comment_token)
+        return cls(cells=cells, id_map=build_slide_id_to_cell_map(cells))
+
+
+def _companion_anchor(
+    deck_cells: _SideCells, owner: str, side: Lang, after: Member | None
+) -> str | None:
+    """The ``vo_anchor`` of a new companion cell on ``side`` (#1057).
+
+    Computed with the primitives ``voiceover extract`` and the build merge
+    use (merge group bounds + occurrence-qualified token), so the anchor
+    resolves back to the cell it names:
+
+    * ``after`` a companion member → that member's anchor (same predecessor;
+      the companion order keeps the new cell after it);
+    * ``after`` an inline narrative cell → that cell's own predecessor:
+      narrative cells are never anchor targets, so this is the nearest
+      expressible spot (directly beside it, not at the group end);
+    * default → the last content cell of the owner group *above* a trailing
+      reference solution (:func:`_trailing_solution_count`).
+
+    ``None`` when the owner group is not found (the merge's ``for_slide``
+    fallback then applies, as before).
+    """
+    from clm.core.slide_text.anchor_primitives import anchor_token, find_predecessor_index
+    from clm.core.slide_text.voiceover_merge import slide_group_bounds
+
+    after_cell = after.side(side) if after is not None else None
+    if after_cell is not None and after_cell.part == "companion":
+        return after_cell.vo_anchor
+
+    cells = deck_cells.cells
+    bounds = slide_group_bounds(cells, owner, side, deck_cells.id_map)
+    if bounds is None:
+        return None
+    start, end = bounds
+
+    def lang_ok(i: int) -> bool:
+        lang = cells[i].metadata.lang
+        return lang is None or lang == side
+
+    if after_cell is not None and after_cell.slide_id is not None:
+        for i in range(start, end):
+            if cells[i].metadata.slide_id == after_cell.slide_id and lang_ok(i):
+                pred = find_predecessor_index(cells, i, side)
+                if pred is not None and start <= pred < end:
+                    return anchor_token(cells, pred, bounds, side)
+                break
+
+    content = [
+        i for i in range(start + 1, end) if not cells[i].metadata.is_narrative and lang_ok(i)
+    ]
+    keep = len(content) - _trailing_solution_count([cells[i].metadata.tags for i in content])
+    pred = content[keep - 1] if keep > 0 else start
+    return anchor_token(cells, pred, bounds, side)
 
 
 def _new_side_cell(
@@ -334,11 +438,14 @@ def _new_side_cell(
     vo_id: str,
     owner: str,
     comment_token: str,
+    vo_anchor: str | None = None,
 ) -> SideCell:
     header = (
         f'{comment_token} %% [markdown] lang="{side}" tags=["{role}"] '
         f'slide_id="{vo_id}" for_slide="{owner}"'
     )
+    if vo_anchor is not None:
+        header += f' vo_anchor="{vo_anchor}"'
     lines = (header, *body.split("\n"), "")
     return SideCell(
         lines=lines,
@@ -349,7 +456,7 @@ def _new_side_cell(
         tags=(role,),
         slide_id=vo_id,
         for_slide=owner,
-        vo_anchor=None,
+        vo_anchor=vo_anchor,
         cell_type="markdown",
     )
 
@@ -363,8 +470,9 @@ def _insert_new_member(
     after: Member | None,
 ) -> None:
     """Place the new member's cells per side: right after ``after`` when it
-    is present in that side's stream; otherwise after the owner group's last
-    cell (deck part) / appended (companion part)."""
+    is present in that side's stream; otherwise at the owner group's end
+    (deck part) — before a trailing reference-solution block (#1057) — or
+    appended (companion part, positioned in the deck by its ``vo_anchor``)."""
     for side in _SIDES:
         cell = member.side(side)
         if cell is None:
@@ -393,6 +501,18 @@ def _insert_new_member(
                         i for i, m in enumerate(stream) if any(m is gm for gm in group_members)
                     ]
                     insert_at = (max(positions) + 1) if positions else 0
+                    # Above a trailing reference solution: the first solution
+                    # cell's position (narrative cells before it stay above).
+                    content = [
+                        i
+                        for i in sorted(positions)
+                        if stream[i] is not group.anchor and stream[i].role not in _NARRATIVE_ROLES
+                    ]
+                    solution = _trailing_solution_count(
+                        [c.tags if (c := stream[i].side(side)) else () for i in content]
+                    )
+                    if solution:
+                        insert_at = content[-solution]
         stream.insert(insert_at, member)
         emitter.mutated = True
 
@@ -539,8 +659,18 @@ def accept_answer(
     emitter = DeckEmitter(deck=deck)
     originals = emitter.emit_all()
 
-    role, layout = _narrative_conventions(deck)
+    role = _NEW_MEMBER_ROLE
+    layout = _new_member_layout(deck)
     part: Part = "companion" if layout == "companion" else "deck"
+    # The deck halves as raw cells, parsed lazily once per side: the anchors
+    # of new companion cells are computed against them (#1057).
+    side_cells: dict[Lang, _SideCells] = {}
+
+    def deck_cells(side: Lang) -> _SideCells:
+        if side not in side_cells:
+            side_cells[side] = _SideCells.parse(originals[(side, "deck")] or "", comment_token)
+        return side_cells[side]
+
     taken = _deck_slide_ids(deck)
     written: list[_WrittenMember] = []
     outcome = AcceptOutcome(item=answer.item, dry_run=dry_run)
@@ -601,7 +731,11 @@ def accept_answer(
                 de=None,
                 en=None,
             )
+            after = by_key[update.after] if update.after is not None else None
+            anchors: dict[str, str | None] = dict.fromkeys(_SIDES)
             for side, body in bodies.items():
+                if part == "companion":
+                    anchors[side] = _companion_anchor(deck_cells(side), slide_id, side, after)
                 emitter.set_side(
                     new_member,
                     side,
@@ -613,9 +747,9 @@ def accept_answer(
                         vo_id=vo_id,
                         owner=slide_id,
                         comment_token=comment_token,
+                        vo_anchor=anchors[side],
                     ),
                 )
-            after = by_key[update.after] if update.after is not None else None
             _insert_new_member(emitter, deck, new_member, slide_id, part, after)
             written.append(
                 _WrittenMember(
@@ -625,7 +759,15 @@ def accept_answer(
                     bilingual=bilingual,
                 )
             )
-            outcome.members.append({"member": member_key.render(), "created": True})
+            outcome.members.append(
+                {
+                    "member": member_key.render(),
+                    "created": True,
+                    "role": role,
+                    "layout": layout,
+                    "vo_anchor": anchors,
+                }
+            )
 
     finals = emitter.emit_all()
     changed = {file_key for file_key in finals if finals[file_key] != originals[file_key]}

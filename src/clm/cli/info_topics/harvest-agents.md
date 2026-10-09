@@ -61,7 +61,10 @@ member) and `video_fingerprint`.
 Slides routinely carry **several narrative cells** (one per code cell).
 Your answer is a list of per-member `updates`: address each existing cell
 by its `member` handle; create a new cell with `"member": null` (place it
-with `"after": "<member>"`, default = end of the slide group).
+with `"after": "<member>"`, default = end of the slide group, but *before*
+a trailing reference solution — an `answer` / `alt` cell or a
+`start`/`completed` pair — so the spoken part closes before the silent
+solution).
 
 ## accept — the write you own
 
@@ -73,8 +76,14 @@ Validation is strict and all-or-nothing: schema shape, per-member
 fingerprint freshness against the **live** deck (a concurrent edit — or a
 narrative cell added/removed since the task — rejects; re-run `task`),
 single-cell body guards, and the v3 re-parse gate. Bullets render into the
-deck's narrative cell style; new members get a minted `<owner>-vo` id and
-the deck's companion/inline convention.
+deck's narrative cell style. New members are always `voiceover` cells
+(never `notes` — those are live-trainer hints, not recorded narration) with
+a minted `<owner>-vo` id; their layout follows the deck's existing
+**voiceover** cells (inline `notes` do not count), defaulting to the
+companion when the deck has no voiceover yet. A new companion cell carries
+a `vo_anchor` that pins it to the placement above. `--dry-run` reports each
+new member's role, layout, and per-side `vo_anchor` before anything is
+written — check them.
 
 **One-language vs bilingual answers.** Harvest is recorded-language-
 authoritative. A one-language answer writes that side only — the pair
