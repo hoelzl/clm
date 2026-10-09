@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-10-03
-review-by: 2027-04-03
+updated: 2026-10-09
+review-by: 2027-04-09
 ---
 # Register: discussions index
 
@@ -26,9 +26,14 @@ the reasons behind it are in `README.md`; the save procedure is
 | `typing-replay` (S11 save extension) | After the first save: the owner settled the step-1 shape (new opt-in `recording-code-along` kind, notebook only, no notes/voiceover/alt; it is the recorded notebook), made the extension repo public, and had it packaged, live-tested on two CppCourses decks in the cam-cpp container (xcpp20), #1023 implemented with an adversarial review, and the cam-notebook images rebuilt with the extension pinned | Active — steps 1–2 shipped; Docker Hub push of 0.5.4 awaits the owner; real recordings next | PR #1025 (decisions), PR #1027 (#1023, merged), issue #1026 (follow-up); hoelzl/jupyterlab-clm-typing (public); PythonCourses `4e09d7d` (image pin) | S11 |
 | `typing-replay` (S11 second extension) | Extension 0.1.1 (Ctrl/Alt+Enter also disarm), an on-screen cheat-sheet artifact, and the 0.1.1 image update: the agent found that a base-stage pin bump re-uploads GBs, drafted a last-layer update (~160 kB), then handed the Dockerfile commit to the 0.5.6 release agent (0.5.5 never pushed) | Active — 0.5.6 must ship 0.1.1; real recordings next | hoelzl/jupyterlab-clm-typing `3cac2b0`; cheat sheet artifact `9gUrMUj3EMgj3uPVqwFHUG`; uncommitted PythonCourses Dockerfile edit (handed off) | S11 |
 | `typing-replay` (S12) | VS Code player: a separate extension in the same repo (`vscode/`) sharing the planner and player code, not part of jupyter-slide-nav. The owner's half-armed bug (command mode after Shift+Enter) gave 0.1.1, where Alt+N always enters edit mode. The command-mode-key consequences were weighed and accepted as 0.1.2. Then CI and a GitHub-release workflow, and the clm 1.31.0 release in between | Active — player merged and released (`vscode-v0.1.2`); the owner sets up a recording profile; real recordings next | hoelzl/jupyterlab-clm-typing PRs #1, #2, #3 and release `vscode-v0.1.2`; clm PR #1030 (1.31.0), PR #1032 (design doc §6 item 5) | S12 |
+| `cam-portal-inception` | Restructuring for multi-role CAM course operations (back-office, trainers, course creators): owner interview on domain, roles, integrations and constraints; one extended clm vs. two systems vs. role tools | Decided — two systems split by data/trust boundary: clm emits CI-built release bundles, new private cam-portal runs operations; inception doc written, owner review + P0 (bundle) design next | hoelzl/cam-portal `docs/inception.md` (private) | S13 |
 
 ### Dropped threads / corrections worth keeping
 
+- The owner's first framing "trainers get only the outputs, without the
+  speaker notes" was imprecise: trainers get speaker `notes` but no
+  `voiceover` — exactly clm's existing `trainer` kind, so no new tier is
+  needed. (S13)
 - #907's framing of backfill as "turn `identify-rev` output into stamps"
   was a prior worth dropping: the dashboard-era state files already stamp
   `git_commit` on 123/197 parts and `recorded_at` on all, so seeding needs
@@ -156,6 +161,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S11 (save extension) | 2026-10-02 | `typing-replay/transcripts/2026-10-02-s11.md` | 9.08 MB → 57 kchar (159:1) | 6 / 103 (310 tool stubs, 3 harness-authored turns dropped; one documented container password redacted by hand) | same Claude Code session `6206a73a-1f92-4816-a421-5dc6a9b8e9f1.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`; #1023 in worktree `issue-1023-recording-code-along`, saves in `save-typing-replay`) | content through 2026-10-02 11:35 (step-1 decisions, the repo made public, packaging + live-kernel test, the #1023 implementation and review, the image rebuild); supersedes the earlier boundary; this save itself is covered by the state file |
 | S11 (second save extension) | 2026-10-02 | `typing-replay/transcripts/2026-10-02-s11.md` | 9.85 MB → 72 kchar (136:1) | 12 / 127 (365 tool stubs, 4 harness-authored turns dropped; re-cleaned with `--allow-narrowing` after review: the only "lost" line was the earlier hand redaction of the container password, re-applied) | same Claude Code session `6206a73a-1f92-4816-a421-5dc6a9b8e9f1.jsonl` | content through 2026-10-02 13:42 (0.1.1, cheat sheet, the image-layer finding and the 0.5.6 hand-off); supersedes the earlier boundary; this save is covered by the state file |
 | S12 | 2026-10-02/03 | `typing-replay/transcripts/2026-10-02-s12.md` | 1.83 MB → 29 kchar (63:1) | 12 / 36 (95 tool stubs, 3 harness-authored turns dropped; 3 owner messages appear twice, as queued and as delivered input, left as cleaned) | Claude Code session `86dd51d6-d947-4015-bac9-7c8f00697adc.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, main checkout; extension work in the separate jupyterlab-clm-typing checkout; save written in worktree `save-s12-typing-vscode`) | content through 2026-10-03 01:39 (feasibility, the spike, the edit-mode bug, the clm 1.31.0 release, the command-mode-key trade-off, CI and releases, the save request); the save itself and the merge of PR #1032 are covered by the state file |
+| S13 | 2026-10-09 | `cam-portal-inception/transcripts/2026-10-09-s13.md` | 0.90 MB → 10 kchar (87:1) | 2 / 5 (25 tool stubs, 1 harness-authored turn dropped; the interview answers live in the AskUserQuestion stubs; two agent messages — the exploration summary and the trust-boundary argument — are absent from the raw source, see the thread's state file) | Claude Code session `bd0a79ed-f9fe-484d-a9e5-dc49bc72e463.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, main checkout, plan mode; inception doc in the separate cam-portal repo; save written in worktree `save-cam-portal-inception`) | content through 2026-10-09 14:02 (the interview, the architecture decision, the cam-portal repo creation, the trainer-notes correction); the save itself is covered by the state file |
 
 ### Deliberately skipped
 
@@ -170,3 +176,4 @@ the reasons behind it are in `README.md`; the save procedure is
 | 2026-09-26 (at S11) | `dcf272be…` (5 owner turns; the S10 resume that found PR #1017 unmerged and fixed `_commits_since` ordering) | Number S10 is used by the corrections above and by `recordings-rerecord-backlog/state.md`, but the session has no transcript row: its substance landed in the corrected state file and the #1017 fix. Candidate for a later save if the resume argument is needed |
 | 2026-09-28 | `22c90a9b…` (0 owner turns) | Empty session; nothing to save |
 | 2026-10-03 (at S12) | the unsaved sessions the audit lists besides S12 (`63c0dc34…`, `dcf272be…`, `22c90a9b…` and the two July Hermes reviews) | Nothing new to triage; earlier verdicts stand |
+| 2026-10-09 (at S13) | `53821502…` (2026-10-03, 8 owner turns, issues #1031/#1034) and `0d0c3183…` (2026-10-09, 11 owner turns, issue triage) plus the earlier unsaved ones | Not triaged at S13 (other sessions' work; the triage session is a candidate); earlier verdicts stand |
