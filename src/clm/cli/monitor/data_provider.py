@@ -9,6 +9,7 @@ from pathlib import Path
 from clm.cli.status.collector import StatusCollector
 from clm.cli.status.models import StatusInfo
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.timestamps import parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -219,13 +220,13 @@ class DataProvider:
                 # Determine event type and timestamp
                 if status == "processing" and started_at:
                     event_type = "job_started"
-                    timestamp = datetime.fromisoformat(started_at)
+                    timestamp = parse_db_timestamp(started_at)
                 elif status == "completed" and completed_at:
                     event_type = "job_completed"
-                    timestamp = datetime.fromisoformat(completed_at)
+                    timestamp = parse_db_timestamp(completed_at)
                 elif status == "failed" and completed_at:
                     event_type = "job_failed"
-                    timestamp = datetime.fromisoformat(completed_at)
+                    timestamp = parse_db_timestamp(completed_at)
                 else:
                     # Skip if we can't determine proper event
                     continue

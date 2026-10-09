@@ -2,12 +2,16 @@
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
 from clm.cli.status.collector import StatusCollector
 from clm.cli.status.models import StatusInfo
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.timestamps import (
+    parse_db_timestamp,
+    parse_optional_db_timestamp,
+    utc_now,
+)
 from clm.web.models import (
     BusyWorkerDetail,
     DatabaseInfoResponse,
@@ -142,12 +146,12 @@ class MonitorService:
             )
 
             for row in cursor.fetchall():
-                created_at = datetime.fromisoformat(row[5])
-                uptime_seconds = int((datetime.now() - created_at).total_seconds())
+                created_at = parse_db_timestamp(row[5])
+                uptime_seconds = int((utc_now() - created_at).total_seconds())
 
                 last_heartbeat = None
                 if row[6]:
-                    last_heartbeat = datetime.fromisoformat(row[6])
+                    last_heartbeat = parse_db_timestamp(row[6])
 
                 workers.append(
                     WorkerDetailResponse(
@@ -236,9 +240,9 @@ class MonitorService:
                         status=row[2],
                         input_file=row[3],
                         output_file=row[4],
-                        created_at=datetime.fromisoformat(row[5]),
-                        started_at=(datetime.fromisoformat(row[6]) if row[6] else None),
-                        completed_at=(datetime.fromisoformat(row[7]) if row[7] else None),
+                        created_at=parse_db_timestamp(row[5]),
+                        started_at=parse_optional_db_timestamp(row[6]),
+                        completed_at=parse_optional_db_timestamp(row[7]),
                         error_message=row[8],
                         duration_seconds=row[9],
                         output_format=payload_info.get("output_format"),

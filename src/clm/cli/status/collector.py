@@ -481,7 +481,8 @@ class StatusCollector:
 
         try:
             conn = self.job_queue._get_conn()
-            # SQLite stores timestamps in local time, use datetime() for comparison
+            # SQLite stores CURRENT_TIMESTAMP as naive UTC, and datetime('now')
+            # is UTC too, so the comparison stays in SQL (UTC vs UTC, #1021).
             time_modifier = f"-{hours} hour" if hours == 1 else f"-{hours} hours"
 
             # Query failed jobs from the last N hours
@@ -580,8 +581,8 @@ class StatusCollector:
                     oldest_pending_seconds = row[0]
 
             # Get completed/failed in last hour
-            # SQLite stores timestamps in local time, so use local time for comparison
-            # Use datetime('now', '-1 hour') in SQL for correct local time comparison
+            # SQLite stores CURRENT_TIMESTAMP as naive UTC; datetime('now', '-1 hour')
+            # is UTC too, so comparing in SQL is correct (never use Python local time).
             cursor = conn.execute(
                 """
                 SELECT COUNT(*)

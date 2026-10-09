@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.timestamps import parse_db_timestamp
 from clm.infrastructure.workers.worker_executor import WorkerExecutor
 
 logger = logging.getLogger(__name__)
@@ -130,10 +131,9 @@ class WorkerDiscovery:
         for row in rows:
             is_docker = not row[2].startswith("direct-")
 
-            # Parse timestamps from database (SQLite CURRENT_TIMESTAMP is UTC)
-            # Make them timezone-aware by adding UTC timezone info
-            last_heartbeat = datetime.fromisoformat(row[4]).replace(tzinfo=timezone.utc)
-            started_at = datetime.fromisoformat(row[7]).replace(tzinfo=timezone.utc)
+            # SQLite CURRENT_TIMESTAMP is naive UTC; parse as aware UTC (#1021)
+            last_heartbeat = parse_db_timestamp(row[4])
+            started_at = parse_db_timestamp(row[7])
 
             worker = DiscoveredWorker(
                 db_id=row[0],

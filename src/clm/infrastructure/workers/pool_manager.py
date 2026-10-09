@@ -16,11 +16,12 @@ import time
 import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.timestamps import parse_db_timestamp, utc_now
 from clm.infrastructure.database.worker_liveness import WORKER_HEARTBEAT_GRACE_SECONDS
 from clm.infrastructure.workers.discovery import (
     MANAGED_BY_BUILD,
@@ -1106,14 +1107,12 @@ class WorkerPoolManager:
             True if heartbeat is stale
         """
         try:
-            heartbeat_time = datetime.fromisoformat(last_heartbeat)
-            if heartbeat_time.tzinfo is None:
-                # SQLite CURRENT_TIMESTAMP writes naive UTC strings; comparing
-                # against local time made every heartbeat look hours stale east
-                # of UTC and *never* stale west of it (which silently disabled
-                # the monitor there).
-                heartbeat_time = heartbeat_time.replace(tzinfo=timezone.utc)
-            age = (datetime.now(timezone.utc) - heartbeat_time).total_seconds()
+            # SQLite CURRENT_TIMESTAMP writes naive UTC strings; comparing
+            # against local time made every heartbeat look hours stale east
+            # of UTC and *never* stale west of it (which silently disabled
+            # the monitor there). parse_db_timestamp reads them as UTC (#1021).
+            heartbeat_time = parse_db_timestamp(last_heartbeat)
+            age = (utc_now() - heartbeat_time).total_seconds()
             return age > threshold_seconds
         except Exception as e:
             logger.error(f"Error parsing heartbeat timestamp: {e}")
