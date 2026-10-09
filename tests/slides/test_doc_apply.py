@@ -3161,10 +3161,12 @@ class TestTagParity:
         assert deck.apply().all_applied
         deck.assert_converged()
 
-    def test_landed_mirror_tags_never_blesses_the_pending_body_row(self, tmp_path: Path):
-        # S3: the mechanical tag mirror lands while the framed body row is
-        # unanswered — recording is deferred, the ledger entry stays at its
-        # old baseline, and the member re-frames next pass.
+    def test_mirror_tags_defers_while_the_body_row_is_pending(self, tmp_path: Path):
+        # S3, tightened by #1051 rule C: the mechanical tag mirror shares its
+        # handle with the framed body row. While that row is unanswered the
+        # mirror DEFERS (it used to land unrecorded) and names the handle;
+        # the ledger entry stays at its old baseline. Answering the body
+        # lands both rows in one pass and converges.
         deck = _deck(tmp_path)
         deck.edit_de(self.DE_PLAIN, self.DE_TAGGED)
         deck.edit_de("DE Text", "DE Text NEU")
@@ -3175,20 +3177,21 @@ class TestTagParity:
             ("id:s0-m", "translate_edit"),
         }, [(i.key, i.action, i.detail) for i in diff.items]
         outcome = deck.apply()  # no decision: the body row stays pending
-        results = [r for r in outcome.results if r.key == "id:s0-m"]
-        assert sorted(r.status for r in results) == ["applied", "pending"]
-        landed = next(r for r in results if r.status == "applied")
-        assert "recording deferred" in landed.reason
-        assert 'tags=["voiceover"]' in deck.en_path.read_text(encoding="utf-8")
+        results = {r.action: r for r in outcome.results if r.key == "id:s0-m"}
+        assert results["translate_edit"].status == "pending"
+        assert results["mirror_tags"].status == "deferred"
+        assert "translate_edit row id:s0-m" in results["mirror_tags"].reason
+        assert 'tags=["voiceover"]' not in deck.en_path.read_text(encoding="utf-8")
         assert _ledger_entry(deck, "id:s0-m") == entry_before
-        # Next pass: the mirrored twin's fingerprint is off base too, so the
-        # pair frames as one verify_translation whose confirm converges.
+        # Next pass: the same two rows; the body answer lands them together.
         _, diff = deck.diff()
-        assert [(i.key, i.action, i.direction) for i in diff.items] == [
-            ("id:s0-m", "verify_translation", "both")
-        ], [(i.key, i.action, i.detail) for i in diff.items]
-        outcome = deck.apply(_decision("id:s0-m", choice="confirm"))
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-m", "mirror_tags"),
+            ("id:s0-m", "translate_edit"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply(_decision("id:s0-m", body="# EN text NEW"))
         assert outcome.all_applied, outcome.to_payload()
+        assert 'tags=["voiceover"]' in deck.en_path.read_text(encoding="utf-8")
         deck.assert_converged()
 
     FORK_CELL = '# %% [markdown] tags=["keep"] slide_id="s0-f"\n# gemeinsam\n\n'
@@ -3422,10 +3425,10 @@ class TestTagParity:
         # _sweep_migrated_pos regression (adversarial review of #615): a
         # shared positional cell RECORDED with a base-carried cross-side
         # divergence gets a slide_id stamped on the DE side only. The stamp
-        # is mechanical and lands, but the pending_divergence row on the
-        # same member stays pending — recording defers, and the migration
-        # sweep must NOT destroy the pos: entry: it IS the surviving old
-        # baseline evidencing the divergence.
+        # is mechanical, but the pending_divergence row on the same member
+        # stays pending — so since #1051 (rule C) the stamp defers too, and
+        # the pos: entry must survive: it IS the surviving old baseline
+        # evidencing the divergence.
         deck = _Deck(
             tmp_path,
             _build(
@@ -3453,10 +3456,10 @@ class TestTagParity:
         }, [(i.key, i.action, i.detail) for i in diff.items]
         outcome = deck.apply()  # no decisions: the divergence stays pending
         results = {r.action: r for r in outcome.results}
-        assert results["stamp_twin_id"].status == "applied"
-        assert "recording deferred" in results["stamp_twin_id"].reason
+        assert results["stamp_twin_id"].status == "deferred"
+        assert "pending_divergence row id:x-cell" in results["stamp_twin_id"].reason
         assert results["pending_divergence"].status == "pending"
-        assert 'slide_id="x-cell"' in deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="x-cell"' not in deck.en_path.read_text(encoding="utf-8")
         ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
         members = ledger.decks["slides_t"].members
         assert "pos:s0/code/0" in members, sorted(members)  # the baseline SURVIVED
@@ -4642,14 +4645,14 @@ class TestStructuralGateScope:
     def test_members_outside_the_failing_slide_still_bank(self, tmp_path: Path):
         # The field shape (#787, 2026-09-24): bodies on untouched slides plus
         # one hand-removed EN slide whose removal is still a pending question.
-        from clm.slides.sync_verify import gate_projected_pair
+        from clm.slides.sync_verify import apply_verify_gate
 
         deck = _three_slide_deck(tmp_path)
         deck.edit_en("EN one", "EN one NEW")
         _remove_en_slide_s1(deck)
         outcome = deck.apply(
             _decision("id:s0-m", body="# DE Eins NEU"),
-            verify_gate=lambda: gate_projected_pair(deck.de_path, deck.en_path, "#"),
+            verify_gate=apply_verify_gate(deck.de_path, deck.en_path, "#"),
         )
         results = {(r.key, r.action): r for r in outcome.results}
         assert results[("id:s0-m", "translate_edit")].status == "applied"
@@ -4671,7 +4674,7 @@ class TestStructuralGateScope:
         # The report's headline: 12 bodies applied, one malformed body
         # rejected, and everything came back as verify_translation. The
         # rejection was a coincidence — the gate was the cause.
-        from clm.slides.sync_verify import gate_projected_pair
+        from clm.slides.sync_verify import apply_verify_gate
 
         deck = _three_slide_deck(tmp_path)
         deck.edit_en("EN one", "EN one NEW")
@@ -4683,7 +4686,7 @@ class TestStructuralGateScope:
                 doc_apply.Decision(key="id:s0-m", body="# DE Eins NEU"),
                 doc_apply.Decision(key="id:s2-m", body="# DE Drei NEU 2"),  # no side
             ],
-            verify_gate=lambda: gate_projected_pair(deck.de_path, deck.en_path, "#"),
+            verify_gate=apply_verify_gate(deck.de_path, deck.en_path, "#"),
         )
         statuses = _statuses(outcome)
         assert statuses["id:s0-m"] == "applied"
@@ -4705,7 +4708,7 @@ class TestStructuralGateScope:
         deck.edit_de("x = 1", "x = 42")  # mechanical mirror inside group s1
         deck.edit_en("EN one", "EN one NEW")
 
-        def gate():
+        def gate(texts=None):
             return [_Violation("id-asymmetry", "s1-m is one-sided", slide_id="s1-m")]
 
         ledger_before = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
@@ -4738,7 +4741,7 @@ class TestStructuralGateScope:
         deck.edit_en("EN one", "EN one NEW")
         deck.edit_de("x = 1", "x = 42")
 
-        def gate():
+        def gate(texts=None):
             return [_Violation("order-parity", "halves disagree about order")]
 
         ledger_file = deck.de_path.parent / ".clm" / "sync-ledger.json"
@@ -4756,14 +4759,13 @@ class TestStructuralGateScope:
         # companion cell that narrated it is orphaned, and the projection
         # refusal used to be deck-wide. It is now attributed to the missing
         # owner: the orphan (and the gone group) stay unrecorded, the rest banks.
-        from clm.slides.sync_verify import gate_projected_pair
+        from clm.slides.sync_verify import apply_verify_gate
 
         deck = _three_slide_deck(tmp_path, companions=True)
         deck.edit_en("EN one", "EN one NEW")
         _remove_en_slide_s1(deck)
 
-        def gate():
-            return gate_projected_pair(deck.de_path, deck.en_path, "#")
+        gate = apply_verify_gate(deck.de_path, deck.en_path, "#")
 
         first = deck.apply(
             decision_rows=[
@@ -4799,7 +4801,7 @@ class TestStructuralGateScope:
         deck.edit_de("x = 1", "x = 42")
         deck.edit_en("EN one", "EN one NEW")
 
-        def gate():
+        def gate(texts=None):
             return [_Violation("id-asymmetry", "!s1-m is one-sided", slide_id="!s1-m")]
 
         outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"), verify_gate=gate)
@@ -4813,7 +4815,7 @@ class TestStructuralGateScope:
         deck.edit_de("x = 1", "x = 42")
         deck.edit_en("EN one", "EN one NEW")
 
-        def gate():
+        def gate(texts=None):
             return [_Violation("id-asymmetry", "ghost is one-sided", slide_id="ghost")]
 
         outcome = deck.apply(_decision("id:s0-m", body="# DE Eins NEU"), verify_gate=gate)
@@ -4828,7 +4830,7 @@ class TestStructuralGateScope:
         deck = _three_slide_deck(tmp_path)
         deck.edit_de("x = 1", "x = 42")
 
-        def gate():
+        def gate(texts=None):
             return [_Violation("order-parity", "halves disagree")]
 
         outcome = deck.apply(verify_gate=gate)
@@ -4871,9 +4873,9 @@ class TestSharedTagMirrorHeaderParity:
 
     @staticmethod
     def _gate(deck: _Deck):
-        from clm.slides.sync_verify import gate_projected_pair
+        from clm.slides.sync_verify import apply_verify_gate
 
-        return lambda: gate_projected_pair(deck.de_path, deck.en_path, "#")
+        return apply_verify_gate(deck.de_path, deck.en_path, "#")
 
     def _assert_lands(self, deck: _Deck, header: str) -> None:
         outcome = deck.apply(verify_gate=self._gate(deck))
@@ -4948,9 +4950,9 @@ class TestDuplicateBodyPoolApply:
 
     @staticmethod
     def _gate(deck: _Deck):
-        from clm.slides.sync_verify import gate_projected_pair
+        from clm.slides.sync_verify import apply_verify_gate
 
-        return lambda: gate_projected_pair(deck.de_path, deck.en_path, "#")
+        return apply_verify_gate(deck.de_path, deck.en_path, "#")
 
     @staticmethod
     def _vo(lang: str) -> str:
@@ -5057,9 +5059,9 @@ class TestOrderMirrorAroundPositionalCells:
 
     @staticmethod
     def _gate(deck: _Deck):
-        from clm.slides.sync_verify import gate_projected_pair
+        from clm.slides.sync_verify import apply_verify_gate
 
-        return lambda: gate_projected_pair(deck.de_path, deck.en_path, "#")
+        return apply_verify_gate(deck.de_path, deck.en_path, "#")
 
     @staticmethod
     def _md(lang: str, slug: str, tag: str, text: str) -> str:

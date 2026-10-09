@@ -193,7 +193,13 @@ pass is answering a deck that has already moved.
 **Mechanical actions** (no decision needed — `apply` executes them):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
 `mirror_order`, `mirror_layout`, the `record_*` acknowledgements, and the
-fork/unify/id-stamp transitions. Trust them; review with `git diff`.
+fork/unify/id-stamp transitions. Trust them; review with `git diff`. One
+exception to "apply executes them" (CLM {version}, #1051): a mechanical row
+whose handle — or the twin it moves or removes — also carries a framed row
+that the same pass leaves unanswered or rejects is **deferred**, its reason
+naming that framed handle (`depends on the framed … row …, which is pending
+this pass`). It is half of an unresolved question: answer the framed row
+(or reconcile it by hand), re-report, and the mechanical row re-derives.
 
 `mirror_remove` fires only when the recorded baseline's two halves agreed. If
 the baseline itself carried a byte divergence, a one-sided removal frames
@@ -406,7 +412,9 @@ way layout and owner changes get their own rows):
 - **One side's tags moved off base** → mechanical `mirror_tags`, even when
   the bodies drifted too: a one-sided tag edit that coincides with body drift
   co-frames a `mirror_tags` row *next to* the framed body row on the same
-  key. `apply` mirrors the tag set; you answer the body row as usual.
+  key. `apply` mirrors the tag set in the pass that lands your answer to
+  the body row; while that row is unanswered (or its answer is rejected) the
+  mirror defers with it (#1051) and both re-frame next report.
 - **Both sides' tags moved apart, or the ledger itself carries a cross-side
   tag divergence** (e.g. banked by a pre-fix confirm) → framed
   `conflict_tags`. Answer `de` or `en`; the chosen side's **tag set only** is
@@ -585,20 +593,40 @@ clm slides sync apply DECK --decisions - --json < decisions.json
 ```
 
 `--member KEY` restricts a pass to named handles; `--dry-run` validates every
-answer and writes nothing. Note what it does **not** cover: a dry run stops
-before the write, so it never runs the structural verify gate that a real pass
-runs afterwards — a document that dry-runs clean can still end in
-`verify_violations` (writes landed, the faulted slide's records withheld). Landed items are recorded into the ledger
-**on fully resolved members only**, and the recording is **gated on the
-structural verify per slide** (#992): a violation attributed to a slide —
-an `id-asymmetry` from a hand-removed slide whose removal is still a
-pending question, an orphaned companion cell — withholds the recording of
-that slide's group only; every other landed member records in the same
-pass. The withheld rows keep their file writes (review with `git diff`) and
-their old baseline, are listed in `verify_withheld`, and re-frame (or
-re-derive mechanically) on the next report. A violation that names no slide
-(`unify`, `order-parity`, an unprojectable companion layout) withholds
-everything, as before. A landed row on
+answer, runs the pre-write structural verify described next, and writes
+nothing — so a dry run shows what a real pass would withhold from the write
+(not which landed rows its post-write gate keeps out of the ledger).
+
+**`apply` never writes a structural violation the pair did not already
+have** (CLM {version}, #1051): the structural verify runs over the projected
+result *before* the write. A violation your pass would introduce on a slide
+— an `id-asymmetry`, a `duplicate-id`, an orphaned companion cell — keeps
+that slide group's changes out of the files: its rows report `deferred`
+with the reason `withheld: this pass's changes would make the structural
+verify fail on this member's slide (…)` and are listed in
+`verify_withheld`, while every other slide's changes are written and
+recorded. A new `unify` failure is scoped to the slides of the cells it
+points at the same way, and only if it persists without their changes does
+it withhold everything. An introduced violation that names no slide
+(`order-parity`, an unprojectable companion layout) means **nothing is
+written** — every row reports `deferred … fail deck-wide (…)`. Read the
+named violation, fix or answer what it points at, re-report: the withheld
+rows re-frame (or re-derive) unchanged. A pair that passed `sync verify`
+before `apply` still passes it after.
+
+A violation the pair **already** carried (say an `id-asymmetry` from a
+hand-removed slide whose removal is still a pending question) does not hold
+writes back — the pass did not cause it, and a fix that takes two passes
+(remove a narrated slide, then answer its orphaned narration's
+`broken_owner`) must be able to take the first. It still gates the ledger
+per slide (#992), checked once more on the written files: that slide
+group's landed rows keep their writes (review with `git diff`) but not
+their recording, stay `applied` with the suffix `(recording deferred: the
+structural verify failed on this member's slide — see verify_violations)`,
+and are listed in `verify_withheld`; every other landed member records in
+the same pass. One that names no slide (`unify` from a shared cell you have
+not reconciled yet, `order-parity` while an order question is open)
+withholds every recording, as before. A landed row on
 a member that still carries an unresolved sibling item (pending, rejected,
 failed — or an answered `conflict_tags`, which re-frames by design) keeps its
 file mutation, but its ledger recording is **deferred**: the entry stays at
@@ -645,17 +673,22 @@ whose ledger write was deferred because the member still carries an
 unresolved sibling item — nothing was banked; it re-frames on the next
 report. (A *file-mutating* row in the same situation stays `applied`, with
 the reason suffix `(recording deferred: unresolved sibling item on this
-member)`.) `verify_violations` non-empty means the written pair failed the
-structural verify somewhere. Read `verify_withheld` for what that cost: the
-handles listed there were written but not trusted (reason suffix
-`(recording deferred: the structural verify failed on this member's slide —
-see verify_violations)` when the fault is on their slide, `… failed
-deck-wide …` when the whole pair is refused). Every landed handle **not** in
-`verify_withheld` banked — do not re-answer those; answer the framed rows on
-the faulted slide (or fix the deck-wide fault, then `record`) and re-report.
-`ledger_recorded` only says whether the ledger file was saved with at least
-one new record; it is `false` both for a deck-wide fault and for a pass
-whose landed rows all sat on the faulted slide. One violation
+member)`.) A `deferred` row whose reason starts `depends on the framed …`
+is a mechanical row waiting on that framed row; one whose reason starts
+`withheld:` was held out of the files by the pre-write verify (#1051).
+`verify_violations` non-empty means the structural verify found something:
+what the pre-write verify withheld changes over, then what the written pair
+still carries. Read `verify_withheld` for what that cost: a handle whose row
+reason starts `withheld:` was **not written**; any other was written (a
+record-only row: simply not recorded) but not trusted (reason suffix `(recording deferred: the structural verify failed on
+this member's slide — see verify_violations)` when a fault the pair already
+had is on their slide, `… failed deck-wide …` when it names no slide). Every
+landed handle **not** in `verify_withheld` banked — do not re-answer those;
+answer the framed rows on the faulted slide (or fix the deck-wide fault,
+then `record`) and re-report. `ledger_recorded` only says whether the ledger
+file was saved with at least one new record; it is `false` both for a
+deck-wide fault and for a pass whose landed rows all sat on a faulted
+slide. One violation
 kind worth knowing by name: `order-parity` (the halves order their common
 id'd cells differently — a group swap or a one-sided cell move). It is only
 a warning in `sync verify` output, but it **blocks** `record` and `apply`'s

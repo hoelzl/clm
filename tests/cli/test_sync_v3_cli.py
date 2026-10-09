@@ -1064,3 +1064,111 @@ class TestScopedStructuralGate:
         err = _stderr(result)
         assert "structural verify failed" in err
         assert "every landed item was recorded" in err, err
+
+
+class TestApplyVerifiesBeforeWriting:
+    """Regression tests for #1051 at the verb level.
+
+    The issue's C++ pair, adapted to what still reaches apply after #1070:
+    EN moves the duplicate ``SHOW(x);`` past the next slide's heading. The
+    only answer the report allows (``remove`` on the ``remove_vs_split``
+    row) used to make ``apply`` write a DE half that had lost the cell —
+    ``cannot align DE/EN cells — DE end``. The structural verify now runs
+    over the projected result first, and nothing is written.
+    """
+
+    @staticmethod
+    def _half(lang: str, *, moved: bool) -> str:
+        def md(tags: str, slide_id: str, text: str) -> str:
+            return (
+                f'// %% [markdown] lang="{lang}" tags=["{tags}"] slide_id="{slide_id}"\n'
+                f"//\n// - {text}\n\n"
+            )
+
+        show = "// %%\nSHOW(x);\n\n"
+        cells = [
+            md("slide", "intro", "Text intro"),
+            "// %%\nint x = 0;\n\n",
+            show,
+            md("voiceover", "vo-assign", "Text narration"),
+            "// %%\nSHOW(x = 10);\n\n",
+        ]
+        nxt = md("slide", "next", "Text next slide")
+        cells += [nxt, show] if moved else [show, nxt]
+        return "".join(cells).rstrip("\n") + "\n"
+
+    def _seed(self, cli_runner: CliRunner, tmp_path: Path) -> tuple[Path, Path]:
+        de = tmp_path / "slides_dup.de.cpp"
+        en = tmp_path / "slides_dup.en.cpp"
+        de.write_text(self._half("de", moved=False), encoding="utf-8")
+        en.write_text(self._half("en", moved=False), encoding="utf-8")
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        en.write_text(self._half("en", moved=True), encoding="utf-8")
+        return de, en
+
+    def _apply(self, cli_runner: CliRunner, de: Path, *extra: str):
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        assert {(i["key"], i["action"], tuple(i["answers"])) for i in report["items"]} == {
+            ("pos:intro/code/3", "remove_vs_split", ("remove",)),
+            ("pos:next/code/0", "verify_cold", ()),
+        }, report["items"]
+        decisions = json.dumps(
+            {
+                "report_id": report["report_id"],
+                "decisions": [{"key": "pos:intro/code/3", "choice": "remove"}],
+            }
+        )
+        return cli_runner.invoke(
+            slides_sync_group, ["apply", str(de), "--decisions", "-", *extra], input=decisions
+        )
+
+    def test_json_names_the_withheld_row_and_writes_nothing(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, en = self._seed(cli_runner, tmp_path)
+        before = (de.read_bytes(), en.read_bytes())
+        result = self._apply(cli_runner, de, "--json")
+        assert result.exit_code == 1, result.output
+        payload = _json_payload(result.output)
+        assert payload["wrote"] is False
+        assert (de.read_bytes(), en.read_bytes()) == before
+        assert de.read_text(encoding="utf-8").count("SHOW(x);") == 2
+        assert payload["verify_withheld"] == ["pos:intro/code/3"]
+        assert [r["key"] for r in payload["left_undone"]] == ["pos:intro/code/3"]
+        assert payload["left_undone"][0]["status"] == "deferred"
+        assert payload["left_undone"][0]["reason"].startswith("withheld:")
+        assert any("cannot align" in v for v in payload["verify_violations"])
+        assert payload["ledger_recorded"] is False
+        verify = cli_runner.invoke(slides_sync_group, ["verify", str(de)])
+        assert verify.exit_code == 0, verify.output
+
+    def test_text_mode_says_the_changes_were_not_written(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de, _en = self._seed(cli_runner, tmp_path)
+        result = self._apply(cli_runner, de)
+        assert result.exit_code == 1, result.output
+        err = _stderr(result)
+        assert "structural verify failed" in err
+        assert "were NOT written (pos:intro/code/3)" in err, err
+
+
+def test_withheld_scope_says_written_when_files_were_written():
+    """Review finding (#1051): a pass that wrote files, recorded nothing, and
+    withheld no row (every landed row awaits a sibling) must not read
+    "nothing was written"."""
+    from clm.cli.commands.slides.sync_v3 import _withheld_scope
+    from clm.slides import doc_apply
+
+    outcome = doc_apply.ApplyOutcome(
+        results=[doc_apply.ItemResult("id:a", "conflict_tags", "applied", "decision: de")],
+        wrote=True,
+        ledger_changed=False,
+    )
+    assert _withheld_scope(outcome) == (
+        "applied changes were written but NOT recorded into the ledger"
+    )
+    outcome.wrote = False
+    assert _withheld_scope(outcome) == "nothing was written or recorded"

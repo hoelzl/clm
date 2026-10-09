@@ -2619,19 +2619,37 @@ the canonical cell shape (CLM {version}, issue #655) — no more validate
 warnings on engine output. A single-line j2 macro
 member (e.g. `id:title`) takes its `body` as the full replacement j2 line or
 as bare text spliced into the macro's quoted argument — the line is replaced
-in place (issue #609). The mutated bundle is
-re-parsed before anything touches disk and written atomically (≤4 files);
-landed items are recorded into the ledger **on fully resolved members only**,
-**gated on the structural verify per slide** (CLM {version}, issue #992): a
-violation attributed to a slide (an `id-asymmetry`, a `duplicate-id`, an
-orphaned companion cell's `companion-refusal`) withholds the recording of
-that slide's group only — its landed rows keep their file writes (review
-with `git diff`) and their old baseline, and are listed in
-`verify_withheld` with the reason suffix `(recording deferred: the
+in place (issue #609). The pass is **settled before anything touches disk**
+(CLM {version}, issue #1051): a mechanical row whose handle also carries a
+framed row the same pass leaves unanswered, rejected or deferred is
+**deferred** (status `deferred`, the reason names that framed handle) and
+re-derives next pass; then the **structural verify runs over the projected
+result**. A violation the pass would *introduce* (one the pair does not
+already carry) on a slide — an `id-asymmetry`, a `duplicate-id`, an orphaned
+companion cell's `companion-refusal` — withholds that slide group's
+**changes**: its rows are not written (status `deferred`, reason
+`withheld: this pass's changes would make the structural verify fail on
+this member's slide (…)`, listed in `verify_withheld`), the pass is
+recomputed without them, and every other group is written and recorded. An
+introduced `unify` failure is scoped the same way, to the slides of the
+cells it points at, and escalates to everything only if it persists without
+their changes; an introduced violation that names no slide (`order-parity`,
+a mixed / cross-language layout), or names an id the deck does not have,
+withholds **everything — nothing is written**. So `apply` never writes a structural
+violation the pair did not already have: a pair that passed `verify` before
+still passes it after. The mutated bundle is also re-parsed before anything
+touches disk and written atomically (≤4 files); landed items are recorded
+into the ledger **on fully resolved members only**, **gated on the
+structural verify per slide** (issue #992) once more after the write: a
+violation the pair *already* carried does not hold its slide's writes back
+(a fix that takes two passes — remove a narrated slide, then answer its
+orphaned narration's `broken_owner` — must be able to take the first), but
+it withholds that slide group's recording — those landed rows keep their
+file writes and their old baseline, stay status `applied`, and are listed
+in `verify_withheld` with the reason suffix `(recording deferred: the
 structural verify failed on this member's slide — see verify_violations)`;
-every other landed member records. A violation that names no slide
-(`unify`, `order-parity`, a mixed / cross-language layout) still withholds
-everything (`ledger_recorded: false`). A landed row on a
+every other landed member records. Such a violation that names no slide
+withholds every recording (`ledger_recorded: false`). A landed row on a
 member that still carries an unresolved sibling item — or an answered
 `conflict_tags`, which records nothing and defers the same-key recordings so
 suppressed body drift is never banked (a divergent-tags fork therefore banks
@@ -2639,7 +2657,10 @@ on the *next* pass) — keeps its file mutation but defers its ledger write:
 record-only rows report status `deferred`, file-mutating rows stay `applied`
 with the reason suffix `(recording deferred: unresolved sibling item on this
 member)`. `--member KEY` limits the pass to the named
-handles; `--dry-run` executes and validates everything, writes nothing. Exit
+handles; `--dry-run` executes and validates everything — including the
+pre-write structural verify, so it shows what a real run would withhold from
+the write (not which landed rows its post-write gate keeps out of the ledger)
+— and writes nothing. Exit
 `0` all-applied / `1` residue / `2` error. The ledger gate projects the
 voiceover companions like `record`'s does, and takes the same
 `--allow-diverged-companion` override (see `record`). Needs no API key; single deck only
@@ -2651,8 +2672,10 @@ or mechanical work that did not land, so `wrote: true` + exit 1 is never the
 only signal; `pending` rows are the loop's normal state and stay out, #885),
 `ledger_recorded` (the ledger was saved with at least one record — it can
 be `true` beside a non-empty `verify_violations` since #992),
-`verify_violations`, and `verify_withheld` (the landed handles the gate kept
-out of the ledger); rejected decisions are additionally echoed to stderr in
+`verify_violations` (what the pre-write verify withheld changes over, then
+what the post-write verify still finds on disk), and `verify_withheld` (the
+handles the verify held back: rows whose reason starts `withheld:` were not
+written, the others were written but kept out of the ledger); rejected decisions are additionally echoed to stderr in
 both output modes. While an `order_decision` is framed in a pass, mechanical
 `mirror_order` rows defer instead of co-executing ("one order authority per
 pass", #885) and re-derive on the next report. Full envelope example:

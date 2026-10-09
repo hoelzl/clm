@@ -79,15 +79,18 @@ here on purpose — the choice belongs at one place, not at four call sites:
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from clm.core.slide_text.raw_cells import RawCell, split_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.slides.git_text import git_ref_text
+from clm.slides.slug import strip_preserve_marker
 from clm.slides.split import UnifyError, unify_texts
-from clm.slides.sync_companion import ProjectedPair, project_pair
+from clm.slides.sync_companion import ProjectedPair, project_pair, project_texts
 from clm.slides.sync_writeback import role_of
 
 logger = logging.getLogger(__name__)
@@ -130,6 +133,19 @@ class VerifyViolation:
     # to "line 1" and stop being clickable. Same additive rule as ``role``: the
     # CLI serializers enumerate fields explicitly, so this is not a wire change.
     line: int | None = None
+    # The finding's identity independent of WHERE it sits (#1051): for a
+    # ``unify`` finding, its message with each ``DE line N`` / ``EN line N``
+    # reference replaced by the bytes of the cell it points at. A line number
+    # moves with every edit above it; the cells do not. ``sync apply`` keys
+    # "did the pair already have this?" on it. ``None`` for the other kinds,
+    # whose ``slide_id`` (or message) already identifies them.
+    locus: str | None = None
+    # The bare anchor ids of the slides holding the cells a ``unify`` finding
+    # names (#1051) — empty when it names none, or any of them sits before
+    # the first slide. Not a ``slide_id``: the finding stays deck-wide for the
+    # #992 recording gate; ``sync apply`` uses it to try withholding just
+    # those slides' changes before it withholds the whole pass.
+    slide_groups: tuple[str, ...] = ()
 
 
 @dataclass
@@ -174,7 +190,16 @@ def structural_violations(de_text: str, en_text: str, comment_token: str) -> lis
     try:
         unify_texts(de_text, en_text, comment_token)
     except UnifyError as exc:
-        violations.append(VerifyViolation(severity="error", kind="unify", message=str(exc)))
+        locus, slide_groups = _unify_locus(str(exc), de_text, en_text, comment_token)
+        violations.append(
+            VerifyViolation(
+                severity="error",
+                kind="unify",
+                message=str(exc),
+                locus=locus,
+                slide_groups=slide_groups,
+            )
+        )
 
     de_keys = _slide_id_role_list(de_text, comment_token)
     en_keys = _slide_id_role_list(en_text, comment_token)
@@ -186,6 +211,53 @@ def structural_violations(de_text: str, en_text: str, comment_token: str) -> lis
     violations.extend(order_parity_violations(de_keys, en_keys))
     violations.extend(tag_parity_violations(de_text, en_text, comment_token))
     return violations
+
+
+_LINE_REF_RE = re.compile(r"\b(DE|EN) line (\d+)")
+
+
+def _unify_locus(
+    message: str, de_text: str, en_text: str, comment_token: str
+) -> tuple[str, tuple[str, ...]]:
+    """``(locus, slide_groups)`` of a ``unify`` finding (#1051).
+
+    ``locus`` is ``message`` with each ``DE line N`` / ``EN line N`` replaced
+    by that cell's bytes. :class:`~clm.slides.split.UnifyError` names cells by
+    their header line, which shifts with every edit above them; the cell's own
+    bytes do not. So two texts that fail on the same cells get the same locus
+    however far the cells moved, while a failure on any other cell — or on
+    one whose bytes changed — gets a different one. A reference to no cell
+    header keeps its line number.
+
+    ``slide_groups`` are the bare anchor ids of the slides (or subslides)
+    holding the named cells, in order — empty when the message names no cell,
+    or a named cell precedes every anchor.
+    """
+    cells: dict[str, dict[int, tuple[str, str | None]]] = {}
+    for half, text in (("DE", de_text), ("EN", en_text)):
+        anchor: str | None = None
+        by_line: dict[int, tuple[str, str | None]] = {}
+        for cell in split_cells(text, comment_token)[1]:
+            meta = cell.metadata
+            if meta.slide_id and ("slide" in meta.tags or "subslide" in meta.tags):
+                anchor = strip_preserve_marker(meta.slide_id)
+            by_line[cell.line_number] = ("\n".join(cell.lines), anchor)
+        cells[half] = by_line
+
+    groups: list[str | None] = []
+
+    def cell_of(match: re.Match[str]) -> str:
+        found = cells[match.group(1)].get(int(match.group(2)))
+        if found is None:
+            groups.append(None)
+            return match.group(0)
+        groups.append(found[1])
+        return f"{match.group(1)} cell {found[0]!r}"
+
+    locus = _LINE_REF_RE.sub(cell_of, message)
+    if not groups or any(g is None for g in groups):
+        return locus, ()
+    return locus, tuple(dict.fromkeys(g for g in groups if g is not None))
 
 
 def order_parity_violations(
@@ -506,8 +578,108 @@ def gate_projected_pair(
     projection introduced — and logs each at WARNING. A corruption in the deck halves
     themselves still blocks the write: the flag is deliberately not a ``--force``.
     """
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    return _gate_projection(
+        de_path,
+        en_path,
+        project_pair(de_path, en_path, de_text, en_text),
+        de_text,
+        en_text,
+        comment_token,
+        slide_id=slide_id,
+        role=role,
+        allow_diverged_companion=allow_diverged_companion,
+    )
+
+
+def gate_projected_texts(
+    de_path: Path,
+    en_path: Path,
+    de_text: str,
+    en_text: str,
+    de_companion_text: str | None,
+    en_companion_text: str | None,
+    comment_token: str | None = None,
+    *,
+    allow_diverged_companion: bool = False,
+) -> list[VerifyViolation]:
+    """:func:`gate_projected_pair` over the texts a writer is ABOUT to land (#1051).
+
+    The same projection and the same checks, but over in-memory texts — the
+    deck halves and each half's companion (``None`` = that half has no
+    companion file). ``sync apply`` runs it over its projected finals before
+    writing, so a slide group whose changes would fail the verify is withheld
+    from the write instead of being written and left unrecorded. Nothing is
+    read from disk; the paths only pick the comment token and name the files.
+    """
+    return _gate_projection(
+        de_path,
+        en_path,
+        project_texts(de_path, en_path, de_text, en_text, de_companion_text, en_companion_text),
+        de_text,
+        en_text,
+        comment_token,
+        allow_diverged_companion=allow_diverged_companion,
+        # An in-memory check is a preview, not a recording: the override is
+        # logged once, by the gate that judges what is actually recorded.
+        log_overrides=False,
+    )
+
+
+def apply_verify_gate(
+    de_path: Path,
+    en_path: Path,
+    comment_token: str | None = None,
+    *,
+    allow_diverged_companion: bool = False,
+) -> Callable[..., list[VerifyViolation]]:
+    """The ``verify_gate`` ``sync apply`` hands to :func:`clm.slides.doc_apply.apply_deck`.
+
+    Called with the bundle's file texts (keyed ``(lang, part)``, part
+    ``deck`` / ``companion``, ``None`` = no such file) it gates those
+    in-memory texts — the projected finals apply is about to write (#1051);
+    called with no argument it gates the files on disk (the post-write
+    check, #992).
+    """
+
+    def gate(texts: Mapping[tuple[str, str], str | None] | None = None) -> list[VerifyViolation]:
+        if texts is None:
+            return gate_projected_pair(
+                de_path,
+                en_path,
+                comment_token,
+                allow_diverged_companion=allow_diverged_companion,
+            )
+        return gate_projected_texts(
+            de_path,
+            en_path,
+            texts[("de", "deck")] or "",
+            texts[("en", "deck")] or "",
+            texts[("de", "companion")],
+            texts[("en", "companion")],
+            comment_token,
+            allow_diverged_companion=allow_diverged_companion,
+        )
+
+    return gate
+
+
+def _gate_projection(
+    de_path: Path,
+    en_path: Path,
+    projection: ProjectedPair,
+    raw_de: str,
+    raw_en: str,
+    comment_token: str | None,
+    *,
+    slide_id: str | None = None,
+    role: str | None = None,
+    allow_diverged_companion: bool = False,
+    log_overrides: bool = True,
+) -> list[VerifyViolation]:
+    """The shared body of the two projected gates (disk and in-memory)."""
     token = comment_token if comment_token is not None else comment_token_for_path(de_path)
-    projection = projected_pair(de_path, en_path)
     violations = structural_gate(
         projection.de_text, projection.en_text, token, slide_id=slide_id, role=role
     )
@@ -551,14 +723,14 @@ def gate_projected_pair(
     if not allow_diverged_companion:
         return violations
     raw_violations = structural_gate(
-        de_path.read_text(encoding="utf-8"),
-        en_path.read_text(encoding="utf-8"),
+        raw_de,
+        raw_en,
         token,
         slide_id=slide_id,
         role=role,
     )
     overridden = _companion_only(violations, raw_violations)
-    for violation in overridden:
+    for violation in overridden if log_overrides else []:
         logger.warning(
             "--allow-diverged-companion: recording %s / %s despite a companion "
             "divergence the strict gate refuses — [%s] %s",
