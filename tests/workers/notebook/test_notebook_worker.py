@@ -1119,6 +1119,75 @@ class TestNotebookWorkerDockerPayloadData:
         assert captured_payload.input_file.replace("\\", "/").startswith("/source/")
 
     @pytest.mark.asyncio
+    async def test_docker_mode_payload_carries_container_output_path(
+        self, worker_id, db_path, tmp_path, monkeypatch
+    ):
+        """Regression test for #1039: on a Windows host the job's
+        ``output_file`` is a Windows path. The worker converted it for
+        writing but handed the processor the raw host path, and a Linux
+        container's ``PurePath`` takes that for one long file name — so the
+        C++ export named its header and ``_workshop_N.cpp`` files (and its
+        ``#include``) after the whole host path (Errno 36). The payload must
+        carry the converted container path, like ``input_file``."""
+        from pathlib import PurePosixPath
+
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        container_workspace = tmp_path / "workspace"
+        monkeypatch.setattr(
+            "clm.infrastructure.workers.worker_base.CONTAINER_WORKSPACE",
+            str(container_workspace),
+        )
+        monkeypatch.setenv("CLM_HOST_WORKSPACE", r"C:\Users\tc\out")
+        monkeypatch.delenv("CLM_HOST_DATA_DIR", raising=False)
+
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(tmp_path / "slides_sums.cpp"),
+            output_file=r"C:\Users\tc\out\Slides\Cpp\Completed\03 Sums.cpp",
+            content_hash="test-hash",
+            payload={
+                "data": "// %%\nint x{1};\n",
+                "kind": "completed",
+                "prog_lang": "cpp",
+                "language": "en",
+                "format": "code",
+            },
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path)
+
+        captured_payload = None
+
+        async def mock_process_notebook(payload, source_dir=None):
+            nonlocal captured_payload
+            captured_payload = payload
+            return "int main() {}\n"
+
+        with patch.object(worker, "_ensure_cache_initialized", return_value=None):
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = mock_process_notebook
+                mock_processor.get_warnings.return_value = []
+                mock_processor.get_companion_outputs.return_value = {
+                    "03 Sums.hpp": "#pragma once\n"
+                }
+                MockProcessor.return_value = mock_processor
+
+                await worker._process_job_async(job)
+
+        expected = container_workspace / "Slides" / "Cpp" / "Completed" / "03 Sums.cpp"
+        assert captured_payload is not None
+        assert captured_payload.output_file == str(expected)
+        # The stem a Linux container derives is the deck name, not the host path.
+        assert PurePosixPath(captured_payload.output_file.replace("\\", "/")).stem == "03 Sums"
+        assert expected.read_text(encoding="utf-8") == "int main() {}\n"
+        assert (expected.parent / "03 Sums.hpp").is_file()
+
+    @pytest.mark.asyncio
     async def test_docker_mode_falls_back_to_mount_read_for_empty_payload_data(
         self, worker_id, db_path, tmp_path, monkeypatch
     ):
