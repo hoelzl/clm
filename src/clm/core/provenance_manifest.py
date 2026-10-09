@@ -46,6 +46,7 @@ from clm.core.cpp_export_files import companion_output_files
 from clm.core.image_registry import get_relative_img_path
 from clm.core.utils.path_utils import (
     PRIVATE_KINDS,
+    PUBLIC_KINDS,
     asset_output_languages,
     asset_output_specs,
     ext_for,
@@ -75,8 +76,8 @@ _MAX_HASH_WORKERS = 16
 
 # Audience routing for shared-mode images, mirroring the ``target`` branch of
 # ``SharedImageFile.get_processing_operation``: every kind in
-# ``PRIVATE_KINDS`` lands under the ``speaker/`` toplevel.
-_SHARED_PUBLIC_KINDS = frozenset({"code-along", "completed", "partial"})
+# ``PRIVATE_KINDS`` lands under the ``speaker/`` toplevel, every kind in
+# ``PUBLIC_KINDS`` under the public one.
 
 
 def _shared_image_audiences(target: OutputTarget) -> list[bool]:
@@ -89,7 +90,7 @@ def _shared_image_audiences(target: OutputTarget) -> list[bool]:
     """
     kinds = set(target.kinds)
     options: list[bool] = []
-    if kinds & _SHARED_PUBLIC_KINDS:
+    if kinds & PUBLIC_KINDS:
         options.append(False)
     if kinds & PRIVATE_KINDS:
         options.append(True)

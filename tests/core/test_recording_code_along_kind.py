@@ -98,3 +98,17 @@ def test_target_with_kind_but_no_notebook_format_is_rejected():
     assert any("recording-code-along" in e and "notebook" in e for e in errors)
     ok = OutputTargetSpec(name="rec", path="output/rec", kinds=[KIND], formats=["notebook"])
     assert ok.validate() == []
+
+
+def test_public_and_private_kinds_partition_every_kind():
+    """#1026 drift guard: a hand-written public subset forgot ``partial``.
+
+    Every kind is either public or private, never both, so the two shared
+    constants together answer the audience question for any kind — including
+    one added later.
+    """
+    from clm.core.utils.path_utils import PUBLIC_KINDS
+
+    assert PUBLIC_KINDS.isdisjoint(PRIVATE_KINDS)
+    assert PUBLIC_KINDS | PRIVATE_KINDS == {k.value for k in Kind}
+    assert VALID_KINDS <= PUBLIC_KINDS | PRIVATE_KINDS

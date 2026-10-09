@@ -62,7 +62,7 @@ from clm.core.course_spec import (
     SectionSelection,
 )
 from clm.core.messaging.correlation_ids import all_correlation_ids
-from clm.core.utils.path_utils import PRIVATE_KINDS, output_path_for
+from clm.core.utils.path_utils import PRIVATE_KINDS, PUBLIC_KINDS, output_path_for
 from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 
@@ -730,7 +730,7 @@ def initialize_paths_and_course(
                 list(target.languages & set(languages)) if languages else list(target.languages)
             )
             for lang in target_languages:
-                if target.kinds & {"code-along", "completed"}:
+                if target.kinds & PUBLIC_KINDS:
                     root_dirs.append(
                         output_path_for(
                             target.output_root,

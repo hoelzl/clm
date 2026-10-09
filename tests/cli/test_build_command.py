@@ -894,6 +894,91 @@ class TestInitializePathsAndCourse:
         with pytest.raises(SystemExit):
             initialize_paths_and_course(config)
 
+    @pytest.mark.parametrize("explicit", [True, False], ids=["explicit", "toplevel"])
+    @pytest.mark.parametrize(
+        ("kinds", "public", "private"),
+        [
+            (["partial"], True, False),  # #1026: the filed shape
+            (["code-along"], True, False),
+            (["completed"], True, False),
+            (["partial", "trainer"], True, True),
+            (["trainer"], False, True),
+        ],
+    )
+    def test_root_dirs_cover_every_public_kind(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        kinds: list[str],
+        public: bool,
+        private: bool,
+        explicit: bool,
+    ) -> None:
+        """Regression test for #1026.
+
+        ``root_dirs`` (the sweep / ``--clean`` / ownership-snapshot roots)
+        added a target's public root only for ``code-along`` /
+        ``completed``, so a target whose only kind is ``partial`` had its
+        output tree left out of cleanup. Every public kind must contribute
+        the public root. Spec targets are explicit (public and private
+        roots coincide at ``<path>/<course-dir>``); the ``toplevel`` variant
+        re-runs the check with the ``public/``/``speaker/`` routing so the
+        two roots are distinguishable.
+        """
+        from attrs import evolve
+
+        from clm.core.utils.path_utils import output_path_for
+
+        config = self._config(tmp_path)
+        (config.data_dir / "slides").mkdir()
+        kind_xml = "".join(f"<kind>{k}</kind>" for k in kinds)
+        config.spec_file.write_text(
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <output-targets>
+        <output-target name="t">
+            <path>t</path>
+            <kinds>{kind_xml}</kinds>
+            <languages><language>en</language></languages>
+        </output-target>
+    </output-targets>
+    <sections/>
+</course>
+""",
+            encoding="utf-8",
+        )
+        if not explicit:
+            real_from_spec = engine_module.Course.from_spec
+
+            def toplevel_from_spec(*args, **kwargs):
+                course = real_from_spec(*args, **kwargs)
+                course.output_targets = [
+                    evolve(t, is_explicit=False) for t in course.output_targets
+                ]
+                return course
+
+            monkeypatch.setattr(engine_module.Course, "from_spec", toplevel_from_spec)
+
+        course, root_dirs, _ = initialize_paths_and_course(config)
+
+        [target] = course.output_targets
+        assert target.is_explicit is explicit
+        name = course.output_dir_name["en"]
+        public_root = output_path_for(
+            target.output_root, False, "en", name, skip_toplevel=target.is_explicit
+        )
+        private_root = output_path_for(
+            target.output_root, True, "en", name, skip_toplevel=target.is_explicit
+        )
+        if explicit:
+            assert public_root == private_root
+            assert (public_root in root_dirs) is (public or private), root_dirs
+        else:
+            assert (public_root in root_dirs) is public, root_dirs
+            assert (private_root in root_dirs) is private, root_dirs
+
 
 # ---------------------------------------------------------------------------
 # list_targets CLI
