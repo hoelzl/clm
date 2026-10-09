@@ -310,9 +310,9 @@ def uncrossed_pairs(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
     `order_decision` on the id-keyed scope). Choosing one of them here would
     turn that framed question into a silent pool split. The differ applies
     this same predicate to its own sync points (``sync_diff._Differ.
-    _build_span_index``, #1052): a positional cell whose placement differs
-    only by way of a crossed pair is suspended while the order row lands,
-    never framed as a placement question beside it.
+    _crossed_sync_points``, #1052): a positional cell whose placement differs
+    only by way of a crossed pair frames no placement question beside the
+    order row.
     """
     return [
         (de_i, en_i)

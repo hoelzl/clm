@@ -2577,8 +2577,7 @@ which re-frame on the next report once the tags are reconciled),
 transition — fork/unify/id-stamp — shifted a positional pool's per-side
 accounting, so its slots' cross-side pairings are order guesses; the pool's
 rows are suspended for the pass, answerless — resolve the transition and
-re-report, #826; also a positional cell between id'd cells the halves order
-differently, held back until that pass's order row lands, #1052), `pool_placement_divergence` (the two halves place a
+re-report, #826), `pool_placement_divergence` (the two halves place a
 positional cell on different sides of an id-keyed sibling — an id-keyed
 member present on both halves is a sync point no positional pairing may
 cross; answer `de`/`en` to adopt that half's placement — the other half's

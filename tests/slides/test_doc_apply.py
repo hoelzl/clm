@@ -5048,11 +5048,11 @@ class TestOrderMirrorAroundPositionalCells:
     Two id'd cells swapped around a positional cell framed a placement row
     beside the mechanical ``mirror_order``; one-order-authority deferred the
     mirror, the placement answer re-homed the DE cell against the pre-mirror
-    order, and DE was written with a divergent id order. Now the slot is
-    suspended while the crossed id'd cells move, the order row lands on its
-    own, and where the positional cell's placement still differs once the
-    id'd order agrees, the next pass frames that placement as its own
-    question (never a mechanical guess at it).
+    order, and DE was written with a divergent id order. Now a placement
+    that differs only by way of the crossed id'd cells is no question: the
+    order row lands, and where the positional cell's placement still
+    differs once the id'd order agrees, the next pass frames that placement
+    as its own question (never a mechanical guess at it).
     """
 
     @staticmethod
@@ -5105,13 +5105,9 @@ class TestOrderMirrorAroundPositionalCells:
             if i.action == "translate_edit"
         }
         outcome = deck.apply(decisions, verify_gate=self._gate(deck))
-        assert outcome.error is None, outcome.to_payload()
+        assert outcome.all_applied, outcome.to_payload()
         assert outcome.verify_violations == [], outcome.verify_violations
-        statuses = {(r.action, r.status) for r in outcome.results}
-        assert ("mirror_order", "applied") in statuses, outcome.to_payload()
-        # Only the suspension waits; nothing is rejected, failed or deferred.
-        assert {status for _, status in statuses} <= {"applied", "recorded", "pending"}
-        assert {a for a, st in statuses if st == "pending"} <= {"pool_pairing_shifted"}
+        assert ("mirror_order", "applied") in {(r.action, r.status) for r in outcome.results}
 
     def _placement_pass(self, deck: _Deck, adopt: str) -> None:
         """Pass 2: the id'd order agrees; a positional cell the halves still
@@ -5131,6 +5127,16 @@ class TestOrderMirrorAroundPositionalCells:
         deck = self._deck(tmp_path, base, base, moved, edited=True)
         self._order_pass(deck)
         assert deck.de_path.read_text(encoding="utf-8") == _build(*self._parts("de", moved, True))
+        deck.assert_converged()
+
+    def test_swap_with_the_positional_cell_edited(self, tmp_path: Path):
+        # Round-3 review: the cell's own edit lands in the same pass.
+        deck = self._deck(tmp_path, ["a", "code", "b"], ["a", "code", "b"], ["b", "code", "a"])
+        deck.edit_en("c = Color.RED", "c = Color.GREEN")
+        self._order_pass(deck)
+        assert deck.de_path.read_text(encoding="utf-8") == _build(
+            *self._parts("de", ["b", "code", "a"])
+        ).replace("c = Color.RED", "c = Color.GREEN")
         deck.assert_converged()
 
     def test_1052_pure_swap(self, tmp_path: Path):
