@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from clm.workers.notebook.cpp_code_analysis import (
+    DEFINITION_CATEGORIES,
     classify_source,
     classify_source_spans,
     mask_comments_and_strings,
@@ -1104,6 +1105,79 @@ class TestRequiresClause:
         assert item.original == _REQUIRES_CLAUSE_TEMPLATE
 
 
+_CONCEPT_CELL = _dedent(
+    """
+    template <typename T>
+    concept SignedNumber = std::signed_integral<T> || std::floating_point<T>;
+    """
+)
+
+
+class TestConceptDefinition:
+    """Issue #1045: ``template <...> concept X = ...;`` is a definition.
+
+    The classifier stripped the template head and the variable regex took
+    ``concept`` for a type, so a concept-only cell was a ``var_decl`` and
+    the emitter left it in its section function (``a template declaration
+    cannot appear at block scope``).
+    """
+
+    @pytest.mark.parametrize(
+        "src, name",
+        [
+            (_CONCEPT_CELL, "SignedNumber"),
+            ("template <class T> concept Small = sizeof(T) <= 4;", "Small"),
+            (
+                "template <typename T, typename U> concept SameAs = std::is_same_v<T, U>;",
+                "SameAs",
+            ),
+            (
+                "template <typename T>\nconcept Printable = requires(T t) { std::cout << t; };",
+                "Printable",
+            ),
+            ("template <typename T> concept Ok = true;", "Ok"),
+        ],
+    )
+    def test_concept_is_a_definition(self, src, name):
+        (item,) = classify_source(src)
+        assert (item.category, item.name) == ("concept_def", name)
+        assert item.category in DEFINITION_CATEGORIES
+
+    def test_concept_then_function_template_cell(self):
+        items = classify_source(
+            "template <typename T> concept Addable = requires(T a) { a + a; };\n"
+            "auto sum3(Addable auto a, Addable auto b, Addable auto c) { return a + b + c; }"
+        )
+        assert [(i.category, i.name) for i in items] == [
+            ("concept_def", "Addable"),
+            ("fn_def", "sum3"),
+        ]
+
+    def test_concept_only_cell_goes_to_namespace_scope(self):
+        tu = emit(
+            slide("Combining concepts", "combining-concepts"),
+            code("#include <concepts>"),
+            code(_CONCEPT_CELL),
+            code("static_assert(SignedNumber<int>);"),
+        )
+        assert "\n" + _CONCEPT_CELL in tu
+        body = _function_body(tu, "slide_combining_concepts")
+        assert "concept SignedNumber" not in body
+        assert "    static_assert(SignedNumber<int>);" in body
+
+    def test_concept_is_a_defined_name_for_workshop_scope(self):
+        # A workshop that uses an untagged lecture concept is reported like
+        # any other lecture definition the workshop file cannot see.
+        files = emit_files(
+            code("#include <concepts>"),
+            code(_CONCEPT_CELL),
+            workshop("Workshop", "ws"),
+            code("auto twice(SignedNumber auto x) { return 2 * x; }"),
+            stem="deck",
+        )
+        assert files.workshop_lecture_uses == {1: ("SignedNumber",)}
+
+
 class TestParenInitialization:
     """``int i2(20);`` is a variable, not a function declaration (#928)."""
 
@@ -1651,5 +1725,16 @@ class TestEmittedCodeCompiles:
         # #921: the constrained template must not be display-wrapped.
         tu = emit(
             code("#include <concepts>"), code(_REQUIRES_CLAUSE_TEMPLATE), code("ordered_min(1, 2)")
+        )
+        self._check(tu, tmp_path)
+
+    def test_concept_only_cell_compiles(self, tmp_path):
+        # #1045: a concept cannot be declared at block scope.
+        tu = emit(
+            slide("Combining concepts", "combining-concepts"),
+            code("#include <concepts>"),
+            code(_CONCEPT_CELL),
+            code("auto twice(SignedNumber auto x) { return 2 * x; }"),
+            code("twice(21)"),
         )
         self._check(tu, tmp_path)

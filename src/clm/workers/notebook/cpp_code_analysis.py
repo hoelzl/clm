@@ -55,7 +55,16 @@ class CppItem:
 
 # Categories that introduce a named entity at namespace scope.
 DEFINITION_CATEGORIES = frozenset(
-    {"type_def", "fn_def", "member_fn_def", "alias_def", "namespace_def", "fn_decl", "type_decl"}
+    {
+        "type_def",
+        "fn_def",
+        "member_fn_def",
+        "alias_def",
+        "concept_def",
+        "namespace_def",
+        "fn_decl",
+        "type_decl",
+    }
 )
 # Categories that are executable statements (need wrapping into a function
 # body for the code export).
@@ -444,6 +453,12 @@ def classify_item(item: str) -> CppItem:
         return CppItem("namespace_def", text=text)
     if re.match(r"^using\s+namespace\b", text):
         return CppItem("using_directive", text=text)
+    cm = re.match(r"^concept\s+(\w+)\s*=", text)
+    if cm:
+        # `template <typename T> concept C = ...;` (the template head is
+        # stripped above). Without this branch the variable regex took
+        # `concept` for a type and the concept stayed at block scope (#1045).
+        return CppItem("concept_def", cm.group(1), text=text)
     if re.match(r"^using\s+\w+\s*=", text) or text.startswith("typedef"):
         nm = re.match(r"^using\s+(\w+)\s*=", text)
         return CppItem("alias_def", nm.group(1) if nm else None, text=text)
