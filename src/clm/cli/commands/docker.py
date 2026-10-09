@@ -41,6 +41,68 @@ console = Console(file=sys.stderr)
 CACHE_DIR_NAME = ".docker-cache"
 
 
+# Variants of the notebook image. ``clm docker build notebook`` builds every
+# variant and ``clm docker push notebook-processor`` publishes every variant.
+NOTEBOOK_VARIANTS = ("lite", "full")
+
+
+def image_repository(full_service_name: str) -> str:
+    """Return the image repository (no tag) for a full service name."""
+    return f"{REGISTRY}/{HUB_NAMESPACE}/clm-{full_service_name}"
+
+
+def service_tags(full_service_name: str, version: str, variant: str | None = None) -> list[str]:
+    """Return the tags ``clm docker build`` applies to one service image.
+
+    This is the single source of truth for image tags: the build commands tag
+    with exactly these, and ``push_service`` publishes exactly these (#1043),
+    so the two cannot drift apart.
+
+    Args:
+        full_service_name: Full service name (e.g. "notebook-processor").
+        version: Version string for tagging.
+        variant: For notebook-processor only: "lite" or "full". The lite image
+            is the default and also carries the bare ``:VERSION`` and
+            ``:latest`` tags; the full image is reachable only through its
+            explicit ``:VERSION-full`` / ``:full`` tags.
+
+    Returns:
+        Tags (without the repository prefix), primary tag first.
+    """
+    if full_service_name != SERVICE_NAME_MAP["notebook"]:
+        return [version, "latest"]
+    if variant == "lite":
+        return [version, f"{version}-lite", "latest", "lite"]
+    if variant == "full":
+        return [f"{version}-full", "full"]
+    raise ValueError(f"Unknown notebook variant: {variant!r}")
+
+
+def all_service_tags(full_service_name: str, version: str) -> list[str]:
+    """Return every tag ``clm docker build`` creates for a service.
+
+    For the notebook processor that is the tags of every ``NOTEBOOK_VARIANTS``
+    image; for the single-variant services it is ``service_tags``.
+    """
+    if full_service_name == SERVICE_NAME_MAP["notebook"]:
+        return [
+            tag
+            for variant in NOTEBOOK_VARIANTS
+            for tag in service_tags(full_service_name, version, variant)
+        ]
+    return service_tags(full_service_name, version)
+
+
+def _tag_args(image_name: str, tags: list[str]) -> list[str]:
+    """Return ``-t IMAGE:TAG`` arguments for a ``docker build`` command."""
+    return [arg for tag in tags for arg in ("-t", f"{image_name}:{tag}")]
+
+
+def _tag_list(image_name: str, tags: list[str]) -> str:
+    """Return a human-readable, comma-separated list of image references."""
+    return ", ".join(f"{image_name}:{tag}" for tag in tags)
+
+
 def get_version() -> str:
     """Get CLM version from the package.
 
@@ -181,7 +243,8 @@ def build_service(
         True if build succeeded, False otherwise.
     """
     full_service_name = SERVICE_NAME_MAP.get(service_name, service_name)
-    image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{full_service_name}"
+    image_name = image_repository(full_service_name)
+    tags = service_tags(full_service_name, version)
 
     dockerfile = docker_path / "Dockerfile"
     if not dockerfile.exists():
@@ -201,10 +264,7 @@ def build_service(
         str(dockerfile),
         "--build-arg",
         f"DOCKER_PATH=docker/{service_name}",
-        "-t",
-        f"{image_name}:{version}",
-        "-t",
-        f"{image_name}:latest",
+        *_tag_args(image_name, tags),
         # Load the image into docker (buildx doesn't do this by default)
         "--load",
     ]
@@ -221,7 +281,7 @@ def build_service(
     try:
         run_docker_command(build_args)
         console.print(f"[green]Successfully built {image_name}:{version}[/green]")
-        console.print(f"[green]  Tagged as: {image_name}:{version}, {image_name}:latest[/green]")
+        console.print(f"[green]  Tagged as: {_tag_list(image_name, tags)}[/green]")
         return True
 
     except subprocess.CalledProcessError:
@@ -246,7 +306,8 @@ def build_notebook_variant(
     Returns:
         True if build succeeded, False otherwise.
     """
-    image_name = f"{REGISTRY}/{HUB_NAMESPACE}/clm-notebook-processor"
+    image_name = image_repository(SERVICE_NAME_MAP["notebook"])
+    tags = service_tags(SERVICE_NAME_MAP["notebook"], version, variant)
 
     console.print(f"[yellow]Building notebook-processor:{variant} (version {version})...[/yellow]")
 
@@ -274,48 +335,16 @@ def build_notebook_variant(
         console.print("[blue]Using local cache for faster builds[/blue]")
     build_args.extend(cache_to_args)
 
-    # Add tags based on variant
-    # Lite is the default (gets :latest tag), full requires explicit :full tag
-    if variant == "lite":
-        build_args.extend(
-            [
-                "-t",
-                f"{image_name}:{version}",
-                "-t",
-                f"{image_name}:{version}-lite",
-                "-t",
-                f"{image_name}:latest",
-                "-t",
-                f"{image_name}:lite",
-            ]
-        )
-    else:
-        build_args.extend(
-            [
-                "-t",
-                f"{image_name}:{version}-full",
-                "-t",
-                f"{image_name}:full",
-            ]
-        )
+    # Lite is the default (also gets :VERSION and :latest); full requires the
+    # explicit :full tag. See service_tags().
+    build_args.extend(_tag_args(image_name, tags))
 
     build_args.append(".")
 
     try:
         run_docker_command(build_args)
         console.print(f"[green]Successfully built {image_name}:{variant}[/green]")
-        if variant == "lite":
-            console.print(
-                f"[green]  Tagged as: {image_name}:{version}, {image_name}:latest "
-                f"(default = lite)[/green]"
-            )
-            console.print(
-                f"[green]  Tagged as: {image_name}:{version}-lite, {image_name}:lite[/green]"
-            )
-        else:
-            console.print(
-                f"[green]  Tagged as: {image_name}:{version}-full, {image_name}:full[/green]"
-            )
+        console.print(f"[green]  Tagged as: {_tag_list(image_name, tags)}[/green]")
         return True
 
     except subprocess.CalledProcessError:
@@ -353,7 +382,12 @@ def build_notebook(
 
 
 def push_service(service_name: str, version: str) -> bool:
-    """Push a service image to Docker Hub.
+    """Push every tag ``clm docker build`` creates for a service to Docker Hub.
+
+    For the notebook processor that is both variants' tags (``:VERSION``,
+    ``:VERSION-lite``, ``:latest``, ``:lite``, ``:VERSION-full``, ``:full``).
+    Every tag must exist locally before anything is pushed, so a partial local
+    build never yields a half-published release (#1043).
 
     Args:
         service_name: Full service name (e.g., "drawio-converter").
@@ -362,29 +396,26 @@ def push_service(service_name: str, version: str) -> bool:
     Returns:
         True if push succeeded, False otherwise.
     """
-    image_version = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{service_name}:{version}"
-    image_latest = f"{REGISTRY}/{HUB_NAMESPACE}/clm-{service_name}:latest"
+    image_name = image_repository(service_name)
+    refs = [f"{image_name}:{tag}" for tag in all_service_tags(service_name, version)]
 
     console.print(f"[yellow]Pushing {service_name}...[/yellow]")
 
-    # Check if image exists
-    result = subprocess.run(
-        ["docker", "image", "inspect", image_version],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        console.print(f"[red]Error: Image {image_version} not found[/red]")
-        console.print("[blue]Run 'clm docker build' first[/blue]")
+    missing = [ref for ref in refs if not image_exists_locally(ref)]
+    if missing:
+        for ref in missing:
+            console.print(f"[red]Error: Image {ref} not found[/red]")
+        build_target = next(
+            (short for short, full in SERVICE_NAME_MAP.items() if full == service_name),
+            service_name,
+        )
+        console.print(f"[blue]Run 'clm docker build {build_target}' first[/blue]")
         return False
 
     try:
-        # Push version tag
-        console.print(f"[blue]Pushing {image_version}[/blue]")
-        run_docker_command(["push", image_version])
-
-        # Push latest tag
-        console.print(f"[blue]Pushing {image_latest}[/blue]")
-        run_docker_command(["push", image_latest])
+        for ref in refs:
+            console.print(f"[blue]Pushing {ref}[/blue]")
+            run_docker_command(["push", ref])
 
         console.print(f"[green]Successfully pushed {service_name}[/green]")
         return True
@@ -919,12 +950,12 @@ def docker_list():
 
         console.print(f"[cyan]{short_name}[/cyan]")
         console.print(f"  Image: {image_name}")
-        console.print(f"  Tags:  {image_name}:{version}, {image_name}:latest")
-
         if short_name == "notebook":
-            console.print(
-                f"  Variants: lite ({image_name}:lite = :latest), full ({image_name}:full)"
-            )
+            for variant in NOTEBOOK_VARIANTS:
+                tags = service_tags(full_name, version, variant)
+                console.print(f"  Tags ({variant}): {_tag_list(image_name, tags)}")
+        else:
+            console.print(f"  Tags:  {_tag_list(image_name, service_tags(full_name, version))}")
 
         # Check if docker directory exists
         if project_root:
