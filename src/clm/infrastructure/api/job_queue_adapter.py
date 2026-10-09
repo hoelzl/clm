@@ -6,11 +6,11 @@ communicating via direct SQLite or via REST API.
 
 import json
 import logging
-from datetime import datetime
 from typing import Any
 
 from clm.infrastructure.api.client import WorkerApiClient, WorkerApiError
 from clm.infrastructure.database.job_queue import Job
+from clm.infrastructure.database.timestamps import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,8 @@ class ApiJobQueue:
                 output_file=job_info.output_file,
                 content_hash=job_info.content_hash,
                 payload=job_info.payload,
-                created_at=datetime.now(),  # Not available from API
+                # Not available from the API; aware UTC like DB-read jobs (#1021).
+                created_at=utc_now(),
                 attempts=1,
                 priority=0,
                 worker_id=wid,

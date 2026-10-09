@@ -1,6 +1,6 @@
 """Formatting utilities for monitor TUI."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def format_elapsed(seconds: int | float) -> str:
@@ -44,7 +44,10 @@ def format_timestamp(dt: datetime, relative: bool = False) -> str:
         Formatted timestamp string
     """
     if relative:
-        now = datetime.now()
+        # DB timestamps are aware UTC (#1021): subtract an aware "now" so the
+        # result is exact (no UTC-offset or DST drift). Naive input keeps the
+        # legacy local-time comparison.
+        now = datetime.now(timezone.utc) if dt.tzinfo is not None else datetime.now()
         delta = (now - dt).total_seconds()
 
         if delta < 60:
@@ -56,6 +59,9 @@ def format_timestamp(dt: datetime, relative: bool = False) -> str:
         else:
             return f"{int(delta // 86400)}d ago"
     else:
+        if dt.tzinfo is not None:
+            # Show aware (UTC) DB timestamps in local wall-clock time (#1021).
+            dt = dt.astimezone()
         return dt.strftime("%H:%M:%S")
 
 

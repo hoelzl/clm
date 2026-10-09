@@ -67,14 +67,14 @@ def jobs_cancel(ctx, older_than, job_type, dry_run, force):
         pending_jobs = jq.get_jobs_by_status("pending", limit=10000)
 
         # Apply filters to get the count
-        from datetime import datetime
+        from clm.infrastructure.database.timestamps import utc_now
 
         matching = []
         for job in pending_jobs:
             if job_type and job.job_type != job_type:
                 continue
             if min_age_seconds is not None:
-                age = (datetime.now() - job.created_at).total_seconds()
+                age = (utc_now() - job.created_at).total_seconds()
                 if age < min_age_seconds:
                     continue
             matching.append(job)
@@ -92,7 +92,7 @@ def jobs_cancel(ctx, older_than, job_type, dry_run, force):
 
         click.echo(f"Found {len(matching)} {description} job(s):")
         for job in matching[:10]:
-            age = (datetime.now() - job.created_at).total_seconds()
+            age = (utc_now() - job.created_at).total_seconds()
             if age >= 3600:
                 age_str = f"{age / 3600:.1f}h"
             elif age >= 60:
@@ -177,11 +177,11 @@ def jobs_list(ctx, status, limit, output_format):
         data = [job.to_dict() for job in jobs]
         click.echo(json.dumps(data, indent=2))
     else:
-        from datetime import datetime
+        from clm.infrastructure.database.timestamps import utc_now
 
         click.echo(f"{len(jobs)} {status} job(s):\n")
         for job in jobs:
-            age = (datetime.now() - job.created_at).total_seconds()
+            age = (utc_now() - job.created_at).total_seconds()
             if age >= 3600:
                 age_str = f"{age / 3600:.1f}h ago"
             elif age >= 60:

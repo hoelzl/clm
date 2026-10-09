@@ -16,6 +16,11 @@ from typing import Any, cast
 
 from clm.infrastructure.database.busy_retry import retry_on_busy
 from clm.infrastructure.database.journal_mode import configure_connection
+from clm.infrastructure.database.timestamps import (
+    parse_db_timestamp,
+    parse_optional_db_timestamp,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +381,7 @@ class JobQueue:
                 output_file=row["output_file"],
                 content_hash=row["content_hash"],
                 payload=json.loads(row["payload"]),
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_db_timestamp(row["created_at"]),
                 attempts=row["attempts"] + 1,
                 priority=row["priority"],
                 worker_id=worker_id,
@@ -424,8 +429,8 @@ class JobQueue:
                 # Calculate duration
                 duration = None
                 if job.started_at:
-                    duration = (datetime.now() - job.started_at).total_seconds()
-                duration_str = f" in {duration:.2f}s" if duration else ""
+                    duration = (utc_now() - job.started_at).total_seconds()
+                duration_str = f" in {duration:.2f}s" if duration is not None else ""
                 logger.info(
                     f"Job #{job_id} completed{duration_str} "
                     f"[worker: {job.worker_id}, file: {job.input_file}]"
@@ -584,19 +589,15 @@ class JobQueue:
             output_file=row["output_file"],
             content_hash=row["content_hash"],
             payload=json.loads(row["payload"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=parse_db_timestamp(row["created_at"]),
             attempts=row["attempts"],
             priority=row["priority"],
-            started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
-            completed_at=datetime.fromisoformat(row["completed_at"])
-            if row["completed_at"]
-            else None,
+            started_at=parse_optional_db_timestamp(row["started_at"]),
+            completed_at=parse_optional_db_timestamp(row["completed_at"]),
             worker_id=row["worker_id"],
             error=row["error"],
             correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
-            cancelled_at=datetime.fromisoformat(row["cancelled_at"])
-            if row["cancelled_at"]
-            else None,
+            cancelled_at=parse_optional_db_timestamp(row["cancelled_at"]),
             cancelled_by=row["cancelled_by"] if "cancelled_by" in row.keys() else None,
             session_id=row["session_id"] if "session_id" in row.keys() else None,
         )
@@ -714,15 +715,11 @@ class JobQueue:
                     output_file=row["output_file"],
                     content_hash=row["content_hash"],
                     payload=json.loads(row["payload"]),
-                    created_at=datetime.fromisoformat(row["created_at"]),
+                    created_at=parse_db_timestamp(row["created_at"]),
                     attempts=row["attempts"],
                     priority=row["priority"],
-                    started_at=datetime.fromisoformat(row["started_at"])
-                    if row["started_at"]
-                    else None,
-                    completed_at=datetime.fromisoformat(row["completed_at"])
-                    if row["completed_at"]
-                    else None,
+                    started_at=parse_optional_db_timestamp(row["started_at"]),
+                    completed_at=parse_optional_db_timestamp(row["completed_at"]),
                     worker_id=row["worker_id"],
                     error=row["error"],
                     correlation_id=row["correlation_id"]
