@@ -55,8 +55,11 @@ notebook kernel tags its outgoing requests with the destination cassette
 The tagging is done by patching the HTTP client libraries inside the kernel.
 Covered:
 
-- **httpx** (`Client`/`AsyncClient`) — the stack the OpenAI/Anthropic/LangChain
-  SDKs use;
+- **httpx** (`Client`/`AsyncClient`) — the stack LangChain and `openai` < 3
+  use;
+- **httpx2** (`Client`/`AsyncClient`) — the separate package `openai` >= 3,
+  `anthropic` and `mcp` send through (including their aiohttp-backed
+  `Httpx2AiohttpClient`);
 - **requests** (`Session.send`, which the module-level `requests.get`/`post`
   helpers funnel through);
 - **aiohttp** (`ClientSession`).
@@ -64,10 +67,15 @@ Covered:
 Traffic from any *other* HTTP stack — `urllib.request`, raw
 `urllib3`/`http.client`, or a subprocess that honors `HTTP(S)_PROXY` — still
 flows through the proxy (the proxy env vars and CA bundle are set
-process-wide), but arrives **untagged**: it is matched and recorded against a
-per-build *catch-all* cassette in the build scratch directory, **not** the
-topic's canonical cassette, so its recordings are never committed and strict
-`replay` will miss. CLM logs a warning in the build log
+process-wide), but arrives **untagged**, so no topic cassette can match or
+record it. Strict modes (`replay` and `once`) refuse it with a non-retryable
+`404` whose `clm_replay_miss` message says the request carried no routing
+tag, so the cell fails instead of contacting the real server. Recording
+modes (`new-episodes`, `refresh`) forward it to the real server on every
+build and record it only into a *catch-all* cassette in the `mitm/`
+directory next to the jobs database. That file persists across builds but
+is machine-local and never committed, and it is never replayed from.
+CLM logs a warning in the build log
 (`CLM-HTTP-REPLAY-UNTAGGED: …`, once per build, naming the first offending
 request) when this happens. If you hit it, switch the deck to a covered
 client library (or file an issue to extend the tag bootstrap to the stack

@@ -206,6 +206,20 @@ def _staging_files(canonical: Path) -> list[Path]:
     ]
 
 
+def _topic_cassette(tmp_path: Path) -> Path:
+    """A topic's canonical cassette path. Replay tests tag their requests with
+    it: since #1055 strict replay never serves *untagged* traffic from the
+    build's catch-all cassette."""
+    return tmp_path / "topic" / "_cassettes" / "slides.http-cassette.yaml"
+
+
+def _fold_only_staging(canonical: Path) -> None:
+    """Fold the single staging file a recording proxy wrote into ``canonical``."""
+    staging = _staging_files(canonical)
+    assert len(staging) == 1, staging
+    _fold_staging_to_canonical(canonical, staging[0])
+
+
 def test_proxy_starts_and_routes_traffic(
     upstream_server: str, cassette_path: Path, tmp_path: Path
 ) -> None:
@@ -230,19 +244,21 @@ def test_replay_serves_from_cassette_without_upstream_hit(
     touching the upstream server."""
     confdir = tmp_path / "mitm-confdir"
     target = f"{upstream_server}/cached"
+    cass = _topic_cassette(tmp_path)
 
     # 1. Record.
     with MitmproxyManager(
         cassette_path=cassette_path, mode="new-episodes", confdir=confdir
     ) as proxy:
-        first = _get_via_proxy(target, proxy.proxy_url)
+        first = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
     assert first.status_code == 200
     assert _CountingHandler.upstream_hits == 1
+    _fold_only_staging(cass)
 
     # 2. Replay against the same cassette. No upstream hits should
     # occur; the response payload should match what we recorded.
     with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
-        replayed = _get_via_proxy(target, proxy.proxy_url)
+        replayed = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
     assert replayed.status_code == 200
     assert replayed.json() == first.json()
     assert _CountingHandler.upstream_hits == 1, "replay-mode request should not reach upstream"
@@ -263,16 +279,18 @@ def test_replay_preserves_recorded_reason_phrase(
     """
     confdir = tmp_path / "mitm-confdir"
     target = f"{upstream_server}/nonstandard-reason"
+    cass = _topic_cassette(tmp_path)
 
     with MitmproxyManager(
         cassette_path=cassette_path, mode="new-episodes", confdir=confdir
     ) as proxy:
-        recorded = _get_via_proxy(target, proxy.proxy_url)
+        recorded = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
     assert recorded.status_code == 429
     assert recorded.reason == "Too many requests"
+    _fold_only_staging(cass)
 
     with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
-        replayed = _get_via_proxy(target, proxy.proxy_url)
+        replayed = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
     assert replayed.status_code == 429
     assert replayed.reason == "Too many requests", (
         "replay must serve the RECORDED reason phrase, not the RFC-standard one"
@@ -297,20 +315,22 @@ def test_replay_serves_repeated_identical_requests_non_depleting(
     """
     confdir = tmp_path / "mitm-confdir"
     target = f"{upstream_server}/repeated"
+    cass = _topic_cassette(tmp_path)
 
     # Record exactly one interaction.
     with MitmproxyManager(
         cassette_path=cassette_path, mode="new-episodes", confdir=confdir
     ) as proxy:
-        recorded = _get_via_proxy(target, proxy.proxy_url)
+        recorded = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
     assert recorded.status_code == 200
     assert _CountingHandler.upstream_hits == 1
+    _fold_only_staging(cass)
 
     # Replay the SAME request three times within ONE proxy lifecycle. Every
     # call must serve the recorded entry (no depletion), and the upstream
     # counter must stay at 1 across all of them.
     with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
-        replays = [_get_via_proxy(target, proxy.proxy_url) for _ in range(3)]
+        replays = [_get_via_proxy(target, proxy.proxy_url, tag=str(cass)) for _ in range(3)]
     assert [r.status_code for r in replays] == [200, 200, 200]
     assert all(r.json() == recorded.json() for r in replays)
     assert _CountingHandler.upstream_hits == 1, (
@@ -328,18 +348,22 @@ def test_strict_replay_miss_returns_nonretryable_404(
     was retried, amplifying a miss across a deck's batched calls into a build
     timeout). The upstream counter must NOT advance."""
     confdir = tmp_path / "mitm-confdir"
+    cass = _topic_cassette(tmp_path)
 
     # Seed the cassette with one URL.
     with MitmproxyManager(
         cassette_path=cassette_path, mode="new-episodes", confdir=confdir
     ) as proxy:
-        _get_via_proxy(f"{upstream_server}/recorded", proxy.proxy_url)
+        _get_via_proxy(f"{upstream_server}/recorded", proxy.proxy_url, tag=str(cass))
     assert _CountingHandler.upstream_hits == 1
+    _fold_only_staging(cass)
 
     # Now request a DIFFERENT URL in strict replay mode. The addon should
     # synthesize the diagnostic miss and the upstream counter must NOT advance.
     with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
-        response = _get_via_proxy(f"{upstream_server}/never-recorded", proxy.proxy_url)
+        response = _get_via_proxy(
+            f"{upstream_server}/never-recorded", proxy.proxy_url, tag=str(cass)
+        )
 
     assert response.status_code == 404, "miss must be a non-retryable 4xx, not a retryable 5xx"
     payload = response.json()
@@ -349,9 +373,38 @@ def test_strict_replay_miss_returns_nonretryable_404(
     assert "clm_replay_miss" in payload["error"]["message"]
     assert payload["method"] == "GET"
     assert payload["url"].endswith("/never-recorded")
+    assert payload["cassette"] == str(cass)
     assert _CountingHandler.upstream_hits == 1, (
         "strict-replay miss must not fall through to upstream"
     )
+
+
+def test_strict_replay_refuses_untagged_flow_despite_catch_all_hit(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """Regression test for #1055, through a real mitmdump: an untagged request
+    recorded into the catch-all by a local recording build is NOT served by a
+    later strict replay build — the catch-all is machine-local scratch, not a
+    replay source — and it never reaches upstream either."""
+    confdir = tmp_path / "mitm-confdir"
+    target = f"{upstream_server}/nonstandard-reason"  # upstream answers 429
+
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        assert _get_via_proxy(target, proxy.proxy_url).status_code == 429
+    assert _CountingHandler.upstream_hits == 1
+    assert "/nonstandard-reason" in cassette_path.read_text(encoding="utf-8")
+
+    with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
+        refused = _get_via_proxy(target, proxy.proxy_url)
+
+    assert refused.status_code == 404, refused.text
+    payload = refused.json()
+    assert payload["clm_replay_miss"] is True
+    assert payload["untagged"] is True
+    assert "X-CLM-Cassette" in payload["error"]["message"]
+    assert _CountingHandler.upstream_hits == 1, "untagged strict replay must not go upstream"
 
 
 def test_untagged_flow_warning_reaches_host_log(

@@ -228,6 +228,127 @@ def test_tag_bootstrap_tags_aiohttp_traffic_in_subprocess():
     assert result["tag"] == tag
 
 
+# A stand-in for the ``httpx2`` package (openai >= 3, anthropic, mcp): it has
+# the httpx-shaped ``Client.send`` / ``AsyncClient.send`` the bootstrap wraps,
+# and records the headers each call actually saw. Installed into
+# ``sys.modules`` of a clean subprocess so the class patch can never leak.
+_FAKE_HTTPX2_SETUP = (
+    "import sys, types\n"
+    "_fake = types.ModuleType('httpx2')\n"
+    "_seen = []\n"
+    "class _Request:\n"
+    "    def __init__(self):\n"
+    "        self.headers = dict()\n"
+    "class Client:\n"
+    "    def send(self, request, *, stream=False, auth=None, follow_redirects=None):\n"
+    "        _seen.append(('sync', dict(request.headers)))\n"
+    "        return 'sync-response'\n"
+    "class AsyncClient:\n"
+    "    async def send(self, request, *, stream=False, auth=None, follow_redirects=None):\n"
+    "        _seen.append(('async', dict(request.headers)))\n"
+    "        return 'async-response'\n"
+    "_fake.Client = Client\n"
+    "_fake.AsyncClient = AsyncClient\n"
+    "sys.modules['httpx2'] = _fake\n"
+)
+
+_FAKE_HTTPX2_EXERCISE = (
+    "import asyncio, json\n"
+    "assert _fake.Client().send(_Request(), stream=True) == 'sync-response'\n"
+    "assert asyncio.run(_fake.AsyncClient().send(_Request())) == 'async-response'\n"
+    "print(json.dumps(_seen))\n"
+)
+
+
+def test_tag_bootstrap_tags_httpx2_traffic_in_subprocess():
+    """Regression test for #1055: openai >= 3, anthropic and mcp send through
+    ``httpx2`` (a separate package with httpx's API), not ``httpx``. Without a
+    patch their requests reach the replay proxy untagged and never match the
+    topic cassette. Both the sync and async ``send`` must add the tag and keep
+    passing keyword arguments through."""
+    tag = "/src/topic/.clm/cassettes/slides.http-cassette.yaml"
+    rendered = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    script = _FAKE_HTTPX2_SETUP + rendered + "\n" + _FAKE_HTTPX2_EXERCISE
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    seen = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert seen == [
+        ["sync", {"x-clm-cassette": tag}],
+        ["async", {"x-clm-cassette": tag}],
+    ]
+
+
+def test_tag_bootstrap_execs_without_httpx_when_httpx2_is_present():
+    """A kernel env that has only ``httpx2`` (no ``httpx``) must still run the
+    bootstrap and tag httpx2 — before #1055 ``import httpx`` was unguarded, so
+    such an env would fail the injected cell outright."""
+    tag = "/x/foo.http-cassette.yaml"
+    rendered = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    script = (
+        _FAKE_HTTPX2_SETUP
+        + "sys.modules['httpx'] = None\n"
+        + rendered
+        + "\n"
+        + _FAKE_HTTPX2_EXERCISE
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    seen = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert [headers["x-clm-cassette"] for _kind, headers in seen] == [tag, tag]
+
+
+def test_tag_bootstrap_fails_open_on_a_broken_httpx2():
+    """A broken or API-skewed ``httpx2`` (here: no ``Client``) must not fail
+    the injected cell — that would fail every http-replay notebook in the env.
+    The bootstrap skips it and still tags ``httpx``; the skipped client's
+    traffic is caught by the proxy's untagged warning/refusal instead."""
+    script = (
+        "import sys, types\n"
+        "sys.modules['httpx2'] = types.ModuleType('httpx2')\n"
+        + _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag="/x/foo.http-cassette.yaml")
+        + "\n"
+        "assert getattr(__import__('httpx').Client.send, '_clm_tagged', False)\n"
+        "print('fail-open-ok')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "fail-open-ok" in proc.stdout
+
+
+def test_tag_bootstrap_does_not_double_wrap_aliased_httpx2():
+    """``httpx2.alias_httpx()`` makes ``httpx`` and ``httpx2`` the *same*
+    module. The bootstrap must wrap its classes once, not twice: count the
+    header writes one ``send`` performs when one module is registered under
+    both names."""
+    script = (
+        _FAKE_HTTPX2_SETUP
+        + "sys.modules['httpx'] = _fake\n"
+        + "_writes = []\n"
+        + "class _CountingHeaders(dict):\n"
+        + "    def __setitem__(self, key, value):\n"
+        + "        _writes.append(key)\n"
+        + "        super().__setitem__(key, value)\n"
+        + _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag="/x/foo.http-cassette.yaml")
+        + "\n"
+        + "_req = _Request()\n"
+        + "_req.headers = _CountingHeaders()\n"
+        + "_fake.Client().send(_req)\n"
+        + "assert _writes == ['x-clm-cassette'], _writes\n"
+        + "print('single-wrap-ok')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "single-wrap-ok" in proc.stdout
+
+
 def test_tag_bootstrap_execs_when_optional_libraries_are_missing():
     """The requests/aiohttp patches are import-guarded: a kernel env without
     them must still run the bootstrap. Simulate absence by poisoning both

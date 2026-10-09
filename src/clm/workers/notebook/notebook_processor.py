@@ -228,12 +228,19 @@ def resolve_http_replay_ignore_hosts() -> tuple[str, ...]:
 # the destination cassette path so the single shared mitmproxy can demux
 # flows to the correct per-(topic,language,kind) cassette. The proxy
 # strips the ``X-CLM-Cassette`` header before recording or forwarding.
-# Three client stacks are tagged (the same ones decks actually use; an
+# Four client stacks are tagged (the same ones decks actually use; an
 # untagged client records into the build's catch-all cassette instead of
-# the topic's canonical one and replay silently breaks):
+# the topic's canonical one, and strict replay refuses it — issue #1055):
 #
-# * ``httpx`` — ``Client.send``/``AsyncClient.send`` (openai/langchain
-#   route through these);
+# * ``httpx`` — ``Client.send``/``AsyncClient.send`` (openai < 3 and
+#   langchain route through these);
+# * ``httpx2`` — the same two methods on the separate ``httpx2`` package
+#   (openai >= 3, anthropic, mcp; issue #1055). It shares httpx's API, so
+#   one helper wraps both. ``httpx2.alias_httpx()`` makes the two names
+#   one module; the ``_clm_tagged`` guard then keeps it from being wrapped
+#   twice. Vendored ``Httpx2AiohttpClient`` subclasses
+#   ``httpx2.AsyncClient`` without overriding ``send``, so it is covered
+#   too (and its aiohttp transport by the aiohttp patch below);
 # * ``requests`` — ``Session.send`` (the module-level ``requests.get``
 #   helpers create a ``Session`` and funnel through it, so one class
 #   patch covers everything);
@@ -241,29 +248,38 @@ def resolve_http_replay_ignore_hosts() -> tuple[str, ...]:
 #   through it; a plain-def wrapper returning the coroutine keeps the
 #   ``_RequestContextManager`` protocol intact).
 #
-# requests/aiohttp are optional in the kernel env, hence the import
-# guards. All patches are on the *classes*, so clients created before or
+# Every library is optional in the kernel env (an openai >= 3 env may have
+# httpx2 but no httpx), hence the import guards on all four. The httpx-like
+# patches fail open on *any* exception (a broken or API-skewed install must
+# not fail every http-replay notebook at cell 0): an unpatched client is not
+# silent, because its untagged requests trigger the proxy's
+# CLM-HTTP-REPLAY-UNTAGGED warning and are refused in strict modes. All patches are on the *classes*, so clients created before or
 # after this cell are covered. One tag per kernel (fresh kernel per
 # notebook), captured in the closure. No literal curly braces in the body
 # so ``str.format`` only substitutes ``{tag!r}``.
 _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY TAG BOOTSTRAP - DO NOT EDIT
-import httpx as _clm_httpx
 _CLM_CASSETTE_TAG = {tag!r}
-if not getattr(_clm_httpx.Client.send, "_clm_tagged", False):
-    _clm_orig_send = _clm_httpx.Client.send
-    def _clm_tagged_send(self, request, *args, **kwargs):
-        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
-        return _clm_orig_send(self, request, *args, **kwargs)
-    _clm_tagged_send._clm_tagged = True
-    _clm_httpx.Client.send = _clm_tagged_send
-if not getattr(_clm_httpx.AsyncClient.send, "_clm_tagged", False):
-    _clm_orig_asend = _clm_httpx.AsyncClient.send
-    async def _clm_tagged_asend(self, request, *args, **kwargs):
-        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
-        return await _clm_orig_asend(self, request, *args, **kwargs)
-    _clm_tagged_asend._clm_tagged = True
-    _clm_httpx.AsyncClient.send = _clm_tagged_asend
+def _clm_tag_httpx_like(_clm_mod):
+    _clm_orig_send = _clm_mod.Client.send
+    if not getattr(_clm_orig_send, "_clm_tagged", False):
+        def _clm_tagged_send(self, request, *args, **kwargs):
+            request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+            return _clm_orig_send(self, request, *args, **kwargs)
+        _clm_tagged_send._clm_tagged = True
+        _clm_mod.Client.send = _clm_tagged_send
+    _clm_orig_asend = _clm_mod.AsyncClient.send
+    if not getattr(_clm_orig_asend, "_clm_tagged", False):
+        async def _clm_tagged_asend(self, request, *args, **kwargs):
+            request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+            return await _clm_orig_asend(self, request, *args, **kwargs)
+        _clm_tagged_asend._clm_tagged = True
+        _clm_mod.AsyncClient.send = _clm_tagged_asend
+for _clm_httpx_name in ("httpx", "httpx2"):
+    try:
+        _clm_tag_httpx_like(__import__(_clm_httpx_name))
+    except Exception:
+        pass
 try:
     import requests as _clm_requests
 except ImportError:

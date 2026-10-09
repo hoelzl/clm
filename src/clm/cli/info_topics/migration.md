@@ -2,6 +2,28 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## HTTP replay tags `httpx2`; strict replay refuses untagged requests (#1055, {version})
+
+**Behavior change, no spec change.** `openai` >= 3, `anthropic` and `mcp`
+send their requests through the `httpx2` package, which older CLM did not
+tag. Those requests reached the replay proxy without a routing tag, so they
+were never matched against or recorded into the topic's cassette — local
+`new-episodes` builds made live calls and recorded them only into a
+machine-local scratch cassette under the jobs-DB `mitm/` directory, and
+later builds could replay whatever that scratch file held (a recorded `429`,
+for example). CLM now tags `httpx2` like `httpx`, never replays from the
+scratch cassette, and in strict modes (`replay`, `once`) refuses every
+untagged request with a `clm_replay_miss` 404.
+
+What to do: if a deck was recorded while `openai` 3.x was installed, its
+LLM calls are missing from the committed cassette — re-record that topic
+(`clm build <spec> --http-replay=refresh`, or `new-episodes`) and commit the
+cassette. If you pinned `openai<3` as a workaround, you can drop the pin. A
+strict build that now fails with `clm_replay_miss: … without an X-CLM-Cassette
+routing tag` uses an HTTP client CLM does not tag (`urllib.request`, raw
+`urllib3`/`http.client`); switch the deck to `httpx`, `httpx2`, `requests` or
+`aiohttp`.
+
 ## Language-tagged assets ship to their language only; no `img/` video in code outputs (#1034, {version})
 
 **Output change, no spec change.** A topic asset named `<stem>.de.<ext>` or
@@ -1297,9 +1319,9 @@ path. Starting the proxy is gated on the course actually containing an
 no cost. See `docs/user-guide/http-replay.md`.
 
 **Client-library coverage (as of {version}):** under the mitmproxy transport
-the kernel tags traffic from **httpx**, **requests**, and **aiohttp** so the
-shared proxy routes it to the topic's cassette. (CLM releases between the
-transport switch and {version} tagged only httpx — `requests`-based decks
+the kernel tags traffic from **httpx**, **httpx2** (since #1055), **requests**,
+and **aiohttp** so the shared proxy routes it to the topic's cassette. (CLM releases between the
+transport switch and 1.13.0 tagged only httpx — `requests`-based decks
 recorded into a non-committed catch-all and could not strict-replay; upgrade
 and re-record those topics with `--http-replay=refresh`.) Other HTTP stacks
 (`urllib.request`, raw `urllib3`/`http.client`, subprocesses) are still
