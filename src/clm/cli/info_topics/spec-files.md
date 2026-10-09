@@ -750,13 +750,15 @@ also surfaces at build time.
 
 Spec-mode `clm validate` resolves every `img/<name>` a deck references
 (`<img src="img/…">` and `![…](img/…)`) against what its topic will
-actually produce, and checks the section's shared output `img/` for
+actually produce, flags references that name the source-only
+`img-generated/` directory, and checks the section's shared output `img/` for
 same-name collisions — a structure pass, no build:
 
 | Category | Severity | When it fires |
 |----------|----------|---------------|
 | `image_ref_missing` | Warning | A deck of the topic references `img/<name>` and nothing in the topic produces it: no file in `img/` or `img-generated/`, no diagram source in `pu/`/`drawio/` whose render name (full stem + `png`/`svg`, so `embed.de.drawio` → `embed.de.png`) matches, no `<include>` providing it (a file or directory included as `img/…`, or a diagram source included as `pu/…`/`drawio/…`). `details`: `image`, `topic`, `section`, `referenced_in`. |
 | `image_ref_wrong_language` | Warning | A cell references a language-scoped asset (`img/<stem>.de.<ext>` / `.en.`, which ships only to that language, CLM {version}) but the cell also reaches another language: an untagged shared cell, a cell with the other `lang`, or the other split half. Any `img/…` path in the cell counts, including code like `Video("img/x.de.mp4")`. `details`: `image`, `image_lang`, `cell_lang` (`null` for a shared cell), `deck`, `line`, `topic`, `section`. |
+| `image_ref_generated_dir` | Warning | A cell references a file by its build-owned source path, `img-generated/<name>` (any form: `<img src>`, `![…]()`, or a path in code; CLM {version}). `img-generated/` never exists in the output — its files land in the output's `img/` and only `img/…` references are resolved — so the link is broken in every output. Reference `img/<name>` instead. `details`: `image`, `reference`, `deck`, `line`, `topic`, `section`. |
 | `image_name_conflict` | Warning | Two providers that collapse onto one section output `img/` supply the same name with different bytes — files in `img/` and `img-generated/` of any topic in the section, include-provided files, and diagram renders (compared by the source owner's committed render, else by the source bytes). A topic's own committed render of its own source is one provider, not two. `details`: `image`, `section`, `providers` (topic, source, content key). The suggestion points at "Sharing a diagram between topics". |
 
 `image_ref_missing` and `image_name_conflict` are per section (topics only share an output `img/` inside one

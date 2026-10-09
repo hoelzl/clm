@@ -1146,6 +1146,58 @@ def _wrong_language_image_refs(deck: Path, text: str) -> list[_WrongLanguageRef]
     return refs
 
 
+#: Any ``img-generated/…`` path in a cell, quoted or not (#1058). Same shape
+#: as :data:`_ANY_IMG_PATH_REGEX`; a backslash separator is accepted too.
+_GENERATED_IMG_PATH_REGEX = re.compile(
+    rf"(?<![\w/.\\-])(?:\./)?{re.escape(GENERATED_IMG_DIR)}[/\\]([^\s\"'()<>\[\]]+)"
+)
+
+
+@dataclass(frozen=True)
+class _GeneratedDirRef:
+    image: str  # the name below img-generated/, i.e. what img/<image> resolves to
+    reference: str  # the path as written, normalized to forward slashes
+    deck: str
+    line: int
+
+
+def _generated_dir_image_refs(deck: Path, text: str) -> list[_GeneratedDirRef]:
+    """Literal ``img-generated/…`` references in a deck (#1058), one per image per cell.
+
+    ``img-generated/`` is a source-tree location: the build copies its files
+    into the output's ``img/`` and only rewrites ``img/…`` references, so an
+    ``img-generated/…`` reference passes through verbatim and is broken in
+    every output. :func:`_image_refs` sees only the ``img/`` form, so without
+    this check such a reference is never validated at all.
+    """
+    from clm.core.slide_text.slide_parser import parse_cells
+    from clm.core.utils.prog_lang_utils import comment_token_for_path
+
+    try:
+        cells = parse_cells(text, comment_token_for_path(deck))
+    except (KeyError, ValueError):
+        return []
+    refs: list[_GeneratedDirRef] = []
+    for cell in cells:
+        seen: set[str] = set()
+        for match in _GENERATED_IMG_PATH_REGEX.finditer(cell.content):
+            name = (
+                match.group(1).rstrip(".,;:").split("?", 1)[0].split("#", 1)[0].replace("\\", "/")
+            )
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            refs.append(
+                _GeneratedDirRef(
+                    image=name,
+                    reference=f"{GENERATED_IMG_DIR}/{name}",
+                    deck=deck.name,
+                    line=cell.line_number,
+                )
+            )
+    return refs
+
+
 def _files_below(root: Path) -> dict[str, Path]:
     """``{relative posix name: path}`` for every file under *root* (empty if absent)."""
     if not root.is_dir():
@@ -1390,6 +1442,37 @@ def _validate_images(
                     continue
                 for name in _image_refs(text):
                     referenced.setdefault(name, []).append(deck.name)
+                for gen in _generated_dir_image_refs(deck, text):
+                    findings.append(
+                        SpecFinding(
+                            severity="warning",
+                            type="image_ref_generated_dir",
+                            topic_id=topic_spec.id,
+                            section=section_name,
+                            message=suffix(
+                                section_disabled,
+                                f"Topic '{topic_spec.id}': {gen.deck} line {gen.line}: "
+                                f"references '{gen.reference}' — {GENERATED_IMG_DIR}/ is a "
+                                f"source-tree directory that never exists in the output (its "
+                                f"files land in the output's img/), so the link is broken in "
+                                f"every output.",
+                            ),
+                            suggestion=(
+                                f"Reference 'img/{gen.image}' instead: slide references always "
+                                f"say img/, and an img/ reference resolves against the topic's "
+                                f"{GENERATED_IMG_DIR}/."
+                            ),
+                            matches=[gen.deck],
+                            details={
+                                "image": gen.image,
+                                "reference": gen.reference,
+                                "deck": gen.deck,
+                                "line": gen.line,
+                                "topic": topic_spec.id,
+                                "section": section_name,
+                            },
+                        )
+                    )
                 for ref in _wrong_language_image_refs(deck, text):
                     where = (
                         "a shared cell"
