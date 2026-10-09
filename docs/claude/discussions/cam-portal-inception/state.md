@@ -1,11 +1,18 @@
 ---
-status: active
+status: superseded
 owner: maintainers
 updated: 2026-10-09
-review-by: 2027-04-09
 ---
 
 # cam-portal inception — state
+
+> **Continued in cam-portal. This thread is frozen at S13.** The conversation
+> goes on in the private repository `hoelzl/cam-portal`, thread
+> `docs/discussions/inception/` (sessions `INC-1` onward). `INC-1` is the
+> same session as S13, saved again there with its second half: setting up
+> cam-portal for agent work. Resume and save in cam-portal, not here. Only
+> clm-side work, such as the P0 bundle design, gets a new thread in this
+> repository.
 
 **Question.** CAM now runs many concurrent courses with different trainers and
 a back-office. Should clm grow into a single multi-module system, or should
@@ -82,6 +89,6 @@ in cam-portal.
 
 - The S13 cleaned transcript lacks two agent messages: the code-exploration
   summary and the "split by data and trust boundary" argument before the
-  architecture question. The raw session file has only their reasoning traces,
-  not the public text. The argument is written out in inception §6. The
+  architecture question. Their visible text never reached the raw session
+  file, and they are not reconstructed. The argument is written out in inception §6. The
   owner's choice is in the transcript's AskUserQuestion stubs.
