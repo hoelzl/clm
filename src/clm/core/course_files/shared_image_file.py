@@ -113,6 +113,7 @@ class SharedImageFile(CourseFile):
         from clm.core.operations.copy_file import CopyFileOperation
         from clm.core.utils.path_utils import (
             PRIVATE_KINDS,
+            PUBLIC_KINDS,
             asset_output_languages,
             output_path_for,
         )
@@ -131,10 +132,9 @@ class SharedImageFile(CourseFile):
 
         # Determine audiences based on target or course output configuration.
         # Every kind in ``PRIVATE_KINDS`` lands under the private toplevel.
-        public_kinds = {"code-along", "completed", "partial"}
         if target is not None:
             has_speaker = bool(target.kinds & PRIVATE_KINDS)
-            has_public = bool(target.kinds & public_kinds)
+            has_public = bool(target.kinds & PUBLIC_KINDS)
             is_speaker_options = []
             if has_public:
                 is_speaker_options.append(False)

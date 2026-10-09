@@ -522,6 +522,13 @@ PRIVATE_KINDS: frozenset[str] = frozenset(
     {"trainer", "recording", "recording-code-along", "speaker"}
 )
 
+# Kinds that land under the public toplevel directory — the complement of
+# ``PRIVATE_KINDS`` over :class:`Kind`. Every place that asks "does this
+# target produce public output?" must use this set: a hand-written subset
+# that forgot ``partial`` left a partial-only target's tree out of the build's
+# cleanup roots (#1026).
+PUBLIC_KINDS: frozenset[str] = frozenset({"code-along", "completed", "partial"})
+
 # Kinds generated in notebook format only. Typing replay (#1023) needs a live
 # notebook; an HTML or code rendering of ``recording-code-along`` would just be
 # the code-along output under a private path.

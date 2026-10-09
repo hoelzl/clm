@@ -54,6 +54,7 @@ from clm.core.utils.file import File
 from clm.core.utils.notebook_mixin import NotebookMixin
 from clm.core.utils.path_utils import (
     PRIVATE_KINDS,
+    PUBLIC_KINDS,
     is_image_file,
     is_in_dir,
     kind_supports_format,
@@ -901,7 +902,7 @@ class Course(NotebookMixin):
                     # kinds. Every kind in ``PRIVATE_KINDS`` (trainer,
                     # recording, recording-code-along, deprecated speaker)
                     # maps to the private toplevel.
-                    has_public = bool(target.kinds & {"code-along", "completed", "partial"})
+                    has_public = bool(target.kinds & PUBLIC_KINDS)
                     has_speaker = bool(target.kinds & PRIVATE_KINDS)
                     is_speaker_options: list[bool] = []
                     if has_public:
