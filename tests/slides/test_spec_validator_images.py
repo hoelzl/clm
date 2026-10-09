@@ -455,3 +455,86 @@ class TestImageRefWrongLanguage:
             },
         )
         assert _findings(result, "image_ref_wrong_language") == []
+
+
+# ---------------------------------------------------------------------------
+# image_ref_generated_dir (#1058)
+# ---------------------------------------------------------------------------
+
+
+class TestImageRefGeneratedDir:
+    """Regression tests for #1058: ``img-generated/`` is a source-tree
+    location, never an output path — a deck that references it ships a
+    broken link, so validate must say ``img/`` instead."""
+
+    def _validate(self, tmp_path, files: dict[str, str]):
+        topic = _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        (topic / "img-generated").mkdir()
+        (topic / "img-generated" / "mcp-servers.png").write_bytes(b"render")
+        for name, text in files.items():
+            (topic / name).write_text(text, encoding="utf-8")
+        return validate_spec(_spec(tmp_path, "<topic>intro</topic>"), tmp_path / "slides")
+
+    def test_literal_img_generated_src_warns_in_both_halves(self, tmp_path):
+        ref = '# %% [markdown]\n# Title\n# <img src="img-generated/mcp-servers.png">\n'
+        result = self._validate(tmp_path, {"slides_intro.de.py": ref, "slides_intro.en.py": ref})
+        found = _findings(result, "image_ref_generated_dir")
+        assert [f.details["deck"] for f in found] == ["slides_intro.de.py", "slides_intro.en.py"]
+        first = found[0]
+        assert first.severity == "warning"
+        assert first.topic_id == "intro"
+        assert first.details == {
+            "image": "mcp-servers.png",
+            "reference": "img-generated/mcp-servers.png",
+            "deck": "slides_intro.de.py",
+            "line": 1,
+            "topic": "intro",
+            "section": "S",
+        }
+        assert "'img/mcp-servers.png'" in first.suggestion
+        assert "broken" in first.message
+
+    def test_every_reference_form_is_found(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.py": (
+                    "# %% [markdown]\n# ![diagram](./img-generated/flow.svg)\n\n"
+                    "# %% [markdown]\n# <img src='img-generated\\win.png'>\n\n"
+                    '# %%\nVideo("img-generated/clip.mp4")\n'
+                ),
+            },
+        )
+        found = _findings(result, "image_ref_generated_dir")
+        assert [(f.details["image"], f.details["line"]) for f in found] == [
+            ("flow.svg", 1),
+            ("win.png", 4),
+            ("clip.mp4", 7),
+        ]
+
+    def test_img_references_and_lookalikes_are_clean(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.py": (
+                    '# %% [markdown]\n# <img src="img/mcp-servers.png">\n\n'
+                    '# %%\nload("my-img-generated/x.png", "data/img-generated/y.png")\n'
+                ),
+            },
+        )
+        assert _findings(result, "image_ref_generated_dir") == []
+        # The img/ form resolves against img-generated/ (#664): no missing ref.
+        assert _findings(result, "image_ref_missing") == []
+
+    def test_one_finding_per_image_per_cell(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            {
+                "slides_intro.py": (
+                    '# %% [markdown]\n# <img src="img-generated/a.png">\n'
+                    '# <img src="img-generated/a.png">\n# ![b](img-generated/b.png)\n'
+                ),
+            },
+        )
+        found = _findings(result, "image_ref_generated_dir")
+        assert [f.details["image"] for f in found] == ["a.png", "b.png"]
