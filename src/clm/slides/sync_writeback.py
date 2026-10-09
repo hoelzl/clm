@@ -331,14 +331,19 @@ def row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -
 
 _LANG_ATTR_RE = re.compile(r'lang="[^"]*"')
 _TAGS_ATTR_RE = re.compile(r"tags=\[[^\]]*\]")
+# The attributes the canonical header order puts AFTER ``tags=[…]``
+# (``[markdown] lang=… tags=[…] for_slide=… vo_anchor=… slide_id=…``).
+_POST_TAGS_ATTR_RE = re.compile(r'\s(?:for_slide|vo_anchor|slide_id)="')
 
 
 def set_header_tags(header: str, tags: Sequence[str]) -> str:
     """Return ``header`` with its ``tags=[…]`` set to exactly ``tags``.
 
     Replaces an existing ``tags=[…]`` block in place (keeping its position
-    relative to ``lang=`` / ``slide_id=``), inserts one at the end when absent,
-    or drops the block entirely when ``tags`` is empty. Used to mirror a tag set
+    relative to ``lang=`` / ``slide_id=``), inserts one at its canonical
+    position when absent — before the first of ``for_slide=`` /
+    ``vo_anchor=`` / ``slide_id=``, else at the end (#1053) — or drops the
+    block entirely when ``tags`` is empty. Used to mirror a tag set
     onto a target cell during a ``retag`` apply (Issue #198) without disturbing
     the rest of the header (slide_id, lang, markdown-vs-code) or the body. Tag
     order is preserved from ``tags`` (the source cell's order), matching the
@@ -354,6 +359,9 @@ def set_header_tags(header: str, tags: Sequence[str]) -> str:
         return re.sub(r"  +", " ", stripped).rstrip()
     if not block:
         return header
+    post = _POST_TAGS_ATTR_RE.search(header)
+    if post:
+        return header[: post.start()] + " " + block + header[post.start() :]
     return header.rstrip() + " " + block
 
 

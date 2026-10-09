@@ -100,3 +100,40 @@ def test_build_cell_code_header_is_addressable(tmp_path: Path):
 def test_build_cell_respects_comment_token(tmp_path: Path):
     cell = build_cell("//", cell_type="code", lang="en", tags=[], slide_id="x", body="int x = 1;")
     assert cell.lines[0] == '// %% lang="en" slide_id="x"'
+
+
+class TestSetHeaderTagsCanonicalPosition:
+    """Regression tests for #1053: an inserted ``tags=[…]`` block goes where
+    the canonical header order puts it (``lang tags for_slide vo_anchor
+    slide_id``), never after the identity attributes."""
+
+    def test_inserts_before_slide_id(self):
+        from clm.slides.sync_writeback import set_header_tags
+
+        assert (
+            set_header_tags('// %% slide_id="call-b"', ["subslide"])
+            == '// %% tags=["subslide"] slide_id="call-b"'
+        )
+
+    def test_inserts_before_for_slide_and_vo_anchor(self):
+        from clm.slides.sync_writeback import set_header_tags
+
+        header = '# %% [markdown] lang="de" for_slide="s1" vo_anchor="a" slide_id="v1"'
+        assert set_header_tags(header, ["voiceover"]) == (
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="s1" vo_anchor="a" '
+            'slide_id="v1"'
+        )
+
+    def test_appends_when_no_identity_attribute(self):
+        from clm.slides.sync_writeback import set_header_tags
+
+        assert set_header_tags('# %% [markdown] lang="de"', ["notes"]) == (
+            '# %% [markdown] lang="de" tags=["notes"]'
+        )
+
+    def test_existing_block_is_replaced_in_place(self):
+        from clm.slides.sync_writeback import set_header_tags
+
+        assert set_header_tags('# %% slide_id="x" tags=["a"]', ["b"]) == (
+            '# %% slide_id="x" tags=["b"]'
+        )
