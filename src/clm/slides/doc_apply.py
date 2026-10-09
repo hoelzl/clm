@@ -702,11 +702,25 @@ def _with_slide_id_of(source_lines: tuple[str, ...], target_header: str) -> tupl
     halves can legitimately differ in the ``!`` preserve marker, and the
     fingerprint ignores the attribute anyway (parity is judged modulo id).
     """
+    return (_header_with_slide_id_of(source_lines[0], target_header), *source_lines[1:])
+
+
+def _header_with_slide_id_of(source_header: str, target_header: str) -> str:
+    """``source_header`` carrying the *target's* verbatim ``slide_id`` bytes.
+
+    The target's attribute takes the source's attribute's PLACE, so the
+    result keeps the source's attribute order byte-for-byte — shared cells
+    must stay byte-identical, and moving ``slide_id`` to the end would break
+    that whenever the source wrote it before another attribute (#1053). A
+    source without an id gets the target's appended; a target without one
+    drops the source's.
+    """
     target_match = _SLIDE_ID_ATTR_RE.search(target_header)
-    header = _SLIDE_ID_ATTR_RE.sub("", source_lines[0])
-    if target_match:
-        header = header + target_match.group(0)
-    return (header, *source_lines[1:])
+    target_attr = target_match.group(0) if target_match else ""
+    source_match = _SLIDE_ID_ATTR_RE.search(source_header)
+    if source_match is None:
+        return source_header + target_attr
+    return source_header[: source_match.start()] + target_attr + source_header[source_match.end() :]
 
 
 def _set_for_slide(header: str, for_slide: str | None) -> str:
@@ -1017,7 +1031,13 @@ class _Executor(DeckEmitter):
     def mirror_tags(self, item: DiffItem, source: Lang) -> None:
         _, moved = self._moved_cell(item, source)
         twin_member, twin_cell = self._locate_twin(item, _other(source))
-        new_header = set_header_tags(twin_cell.header, moved.tags)
+        if moved.lang_attr is None and twin_cell.lang_attr is None:
+            # A shared pair must stay byte-identical, so the twin takes the
+            # source's header verbatim (its own slide_id bytes kept) — never a
+            # re-serialized one whose attribute order can differ (#1053).
+            new_header = _header_with_slide_id_of(moved.header, twin_cell.header)
+        else:
+            new_header = set_header_tags(twin_cell.header, moved.tags)
         self.set_side(
             twin_member,
             _other(source),

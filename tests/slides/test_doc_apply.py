@@ -4843,3 +4843,92 @@ class TestStructuralGateScope:
         assert outcome.verify_withheld == []
         assert outcome.ledger_changed is True
         deck.assert_converged()
+
+
+class TestSharedTagMirrorHeaderParity:
+    """Regression tests for #1053.
+
+    ``mirror_tags`` rebuilt a shared twin's header by appending ``tags=[…]``
+    after its ``slide_id``, so a tag added on one side in the canonical order
+    (``tags=[…] slide_id=…``) landed on the other as ``slide_id=… tags=[…]``.
+    Shared cells must be byte-identical, so the post-apply structural verify
+    failed and nothing was recorded. A shared twin's header is now the
+    source's header verbatim (twin's own ``slide_id`` bytes kept), and the
+    localized path inserts ``tags`` at its canonical position.
+    """
+
+    CALL_A = '# %% slide_id="call-a"\nprint(1 + 1)\n\n'
+    CALL_B = '# %% slide_id="call-b"\nprint(2 + 2)\n\n'
+
+    def _deck(self, tmp_path: Path) -> _Deck:
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("intro", "de", "Titel"), self.CALL_A, self.CALL_B),
+            _build(HEADER_EN, _slide("intro", "en", "Title"), self.CALL_A, self.CALL_B),
+        )
+        deck.record()
+        return deck
+
+    @staticmethod
+    def _gate(deck: _Deck):
+        from clm.slides.sync_verify import gate_projected_pair
+
+        return lambda: gate_projected_pair(deck.de_path, deck.en_path, "#")
+
+    def _assert_lands(self, deck: _Deck, header: str) -> None:
+        outcome = deck.apply(verify_gate=self._gate(deck))
+        assert outcome.all_applied, outcome.to_payload()
+        assert [r.action for r in outcome.results] == ["mirror_tags"]
+        assert outcome.verify_violations == [], outcome.verify_violations
+        assert outcome.verify_withheld == []
+        for path in (deck.de_path, deck.en_path):
+            assert header in path.read_text(encoding="utf-8").splitlines()
+        deck.assert_converged()
+
+    def test_canonical_order_tag_add_stays_byte_identical(self, tmp_path: Path):
+        # The filed shape: EN adds a tag in the order clm itself writes.
+        deck = self._deck(tmp_path)
+        header = '# %% tags=["subslide"] slide_id="call-b"'
+        deck.edit_en('# %% slide_id="call-b"', header)
+        self._assert_lands(deck, header)
+
+    def test_hand_written_order_is_copied_verbatim(self, tmp_path: Path):
+        # Shared parity is byte parity: whatever order the author wrote is
+        # the order the twin gets, not a re-canonicalized one.
+        deck = self._deck(tmp_path)
+        header = '# %% slide_id="call-b" tags=["subslide"]'
+        deck.edit_de('# %% slide_id="call-b"', header)
+        self._assert_lands(deck, header)
+
+    def test_tag_removal_stays_byte_identical(self, tmp_path: Path):
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("intro", "de", "Titel"),
+                '# %% tags=["subslide", "keep"] slide_id="call-b"\nprint(2 + 2)\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("intro", "en", "Title"),
+                '# %% tags=["subslide", "keep"] slide_id="call-b"\nprint(2 + 2)\n\n',
+            ),
+        )
+        deck.record()
+        header = '# %% tags=["keep"] slide_id="call-b"'
+        deck.edit_en('# %% tags=["subslide", "keep"] slide_id="call-b"', header)
+        self._assert_lands(deck, header)
+
+    def test_localized_twin_gets_tags_in_canonical_position(self, tmp_path: Path):
+        # Localized halves differ in lang, so they are rebuilt, not copied —
+        # but the rebuilt header must still read in the canonical order.
+        deck = _deck(tmp_path)
+        deck.edit_de(
+            '# %% [markdown] lang="de" slide_id="s0-m"',
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="s0-m"',
+        )
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en_lines = deck.en_path.read_text(encoding="utf-8").splitlines()
+        assert '# %% [markdown] lang="en" tags=["notes"] slide_id="s0-m"' in en_lines
+        deck.assert_converged()
