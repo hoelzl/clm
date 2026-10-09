@@ -193,6 +193,20 @@ class NotebookWorker(Worker):
                 logger.info(f"Job {job.id} was cancelled after reading input, aborting")
                 return
 
+            # In Docker mode, convert the host output path to its container
+            # path. The payload must carry the converted path, like the input
+            # path: the processor derives names from it (the C++ export's
+            # header, workshop files and ``#include``), and a Linux container
+            # reads a Windows host path as one long file name (#1039).
+            host_workspace = os.environ.get("CLM_HOST_WORKSPACE")
+            if host_workspace:
+                from clm.infrastructure.workers.worker_base import convert_host_path_to_container
+
+                output_path = convert_host_path_to_container(job.output_file, host_workspace)
+                logger.debug(f"Converted output path: {job.output_file} -> {output_path}")
+            else:
+                output_path = Path(job.output_file)
+
             # Reconstruct the full typed payload from the serialized job data.
             # ``from_job_payload`` deserializes the whole dict so no field can
             # be silently dropped at the worker boundary (issue #17); see its
@@ -201,7 +215,7 @@ class NotebookWorker(Worker):
                 payload_data,
                 content=notebook_text,
                 input_file=str(input_path),
-                output_file=job.output_file,
+                output_file=str(output_path),
                 fallback_correlation_id=f"job-{job.id}",
             )
 
@@ -258,17 +272,8 @@ class NotebookWorker(Worker):
                 logger.debug(f"Notebook processing generated {len(warnings)} warning(s)")
                 self.set_job_warnings(warnings)
 
-            # Write output file
-            # In Docker mode, convert host path to container path
-            host_workspace = os.environ.get("CLM_HOST_WORKSPACE")
-            if host_workspace:
-                from clm.infrastructure.workers.worker_base import convert_host_path_to_container
-
-                output_path = convert_host_path_to_container(job.output_file, host_workspace)
-                logger.debug(f"Converted output path: {job.output_file} -> {output_path}")
-            else:
-                output_path = Path(job.output_file)
-
+            # Write output file (``output_path`` is the container path in
+            # Docker mode, converted above)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             # newline="\n" is required: without it, Python's text-mode
