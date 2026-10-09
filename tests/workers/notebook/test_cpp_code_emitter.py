@@ -1172,7 +1172,7 @@ class TestConceptDefinition:
             code("#include <concepts>"),
             code(_CONCEPT_CELL),
             workshop("Workshop", "ws"),
-            code("SignedNumber auto twice(SignedNumber auto x) { return 2 * x; }"),
+            code("auto twice(SignedNumber auto x) { return 2 * x; }"),
             stem="deck",
         )
         assert files.workshop_lecture_uses == {1: ("SignedNumber",)}
@@ -1734,7 +1734,7 @@ class TestEmittedCodeCompiles:
             slide("Combining concepts", "combining-concepts"),
             code("#include <concepts>"),
             code(_CONCEPT_CELL),
-            code("SignedNumber auto twice(SignedNumber auto x) { return 2 * x; }"),
+            code("auto twice(SignedNumber auto x) { return 2 * x; }"),
             code("twice(21)"),
         )
         self._check(tu, tmp_path)
