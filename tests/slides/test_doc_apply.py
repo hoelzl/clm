@@ -5130,13 +5130,22 @@ class TestOrderMirrorAroundPositionalCells:
         deck.assert_converged()
 
     def test_swap_with_the_positional_cell_edited(self, tmp_path: Path):
-        # Round-3 review: the cell's own edit lands in the same pass.
+        # Round-3 review: the cell's own edit lands in the same pass as the
+        # order. Round 4: its pairing crossed the swapped cells, so the pool
+        # banks nothing that pass — the next pass records it mechanically.
         deck = self._deck(tmp_path, ["a", "code", "b"], ["a", "code", "b"], ["b", "code", "a"])
         deck.edit_en("c = Color.RED", "c = Color.GREEN")
         self._order_pass(deck)
-        assert deck.de_path.read_text(encoding="utf-8") == _build(
-            *self._parts("de", ["b", "code", "a"])
-        ).replace("c = Color.RED", "c = Color.GREEN")
+        expected = _build(*self._parts("de", ["b", "code", "a"])).replace(
+            "c = Color.RED", "c = Color.GREEN"
+        )
+        assert deck.de_path.read_text(encoding="utf-8") == expected
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/code/0", "record_symmetric_edit")
+        ]
+        assert deck.apply(verify_gate=self._gate(deck)).all_applied
+        assert deck.de_path.read_text(encoding="utf-8") == expected
         deck.assert_converged()
 
     def test_1052_pure_swap(self, tmp_path: Path):

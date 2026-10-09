@@ -3119,6 +3119,30 @@ class TestCrossedSyncPointsFrameNoPlacement:
         actions = [(i.key, i.action) for i in diff.items]
         assert ("pos:intro/code/0", "pool_placement_divergence") in actions, actions
 
+    def test_exempt_pool_banks_nothing_and_holds_its_move_row(self):
+        """Round-4 review: a slot exempted by crossing was paired across the
+        crossed cells, so its pool is frozen for the pass (``shifted_pools``)
+        and the pool's own reorder waits for the order row instead of
+        co-executing beside the scope mirror."""
+        cells = {"c1": _code("c1 = 1"), "c2": _code("c2 = 2")}
+
+        def deck(lang: str, order: list[str]) -> str:
+            return _build(
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("intro", lang, "T"),
+                *(cells.get(n) or self._vo(lang, f"vo-{n}", n.upper()) for n in order),
+            )
+
+        base_order = ["a", "c1", "b", "c2"]
+        snapshot = _snapshot(deck("de", base_order), deck("en", base_order))
+        snapshot.complete = False
+        diff = _diff(snapshot, deck("de", base_order), deck("en", ["b", "c2", "c1", "a"]))
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/pool.code/0", "pool_pairing_shifted"),
+            ("pos:intro/order.deck/0", "mirror_order"),
+        ]
+        assert ("intro", "code") in diff.shifted_pools
+
     def test_crossed_sync_points_still_delimit_spans_for_the_alignment(self):
         """#1052 review: dropping crossed sync points from the span index
         (the first fix) let one unrelated long-range id'd move strip the
