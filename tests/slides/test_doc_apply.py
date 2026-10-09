@@ -5039,3 +5039,125 @@ class TestDuplicateBodyPoolApply:
             *self._keep_parts("de", keep=False)
         )
         deck.assert_converged()
+
+
+class TestOrderMirrorAroundPositionalCells:
+    """Regression tests for #1052, end to end through the real structural
+    verify.
+
+    Two id'd cells swapped around a positional cell framed a placement row
+    beside the mechanical ``mirror_order``; one-order-authority deferred the
+    mirror, the placement answer re-homed the DE cell against the pre-mirror
+    order, and DE was written with a divergent id order. Now the crossed id
+    pair is no sync point (the lens's rule): only the order row frames and
+    lands, and where the positional cell's placement still differs once the
+    id'd order agrees, the next pass frames that placement as its own
+    question (never a mechanical guess at it).
+    """
+
+    @staticmethod
+    def _gate(deck: _Deck):
+        from clm.slides.sync_verify import gate_projected_pair
+
+        return lambda: gate_projected_pair(deck.de_path, deck.en_path, "#")
+
+    @staticmethod
+    def _md(lang: str, slug: str, tag: str, text: str) -> str:
+        return f'# %% [markdown] lang="{lang}" tags=["{tag}"] slide_id="{slug}"\n#\n# - {text}\n\n'
+
+    def _parts(self, lang: str, order: list[str], edited: bool = False) -> tuple[str, ...]:
+        suffix = " edited" if edited else ""
+        cells = {
+            "a": self._md(lang, "vo-a", "voiceover", f"A {lang}{suffix}"),
+            "b": self._md(lang, "vo-b", "voiceover", f"B {lang}{suffix}"),
+            "note": self._md(lang, "s-note", "notes", f"Note {lang}"),
+            "code": _code("c = Color.RED"),
+            "inc": _code("import os"),
+        }
+        return (
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "Titel" if lang == "de" else "Title"),
+            _idd_code("enum-def", "Color = 1"),
+            *(cells[name] for name in order),
+            _slide("next", lang, "N"),
+        )
+
+    def _deck(
+        self, tmp_path: Path, base: list[str], de: list[str], en: list[str], *, edited=False
+    ) -> _Deck:
+        deck = _Deck(tmp_path, _build(*self._parts("de", base)), _build(*self._parts("en", base)))
+        deck.record()
+        deck.write_de(*self._parts("de", de))
+        deck.write_en(*self._parts("en", en, edited))
+        return deck
+
+    def _order_pass(self, deck: _Deck) -> None:
+        """Pass 1: the order row is the pass's only order authority."""
+        _, diff = deck.diff()
+        actions = {i.action for i in diff.items}
+        assert "mirror_order" in actions, [(i.key, i.action) for i in diff.items]
+        assert "pool_placement_divergence" not in actions, [(i.key, i.action) for i in diff.items]
+        decisions = {
+            i.key: doc_apply.Decision(
+                key=i.key, body=f"#\n# - {i.key[4:].split('-')[1].upper()} de edited"
+            )
+            for i in diff.items
+            if i.action == "translate_edit"
+        }
+        outcome = deck.apply(decisions, verify_gate=self._gate(deck))
+        assert outcome.all_applied, outcome.to_payload()
+        assert outcome.verify_violations == [], outcome.verify_violations
+        assert "mirror_order" in {r.action for r in outcome.results}
+
+    def _placement_pass(self, deck: _Deck, adopt: str) -> None:
+        """Pass 2: the id'd order agrees; a positional cell the halves still
+        place differently frames as a placement question, and its answer
+        converges."""
+        _, diff = deck.diff()
+        [row] = diff.items
+        assert row.action == "pool_placement_divergence", (row.key, row.action)
+        outcome = deck.apply(
+            {row.key: doc_apply.Decision(key=row.key, choice=adopt)}, verify_gate=self._gate(deck)
+        )
+        assert outcome.error is None and outcome.verify_violations == [], outcome.to_payload()
+
+    def test_1052_swap_with_both_bodies_edited(self, tmp_path: Path):
+        # The filed shape: [vo-a] [code] [vo-b] -> [vo-b'] [code] [vo-a'].
+        base, moved = ["a", "code", "b"], ["b", "code", "a"]
+        deck = self._deck(tmp_path, base, base, moved, edited=True)
+        self._order_pass(deck)
+        assert deck.de_path.read_text(encoding="utf-8") == _build(*self._parts("de", moved, True))
+        deck.assert_converged()
+
+    def test_1052_pure_swap(self, tmp_path: Path):
+        base, moved = ["a", "code", "b"], ["b", "code", "a"]
+        deck = self._deck(tmp_path, base, base, moved)
+        self._order_pass(deck)
+        assert deck.de_path.read_text(encoding="utf-8") == _build(*self._parts("de", moved))
+        deck.assert_converged()
+
+    def test_1052_voiceover_moved_past_note_and_positional_cell(self, tmp_path: Path):
+        # The filed variant: [vo] [include] [note] -> [include] [note] [vo].
+        # The id'd mirror lands first; the include's placement among them is
+        # then its own framed question, and answering it converges.
+        base, moved = ["a", "inc", "note"], ["inc", "note", "a"]
+        deck = self._deck(tmp_path, base, base, moved)
+        self._order_pass(deck)
+        self._placement_pass(deck, "en")
+        assert deck.de_path.read_text(encoding="utf-8") == _build(*self._parts("de", moved))
+        deck.assert_converged()
+
+    def test_concurrent_positional_move_stays_a_question(self, tmp_path: Path):
+        # DE moved the positional cell, EN swapped the id'd cells: the mirror
+        # must not silently overwrite DE's own move. Once the id'd order
+        # agrees the placement frames, and `de` keeps DE's placement.
+        deck = self._deck(tmp_path, ["a", "code", "b"], ["a", "b", "code"], ["b", "code", "a"])
+        self._order_pass(deck)
+        self._placement_pass(deck, "de")
+        assert deck.de_path.read_text(encoding="utf-8") == _build(
+            *self._parts("de", ["b", "a", "code"])
+        )
+        assert deck.en_path.read_text(encoding="utf-8") == _build(
+            *self._parts("en", ["b", "a", "code"])
+        )
+        deck.assert_converged()

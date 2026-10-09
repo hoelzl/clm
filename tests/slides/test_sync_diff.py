@@ -3046,3 +3046,58 @@ class TestDuplicateBodyPoolAlignment:
             ("pos:s0/code/0", "record_symmetric_edit"),
             ("pos:s0/code/2", "record_remove"),
         ]
+
+
+class TestCrossedIdPairsAreNotSyncPoints:
+    """#1052: two id'd cells the halves order differently bracket nothing —
+    the lens's rule (``_uncrossed_pairs``), now the differ's too. Counting
+    them as sync points framed a ``pool_placement_divergence`` for the
+    positional cell between them beside the ``mirror_order`` row; the
+    placement answer then executed against the pre-mirror order while the
+    one-order-authority rule deferred the mirror, and the written halves
+    failed the order-parity verify."""
+
+    @staticmethod
+    def _vo(lang: str, slug: str, text: str) -> str:
+        return (
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{slug}"\n'
+            f"#\n# - {text} {lang}\n\n"
+        )
+
+    def _deck(self, lang: str, order: list[str]) -> str:
+        cells = {
+            "a": self._vo(lang, "vo-a", "A"),
+            "b": self._vo(lang, "vo-b", "B"),
+            "code": _code("c = Color.RED"),
+        }
+        return _build(
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "T"),
+            _idd_code("enum-def", "Color = 1"),
+            *(cells[name] for name in order),
+            _slide("next", lang, "N"),
+        )
+
+    def _base(self) -> DeckBaseline:
+        base = _snapshot(self._deck("de", ["a", "code", "b"]), self._deck("en", ["a", "code", "b"]))
+        base.complete = False
+        return base
+
+    def test_swap_around_a_positional_cell_frames_only_the_order(self):
+        """Regression test for #1052."""
+        diff = _diff(
+            self._base(), self._deck("de", ["a", "code", "b"]), self._deck("en", ["b", "code", "a"])
+        )
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/order.deck/0", "mirror_order")
+        ]
+
+    def test_uncrossed_id_pair_still_delimits_a_span(self):
+        # Neighbour: id'd cells both halves order alike stay sync points, so
+        # a one-sided move of the positional cell across one still frames.
+        diff = _diff(
+            self._base(), self._deck("de", ["a", "code", "b"]), self._deck("en", ["a", "b", "code"])
+        )
+        assert [(i.key, i.action) for i in diff.items] == [
+            ("pos:intro/code/0", "pool_placement_divergence")
+        ]

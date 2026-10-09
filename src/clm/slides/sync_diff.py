@@ -86,6 +86,8 @@ from clm.slides.doc_identity import (
 from clm.slides.doc_identity import (
     pair_signature as _pair_sig,
 )
+from clm.slides.doc_lenses import uncrossed_pairs
+from clm.slides.slug import strip_preserve_marker
 from clm.slides.sync_wire import WIRE_SCHEMA
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
@@ -3463,6 +3465,16 @@ class _Differ:
         positional twin cannot sit before a sync point on one half and
         after it on the other; whichever cross-side pairing does is a
         placement divergence to frame, never to execute against (#906).
+
+        Only the id pairs both halves order alike delimit spans — the
+        lens's rule (:func:`~clm.slides.doc_lenses.uncrossed_pairs`). Two
+        id'd cells the halves order differently would bracket a positional
+        cell between them on opposite sides; which of them is "in place" is
+        the ``order`` row's question, not a placement one. Counting them as
+        sync points framed a ``pool_placement_divergence`` for the cell
+        between two swapped id'd cells beside the order row, and the
+        placement answer then executed against the pre-mirror order while
+        the order row deferred to it (#1052).
         """
         anchor_index, _ = self._anchor_brackets()
         streams: dict[tuple[Lang, str], list[tuple[int, Member]]] = {}
@@ -3471,27 +3483,53 @@ class _Differ:
                 cell = member.side(lang)
                 if cell is not None:
                     streams.setdefault((lang, cell.part), []).append((cell.index, member))
+        sync_points = self._uncrossed_sync_points(anchor_index)
         spans: dict[tuple[Lang, str, int], str] = {}
         for (lang, part), entries in streams.items():
             current = ""
             for index, member in sorted(entries, key=lambda e: e[0]):
-                if self._is_sync_point(member, part, anchor_index):
+                if id(member) in sync_points:
                     current = member.key.render()
                     continue
                 spans[(lang, part, index)] = current
         return spans
 
-    def _is_sync_point(
-        self, member: Member, part: str, anchor_index: dict[Lang, list[tuple[int, str]]]
-    ) -> bool:
-        de, en = member.de, member.en
-        if member.key.scheme != "id" or de is None or en is None:
-            return False
-        if de.part != part or en.part != part:
-            return False
-        if part == "companion":
-            return de.for_slide == en.for_slide
-        return self._bracket_of(anchor_index, "de", de) == self._bracket_of(anchor_index, "en", en)
+    def _uncrossed_sync_points(self, anchor_index: dict[Lang, list[tuple[int, str]]]) -> set[int]:
+        """``id()`` of every sync point that delimits spans: the members the
+        lens pairs **by id** and no other such pair of the same lens region
+        crosses — :func:`~clm.slides.doc_lenses.uncrossed_pairs` over the
+        lens's regions (one per group bracket on the deck part, the whole
+        file on the companion part).
+
+        Matching the lens's member set matters as much as its predicate: a
+        #443 transition member (id'd on one half, its twin adopted
+        positionally) carries an ``id:`` key on both halves but is paired
+        after the lens drew its spans, so it delimits none (#1052 review).
+        """
+        regions: dict[tuple[str, str | None], dict[tuple[int, int], int]] = {}
+        for member in self.current.members():
+            de, en = member.de, member.en
+            if member.key.scheme != "id" or de is None or en is None or de.part != en.part:
+                continue
+            if not (
+                strip_preserve_marker(de.slide_id or "")
+                and strip_preserve_marker(en.slide_id or "")
+            ):
+                continue  # adopted, not paired by id: the lens drew no span on it
+            if de.part == "companion":
+                if de.for_slide != en.for_slide:
+                    continue
+                region: str | None = None
+            else:
+                region = self._bracket_of(anchor_index, "de", de)
+                if region != self._bracket_of(anchor_index, "en", en):
+                    continue
+            regions.setdefault((de.part, region), {})[(de.index, en.index)] = id(member)
+        uncrossed: set[int] = set()
+        for points in regions.values():
+            for pair in uncrossed_pairs(sorted(points)):
+                uncrossed.add(points[pair])
+        return uncrossed
 
     def _span_of(self, lang: Lang, cell: SideCell) -> str:
         return self._spans.get((lang, cell.part, cell.index), "")
