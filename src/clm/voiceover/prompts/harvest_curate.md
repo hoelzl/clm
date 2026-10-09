@@ -38,7 +38,11 @@ Rules (these replace the old embedded-model merge — apply them yourself):
    only touch the cells the transcript actually concerns. To add a new
    narrative cell, use `"member": null` — with `"after": "<member handle>"`
    to place it right after an existing narrative cell, or omit `after` to
-   append it at the end of the slide group.
+   append it at the end of the slide group (before a trailing reference
+   solution: an `answer`/`alt` cell or a `start`/`completed` pair). A new
+   cell is always a `voiceover` cell. A cell with role `notes` is a
+   live-trainer hint that never reaches the recording — do not move spoken
+   narration into it.
 
 Answer with the JSON shape given in `answer_schema`, echoing `item`, `kind`,
 `baseline_fingerprints`, and `video_fingerprint` from this task document.

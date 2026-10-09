@@ -720,6 +720,15 @@ def harvest_accept_cmd(
             f"{m['member']}{' (new)' if m['created'] else ''}" for m in outcome.members
         )
         click.echo(f"accepted {outcome.item} → {touched} ({state})")
+        for m in outcome.members:
+            if m["created"]:
+                anchors = ", ".join(
+                    f"{side}={anchor}" for side, anchor in m["vo_anchor"].items() if anchor
+                )
+                click.echo(
+                    f"  new {m['member']}: {m['role']}/{m['layout']}"
+                    + (f", vo_anchor {anchors}" if anchors else "")
+                )
         for path in outcome.written_paths:
             click.echo(f"  {path}")
         if outcome.recorded:

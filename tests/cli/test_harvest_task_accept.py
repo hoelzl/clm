@@ -182,11 +182,22 @@ class TestHarvestAccept:
         assert result.exit_code == 0, result.output
         payload = _json_from(result)
         assert payload["applied"] is True
-        assert payload["members"] == [{"member": "id:s1-vo", "created": True}]
+        assert payload["members"] == [
+            {
+                "member": "id:s1-vo",
+                "created": True,
+                "role": "voiceover",
+                "layout": "companion",
+                "vo_anchor": {"de": "id:s1#0", "en": None},
+            }
+        ]
 
         companion = tmp_path / "voiceover" / "voiceover_t.de.py"
         text = companion.read_text(encoding="utf-8")
         assert 'for_slide="s1"' in text
+        # #1057: the fixture's existing companion cells are `notes`; a
+        # harvest create is spoken narration all the same.
+        assert 'tags=["voiceover"] slide_id="s1-vo"' in text
         assert 'slide_id="s1-vo"' in text
         assert "# - Beta ist wichtig." in text
 
@@ -372,7 +383,14 @@ class TestMultiNarrativeSlides:
         assert payload["members"] == [
             {"member": "id:s0-vo", "created": False},
             {"member": "id:s0-vo-code", "created": False},
-            {"member": "id:s0-vo2", "created": True},
+            {
+                "member": "id:s0-vo2",
+                "created": True,
+                "role": "voiceover",
+                "layout": "companion",
+                # `after` a companion member: shares its predecessor anchor.
+                "vo_anchor": {"de": "id:s0#0", "en": None},
+            },
         ]
 
         text = (tmp_path / "voiceover" / "voiceover_t.de.py").read_text(encoding="utf-8")
@@ -476,3 +494,215 @@ class TestHarvestVerify:
         assert result.exit_code == 0, result.output
         assert "PASS" in result.output
         assert "id:s1-vo" in result.output  # the fresh harvest write is pending
+
+
+def _workshop_deck(lang: str, *, s0_inline_vo: bool = False, start_completed: bool = False) -> str:
+    """A deck half with no companion: ``s0`` a plain slide (optionally with
+    an inline voiceover), ``s1`` a workshop slide followed by its reference
+    solution (``alt``) and an inline trainer-``notes`` cell — the shape of
+    the #1057 real case. ``start_completed`` swaps the ``alt`` cell for a
+    shared ``start``/``completed`` code pair."""
+    from tests.cli.test_harvest_cli import HEADER_DE, HEADER_EN, _slide
+
+    title = "Aufgabe" if lang == "de" else "Task"
+    parts = [HEADER_DE if lang == "de" else HEADER_EN, _slide("s0", lang, "Alpha")]
+    if s0_inline_vo:
+        parts.append(
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="s0-vo"\n'
+            f"#\n# - Alpha {lang}.\n\n"
+        )
+    parts.append(
+        f'# %% [markdown] lang="{lang}" tags=["slide", "workshop"] slide_id="s1"\n'
+        f"#\n# ## Workshop\n#\n# - {title}\n\n"
+    )
+    if start_completed:
+        parts += [
+            '# %% tags=["start"]\ndef solve():\n    ...\n\n',
+            '# %% tags=["completed"]\ndef solve():\n    return 42\n\n',
+        ]
+    else:
+        parts.append(
+            f'# %% [markdown] lang="{lang}" tags=["alt"] slide_id="s1-answer"\n'
+            f"#\n# ## Hinweise\n#\n# - Lösung {lang}\n\n"
+        )
+    parts.append(
+        f'# %% [markdown] lang="{lang}" tags=["notes"] slide_id="s1-notes"\n'
+        f"#\n# - Trainerhinweis {lang}\n\n"
+    )
+    return "".join(parts).rstrip("\n") + "\n"
+
+
+def _write_workshop_fixture(
+    tmp_path: Path, *, s0_inline_vo: bool = False, start_completed: bool = False
+) -> tuple[Path, Path]:
+    de_path = tmp_path / "slides_t.de.py"
+    en_path = tmp_path / "slides_t.en.py"
+    for lang, path in (("de", de_path), ("en", en_path)):
+        path.write_text(
+            _workshop_deck(lang, s0_inline_vo=s0_inline_vo, start_completed=start_completed),
+            encoding="utf-8",
+        )
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"not a real video")
+    return de_path, video
+
+
+def _bilingual_create(tmp_path: Path, de_path: Path, video: Path, *extra: str):
+    task = _task_for(tmp_path, de_path, video, "s1")
+    answer = _single_update_answer(
+        task,
+        {"de": ["Bitte jetzt die Probleme finden."], "en": ["Now find the problems."]},
+        member=None,
+    )
+    return _accept(tmp_path, de_path, answer, *extra)
+
+
+class TestNewMemberConventions:
+    """Regression tests for #1057: what a ``"member": null`` create writes.
+
+    Harvest curates *spoken* narration, so a create is always a ``voiceover``
+    cell; inline ``notes`` (trainer hints) win neither the role vote nor the
+    layout vote; and the default placement on a workshop slide ending in its
+    reference solution is *before* that solution (with a matching
+    ``vo_anchor`` when the cell lands in a companion)."""
+
+    def test_notes_only_deck_creates_a_companion_voiceover(self, tmp_path: Path) -> None:
+        de_path, video = _write_workshop_fixture(tmp_path)
+        deck_before = de_path.read_text(encoding="utf-8")
+        result = _bilingual_create(tmp_path, de_path, video)
+        assert result.exit_code == 0, result.output
+        payload = _json_from(result)
+        assert payload["members"] == [
+            {
+                "member": "id:s1-vo",
+                "created": True,
+                "role": "voiceover",
+                "layout": "companion",
+                "vo_anchor": {"de": "id:s1#0", "en": "id:s1#0"},
+            }
+        ]
+        # Nothing inline: the deck halves are untouched.
+        assert de_path.read_text(encoding="utf-8") == deck_before
+        for lang in ("de", "en"):
+            text = (tmp_path / "voiceover" / f"voiceover_t.{lang}.py").read_text(encoding="utf-8")
+            assert (
+                f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="s1-vo" '
+                'for_slide="s1" vo_anchor="id:s1#0"'
+            ) in text
+            assert '"notes"' not in text
+
+    def test_companion_voiceover_merges_before_the_reference_solution(self, tmp_path: Path) -> None:
+        from clm.core.slide_text.voiceover_merge import merge_voiceover_text
+
+        de_path, video = _write_workshop_fixture(tmp_path)
+        assert _bilingual_create(tmp_path, de_path, video).exit_code == 0
+        for lang, spoken in (("de", "Bitte jetzt"), ("en", "Now find")):
+            deck = (tmp_path / f"slides_t.{lang}.py").read_text(encoding="utf-8")
+            companion = (tmp_path / "voiceover" / f"voiceover_t.{lang}.py").read_text(
+                encoding="utf-8"
+            )
+            merged, unmatched = merge_voiceover_text(deck, companion)
+            assert unmatched == []
+            assert (
+                merged.index('slide_id="s1"')
+                < merged.index(spoken)
+                < merged.index('slide_id="s1-answer"')
+            )
+
+    def test_inline_voiceover_deck_places_the_create_before_the_solution(
+        self, tmp_path: Path
+    ) -> None:
+        # The deck's *voiceover* is inline, so the create follows that layout
+        # (the notes cell never counted) and lands before the `alt` cell.
+        de_path, video = _write_workshop_fixture(tmp_path, s0_inline_vo=True)
+        result = _bilingual_create(tmp_path, de_path, video)
+        assert result.exit_code == 0, result.output
+        created = _json_from(result)["members"][0]
+        assert created["role"] == "voiceover"
+        assert created["layout"] == "inline"
+        assert created["vo_anchor"] == {"de": None, "en": None}
+        assert not (tmp_path / "voiceover").exists()
+        for lang, spoken in (("de", "Bitte jetzt"), ("en", "Now find")):
+            text = (tmp_path / f"slides_t.{lang}.py").read_text(encoding="utf-8")
+            assert (
+                f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="s1-vo" for_slide="s1"'
+            ) in text
+            assert (
+                text.index('slide_id="s1"')
+                < text.index(spoken)
+                < text.index('slide_id="s1-answer"')
+                < text.index('slide_id="s1-notes"')
+            )
+
+    def test_slide_without_solution_keeps_the_group_end_default(self, tmp_path: Path) -> None:
+        de_path, video = _write_workshop_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s0")
+        answer = _single_update_answer(task, {"de": ["Alpha, gesprochen."]}, member=None)
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+        created = _json_from(result)["members"][0]
+        assert created["role"] == "voiceover"
+        assert created["vo_anchor"] == {"de": "id:s0#0", "en": None}
+
+    def test_dry_run_reports_role_layout_and_anchor(self, tmp_path: Path) -> None:
+        de_path, video = _write_workshop_fixture(tmp_path)
+        result = _bilingual_create(tmp_path, de_path, video, "--dry-run")
+        assert result.exit_code == 0, result.output
+        payload = _json_from(result)
+        assert payload["dry_run"] is True
+        created = payload["members"][0]
+        assert (created["role"], created["layout"]) == ("voiceover", "companion")
+        assert created["vo_anchor"] == {"de": "id:s1#0", "en": "id:s1#0"}
+        assert not (tmp_path / "voiceover").exists()
+
+        text_result = _invoke(
+            ["accept", str(de_path), "--answer", str(tmp_path / "answer.json"), "--dry-run"]
+        )
+        assert text_result.exit_code == 0, text_result.output
+        assert "voiceover/companion" in text_result.output
+        assert "id:s1#0" in text_result.output
+
+    def test_start_completed_pair_counts_as_the_solution(self, tmp_path: Path) -> None:
+        # The narration goes above the whole start/completed pair, never
+        # between them (the normalizer pairs them by adjacency).
+        from clm.core.slide_text.voiceover_merge import merge_voiceover_text
+
+        de_path, video = _write_workshop_fixture(tmp_path, start_completed=True)
+        result = _bilingual_create(tmp_path, de_path, video)
+        assert result.exit_code == 0, result.output
+        assert _json_from(result)["members"][0]["vo_anchor"] == {"de": "id:s1#0", "en": "id:s1#0"}
+        deck = de_path.read_text(encoding="utf-8")
+        companion = (tmp_path / "voiceover" / "voiceover_t.de.py").read_text(encoding="utf-8")
+        merged, _ = merge_voiceover_text(deck, companion)
+        assert merged.index("Bitte jetzt") < merged.index('tags=["start"]')
+
+    def test_after_an_inline_notes_cell_anchors_beside_it(self, tmp_path: Path) -> None:
+        # Companion layout (no voiceover yet), `after` names the inline notes
+        # cell: the new cell takes that cell's predecessor as its anchor
+        # instead of silently falling back to the group-end default.
+        de_path, video = _write_workshop_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s1")
+        answer = _answer_from_task(
+            task,
+            [{"member": None, "after": "id:s1-notes", "bullets": {"de": ["Nach den Notizen."]}}],
+        )
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+        created = _json_from(result)["members"][0]
+        assert created["layout"] == "companion"
+        assert created["vo_anchor"] == {"de": "id:s1-answer#0", "en": None}
+
+
+class TestTrailingSolutionCount:
+    """Unit pins for the #1057 solution-block rule."""
+
+    def test_rule(self) -> None:
+        from clm.voiceover.harvest_accept import _trailing_solution_count as count
+
+        assert count([]) == 0
+        assert count([("code",)]) == 0
+        assert count([(), ("alt",)]) == 1
+        assert count([(), ("answer",), ("alt",)]) == 2
+        assert count([("start",), ("completed",)]) == 2
+        assert count([(), ("completed",)]) == 1
+        assert count([("alt",), ()]) == 0  # not trailing
