@@ -17,33 +17,29 @@ This document describes how to build Docker images for CLM workers.
 
 ## Quick Start
 
-From the repository root:
+From the repository root (the same commands work in PowerShell, `cmd.exe`
+and bash):
 
 ```bash
 # Build all workers (notebook builds both lite and full variants)
-./build-services.sh
+clm docker build
 
 # Build specific worker
-./build-services.sh plantuml
-./build-services.sh drawio
+clm docker build plantuml
+clm docker build drawio
 
 # Build notebook variants
-./build-services.sh notebook           # Both lite and full
-./build-services.sh notebook:lite      # Lite only (cross-platform, no GPU)
-./build-services.sh notebook:full      # Full only (CUDA/PyTorch, amd64 only)
+clm docker build notebook           # Both lite and full
+clm docker build notebook:lite      # Lite only (cross-platform, no GPU)
+clm docker build notebook:full      # Full only (CUDA/PyTorch on amd64)
+
+# Publish every tag the build created to Docker Hub
+clm docker push
 ```
 
-On Windows (PowerShell):
-
-```powershell
-# Build all workers
-.\build-services.ps1
-
-# Build specific worker
-.\build-services.ps1 notebook
-.\build-services.ps1 plantuml
-.\build-services.ps1 drawio
-```
+Builds reuse a local BuildKit cache in `.docker-cache/`; pass `--no-cache` to
+rebuild from scratch. `clm docker --help` lists the remaining subcommands
+(`build-quick`, `cache-info`, `list`, `pull`).
 
 ## Worker Images
 
