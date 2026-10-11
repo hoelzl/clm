@@ -9,6 +9,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.34.2] - 2026-10-11
+
+### Fixed
+
+- Job durations, job ages and worker uptimes no longer drift by the host's UTC offset (e.g. "Job #6 completed in 7208s" for a 7 s job on a CEST machine). SQLite `CURRENT_TIMESTAMP` values are naive UTC, but were parsed as naive datetimes and subtracted from local `datetime.now()`. All DB timestamp reads now go through one helper (`clm.infrastructure.database.timestamps.parse_db_timestamp`), which returns aware UTC datetimes. This fixes the worker completion log, the `clm jobs list` ages, the `clm jobs cancel --older-than` preview, the web monitor's worker uptime and the TUI monitor's activity times, which are now shown in local time. One visible side effect: `clm jobs list --format json` timestamps now carry an explicit `+00:00` offset (#1021).
+
+- **A target whose only kind is `partial` is now cleaned up like every other target (#1026).** The build's cleanup roots (stale-output sweep, `--clean`, output-ownership snapshot) counted a target's output tree only for `code-along` / `completed`, so a partial-only target's tree was never swept. Every audience check now uses one shared `PUBLIC_KINDS` constant beside `PRIVATE_KINDS`.
+
+- **C++ export with Docker workers on a Windows host names its header and
+  workshop files correctly (#1039).** The notebook worker converted the
+  job's output path to its container path only for writing, and handed the
+  processor the raw Windows host path. The Linux container read that path
+  as one long file name, so the `.hpp` header and the `_workshop_N.cpp`
+  files were named after the whole host path (`Errno 36`, or stray
+  `C:Users…` files), and every lecture `.cpp` started with
+  `#include "C:\…\deck.hpp"`. The payload now carries the container path, so
+  the include is `#include "deck.hpp"` and the companions are written next
+  to the lecture file, as on Linux hosts.
+
+- `clm docker push notebook-processor` now publishes every tag `clm docker build notebook` creates (`:VERSION`, `:VERSION-lite`, `:latest`, `:lite`, `:VERSION-full`, `:full`), not just `:VERSION` and `:latest`, so the full image and the `:lite`/`:full` tags are no longer left stale on Docker Hub. Build and push now derive their tags from one helper, and push refuses to start if any tag is missing locally. `docker/BUILDING.md` now documents `:VERSION`/`:latest` as the **lite** image, which is what is built and published (#1043).
+
+- **C++ export hoists concept definitions to namespace scope (#1045).** A
+  code cell that holds only `template <...> concept X = ...;` was classified
+  as a variable declaration and stayed inside its section function, which
+  g++ rejects (`a template declaration cannot appear at block scope`). Concept
+  definitions now go to namespace scope like other templates, so the `global`
+  tag workaround is no longer needed.
+
+- **`clm slides sync apply` never writes a structural violation the pair did not already have (#1051).** `apply` used to run the structural verify after writing, so a pass whose changes broke the pair (a removal beside a rejected question, mixed `de`/`en` answers to one pool's placement rows) left the broken half on disk and only withheld the ledger. The verify now judges the projected result before the write. A violation the pass would introduce on a slide keeps that slide's changes out of the files (rows `deferred`, reason `withheld: …`, listed in `verify_withheld`) while the other slides are written and recorded; one that names no slide means nothing is written. A violation the pair already had still only keeps its slide out of the ledger, as before. A mechanical row whose handle also carries a framed row the pass leaves unanswered or rejects now defers with it, its reason naming that row. `--dry-run` now runs the pre-write verify too.
+
+- **`clm slides sync` pairs byte-identical un-id'd cells correctly (#1051, #1054).** When a pool held two cells with the same body (`SHOW(x);` twice), the per-side alignment could pair them with the wrong twins. Moving a voiceover past such cells framed a `mirror_remove` plus an unconfirmable one-sided `verify_cold` on one cell, and `apply` wrote a half that had lost a cell (#1051). Removing a tag from such a run read as `propagate_shared_edit`, and `apply` reordered the DE cells (#1054). Duplicates now pair in occurrence order, so a pure move frames `pool_placement_divergence` and a tag change frames `mirror_tags`. A cell edited on both halves no longer shifts the pairing of the cells after it either.
+
+- **`clm slides sync apply` mirrors a reorder of id'd cells around an un-id'd cell (#1052).** When two id'd cells swapped around an un-id'd cell on one half, `report` framed a `pool_placement_divergence` for that cell next to the `mirror_order` row. `apply` deferred the mirror, so answering the placement wrote a DE half whose id order differed from EN, and the structural verify failed. A placement that differs only because the id'd cells around it were reordered is no longer reported as a separate question, and the order row lands in one pass. If the cell's placement still differs once the id order agrees, the next report asks about it.
+
+- **`clm slides sync apply` no longer breaks shared-cell parity when it mirrors a tag change (#1053).** A tag added to an id'd shared cell (`// %% tags=["subslide"] slide_id="x"`) landed on the twin as `slide_id="x" tags=[…]`; the halves were no longer byte-identical, so the structural verify failed and nothing was recorded. A shared twin now takes the source header verbatim (keeping its own `slide_id` bytes), and a tag block inserted into a localized header goes before `for_slide` / `vo_anchor` / `slide_id`, the canonical order.
+
+- **HTTP replay now covers `httpx2` (`openai` >= 3, `anthropic`, `mcp`), and strict replay refuses untagged requests (#1055).** The kernel tag bootstrap patched only `httpx`, `requests` and `aiohttp`, so requests made through `httpx2` reached the replay proxy without an `X-CLM-Cassette` tag: they bypassed the topic's committed cassette, local recording builds made live (billed) calls, and later builds — strict `--http-replay=replay` included — could replay a stale response (a recorded `429`) from the machine-local catch-all cassette. The bootstrap now tags `httpx2.Client`/`AsyncClient` (each client patch is guarded and fails open; `httpx` is no longer required either). The catch-all is now record-only: it is never replayed from in any mode, and in strict modes (`replay`, `once`) the proxy answers any untagged request with a non-retryable `clm_replay_miss` 404 that names the missing routing tag. Re-record decks recorded while `openai` 3.x was installed; see `clm info migration`.
+
+- `clm harvest accept` now always writes a new narration cell (`"member": null`)
+  as a `voiceover` cell. Before, the deck's majority narrative role was used and
+  inline `notes` cells counted, so on a deck without voiceover the harvested
+  narration landed as inline trainer `notes` that never reached the recording.
+  The layout now follows the deck's voiceover cells only (default: companion).
+  On a slide that ends in a reference solution (an `answer` / `alt` cell, or a
+  `start`/`completed` pair), the default placement is before the solution:
+  inline cells are inserted above it and companion cells carry a matching
+  `vo_anchor`. `accept` (including `--dry-run`) now reports each new member's
+  role, layout, and per-side `vo_anchor`. (#1057)
+
+- Spec-mode `clm validate` now warns (`image_ref_generated_dir`) when a deck
+  references an image by its build-owned source path `img-generated/<name>`.
+  That directory never exists in the output (its files land in the output's
+  `img/`), so such a link was broken in every output, and validate stayed
+  silent because it only recognised `img/` references. The finding tells the
+  author to reference `img/<name>` instead. (#1058)
+
 ## [1.34.1] - 2026-10-04
 
 ### Fixed
