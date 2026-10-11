@@ -16,10 +16,10 @@
 #   docker build -t docker.io/mhoelzl/clm-notebook-processor:full .
 #   docker build --build-arg VARIANT=full -t docker.io/mhoelzl/clm-notebook-processor:full .
 #
-# Or use the build script:
-#   ./build-services.sh notebook:lite
-#   ./build-services.sh notebook:full
-#   ./build-services.sh notebook        # builds both
+# Or use the CLI (from the project root):
+#   clm docker build notebook:lite
+#   clm docker build notebook:full
+#   clm docker build notebook           # builds both
 #
 
 ARG VARIANT=full
@@ -149,9 +149,9 @@ ARG TARGETARCH
 #   #13 ERROR: process "/bin/sh -c curl -sSL https://dot.net/... &&
 #       ./dotnet-install.sh ..." did not complete successfully: exit code: 18
 #
-# Exit 18 is CURLE_PARTIAL_FILE — a truncated transfer, not a bad URL. It is
-# the single largest source of the Docker job's infra flake, which is why that
-# job is not a required status check.
+# Exit 18 is CURLE_PARTIAL_FILE — a truncated transfer, not a bad URL. It was
+# the single largest source of the Docker CI job's infra flake (that job has
+# been a required status check since #679, so a flake here blocks merges).
 RUN set -eu; \
     ok=0; \
     for attempt in 1 2 3; do \
@@ -283,9 +283,9 @@ RUN set -eu && \
         --output ijava.zip \
         "https://github.com/SpencerPark/IJava/releases/download/v${IJAVA_VERSION}/ijava-${IJAVA_VERSION}.zip" && \
     echo "${IJAVA_SHA256}  ijava.zip" | sha256sum -c - && \
-    unzip ijava.zip -d ijava-1.3.0 && \
+    unzip ijava.zip -d "ijava-${IJAVA_VERSION}" && \
     rm ijava.zip
-WORKDIR /app/ijava-1.3.0
+WORKDIR /app/ijava-${IJAVA_VERSION}
 RUN python3 install.py --sys-prefix
 
 WORKDIR /app
@@ -301,15 +301,27 @@ FROM common AS packages-lite
 # repository's declaration (PythonCourses `pyproject.toml`, the venv the
 # decks are authored and executed in for Direct-mode builds) plus the
 # modules its decks import transitively; keep the two in step — a deck that
-# runs in the course venv must run in this image. Floors are the course's
-# floors; the resolution date below stands in for the course's
-# `exclude-newer` (2026-07-12, with the LangChain family, deepeval and
-# deepagents exempted up to 2026-08-29): one cutoff for the whole image keeps
-# the build reproducible and the versions close to the course venv's.
-ENV UV_EXCLUDE_NEWER=2026-08-29
+# runs in the course venv must run in this image. Floors and caps are the
+# course's; the resolution cutoffs mirror the course's `[tool.uv]` table:
+# `exclude-newer` (UV_EXCLUDE_NEWER) plus the per-package dates of
+# `[tool.uv.exclude-newer-package]` (CLM_UV_PACKAGE_CUTOFFS — uv has no env
+# var for those, so every `uv pip install` below passes it unquoted). A
+# per-package date replaces the global one for that package, so the LangChain
+# family really resolves at its own, *earlier* date — not at the global one.
+ENV UV_EXCLUDE_NEWER=2026-09-23
+ENV CLM_UV_PACKAGE_CUTOFFS="\
+--exclude-newer-package deepeval=2026-08-26 \
+--exclude-newer-package deepagents=2026-08-29 \
+--exclude-newer-package langchain=2026-08-29 \
+--exclude-newer-package langchain-core=2026-08-29 \
+--exclude-newer-package langchain-anthropic=2026-08-29 \
+--exclude-newer-package langgraph=2026-08-29 \
+--exclude-newer-package langsmith=2026-08-29 \
+--exclude-newer-package anthropic=2026-08-29 \
+--exclude-newer-package langgraph-checkpoint-sqlite=2026-08-29"
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
+    uv pip install --python /opt/conda/bin/python ${CLM_UV_PACKAGE_CUTOFFS} \
         # Jupyter and notebook processing (nbconvert/jupytext drive the build)
         'ipython>=8.26.0' \
         'ipykernel>=6.29.5' \
@@ -396,7 +408,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # skorch comes from its git main like in the course venv (the PyPI release
 # lags the scikit-learn/numpy versions the floors above resolve to).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
+    uv pip install --python /opt/conda/bin/python ${CLM_UV_PACKAGE_CUTOFFS} \
         'fastai>=2.7' \
         'skorch @ git+https://github.com/skorch-dev/skorch.git' \
         'numba>=0.60.0' \
@@ -413,7 +425,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Step 3: LLM / RAG / agents (incl. the RAG-evaluation decks' deepeval and the
 # AI-Agents-II decks' deepagents, both pinned like the course venv)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/conda/bin/python \
+    uv pip install --python /opt/conda/bin/python ${CLM_UV_PACKAGE_CUTOFFS} \
         'langchain>=1.2.7' \
         'langsmith' \
         'langchain-anthropic' \
@@ -428,7 +440,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'qdrant-client>=1.13.0' \
         'langchain-qdrant' \
         'fastembed>=0.6.0' \
-        'openai>=2.8.1' \
+        # <3 like the course venv: openai 3.x sends via httpx2, which clm's
+        # http-replay does not tag, so its calls bypass the topic cassettes and
+        # go live. Lift once clm tags httpx2.
+        'openai>=2.45,<3' \
         'tiktoken>=0.9.0' \
         'langfuse>=4.0.0' \
         'deepeval>=4.2.0,<4.3' \

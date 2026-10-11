@@ -93,7 +93,7 @@ langgraph-checkpoint-sqlite  # agent-memory deep dive (persistent checkpointer)
 qdrant-client>=1.13.0
 langchain-qdrant
 fastembed>=0.6.0
-openai>=2.8.1
+openai>=2.45,<3  # 3.x sends via httpx2, which clm's http-replay does not tag: calls bypass the cassettes
 tiktoken>=0.9.0
 langfuse>=4.0.0
 deepeval>=4.2.0,<4.3  # RAG-evaluation decks teach its current interface; the tight pin is the guard
