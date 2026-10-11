@@ -440,9 +440,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'qdrant-client>=1.13.0' \
         'langchain-qdrant' \
         'fastembed>=0.6.0' \
-        # <3 like the course venv: openai 3.x sends via httpx2, which clm's
-        # http-replay does not tag, so its calls bypass the topic cassettes and
-        # go live. Lift once clm tags httpx2.
+        # <3 for parity with the course venv's cap. The course added it because
+        # openai 3.x sends via httpx2, which clm's http-replay did not tag until
+        # 1.34.2 (#1055); lift it here together with the course's pin.
         'openai>=2.45,<3' \
         'tiktoken>=0.9.0' \
         'langfuse>=4.0.0' \
