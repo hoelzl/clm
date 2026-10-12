@@ -3,6 +3,7 @@
 This module provides commands for building and pushing CLM worker Docker images.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,10 @@ console = Console(file=sys.stderr)
 
 # Local cache directory name (relative to project root)
 CACHE_DIR_NAME = ".docker-cache"
+
+# Overrides CACHE_DIR_NAME, e.g. to keep the multi-GB BuildKit cache export on a
+# faster or larger drive, or to share one cache between worktrees.
+CACHE_DIR_ENV = "CLM_DOCKER_CACHE_DIR"
 
 
 # Variants of the notebook image. ``clm docker build notebook`` builds every
@@ -162,6 +167,16 @@ def image_exists_locally(image_name: str) -> bool:
     return result.returncode == 0
 
 
+def get_cache_root() -> Path:
+    """Get the root of the local BuildKit cache.
+
+    ``$CLM_DOCKER_CACHE_DIR`` when set, otherwise ``.docker-cache`` relative to
+    the current directory (the build commands run from the project root).
+    """
+    override = os.environ.get(CACHE_DIR_ENV, "").strip()
+    return Path(override).expanduser() if override else Path(CACHE_DIR_NAME)
+
+
 def get_cache_dir(service: str, variant: str | None = None) -> Path:
     """Get the local cache directory path for a service.
 
@@ -172,7 +187,7 @@ def get_cache_dir(service: str, variant: str | None = None) -> Path:
     Returns:
         Path to the cache directory.
     """
-    cache_dir = Path(CACHE_DIR_NAME) / service
+    cache_dir = get_cache_root() / service
     if service == "notebook" and variant:
         cache_dir = cache_dir / variant
     return cache_dir
@@ -510,8 +525,8 @@ def docker_build(services: tuple[str, ...], build_all: bool, cache: bool):
 
     \b
     Caching:
-      Build cache is stored locally in .docker-cache/ and reused automatically.
-      Use --no-cache to rebuild from scratch.
+      Build cache is stored locally in .docker-cache/ (or $CLM_DOCKER_CACHE_DIR)
+      and reused automatically. Use --no-cache to rebuild from scratch.
 
     \b
     Examples:
@@ -684,7 +699,8 @@ def docker_build_quick(service_spec: str):
 
     \b
     Cache:
-      Build cache is stored in .docker-cache/ and populated on first build.
+      Build cache is stored in .docker-cache/ (or $CLM_DOCKER_CACHE_DIR) and
+      populated on first build.
       Subsequent builds reuse cached layers automatically.
 
     \b

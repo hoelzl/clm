@@ -21,6 +21,7 @@ from rich.console import Console
 from clm.cli.commands import docker as docker_cmd
 from clm.cli.commands.docker import (
     AVAILABLE_SERVICES,
+    CACHE_DIR_ENV,
     CACHE_DIR_NAME,
     HUB_NAMESPACE,
     REGISTRY,
@@ -48,6 +49,14 @@ from clm.cli.commands.docker import (
 # ---------------------------------------------------------------------------
 # Helper fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_docker_cache_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear ``CLM_DOCKER_CACHE_DIR`` so a dev shell that sets it cannot move
+    the cache paths the tests below assert. Tests that need it set do so in
+    their own body (``TestCacheDirOverride``)."""
+    monkeypatch.delenv(CACHE_DIR_ENV, raising=False)
 
 
 @pytest.fixture
@@ -150,6 +159,34 @@ class TestGetCacheDir:
 
     def test_notebook_without_variant(self) -> None:
         assert get_cache_dir("notebook") == Path(CACHE_DIR_NAME) / "notebook"
+
+
+class TestCacheDirOverride:
+    def test_env_var_replaces_the_project_relative_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(CACHE_DIR_ENV, str(tmp_path / "shared-cache"))
+        assert get_cache_dir("notebook", "lite") == tmp_path / "shared-cache" / "notebook" / "lite"
+
+    def test_blank_env_var_falls_back_to_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(CACHE_DIR_ENV, "  ")
+        assert get_cache_dir("plantuml") == Path(CACHE_DIR_NAME) / "plantuml"
+
+    def test_build_args_and_mkdir_use_the_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache_root = tmp_path / "elsewhere"
+        monkeypatch.setenv(CACHE_DIR_ENV, str(cache_root))
+        monkeypatch.chdir(tmp_path)
+
+        created = ensure_cache_dir("drawio")
+        cache_from, cache_to = get_cache_args("drawio", use_cache=True)
+
+        assert created == cache_root / "drawio"
+        assert created.is_dir()
+        assert not (tmp_path / CACHE_DIR_NAME).exists()
+        assert cache_from == ["--cache-from", f"type=local,src={cache_root / 'drawio'}"]
+        assert cache_to == ["--cache-to", f"type=local,dest={cache_root / 'drawio'},mode=max"]
 
 
 class TestGetCacheArgs:
