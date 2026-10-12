@@ -9,6 +9,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.34.3] - 2026-10-12
+
+### Changed
+
+- The Docker notebook image's package resolution now mirrors the PythonCourses
+  course venv: `exclude-newer` 2026-09-23 plus the course's per-package dates,
+  and its `openai<3` cap (also added to `course-runtime-requirements.txt`). The
+  1.34.1 image had resolved openai 3.6.0 while clm did not yet tag `httpx2`
+  (fixed in 1.34.2, #1055), so LLM calls in Docker-mode builds with that image
+  bypassed the topic cassettes — re-record decks recorded with it.
+
+### Fixed
+
+- **Docker builds no longer abort when notebook containers are slow to start
+  (#1078).** The build waited a flat 30 s for pre-registered workers to
+  activate, then marked every still-starting worker dead — even healthy
+  Docker containers, whose startup on Docker Desktop routinely takes 30–70 s
+  when many start at once — and the late activation was then refused.
+  Docker workers now get a 180 s activation budget (Direct workers keep the
+  30 s fail-fast). A Docker worker whose container exits before activating
+  is marked dead by the pool's health monitor right away, which ends the
+  wait early, and its container output is logged. When the pool stops, the
+  output of every Docker worker that never activated or died is copied into
+  `clm.log` before the container is removed. The Docker-mode error messages
+  now point there instead of at the local worker-log directory and
+  `clm[all-workers]`.
+
+- Docker-mode builds now reuse the execution cache for Recording/Speaker HTML
+  instead of re-executing every deck on every build. The Docker notebook worker
+  stored executed notebooks under its container path (`/source/...`), while the
+  host looked them up by the host path, so the lookup never hit. Executions are
+  now keyed by the host path in both modes. The first Docker build after
+  upgrading still executes once to re-populate the cache (#1079).
+
 ## [1.34.2] - 2026-10-11
 
 ### Fixed
