@@ -1119,6 +1119,59 @@ class TestNotebookWorkerDockerPayloadData:
         assert captured_payload.input_file.replace("\\", "/").startswith("/source/")
 
     @pytest.mark.asyncio
+    async def test_docker_mode_caches_execution_under_host_input_path(
+        self, worker_id, db_path, cache_db_path, tmp_path, monkeypatch
+    ):
+        """Regression test for #1079: in Docker mode the payload's
+        ``input_file`` is the container path (``/source/...``), and the worker
+        used to key ``executed_notebooks`` by it. The host's Recording warm-up
+        gate looks entries up by the HOST path, so it never hit and every
+        Recording/Speaker HTML deck re-executed on every build. The stored
+        entry must be found under exactly the key the host gate uses."""
+        from clm.infrastructure.database.executed_notebook_cache import (
+            ExecutedNotebookCache,
+        )
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        host_data_dir = tmp_path / "course"
+        input_file = host_data_dir / "slides" / "topic_100" / "slides_intro.py"
+        input_file.parent.mkdir(parents=True)
+        input_file.write_text(self.RAW_SLIDE, encoding="utf-8")
+        output_file = tmp_path / "output" / "slides_intro.html"
+
+        monkeypatch.setenv("CLM_HOST_DATA_DIR", str(host_data_dir))
+        monkeypatch.delenv("CLM_HOST_WORKSPACE", raising=False)
+
+        host_payload = self._host_payload(input_file, output_file)
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(input_file),
+            output_file=str(output_file),
+            content_hash=host_payload.content_hash(),
+            payload=host_payload.model_dump(mode="json"),
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path, cache_db_path=cache_db_path)
+        try:
+            await worker._process_job_async(job)
+        finally:
+            worker.cleanup()
+
+        assert output_file.exists()
+        with ExecutedNotebookCache(cache_db_path) as cache:
+            # The lookup ``SqliteBackend._can_replay_from_cache`` performs.
+            hit = cache.get(
+                input_file=host_payload.input_file,
+                content_hash=host_payload.execution_cache_hash(),
+                language=host_payload.language,
+                prog_lang=host_payload.prog_lang,
+            )
+        assert hit is not None, "execution cached under a key the host never looks up"
+
+    @pytest.mark.asyncio
     async def test_docker_mode_payload_carries_container_output_path(
         self, worker_id, db_path, tmp_path, monkeypatch
     ):

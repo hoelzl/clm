@@ -250,6 +250,11 @@ class NotebookWorker(Worker):
                 cache=cache,
                 heartbeat_store=self._heartbeat_store,
                 heartbeat_job_id=job.id,
+                # Key the executed-notebook cache by the host path the job
+                # was submitted with, not the container path the payload now
+                # carries — the host's Recording warm-up gate looks entries up
+                # by the host path (issue #1079).
+                cache_input_file=job.input_file,
             )
             try:
                 result = await processor.process_notebook(payload, source_dir=source_dir)

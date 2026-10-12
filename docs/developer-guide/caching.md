@@ -81,7 +81,11 @@ probe) **must** be given the *same* `--cache-db-path` / `--jobs-db-path` /
 
 - **File / table:** `clm_cache.db` → `executed_notebooks`
 - **Key:** `(input_file, language, prog_lang, content_hash)` where the hash is
-  `payload.execution_cache_hash()` — **kind-agnostic** (see below)
+  `payload.execution_cache_hash()` — **kind-agnostic** (see below).
+  `input_file` is always the **host** path, also in Docker mode, where the
+  worker's payload carries the container path (`/source/...`): the worker keys
+  the cache by the job's host `input_file` (`NotebookProcessor(cache_input_file=…)`)
+  so the host-side warmup gate and the worker agree (#1079)
 - **Read by:** `ExecutedNotebookCache.get(...)`
   (`infrastructure/database/executed_notebook_cache.py`)
 - **Written by:** the notebook worker after kernel execution
@@ -318,6 +322,7 @@ useful map of the failure modes.
 | **#577 / #578** | `jobcache_hit` left the on-disk output unregistered, so the end-of-build stray-file sweep deleted valid Recording/Speaker HTML for unchanged topics. | Register the output on the `jobcache_hit` path (uphold "replay == execution"). |
 | **#580 / #581** | `results_cache` grew without bound: `UNIQUE(output_file, content_hash)` + `INSERT OR REPLACE` meant a changed hash inserted a new row and never removed the old one; nothing trimmed the table. | `prune_old_cache_versions` — newest-N per `output_file`, wired into build-end cleanup. |
 | **#579 / #582** | The execution-cache warmup guard forced a producer run past `processed_files`, but `results_cache` then short-circuited it, so `executed_notebooks` stayed cold and Stage-4 consumers re-executed. | Thread the guard's decision as `force_execution`, suppressing the job-cache probe for those payloads. |
+| **#1079** | In Docker mode the worker keyed `executed_notebooks` by the container path (`/source/...`) while the host warmup gate looked it up by the host path, so the gate never hit and every Recording/Speaker HTML deck re-executed on every build. | Key the store/lookup by the job's host `input_file` (`cache_input_file`). |
 | **#321** | Template/worker-image/sibling changes replayed stale teaching material because the cache key ignored them. | Fold `template_fingerprint`, `worker_image_identity`, and sibling bytes into both hashes; add `CACHE_HASH_SCHEMA_VERSION`. |
 
 ## Rules of thumb for changing cache code
