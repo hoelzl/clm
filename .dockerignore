@@ -1,3 +1,11 @@
+# Every root-level dot entry: tool caches and local state (.scratch/, .venv/,
+# .clm/, .clm-cache/, .hypothesis/, .claude/, ...). None of it is a build input
+# (hatchling builds the wheel from src/), and a denylist of individual names
+# missed .scratch/ — 733 MB of agent scratch that `COPY . ./clm` baked into the
+# images (issue #1084). Matching is root-anchored, so dot files inside src/
+# are unaffected. Pinned by tests/infrastructure/workers/test_dockerignore.py.
+.*
+
 # Python-related files
 **/__pycache__
 **/*.pyc
