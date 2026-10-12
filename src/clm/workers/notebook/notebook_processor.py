@@ -935,10 +935,20 @@ class NotebookProcessor:
         cache: "ExecutedNotebookCacheLike | None" = None,
         heartbeat_store: "WorkerHeartbeatStore | None" = None,
         heartbeat_job_id: int | None = None,
+        cache_input_file: str | None = None,
     ):
         self.output_spec = output_spec
         self.id_generator = CellIdGenerator()
         self.cache = cache
+        # The ``input_file`` the executed-notebook cache is keyed by. A Docker
+        # worker's payload carries the container path (``/source/...``), but
+        # the host's warm-up gate (``SqliteBackend._can_replay_from_cache``)
+        # looks entries up by the host path, so the worker passes the host
+        # path it was given here — otherwise every Recording/Speaker HTML
+        # store landed under a key the host never asks for and the deck
+        # re-executed on every build (issue #1079). None keys by
+        # ``payload.input_file`` (Direct mode, where the two coincide).
+        self.cache_input_file = cache_input_file
         self._warnings: list[ProcessingWarning] = []
         # Track the currently executing cell for accurate error reporting
         self._current_cell: CellContext | None = None
@@ -1084,7 +1094,7 @@ class NotebookProcessor:
 
         assert self.cache is not None  # Checked by caller
         cached_nb = self.cache.get(
-            input_file=payload.input_file,
+            input_file=self._cache_key_input_file(payload),
             content_hash=cache_hash,
             language=payload.language,
             prog_lang=payload.prog_lang,
@@ -2229,6 +2239,10 @@ class NotebookProcessor:
         (body, _resources) = html_exporter.from_notebook_node(processed_nb)
         return body
 
+    def _cache_key_input_file(self, payload: NotebookPayload) -> str:
+        """The ``input_file`` cache key: the host path, never a container one."""
+        return self.cache_input_file or payload.input_file
+
     def _cache_executed_notebook(self, executed_nb: NotebookNode, payload: NotebookPayload) -> None:
         """Cache the executed notebook for reuse by Completed HTML.
 
@@ -2252,7 +2266,7 @@ class NotebookProcessor:
 
         assert self.cache is not None  # Checked by caller
         self.cache.store(
-            input_file=payload.input_file,
+            input_file=self._cache_key_input_file(payload),
             content_hash=cache_hash,
             language=payload.language,
             prog_lang=payload.prog_lang,
