@@ -48,7 +48,9 @@ docker build ...
 ### Using `clm docker build` (Recommended)
 
 For convenience, use the built-in `clm docker build` command. Build cache is
-stored locally in `.docker-cache/` and reused automatically.
+stored locally in `.docker-cache/` and reused automatically. The export grows to
+tens of GB; set `CLM_DOCKER_CACHE_DIR` to keep it on a faster or larger drive,
+or to share one cache between worktrees.
 
 ```bash
 # Build all services
