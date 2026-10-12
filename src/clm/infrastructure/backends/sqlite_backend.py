@@ -64,6 +64,23 @@ DEAD_WORKER_SWEEP_INTERVAL_SECONDS = 5.0
 # activate before declaring them startup casualties (issue #348).
 WORKER_ACTIVATION_TIMEOUT_SECONDS = 30.0
 
+# The same wait for Docker workers (issue #1078). Docker Desktop's container
+# startup jitter is unbounded: a healthy notebook container has been seen to
+# take 3 s to 45+ s from `docker run` returning to activation, sometimes with
+# every container of the pool frozen until the same instant. 30 s condemned
+# whole healthy pools. A Docker worker that genuinely crashes does not wait
+# this out: the pool's health monitor marks a 'created' row whose container
+# has exited dead, and the wait stops as soon as no 'created' row is left.
+DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS = 180.0
+
+
+def _activation_timeout(execution_mode: str | None) -> float:
+    """The activation budget for pre-registered workers of *execution_mode*."""
+    if execution_mode == "docker":
+        return DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS
+    return WORKER_ACTIVATION_TIMEOUT_SECONDS
+
+
 # Upper bound on how many queued cache-DB writes the background writer commits
 # under one lock acquisition (see ``_result_cache_writer_loop``).
 RESULT_CACHE_BATCH_SIZE = 32
@@ -1599,9 +1616,14 @@ class SqliteBackend(LocalOpsBackend):
         and the submission aborted a healthy build.
 
         If no worker is live but some are pre-registered (``created``), waits
-        up to ``WORKER_ACTIVATION_TIMEOUT_SECONDS`` for them to activate.
-        Workers still ``created`` after that are marked dead as startup
-        casualties (issue #348) so later submissions fail fast.
+        for them to activate: up to ``WORKER_ACTIVATION_TIMEOUT_SECONDS`` for
+        Direct workers, ``DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS`` for
+        Docker workers (issue #1078 — Docker Desktop's container startup
+        jitter outlasts the Direct budget on healthy pools). The wait ends
+        early once no ``created`` row is left (the health monitor marked the
+        crashed ones dead). Workers still ``created`` after the budget are
+        marked dead as startup casualties (issue #348) so later submissions
+        fail fast.
 
         Args:
             job_type: Type of job (e.g., 'notebook', 'plantuml', 'drawio')
@@ -1637,7 +1659,7 @@ class SqliteBackend(LocalOpsBackend):
         logger.info(
             f"Found {created_count} pre-registered {job_type} worker(s), waiting for activation..."
         )
-        timeout = WORKER_ACTIVATION_TIMEOUT_SECONDS
+        timeout = _activation_timeout(required_mode)
         poll_interval = 0.5
         start_time = time.time()
         while (time.time() - start_time) < timeout:
@@ -1645,6 +1667,19 @@ class SqliteBackend(LocalOpsBackend):
             if available > 0:
                 elapsed = time.time() - start_time
                 logger.info(f"{available} {job_type} worker(s) activated after {elapsed:.1f}s")
+                return available
+            still_starting = count_workers_awaiting_activation(
+                conn, job_type, execution_mode=required_mode, session_id=self.worker_session_id
+            )
+            if still_starting == 0:
+                # Every pre-registration left 'created' without becoming
+                # claimable: the health monitor marked the workers whose
+                # process/container exited dead (issue #1078). Nothing is
+                # left to wait for. Recount first: a worker that activated
+                # between the two queries also leaves no 'created' row.
+                available = live_count()
+                if available == 0:
+                    logger.warning(f"Every pre-registered {job_type} worker died before activating")
                 return available
             time.sleep(poll_interval)
 
@@ -1657,11 +1692,15 @@ class SqliteBackend(LocalOpsBackend):
         # fails fast instead of repeating this full wait per job, which is
         # what stalled builds for many minutes.
         logger.warning(f"Timeout waiting for {job_type} workers to activate after {timeout}s")
-        self._mark_stuck_created_workers_dead(conn, job_type, required_mode)
+        self._mark_stuck_created_workers_dead(conn, job_type, required_mode, timeout)
         return 0
 
     def _mark_stuck_created_workers_dead(
-        self, conn: sqlite3.Connection, job_type: str, required_mode: str | None
+        self,
+        conn: sqlite3.Connection,
+        job_type: str,
+        required_mode: str | None,
+        min_age_seconds: float = WORKER_ACTIVATION_TIMEOUT_SECONDS,
     ) -> None:
         """Declare this session's never-activated pre-registrations dead.
 
@@ -1691,14 +1730,28 @@ class SqliteBackend(LocalOpsBackend):
             UPDATE workers SET status = 'dead'
             WHERE worker_type = ?
             AND status = 'created'
-            AND started_at < datetime('now', '-30 seconds')
+            AND started_at < datetime('now', ?)
             {mode_clause}
             {ownership_clause}
             """,
-            (job_type, *mode_params, *ownership_params),
+            (job_type, f"-{int(min_age_seconds)} seconds", *mode_params, *ownership_params),
         )
         if cursor.rowcount:
             conn.commit()
+            if required_mode == "docker":
+                # Docker workers log to their container, not to the local
+                # worker-log directory, and their image already carries every
+                # dependency — the Direct-mode hint would mislead (#1078).
+                logger.error(
+                    f"Marked {cursor.rowcount} pre-registered docker {job_type} "
+                    f"worker(s) as dead: their containers did not activate within "
+                    f"{min_age_seconds:.0f}s. Docker may be overloaded or still "
+                    f"pulling the image — retry, or start fewer workers. The "
+                    f"container output of each worker that never activated is "
+                    f"logged to clm.log when the pool stops (containers "
+                    f"clm-{job_type}-worker-N)."
+                )
+                return
             from clm.infrastructure.logging.log_paths import get_worker_log_path
 
             log_dir = get_worker_log_path(job_type, 0).parent
@@ -1743,6 +1796,13 @@ class SqliteBackend(LocalOpsBackend):
                 f"sessions and cannot claim this build's jobs (e.g. persistent workers "
                 f"left running by an earlier build). Reap them (clm workers reap) or "
                 f"let this build start its own pool."
+            )
+        elif mode == "docker":
+            cause = (
+                f"Either the {job_type} worker pool never started or every worker has "
+                f"been marked dead/hung — the container output of each worker that "
+                f"never activated or died is logged to clm.log when the pool stops "
+                f"(containers clm-{job_type}-worker-N)."
             )
         else:
             cause = (

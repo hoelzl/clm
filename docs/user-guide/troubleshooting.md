@@ -635,6 +635,31 @@ Error: Cannot connect to Docker daemon
    docker ps
    ```
 
+### Docker Workers Never Activate
+
+**Symptoms**:
+```
+WARNING  Timeout waiting for notebook workers to activate after 180.0s
+ERROR    Marked 8 pre-registered docker notebook worker(s) as dead: their containers did not activate within 180s ...
+```
+
+**Cause**: A worker container starts, then reports to the build ("activates")
+once Python inside it has loaded. On Docker Desktop (Windows/macOS) the time
+between the two varies a lot — from a few seconds to more than a minute when
+many containers start at once — so the build waits up to 180 s for Docker
+workers (30 s for Direct workers). A container that crashes during startup
+does not hold the build that long: it is marked dead as soon as it exits, with
+its output logged to `clm.log`.
+
+**Solutions**:
+
+1. **Look at the container output**: when the pool stops, the output of every
+   Docker worker that never activated or died is copied into `clm.log`
+   (the containers themselves are removed). Search it for `Container output`.
+2. **Start fewer workers** (e.g. `--notebook-workers 4`) so Docker has fewer
+   containers to bring up at once.
+3. **Retry**: a one-off slow start of Docker Desktop is the usual cause.
+
 ### Build Context Too Large
 
 **Symptoms**:
