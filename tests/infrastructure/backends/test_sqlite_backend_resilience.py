@@ -735,6 +735,138 @@ async def test_activation_timeout_dead_marking_respects_ownership(temp_db, temp_
         await backend.shutdown()
 
 
+def _set_worker_status(db_path: Path, worker_id: int, status: str) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE workers SET status = ?, last_heartbeat = CURRENT_TIMESTAMP WHERE id = ?",
+            (status, worker_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _run_activation_wait_with_fake_clock(backend, on_tick, job_type: str = "notebook"):
+    """Drive the activation wait with a fake clock; ``on_tick(elapsed)`` runs
+    at every poll sleep. Returns ``(available, fake_seconds_waited)``."""
+    start = time.time()
+    fake_now = [start]
+
+    def fast_sleep(seconds):
+        fake_now[0] += seconds
+        on_tick(fake_now[0] - start)
+
+    with (
+        patch("clm.infrastructure.backends.sqlite_backend.time.sleep", side_effect=fast_sleep),
+        patch(
+            "clm.infrastructure.backends.sqlite_backend.time.time",
+            side_effect=lambda: fake_now[0],
+        ),
+    ):
+        available = backend._get_available_workers(job_type)
+    return available, fake_now[0] - start
+
+
+@pytest.mark.asyncio
+async def test_docker_worker_activating_after_direct_budget_is_not_condemned(
+    temp_db, temp_workspace
+):
+    """Issue #1078: Docker Desktop's container startup jitter routinely
+    outlasts the 30 s Direct budget on a healthy pool (activation 37-44 s
+    after container start, once 70+ s). A Docker worker that activates after
+    30 s — but within the Docker budget — must be found, not marked dead."""
+    worker_id = _seed_created_worker(temp_db, container_id="0123456789ab")
+    _age_worker(temp_db, worker_id, seconds=120)
+
+    def activate_after_60s(elapsed):
+        if elapsed >= 60:
+            _set_worker_status(temp_db, worker_id, "idle")
+
+    backend = _backend(temp_db, temp_workspace, worker_execution_modes={"notebook": "docker"})
+    try:
+        available, waited = _run_activation_wait_with_fake_clock(backend, activate_after_60s)
+        assert available == 1
+        assert 60 <= waited < 61
+        assert _worker_status(temp_db, worker_id) == "idle"
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_docker_activation_wait_ends_once_every_created_worker_died(temp_db, temp_workspace):
+    """The longer Docker budget must not hold a build whose containers
+    crashed: once the health monitor has marked every 'created' row dead,
+    the wait stops at once instead of running out the budget (#1078)."""
+    worker_id = _seed_created_worker(temp_db, container_id="0123456789ab")
+
+    def crash_after_5s(elapsed):
+        if elapsed >= 5:
+            _set_worker_status(temp_db, worker_id, "dead")
+
+    backend = _backend(temp_db, temp_workspace, worker_execution_modes={"notebook": "docker"})
+    try:
+        available, waited = _run_activation_wait_with_fake_clock(backend, crash_after_5s)
+        assert available == 0
+        assert waited < 6
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_docker_activation_timeout_marks_dead_with_docker_guidance(
+    temp_db, temp_workspace, caplog
+):
+    """A Docker worker still 'created' after the whole Docker budget is a
+    startup casualty (#348 fail-fast keeps working), and the message points
+    at the container output in clm.log — not at the local worker-log
+    directory or clm[all-workers], which do not apply in Docker mode."""
+    from clm.infrastructure.backends.sqlite_backend import (
+        DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS,
+    )
+
+    worker_id = _seed_created_worker(temp_db, container_id="0123456789ab")
+    _age_worker(temp_db, worker_id, seconds=int(DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS) + 60)
+
+    backend = _backend(temp_db, temp_workspace, worker_execution_modes={"notebook": "docker"})
+    try:
+        with caplog.at_level("ERROR", logger="clm.infrastructure.backends.sqlite_backend"):
+            available, waited = _run_activation_wait_with_fake_clock(backend, lambda _e: None)
+        assert available == 0
+        assert waited >= DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS
+        assert _worker_status(temp_db, worker_id) == "dead"
+
+        errors = "\n".join(r.message for r in caplog.records)
+        assert "clm.log" in errors
+        assert "clm-notebook-worker-N" in errors
+        assert "all-workers" not in errors
+
+        description = backend._describe_no_workers("notebook")
+        assert "clm.log" in description
+        assert "all-workers" not in description
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_direct_activation_budget_unchanged(temp_db, temp_workspace):
+    """Direct mode keeps the 30 s issue-#348 fail-fast: the Docker budget
+    applies to Docker workers only."""
+    from clm.infrastructure.backends.sqlite_backend import WORKER_ACTIVATION_TIMEOUT_SECONDS
+
+    worker_id = _seed_created_worker(temp_db, container_id="direct-notebook-own")
+    _age_worker(temp_db, worker_id)
+
+    backend = _backend(temp_db, temp_workspace, worker_execution_modes={"notebook": "direct"})
+    try:
+        available, waited = _run_activation_wait_with_fake_clock(backend, lambda _e: None)
+        assert available == 0
+        assert WORKER_ACTIVATION_TIMEOUT_SECONDS <= waited < WORKER_ACTIVATION_TIMEOUT_SECONDS + 1
+        assert _worker_status(temp_db, worker_id) == "dead"
+    finally:
+        await backend.shutdown()
+
+
 @pytest.mark.asyncio
 async def test_submitted_job_is_stamped_with_worker_session_id(temp_db, temp_workspace):
     """Issue #620: the backend stamps its build session onto every submitted

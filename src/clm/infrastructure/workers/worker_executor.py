@@ -254,6 +254,14 @@ class WorkerExecutor(ABC):
         """
         pass
 
+    def has_exited(self, worker_id: str) -> bool:
+        """True only when the worker is positively known to have exited.
+
+        Defaults to ``False`` (unknown); see
+        :meth:`DockerWorkerExecutor.has_exited` (issue #1078).
+        """
+        return False
+
     @abstractmethod
     def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get resource usage statistics for a worker.
@@ -684,6 +692,31 @@ class DockerWorkerExecutor(WorkerExecutor):
         except Exception as e:
             logger.error(f"Error checking worker status: {e}")
             return False
+
+    def has_exited(self, worker_id: str) -> bool:
+        """True only when a container THIS executor started has positively exited.
+
+        Unlike :meth:`is_worker_running`, uncertainty answers ``False``: a
+        container this executor never started (a foreign row, or a
+        pre-registration whose ``docker run`` has not returned yet), one
+        still ``created``/``restarting``, or a Docker API error. The health
+        monitor uses this to condemn never-activated workers (issue #1078),
+        where a false positive would kill a healthy-but-slow pool — the very
+        failure the longer Docker activation budget exists to avoid.
+        """
+        import docker.errors
+
+        container = self.containers.get(worker_id)
+        if container is None:
+            return False
+        try:
+            container.reload()
+        except docker.errors.NotFound:
+            return True
+        except Exception as e:
+            logger.debug(f"Could not inspect container {worker_id[:12]}: {e}")
+            return False
+        return cast(str, container.status) in ("exited", "dead")
 
     def get_worker_stats(self, worker_id: str) -> dict | None:
         """Get Docker container resource statistics."""

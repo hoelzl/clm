@@ -1049,6 +1049,8 @@ class WorkerPoolManager:
                             f"Error checking worker {worker_id} health: {e}", exc_info=True
                         )
 
+                self._reap_exited_created_docker_workers(conn)
+
                 self._monitor_stop_event.wait(check_interval)
 
             except Exception as e:
@@ -1056,6 +1058,48 @@ class WorkerPoolManager:
                 self._monitor_stop_event.wait(check_interval)
 
         logger.info("Health monitor stopped")
+
+    def _reap_exited_created_docker_workers(self, conn) -> None:
+        """Mark this pool's never-activated Docker workers dead once their container exits.
+
+        Issue #1078: the build waits up to
+        ``DOCKER_WORKER_ACTIVATION_TIMEOUT_SECONDS`` for 'created' Docker
+        workers, because Docker Desktop's startup jitter is unbounded. A
+        container that crashed at startup must not hold the build for that
+        whole budget: once it is positively gone its row turns 'dead', which
+        ends the build's activation wait as soon as no 'created' row is
+        left. Only containers this pool started are judged
+        (:meth:`DockerWorkerExecutor.has_exited`), so a still-booting or a
+        foreign row is never condemned.
+        """
+        executor = self.executors.get("docker")
+        if executor is None:
+            return
+        if self.session_id is not None:
+            rows = conn.execute(
+                "SELECT id, worker_type, container_id FROM workers "
+                "WHERE status = 'created' AND session_id = ?",
+                (self.session_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, worker_type, container_id FROM workers WHERE status = 'created'"
+            ).fetchall()
+        for worker_id, worker_type, container_id in rows:
+            # Strictly True: only a positive "exited" condemns a worker.
+            if not container_id or executor.has_exited(container_id) is not True:
+                continue
+            logs = executor.get_container_logs(container_id, tail=40)
+            logger.error(
+                f"Docker {worker_type} worker {worker_id} exited before activating; "
+                f"marking it dead. Container output (last 40 lines):\n"
+                f"{logs if logs else '(no output available)'}"
+            )
+            conn.execute(
+                "UPDATE workers SET status = 'dead' WHERE id = ? AND status = 'created'",
+                (worker_id,),
+            )
+            conn.commit()
 
     # Grace period for cleanup_stale_workers (issue #853): a direct worker row
     # whose most recent heartbeat is younger than this belongs to a LIVE
@@ -1225,6 +1269,8 @@ class WorkerPoolManager:
                     executor = worker_info["executor"]
                     executor_id = worker_info["executor_id"]
 
+                    self._log_unhealthy_docker_worker_output(worker_info)
+
                     # Stop using executor
                     if executor.stop_worker(executor_id):
                         total_stopped += 1
@@ -1251,6 +1297,41 @@ class WorkerPoolManager:
         self._stop_worker_api_server()
 
         logger.info(f"Stopped {total_stopped} workers")
+
+    def _log_unhealthy_docker_worker_output(self, worker_info: dict) -> None:
+        """Log a Docker worker's container output if it never served the build.
+
+        Stopping removes the container, and with it the only record of why a
+        worker never activated or died — Docker workers write no local log
+        file (issue #1078). So before removal, a Docker worker whose row is
+        not ``idle``/``busy`` (still ``created``, or ``dead``/``hung``) has
+        its output tail copied into clm.log, where the build's error message
+        points.
+        """
+        config = worker_info.get("config")
+        if config is None or getattr(config, "execution_mode", None) != "docker":
+            return
+        try:
+            row = (
+                self.job_queue._get_conn()
+                .execute(
+                    "SELECT status FROM workers WHERE id = ?",
+                    (worker_info["db_worker_id"],),
+                )
+                .fetchone()
+            )
+            if row is None or row[0] in ("idle", "busy"):
+                return
+            executor_id = worker_info["executor_id"]
+            logs = worker_info["executor"].get_container_logs(executor_id, tail=40)
+            logger.warning(
+                f"Docker {config.worker_type} worker {worker_info['db_worker_id']} "
+                f"(container {executor_id[:12]}) ended with status '{row[0]}'. "
+                f"Container output (last 40 lines):\n"
+                f"{logs if logs else '(no output available)'}"
+            )
+        except Exception as e:
+            logger.debug(f"Could not capture container output: {e}")
 
     def _emergency_stop(self):
         """Emergency stop of all workers without waiting for graceful shutdown.
