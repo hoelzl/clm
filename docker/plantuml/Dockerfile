@@ -28,7 +28,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-    echo 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/unsafe-io && \
     apt-get update && \
     apt-get install -y \
         default-jre \

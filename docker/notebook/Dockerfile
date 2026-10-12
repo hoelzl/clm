@@ -51,15 +51,10 @@ RUN mkdir -p /root/.jupyter /root/course
 
 # Install system dependencies for lite
 # Note: software-properties-common is not needed on Debian (no PPA support)
-# dpkg's force-unsafe-io skips its per-file fsync, which buys nothing in a
-# build layer (committed or discarded as a whole). It did NOT cure the ~3 s
-# per package apt unpack seen on Docker Desktop (2026-10-11, cause unknown).
-# Not set in the CUDA base below only to keep that unchanged layer cached.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-    echo 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/unsafe-io && \
     apt-get update && \
     apt-get install -y \
         ca-certificates \
