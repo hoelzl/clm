@@ -16,11 +16,18 @@ import logging
 import subprocess
 import sys
 import tempfile
+import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Whisper models consume 16 kHz mono audio.
+WHISPER_SAMPLE_RATE = 16000
 
 
 @dataclass(frozen=True)
@@ -173,8 +180,13 @@ class FasterWhisperBackend:
 
         logger.info("Transcribing %s (language=%s)...", audio_path.name, language or "auto")
 
+        # Hand faster-whisper decoded samples, never a path: given a path it
+        # decodes with PyAV, and its av.open(metadata_errors=...) call crashes
+        # on PyAV >= 19 (#1088).
+        audio = load_whisper_audio(audio_path)
+
         segments_iter, info = model.transcribe(
-            str(audio_path),
+            audio,
             language=language,
             beam_size=5,
             vad_filter=True,
@@ -435,7 +447,7 @@ def extract_audio(
     video_path: str | Path,
     output_path: str | Path | None = None,
     *,
-    sample_rate: int = 16000,
+    sample_rate: int = WHISPER_SAMPLE_RATE,
 ) -> Path:
     """Extract audio from a video file using ffmpeg.
 
@@ -488,6 +500,80 @@ def extract_audio(
 
     logger.info("Audio extracted: %s", output_path)
     return output_path
+
+
+def load_whisper_audio(
+    audio_path: str | Path,
+    *,
+    sample_rate: int = WHISPER_SAMPLE_RATE,
+) -> np.ndarray:
+    """Decode an audio file into the mono float32 samples Whisper consumes.
+
+    This replaces ``faster_whisper.decode_audio``, which decodes with PyAV and
+    breaks whenever PyAV changes its API. PyAV 19 removed the
+    ``metadata_errors`` keyword that faster-whisper 1.2.1 passes (#1088).
+
+    The WAV written by :func:`extract_audio` (16-bit PCM, mono, *sample_rate*)
+    is read directly. Any other input is converted by ffmpeg, which
+    :func:`extract_audio` already requires. Samples are scaled the way
+    faster-whisper scales them: int16 / 32768.
+    """
+    import numpy as np
+
+    path = Path(audio_path)
+    pcm = _read_pcm16_mono_wav(path, sample_rate)
+    if pcm is None:
+        pcm = _ffmpeg_pcm16_mono(path, sample_rate)
+    return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _read_pcm16_mono_wav(path: Path, sample_rate: int) -> bytes | None:
+    """Raw little-endian int16 frames of *path*, or None if it is not a WAV
+    in exactly the shape :func:`extract_audio` writes."""
+    try:
+        with wave.open(str(path), "rb") as wav:
+            if (
+                wav.getnchannels() != 1
+                or wav.getsampwidth() != 2
+                or wav.getframerate() != sample_rate
+                or wav.getcomptype() != "NONE"
+            ):
+                return None
+            return wav.readframes(wav.getnframes())
+    except (wave.Error, EOFError):
+        # Not RIFF/WAVE, or a WAVE codec the stdlib cannot read.
+        return None
+
+
+def _ffmpeg_pcm16_mono(path: Path, sample_rate: int) -> bytes:
+    """Decode *path* with ffmpeg to raw little-endian int16 mono samples."""
+    if not path.exists():
+        raise FileNotFoundError(f"Audio not found: {path}")
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+        "-vn",
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"ffmpeg failed to decode {path.name} (exit {result.returncode}): {stderr[:500]}"
+        )
+    return result.stdout
 
 
 def _transcribe_in_subprocess(

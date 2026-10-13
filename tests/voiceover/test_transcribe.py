@@ -3,19 +3,41 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from clm.voiceover.transcribe import (
+    WHISPER_SAMPLE_RATE,
     FasterWhisperBackend,
     Transcript,
     TranscriptSegment,
     _transcribe_in_subprocess,
     extract_audio,
+    load_whisper_audio,
     transcribe_video,
 )
+
+
+def _write_wav(
+    path: Path,
+    samples: list[int],
+    *,
+    rate: int = WHISPER_SAMPLE_RATE,
+    channels: int = 1,
+) -> Path:
+    """Write int16 *samples* (interleaved when channels > 1) as a PCM WAV."""
+    np = pytest.importorskip("numpy")
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(np.asarray(samples, dtype="<i2").tobytes())
+    return path
 
 
 class TestTranscriptSegment:
@@ -93,7 +115,7 @@ class TestFasterWhisperBackend:
         assert backend._model is None
 
     @patch("clm.voiceover.transcribe.FasterWhisperBackend._get_model")
-    def test_transcribe_returns_transcript(self, mock_get_model):
+    def test_transcribe_returns_transcript(self, mock_get_model, tmp_path):
         # Mock the model's transcribe method
         mock_segment = MagicMock()
         mock_segment.start = 0.0
@@ -117,13 +139,128 @@ class TestFasterWhisperBackend:
         mock_get_model.return_value = mock_model
 
         backend = FasterWhisperBackend(model_size="tiny")
-        transcript = backend.transcribe(Path("test.wav"), language="de")
+        transcript = backend.transcribe(_write_wav(tmp_path / "test.wav", [0] * 160), language="de")
 
         assert len(transcript.segments) == 2
         assert transcript.segments[0].text == "Hallo, das ist ein Test."
         assert transcript.segments[1].text == "Noch ein Satz."
         assert transcript.language == "de"
         assert transcript.duration == 5.0
+
+    @patch("clm.voiceover.transcribe.FasterWhisperBackend._get_model")
+    def test_passes_decoded_samples_not_a_path(self, mock_get_model, tmp_path):
+        """#1088: given a path, faster-whisper decodes with PyAV, whose 19.x
+        release removed the ``metadata_errors`` keyword faster-whisper passes.
+        The backend must hand over the decoded array instead."""
+        np = pytest.importorskip("numpy")
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = (iter([]), MagicMock(language="en", duration=0.0))
+        mock_get_model.return_value = mock_model
+        wav = _write_wav(tmp_path / "a.wav", [0, 16384, -32768])
+
+        FasterWhisperBackend(model_size="tiny").transcribe(wav, language="en")
+
+        (audio,), _ = mock_model.transcribe.call_args
+        assert isinstance(audio, np.ndarray)
+        assert audio.dtype == np.float32
+        assert audio.tolist() == [0.0, 0.5, -1.0]
+
+
+class TestLoadWhisperAudio:
+    def test_reads_extract_audio_wav_without_ffmpeg(self, tmp_path):
+        np = pytest.importorskip("numpy")
+        wav = _write_wav(tmp_path / "a.wav", [0, 16384, -32768, 32767])
+
+        with patch("clm.voiceover.transcribe.subprocess.run") as run:
+            audio = load_whisper_audio(wav)
+
+        run.assert_not_called()
+        assert audio.dtype == np.float32
+        # Same scaling as faster_whisper.decode_audio: int16 / 32768.
+        assert audio.tolist() == [0.0, 0.5, -1.0, 32767 / 32768]
+
+    @pytest.mark.parametrize(
+        ("rate", "channels"),
+        [(44100, 1), (WHISPER_SAMPLE_RATE, 2)],
+        ids=["other-rate", "stereo"],
+    )
+    def test_other_wav_shapes_go_through_ffmpeg(self, tmp_path, rate, channels):
+        np = pytest.importorskip("numpy")
+        wav = _write_wav(tmp_path / "a.wav", [0] * 8, rate=rate, channels=channels)
+        pcm = np.asarray([16384, -16384], dtype="<i2").tobytes()
+
+        with patch(
+            "clm.voiceover.transcribe.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, pcm, b""),
+        ) as run:
+            audio = load_whisper_audio(wav)
+
+        cmd = run.call_args[0][0]
+        assert cmd[0] == "ffmpeg"
+        assert cmd[cmd.index("-ar") + 1] == str(WHISPER_SAMPLE_RATE)
+        assert cmd[cmd.index("-ac") + 1] == "1"
+        assert cmd[cmd.index("-f") + 1] == "s16le"
+        assert audio.tolist() == [0.5, -0.5]
+
+    def test_non_wav_input_goes_through_ffmpeg(self, tmp_path):
+        pytest.importorskip("numpy")
+        mp3 = tmp_path / "a.mp3"
+        mp3.write_bytes(b"ID3\x04\x00not really an mp3")
+
+        with patch(
+            "clm.voiceover.transcribe.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"\x00\x40", b""),
+        ) as run:
+            audio = load_whisper_audio(mp3)
+
+        assert str(mp3) in run.call_args[0][0]
+        assert audio.tolist() == [0.5]
+
+    def test_ffmpeg_failure_raises(self, tmp_path):
+        pytest.importorskip("numpy")
+        bad = tmp_path / "a.mp3"
+        bad.write_bytes(b"garbage")
+
+        with patch(
+            "clm.voiceover.transcribe.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 1, b"", b"Invalid data found"),
+        ):
+            with pytest.raises(RuntimeError, match="Invalid data found"):
+                load_whisper_audio(bad)
+
+    def test_missing_file_raises_file_not_found(self, tmp_path):
+        pytest.importorskip("numpy")
+        with pytest.raises(FileNotFoundError):
+            load_whisper_audio(tmp_path / "missing.wav")
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")
+    def test_real_ffmpeg_resamples_to_16k_mono(self, tmp_path):
+        np = pytest.importorskip("numpy")
+        rate = 44100
+        t = np.arange(rate) / rate  # one second
+        tone = (np.sin(2 * np.pi * 440 * t) * 8000).astype("<i2")
+        stereo = np.repeat(tone, 2)  # identical left/right channels
+        wav = _write_wav(tmp_path / "tone.wav", stereo.tolist(), rate=rate, channels=2)
+
+        audio = load_whisper_audio(wav)
+
+        assert abs(len(audio) - WHISPER_SAMPLE_RATE) <= 32
+        assert 0.2 < float(np.abs(audio).max()) < 0.3  # 8000 / 32768 ~ 0.244
+
+    def test_matches_faster_whisper_decoder(self, tmp_path):
+        """Parity with ``faster_whisper.decode_audio`` where it still works
+        (PyAV < 19): the model sees exactly the samples it saw before."""
+        np = pytest.importorskip("numpy")
+        fw_audio = pytest.importorskip("faster_whisper.audio")
+        rng = np.random.default_rng(1088)
+        samples = rng.integers(-32768, 32767, size=4000).tolist()
+        wav = _write_wav(tmp_path / "noise.wav", samples)
+        try:
+            expected = fw_audio.decode_audio(str(wav))
+        except TypeError as exc:  # PyAV >= 19: the very bug this module avoids
+            pytest.skip(f"faster-whisper's decoder is broken here: {exc}")
+
+        assert np.array_equal(load_whisper_audio(wav), expected)
 
 
 class TestTranscribeVideo:
