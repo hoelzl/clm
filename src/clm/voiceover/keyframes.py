@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
     import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -83,18 +85,23 @@ def get_video_info(video_path: str | Path) -> VideoInfo:
         cap.release()
 
 
-def extract_frames(
+def iter_frames(
     video_path: str | Path,
     sample_fps: float = 2.0,
-) -> list[tuple[float, np.ndarray]]:
-    """Extract grayscale frames from a video at the given sample rate.
+) -> Iterator[tuple[float, np.ndarray]]:
+    """Yield grayscale frames from a video at the given sample rate.
+
+    Frames are produced one at a time, so a consumer that only keeps the
+    previous frame (like :func:`compute_differences`) runs in constant
+    memory regardless of video length. Holding every sampled frame of a 4K
+    recording costs ~8 MB per frame, i.e. tens of GB for a 30-minute video.
 
     Args:
         video_path: Path to the video file.
         sample_fps: How many frames per second to sample (default: 2.0).
 
-    Returns:
-        List of (timestamp_seconds, grayscale_frame) tuples.
+    Yields:
+        (timestamp_seconds, grayscale_frame) tuples.
     """
     import cv2
 
@@ -105,32 +112,51 @@ def extract_frames(
     try:
         video_fps = cap.get(cv2.CAP_PROP_FPS)
         frame_interval = max(1, int(video_fps / sample_fps))
-
-        frames: list[tuple[float, np.ndarray]] = []
         frame_idx = 0
 
         while True:
-            ret, frame = cap.read()
-            if not ret:
+            # grab() advances without converting the frame; only the sampled
+            # frames are retrieved into BGR and converted to grayscale.
+            if not cap.grab():
                 break
             if frame_idx % frame_interval == 0:
+                ret, frame = cap.retrieve()
+                if not ret:
+                    break
                 timestamp = frame_idx / video_fps
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                frames.append((timestamp, gray))
+                yield timestamp, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             frame_idx += 1
-
-        return frames
     finally:
         cap.release()
 
 
+def extract_frames(
+    video_path: str | Path,
+    sample_fps: float = 2.0,
+) -> list[tuple[float, np.ndarray]]:
+    """Extract grayscale frames from a video at the given sample rate.
+
+    Materializes every sampled frame; prefer :func:`iter_frames` for long or
+    high-resolution videos.
+
+    Args:
+        video_path: Path to the video file.
+        sample_fps: How many frames per second to sample (default: 2.0).
+
+    Returns:
+        List of (timestamp_seconds, grayscale_frame) tuples.
+    """
+    return list(iter_frames(video_path, sample_fps=sample_fps))
+
+
 def compute_differences(
-    frames: list[tuple[float, np.ndarray]],
+    frames: Iterable[tuple[float, np.ndarray]],
 ) -> list[tuple[float, float]]:
     """Compute frame-to-frame difference scores.
 
     Uses normalized mean absolute pixel difference (0.0 = identical,
-    1.0 = completely different).
+    1.0 = completely different). Only the previous frame is kept, so
+    passing the :func:`iter_frames` generator runs in constant memory.
 
     Returns:
         List of (timestamp, difference_score) tuples. The timestamp
@@ -139,13 +165,13 @@ def compute_differences(
     import numpy as np
 
     diffs: list[tuple[float, float]] = []
-    for i in range(1, len(frames)):
-        ts, frame = frames[i]
-        _, prev_frame = frames[i - 1]
-        diff = float(
-            np.mean(np.abs(frame.astype(np.float32) - prev_frame.astype(np.float32))) / 255.0
-        )
-        diffs.append((ts, diff))
+    prev: np.ndarray | None = None
+    for ts, frame in frames:
+        current = frame.astype(np.float32)
+        if prev is not None:
+            diff = float(np.mean(np.abs(current - prev)) / 255.0)
+            diffs.append((ts, diff))
+        prev = current
     return diffs
 
 
@@ -324,8 +350,7 @@ def detect_transitions(
         Tuple of (transition_events, raw_diffs) where raw_diffs can be
         used for diagnostics/plotting.
     """
-    frames = extract_frames(video_path, sample_fps=sample_fps)
-    diffs = compute_differences(frames)
+    diffs = compute_differences(iter_frames(video_path, sample_fps=sample_fps))
     candidates = find_transition_candidates(
         diffs,
         threshold_factor=threshold_factor,

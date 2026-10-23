@@ -10,7 +10,10 @@ from clm.voiceover.keyframes import (
     TransitionEvent,
     cluster_transitions,
     compute_differences,
+    detect_transitions,
+    extract_frames,
     find_transition_candidates,
+    iter_frames,
 )
 
 
@@ -52,6 +55,69 @@ class TestComputeDifferences:
     def test_single_frame(self):
         frame = np.zeros((10, 10), dtype=np.uint8)
         assert compute_differences([(0.0, frame)]) == []
+
+    def test_generator_matches_two_pass(self):
+        """Streaming diffs equal the original materialize-then-pair diffs (#1096)."""
+        rng = np.random.default_rng(1096)
+        frames = [(i * 0.5, rng.integers(0, 256, (90, 160), dtype=np.uint8)) for i in range(12)]
+        expected = [
+            (
+                frames[i][0],
+                float(
+                    np.mean(
+                        np.abs(
+                            frames[i][1].astype(np.float32) - frames[i - 1][1].astype(np.float32)
+                        )
+                    )
+                    / 255.0
+                ),
+            )
+            for i in range(1, len(frames))
+        ]
+        assert compute_differences(iter(frames)) == expected
+        assert compute_differences(frames) == expected
+
+
+def _write_video(path, levels: list[int], fps: float = 10.0) -> None:
+    """Write a tiny grayscale-level test video, one frame per entry in levels."""
+    import cv2
+
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (64, 48))
+    assert writer.isOpened()
+    for level in levels:
+        writer.write(np.full((48, 64, 3), level, dtype=np.uint8))
+    writer.release()
+
+
+class TestIterFrames:
+    def test_samples_at_requested_rate(self, tmp_path):
+        video = tmp_path / "v.avi"
+        _write_video(video, [0] * 10 + [255] * 10, fps=10.0)
+        frames = list(iter_frames(video, sample_fps=2.0))
+        assert [ts for ts, _ in frames] == pytest.approx([0.0, 0.5, 1.0, 1.5])
+        assert all(f.ndim == 2 for _, f in frames)
+        assert frames[0][1].mean() < 10 and frames[-1][1].mean() > 245
+
+    def test_is_lazy_and_matches_extract_frames(self, tmp_path):
+        video = tmp_path / "v.avi"
+        _write_video(video, [0, 50, 100, 150, 200, 250] * 2, fps=4.0)
+        gen = iter_frames(video, sample_fps=2.0)
+        assert iter(gen) is gen
+        streamed = list(gen)
+        eager = extract_frames(video, sample_fps=2.0)
+        assert [ts for ts, _ in streamed] == [ts for ts, _ in eager]
+        assert all(np.array_equal(a, b) for (_, a), (_, b) in zip(streamed, eager, strict=True))
+
+    def test_missing_video_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            list(iter_frames(tmp_path / "missing.avi"))
+
+    def test_detect_transitions_finds_cut(self, tmp_path):
+        video = tmp_path / "v.avi"
+        _write_video(video, [20] * 40 + [230] * 40, fps=10.0)
+        events, diffs = detect_transitions(video, sample_fps=2.0)
+        assert len(diffs) == 15
+        assert [e.timestamp for e in events] == pytest.approx([4.0])
 
 
 class TestFindTransitionCandidates:
