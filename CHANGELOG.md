@@ -9,6 +9,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.35.0] - 2026-10-23
+
+### Added
+
+- `clm docker build`, `build-quick` and `cache-info` honor a new
+  `CLM_DOCKER_CACHE_DIR` environment variable for the local BuildKit cache
+  (default `<project-root>/.docker-cache/`). Use it to keep the multi-GB cache
+  export on a faster or larger drive, or to share one cache between worktrees.
+
+### Changed
+
+- The plantuml, drawio and notebook-lite Docker images no longer set dpkg's
+  `force-unsafe-io` in their apt layers. Build-history measurements showed it
+  gave no speed-up. The slow apt unpack (~3 s per package) came from Docker
+  Desktop's data disk sitting on a high-fsync-latency drive (#1083).
+
+### Fixed
+
+- Docker images no longer pick up local, gitignored state from the build
+  checkout. `.dockerignore` now excludes every root-level dot entry, so
+  `.scratch/`, `.clm/`, `.clm-cache/`, `.clm-test-corpus/`, `.hypothesis/` and
+  `.import_linter_cache/` stay out of `/app/clm`. Previously, a build from a
+  working checkout baked ~455 MB of agent scratch into the images and made the
+  final `chmod -R` layer take over an hour on a slow disk (#1084).
+
+- Fixed: ASR (`clm harvest transcribe`, `cached_transcribe` and every other
+  faster-whisper path) crashed with `TypeError: open() got an unexpected keyword
+  argument 'metadata_errors'` when PyAV 19 was installed. Global
+  `uv tool install`s pick up PyAV 19 because they ignore clm's lock file. clm
+  now decodes the audio itself: it reads the 16 kHz mono WAV that
+  `extract_audio` produced, or falls back to ffmpeg for any other input. It
+  hands faster-whisper the samples, so faster-whisper's PyAV decoder is never
+  called. The decoded samples are bit-identical to faster-whisper's own (#1088).
+
+- Slide-transition detection (`clm harvest report`, `clm voiceover …`) no longer
+  holds every sampled frame in memory. Frame differences are now computed while
+  the video is read, keeping only the previous frame, so memory stays under
+  1 GB regardless of length; previously a 30–40 minute 4K recording needed
+  30–40 GB. Non-sampled frames are skipped without decoding into images, which
+  also makes detection several times faster. Difference scores and detected
+  transitions are unchanged, so cached results stay valid (#1096).
+
 ## [1.34.3] - 2026-10-12
 
 ### Changed
