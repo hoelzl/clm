@@ -427,7 +427,10 @@ class TestContainerEndpoint:
             # …and the URL names the port that was actually taken, not the default.
             assert endpoint is not None
             assert endpoint[0] == f"http://host.docker.internal:{server.port}"
-            assert str(DEFAULT_PORT) not in endpoint[0] or server.port == DEFAULT_PORT
+            # Compare the parsed port, not a substring: a random port such as
+            # 38765 contains the default 8765 as text.
+            url_port = int(endpoint[0].rsplit(":", 1)[1])
+            assert url_port != DEFAULT_PORT or server.port == DEFAULT_PORT
         finally:
             stop_worker_api_server(timeout=2.0)
 
