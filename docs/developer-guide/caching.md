@@ -131,9 +131,18 @@ Do not assume they move together.
 `_dependency_digest()` folds in, besides `data` (the notebook text):
 
 - **`template_fingerprint`** — a digest of the bundled Jinja template directory
-  **plus the CLM version**. ⚠️ **Any `clm` upgrade changes this and invalidates
-  the entire notebook cache, wholesale.** This is intentional (#321): a template
-  shipped with a new clm must not replay stale output.
+  **plus `NOTEBOOK_OUTPUT_EPOCH`** (`clm/core/operations/process_notebook.py`).
+  A template change invalidates the decks of that language (#321). The epoch
+  stands for every other output-affecting source clm ships (the notebook worker,
+  tag/cell filtering, cross-references, HTTP replay; listed in
+  `NOTEBOOK_OUTPUT_SOURCES`). ⚠️ **Bumping the epoch invalidates the entire
+  notebook cache, wholesale** — so a clm upgrade only costs a full re-execution
+  when it actually changes notebook output. Before #1109 the clm release version
+  stood in for the epoch, and *every* upgrade re-executed everything.
+  **Maintaining it:** `tests/core/operations/test_notebook_output_epoch.py`
+  snapshots the guarded sources and fails on any change. Decide whether the
+  change can alter output; if so bump the epoch; then run
+  `python scripts/update_notebook_output_snapshot.py` and commit the snapshot.
 - **`worker_image_identity`** — `"direct"` or `"docker:<image reference>"`. A
   cache populated under one execution environment must not be replayed under
   another. ⚠️ Switching `--workers direct` ↔ `docker`, or a moved/retagged
