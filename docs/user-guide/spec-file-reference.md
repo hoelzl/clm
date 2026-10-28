@@ -997,7 +997,7 @@ segment is omitted when unset). Unlike output targets, a channel repo carries no
 language segment — the cohort `name` disambiguates it.
 
 Per-topic promotion relies on the build **provenance manifest**
-(`.clm-manifest.json`, written by `clm build` on by default), which maps each
+(`.clm-manifest.<spec>.json`, written by `clm build` on by default), which maps each
 output file to its owning topic — information the output path alone cannot
 recover. The manifest is private and is excluded from every distributed repo by
 `clm git`; the per-cohort, per-stream **frozen manifest**
