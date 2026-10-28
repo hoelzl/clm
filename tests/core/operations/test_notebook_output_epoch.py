@@ -11,6 +11,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from clm.core.operations import process_notebook
 from clm.core.operations.process_notebook import (
     NOTEBOOK_OUTPUT_EPOCH,
@@ -48,21 +50,50 @@ class TestNotebookOutputEpochGuard:
         assert not (changed or added or removed), (
             "Sources that shape notebook output changed "
             f"(changed={changed}, added={added}, removed={removed}).\n"
-            "If the change can alter executed or rendered notebook output, bump "
-            "NOTEBOOK_OUTPUT_EPOCH in src/clm/core/operations/process_notebook.py "
-            "(this invalidates every notebook cache once). Otherwise leave it.\n"
-            "Either way, then run: python scripts/update_notebook_output_snapshot.py"
+            "Bump NOTEBOOK_OUTPUT_EPOCH unless you can say why the change cannot "
+            "affect executed or rendered notebook output. A missed bump ships stale "
+            "notebook output silently; a needless one only costs one full re-execution.\n"
+            "  python scripts/update_notebook_output_snapshot.py --bump\n"
+            '  python scripts/update_notebook_output_snapshot.py --keep --reason "<why>"\n'
+            "Do not refresh the snapshot just to make this test pass."
         )
 
     def test_snapshot_epoch_matches_constant(self):
         assert _snapshot()["epoch"] == NOTEBOOK_OUTPUT_EPOCH, (
-            "NOTEBOOK_OUTPUT_EPOCH changed without refreshing the snapshot; run "
-            "python scripts/update_notebook_output_snapshot.py"
+            "NOTEBOOK_OUTPUT_EPOCH was edited by hand; use "
+            "python scripts/update_notebook_output_snapshot.py --bump instead"
         )
+
+    def test_decision_is_recorded(self):
+        decision = _snapshot()["decision"]
+        assert decision["action"] in ("bump", "keep")
+        if decision["action"] == "keep":
+            assert decision["reason"].strip(), "a keep decision must state its reason"
 
     def test_every_pattern_matches_something(self):
         for pattern in NOTEBOOK_OUTPUT_SOURCES:
             assert any(SRC_ROOT.glob(pattern)), f"{pattern} matches no file"
+
+
+class TestUpdateScriptArguments:
+    def test_requires_a_decision(self):
+        with pytest.raises(SystemExit):
+            _load_update_script().parse_args([])
+
+    def test_keep_requires_a_reason(self):
+        script = _load_update_script()
+        with pytest.raises(SystemExit):
+            script.parse_args(["--keep"])
+        with pytest.raises(SystemExit):
+            script.parse_args(["--keep", "--reason", "  "])
+
+    def test_bump_and_keep_are_exclusive(self):
+        with pytest.raises(SystemExit):
+            _load_update_script().parse_args(["--bump", "--keep", "--reason", "x"])
+
+    def test_keep_with_reason_parses(self):
+        args = _load_update_script().parse_args(["--keep", "--reason", "logging only"])
+        assert args.keep and args.reason == "logging only"
 
 
 class TestFingerprintIgnoresReleaseVersion:

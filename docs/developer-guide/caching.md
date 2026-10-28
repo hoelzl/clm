@@ -140,9 +140,11 @@ Do not assume they move together.
   when it actually changes notebook output. Before #1109 the clm release version
   stood in for the epoch, and *every* upgrade re-executed everything.
   **Maintaining it:** `tests/core/operations/test_notebook_output_epoch.py`
-  snapshots the guarded sources and fails on any change. Decide whether the
-  change can alter output; if so bump the epoch; then run
-  `python scripts/update_notebook_output_snapshot.py` and commit the snapshot.
+  snapshots the guarded sources and fails on any change. **Bump unless you can
+  say why the change cannot affect notebook output** — a missed bump ships stale
+  output silently, a needless one costs one re-execution. Record the decision
+  with `python scripts/update_notebook_output_snapshot.py --bump` or
+  `--keep --reason "…"`; the reason lands in the snapshot diff for review.
 - **`worker_image_identity`** — `"direct"` or `"docker:<image reference>"`. A
   cache populated under one execution environment must not be replayed under
   another. ⚠️ Switching `--workers direct` ↔ `docker`, or a moved/retagged
