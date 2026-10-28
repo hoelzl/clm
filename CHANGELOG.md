@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.35.2] - 2026-10-28
+
+### Changed
+
+- **Upgrading clm no longer re-executes every notebook** (#1109). Notebook cache keys used to include the clm release version, so every release, even an output-neutral patch, invalidated the executed-notebook cache of every course. They now carry `NOTEBOOK_OUTPUT_EPOCH`, which is bumped only when a change can alter notebook output; a guard test snapshots the output-affecting sources and fails until the bump decision is made (`scripts/update_notebook_output_snapshot.py`). Template changes still invalidate the affected decks directly. The first build after upgrading to this release re-executes once more, because the key format changes.
+
 ## [1.35.1] - 2026-10-28
 
 ### Fixed
