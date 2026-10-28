@@ -1,5 +1,9 @@
 {
   "epoch": 1,
+  "decision": {
+    "action": "keep",
+    "reason": "only the snapshot script, its guard test and docs changed; no guarded source"
+  },
   "sources": {
     "clm/core/cpp_export_files.py": "32d55d727cc7b300dd1d966f5898c481c28f7af12402818b27f4744849866f6c",
     "clm/core/cross_references.py": "0b293a27219c07cd011498a703aa641c00070d18c7e085681759f0ba731d3643",

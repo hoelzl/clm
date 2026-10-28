@@ -101,6 +101,11 @@ must cite the test that proves it — see "The claimed-wired rule" in
   Bash being on PATH, and benefits from the same ruff/mypy checks as the
   rest of the codebase. Reach for bash only when a shell-specific feature
   is genuinely required and the script will never run on Windows.
+- **Notebook output epoch**: when `test_notebook_output_epoch.py` fails, **bump
+  unless you can say why the change cannot affect notebook output**
+  (`scripts/update_notebook_output_snapshot.py --bump`, or `--keep --reason
+  "…"`). A missed bump ships stale notebook output silently; never refresh the
+  snapshot just to turn the test green. See `docs/developer-guide/caching.md`.
 
 ## Info Topics Maintenance Rule (CRITICAL)
 
