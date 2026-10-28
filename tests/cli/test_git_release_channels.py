@@ -530,10 +530,10 @@ class TestChannelGitEndToEnd:
         tracked = _ls_files(channel)
         assert "Sec/01 Intro.ipynb" in tracked
         assert ".clm-released.json" in tracked
-        assert ".clm-manifest.json" not in tracked
+        assert not [f for f in tracked if f.startswith(".clm-manifest")]
         # The gitignore template entry is the human-`git add` / status-noise
         # guard, independent of the staging exclusion — pin it explicitly.
-        assert ".clm-manifest.json" in (channel / ".gitignore").read_text(encoding="utf-8")
+        assert ".clm-manifest*.json" in (channel / ".gitignore").read_text(encoding="utf-8")
 
     def test_commit_channel_excludes_manifest_after_resync(self, tmp_path: Path, git_identity):
         spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
