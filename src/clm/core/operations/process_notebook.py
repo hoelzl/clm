@@ -27,6 +27,42 @@ from clm.core.worker_identity import effective_worker_image_identity
 
 logger = logging.getLogger(__name__)
 
+NOTEBOOK_OUTPUT_EPOCH = 1
+"""Version of everything clm ships that shapes executed/rendered notebook output.
+
+Folded into :func:`compute_template_fingerprint` in place of the clm release
+version (issue #1109): the version changed on *every* release, so even an
+output-neutral patch re-executed every notebook of every course. Bump this
+when a change can alter what a notebook build produces — the notebook worker,
+cell filtering/tag handling, cross-reference rewriting, HTTP-replay plumbing,
+the output writers. The bundled Jinja templates need no bump; their bytes are
+hashed directly.
+
+``tests/core/operations/test_notebook_output_epoch.py`` enforces the decision:
+it snapshots the sources listed in :data:`NOTEBOOK_OUTPUT_SOURCES` and fails
+whenever they change, until the snapshot is refreshed — with or without a
+bump, but deliberately.
+"""
+
+NOTEBOOK_OUTPUT_SOURCES: tuple[str, ...] = (
+    "clm/workers/notebook/**/*.py",
+    "clm/core/operations/process_notebook.py",
+    "clm/core/messaging/notebook_classes.py",
+    "clm/core/workshop_scope.py",
+    "clm/core/tags.py",
+    "clm/core/cross_references.py",
+    "clm/core/cpp_export_files.py",
+    "clm/core/utils/text_utils.py",
+    "clm/core/utils/prog_lang_utils.py",
+    "clm/infrastructure/http_replay_mitm/**/*.py",
+)
+"""Package-relative globs of the sources guarded by :data:`NOTEBOOK_OUTPUT_EPOCH`.
+
+The notebook worker package plus the clm modules it imports that decide cell
+content. A file added here is merely *watched*; whether a given change to it
+needs an epoch bump stays a judgment call made when the guard test fails.
+"""
+
 
 def _normalize_template_bytes(data: bytes) -> bytes:
     """Collapse CRLF to LF before hashing.
@@ -49,10 +85,8 @@ def _hash_template_dir(prog_lang: str, template_dir: Traversable) -> str:
     Split from :func:`compute_template_fingerprint` so tests can point it at
     synthetic directories (CRLF vs LF twins) instead of the bundled package.
     """
-    from clm import __version__
-
     hasher = hashlib.sha256()
-    hasher.update(f"{__version__}:{prog_lang}".encode())
+    hasher.update(f"epoch-{NOTEBOOK_OUTPUT_EPOCH}:{prog_lang}".encode())
     if template_dir.is_dir():
         entries = sorted((entry.name, entry) for entry in template_dir.iterdir() if entry.is_file())
         for name, entry in entries:
@@ -63,7 +97,7 @@ def _hash_template_dir(prog_lang: str, template_dir: Traversable) -> str:
 
 @cache
 def compute_template_fingerprint(prog_lang: str) -> str:
-    """Digest of the bundled Jinja templates for *prog_lang* plus the CLM version.
+    """Digest of the bundled Jinja templates for *prog_lang* plus the output epoch.
 
     Computed HOST-side at payload construction and shipped to the worker via
     ``NotebookPayload.template_fingerprint``, where it is folded into the
@@ -72,9 +106,11 @@ def compute_template_fingerprint(prog_lang: str) -> str:
     cache: without this fingerprint a template change shipped with a clm
     upgrade silently replays stale HTML from a warm cache (issue #321).
 
-    The CLM version is folded in as well, as a coarse proxy for everything
-    else the package ships that can affect output (worker code, bootstrap
-    templates). The fingerprint must be computed on ONE side only — host and
+    :data:`NOTEBOOK_OUTPUT_EPOCH` is folded in as well, standing for
+    everything else the package ships that can affect output (worker code,
+    cell filtering, HTTP replay). It replaced the clm release version, which
+    re-executed every notebook on every upgrade (issue #1109). The
+    fingerprint must be computed on ONE side only — host and
     worker may run different clm versions (Docker images), and the cache key
     must be computed identically by every layer: two of the three cache
     layers are consulted host-side at job-submission time, before any worker

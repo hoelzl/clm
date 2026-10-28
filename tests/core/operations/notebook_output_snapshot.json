@@ -1,0 +1,32 @@
+{
+  "epoch": 1,
+  "sources": {
+    "clm/core/cpp_export_files.py": "32d55d727cc7b300dd1d966f5898c481c28f7af12402818b27f4744849866f6c",
+    "clm/core/cross_references.py": "0b293a27219c07cd011498a703aa641c00070d18c7e085681759f0ba731d3643",
+    "clm/core/messaging/notebook_classes.py": "ee75027d2ad7a2a14a905d10c910f85560b797851e2544bf7bf63e9fd778c5a2",
+    "clm/core/operations/process_notebook.py": "dad33c92d162ac94490a800fcd250cd653d4c13c3544b66b925045592eec5052",
+    "clm/core/tags.py": "f28e6bdacdc89f7223d851a85ff16eb5623f745b8b28080d1f7cdf036516ea85",
+    "clm/core/utils/prog_lang_utils.py": "ebaebaf30ab1facca6cd7ac16a6aa1e7c698abc794380718e25ad18caa132581",
+    "clm/core/utils/text_utils.py": "b30fbd3fe330f86ea369adc22845371e43a41dcbde2f967b7632713658cb9cd7",
+    "clm/core/workshop_scope.py": "4256bb2c5fa92f10608e8c8982e4b3dd6886b29dd23f4ac39e1a1f50103f5fe5",
+    "clm/infrastructure/http_replay_mitm/__init__.py": "c2bfe0c6d6e7d03b0feb2394c1ca49e2a1e9dc5c04a26ea2a62725d008498b6b",
+    "clm/infrastructure/http_replay_mitm/addon.py": "38b7c68d300f297a080750056ba879f6049607d07d5382f378c863209da70ff2",
+    "clm/infrastructure/http_replay_mitm/cassette_format.py": "1c805fa7f2c394195a18d7429890e0a58de983f34d65c616712073a1d4c3e150",
+    "clm/infrastructure/http_replay_mitm/cassette_staging.py": "c84c487f8083de07bcd8e7a3194a84d614ada8f4905b3d6c629017a018128357",
+    "clm/infrastructure/http_replay_mitm/http_replay_cassette.py": "a020f2b17a60b97ee242baa9392f8bd4da3399172453c2922561c4bfb1e6c9d4",
+    "clm/infrastructure/http_replay_mitm/proxy_manager.py": "95e6d8f2169791eeb572ca8a18b0e628d081154fbd69a6cbe0f9edf9e2401311",
+    "clm/infrastructure/http_replay_mitm/trace_log.py": "6d9cca375ac17f1546c56aee662b7548a00e859a79416426d085bd27b51fd7aa",
+    "clm/infrastructure/http_replay_mitm/vcr_format.py": "f573d97dc4cd67e0f9aa2e1f4e799732a711390a5b69c629569a4f3b0c91babd",
+    "clm/workers/notebook/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "clm/workers/notebook/__main__.py": "15ad57191657c74596e6f4bda36b56acc8156f5ac6a96240ca1d3bc12317b75d",
+    "clm/workers/notebook/cassette_doctor.py": "ff7aec5f90fe5732cdcea83d1245e3390a025be84921a2dbf86f813f3ffe252c",
+    "clm/workers/notebook/commented_installs.py": "8c056e6e8a36aaae61ec7772fee7ad74fd23fb7e364694b9bff1463b343e2ed2",
+    "clm/workers/notebook/cpp_code_analysis.py": "8ddcc7d7e181f9cc37bef80e909380f6cac9f14d53ffefb21e52436645dfd201",
+    "clm/workers/notebook/cpp_code_emitter.py": "3a6fa932a274ac771448e2c88e756f8ca189ad3ca9d0ff9829cf9d937b3ea507",
+    "clm/workers/notebook/notebook_processor.py": "c3ab212ba288b73432047d7b50c74020c4c16bba2540bc5318ae00481d09d07c",
+    "clm/workers/notebook/notebook_worker.py": "82383af421265fc675811387842f72c992cd423c6dea4bf9e05f2e762ec2ad60",
+    "clm/workers/notebook/output_spec.py": "92a341dade00736476a2c1ac42920569725f31f4609fd60a1575dd9e229c2698",
+    "clm/workers/notebook/utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "clm/workers/notebook/utils/jupyter_utils.py": "c4153457f2e41bf7a47cf1bf78c51abe85b1bfff0177a44531ecf0fe61294b4a"
+  }
+}
