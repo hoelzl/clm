@@ -48,7 +48,7 @@ def build_snapshot() -> dict[str, object]:
 def main() -> int:
     sys.path.insert(0, str(SRC_ROOT))
     snapshot = build_snapshot()
-    SNAPSHOT_PATH.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+    SNAPSHOT_PATH.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(
         f"Wrote {SNAPSHOT_PATH.relative_to(REPO_ROOT)} "
         f"(epoch {snapshot['epoch']}, {len(snapshot['sources'])} sources)"  # type: ignore[arg-type]
