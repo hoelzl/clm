@@ -24,7 +24,7 @@ from clm.core.course_spec import (
     release_channel_ref,
     validate_output_target_path,
 )
-from clm.core.provenance_manifest import MANIFEST_FILENAME
+from clm.core.provenance_manifest import MANIFEST_GLOB
 from clm.infrastructure.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -690,7 +690,8 @@ def _dedupe_shared_destinations(repos: list[OutputRepo]) -> list[OutputRepo]:
 def _stage_all_excluding_sidecars(repo_path: Path) -> None:
     """Stage every change except CLM's private build sidecars.
 
-    The provenance manifest (``.clm-manifest.json``) records every output
+    The provenance manifest (``.clm-manifest.<spec>.json``, formerly
+    ``.clm-manifest.json``; both match ``MANIFEST_GLOB``) records every output
     file's owning topic/section and source commit (issue #208). It is a private
     build artifact and must never be distributed in a student-facing output or
     cohort repo, so it is excluded from staging here regardless of whether the
@@ -713,8 +714,8 @@ def _stage_all_excluding_sidecars(repo_path: Path) -> None:
         "--ignore-unmatch",
         "--quiet",
         "--",
-        MANIFEST_FILENAME,
-        f":(glob)**/{MANIFEST_FILENAME}",
+        f":(glob){MANIFEST_GLOB}",
+        f":(glob)**/{MANIFEST_GLOB}",
     )
     run_git(
         repo_path,
@@ -722,8 +723,8 @@ def _stage_all_excluding_sidecars(repo_path: Path) -> None:
         "-A",
         "--",
         ".",
-        f":(exclude){MANIFEST_FILENAME}",
-        f":(exclude,glob)**/{MANIFEST_FILENAME}",
+        f":(exclude,glob){MANIFEST_GLOB}",
+        f":(exclude,glob)**/{MANIFEST_GLOB}",
     )
 
 
@@ -862,8 +863,8 @@ Thumbs.db
 *.tmp
 *.temp
 
-# CLM private build sidecars (never distribute the provenance manifest)
-.clm-manifest.json
+# CLM private build sidecars (never distribute the provenance manifests)
+.clm-manifest*.json
 """
     gitignore_path = repo.path / ".gitignore"
     if not gitignore_path.exists():
@@ -1366,7 +1367,7 @@ def commit(
 ):
     """Stage all changes and commit.
 
-    Stages all files (except the private ``.clm-manifest.json``) and creates a
+    Stages all files (except the private ``.clm-manifest*.json``) and creates a
     commit with the given message. Skips repositories with no changes. Use
     --channel NAME / --all-channels to commit per-cohort release repositories
     instead of output targets (issue #208). Use --all to commit output targets

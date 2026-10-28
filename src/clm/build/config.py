@@ -173,7 +173,7 @@ def resolve_log_level(cli_log_level: str | None) -> str:
 def resolve_write_provenance_manifest(
     *, requested: bool, is_snapshot: bool, verify_against_dir: Path | None
 ) -> bool:
-    """Whether this build should write the ``.clm-manifest.json`` provenance index.
+    """Whether this build should write the ``.clm-manifest.<spec>.json`` provenance index.
 
     ``requested`` is the resolved ``--provenance-manifest/--no-provenance-manifest``
     value (on by default since issue #208 step 3d). It is always suppressed for
@@ -293,7 +293,7 @@ class BuildConfig:
     # Escape hatch for the output-ownership gate (finding S11, #798).
     # ``--clean`` and the post-build sweep delete files clm did not
     # write, so both refuse to act in an output root that was neither
-    # empty at build start nor carries a ``.clm-manifest.json`` from an
+    # empty at build start nor carries a provenance manifest from an
     # earlier build. Setting this to ``True`` (CLI:
     # ``--allow-unowned-output``) proceeds anyway — deliberately its own
     # flag, since ``--clean`` is the operation being gated.
@@ -339,7 +339,7 @@ class BuildConfig:
     # ``fail_on_error`` (issue #90).
     fail_on_missing_xref: bool = False
 
-    # Emit a ``.clm-manifest.json`` provenance index per output root after a
+    # Emit a ``.clm-manifest.<spec>.json`` provenance index per output root after a
     # successful (non-watch) build (issue #208). On by default since step 3d:
     # ``clm git`` now excludes (and self-heals) the manifest from every
     # distributed output/cohort repo, so the per-topic release workflow gets

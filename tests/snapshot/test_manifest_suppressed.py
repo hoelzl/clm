@@ -32,7 +32,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from clm.cli.commands import build as build_module
-from clm.core.provenance_manifest import MANIFEST_FILENAME
+from clm.core.provenance_manifest import MANIFEST_GLOB
 
 _SPEC = """<?xml version="1.0" encoding="UTF-8"?>
 <course>
@@ -82,7 +82,7 @@ def _invoke_build(args, tmp_path: Path):
 
 
 def _manifests_under(root: Path) -> list[Path]:
-    return list(root.rglob(MANIFEST_FILENAME))
+    return list(root.rglob(MANIFEST_GLOB))
 
 
 def test_snapshot_writes_no_provenance_manifest(tmp_path: Path) -> None:

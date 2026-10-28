@@ -1533,3 +1533,90 @@ def test_section_is_an_alias_of_week(tmp_path):
     # Both spellings are listed; neither is hidden or deprecated.
     listing = runner.invoke(release_group, ["--help"]).output
     assert "  week" in listing and "  section" in listing
+
+
+# ---------------------------------------------------------------------------
+# Specs sharing a source output root (issue #1095)
+# ---------------------------------------------------------------------------
+
+
+def _write_shared_source(root: Path) -> None:
+    """A source root two specs built into: test-spec-1 owns ``intro``, other owns ``x``."""
+    _write_source(root)
+    (root / MANIFEST_FILENAME).rename(root / ".clm-manifest.test-spec-1.json")
+    other = {
+        "spec": "other.xml",
+        "files": [
+            {
+                "path": "Other/x.ipynb",
+                "topic_id": "x",
+                "section_id": "w09",
+                "kind": "completed",
+                "format": "notebook",
+                "language": "en",
+                "content_hash": "sha256:x",
+            }
+        ],
+    }
+    (root / ".clm-manifest.other.json").write_text(json.dumps(other), encoding="utf-8")
+    (root / "Other").mkdir()
+    (root / "Other" / "x.ipynb").write_text("sha256:x", encoding="utf-8")
+
+
+def test_sync_reads_this_specs_manifest_from_a_shared_root(tmp_path):
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_shared_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro", "x"]).save(ledger)
+
+    result = CliRunner().invoke(
+        release_group,
+        ["sync", str(SPEC), "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (dest / "Sec/01 Intro.ipynb").is_file()
+    assert not (dest / "Other").exists(), "the other spec's files must not be promoted"
+
+
+def test_sync_names_the_spec_that_built_the_root_instead(tmp_path):
+    source = tmp_path / "src"
+    _write_shared_source(source)
+    (source / ".clm-manifest.test-spec-1.json").unlink()
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+
+    result = CliRunner().invoke(
+        release_group,
+        [
+            "sync",
+            str(SPEC),
+            "--ledger",
+            str(ledger),
+            "--source",
+            str(source),
+            "--dest",
+            str(tmp_path / "jan"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "other" in result.output
+    assert ".clm-manifest.test-spec-1.json" in result.output
+    assert "provenance manifest records no" not in result.output
+
+
+def test_sync_without_spec_refuses_an_ambiguous_shared_root(tmp_path):
+    source = tmp_path / "src"
+    _write_shared_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+
+    result = CliRunner().invoke(
+        release_group,
+        ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(tmp_path / "j")],
+    )
+
+    assert result.exit_code != 0
+    assert "SPEC_FILE" in result.output

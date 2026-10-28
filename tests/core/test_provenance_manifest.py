@@ -14,6 +14,12 @@ from clm.core.provenance_manifest import (
     build_provenance_manifest,
     enumerate_expected_outputs,
     find_course_manifest_path,
+    find_spec_manifest,
+    foreign_manifests,
+    is_manifest_filename,
+    manifest_claims_dir,
+    manifest_filename,
+    manifest_owner_stem,
     manifest_topic_digest,
     topic_digest_from_files,
     write_provenance_manifests,
@@ -93,7 +99,8 @@ def test_write_provenance_manifests_writes_one_per_target(course_1):
 
     assert len(written) == 1
     manifest_path = written[0]
-    assert manifest_path.name == MANIFEST_FILENAME
+    # Per spec since #1095, so specs sharing the root keep separate manifests.
+    assert manifest_path.name == ".clm-manifest.course.json"
     assert manifest_path.parent == target.output_root
 
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -639,3 +646,118 @@ def test_clean_build_manifest_is_not_partial(course_1):
     )
     assert manifest["partial"] is False
     assert manifest["failed_topics"] == []
+
+
+# ---------------------------------------------------------------------------
+# Per-spec manifests in a shared output root (issue #1095)
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest(path, *, spec=None, files=()):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"spec": spec, "files": [{"path": f} for f in files]}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_manifest_filename_is_keyed_by_spec_stem():
+    assert manifest_filename("course.xml") == ".clm-manifest.course.json"
+    assert manifest_filename("course-specs/ml-2026-10.xml") == ".clm-manifest.ml-2026-10.json"
+    assert manifest_filename(None) == MANIFEST_FILENAME
+
+
+def test_is_manifest_filename_matches_legacy_and_per_spec_names():
+    assert is_manifest_filename(".clm-manifest.json")
+    assert is_manifest_filename(".clm-manifest.course.json")
+    assert not is_manifest_filename(".clm-manifest..json")
+    assert not is_manifest_filename(".clm-released.materials.json")
+
+
+def test_manifest_owner_stem_reads_name_or_legacy_spec_field(tmp_path):
+    per_spec = _write_manifest(tmp_path / ".clm-manifest.a.json")
+    legacy = _write_manifest(tmp_path / MANIFEST_FILENAME, spec="b.xml")
+    assert manifest_owner_stem(per_spec) == "a"
+    assert manifest_owner_stem(legacy) == "b"
+
+
+def test_find_spec_manifest_picks_this_specs_file_among_several(tmp_path):
+    own = _write_manifest(tmp_path / ".clm-manifest.a.json", spec="a.xml")
+    _write_manifest(tmp_path / ".clm-manifest.b.json", spec="b.xml")
+    assert find_spec_manifest(tmp_path, "a.xml") == own
+    assert find_spec_manifest(tmp_path, "c.xml") is None
+
+
+def test_find_spec_manifest_falls_back_to_this_specs_legacy_manifest(tmp_path):
+    legacy = _write_manifest(tmp_path / MANIFEST_FILENAME, spec="a.xml")
+    assert find_spec_manifest(tmp_path, "a.xml") == legacy
+
+
+def test_find_spec_manifest_ignores_another_specs_legacy_manifest(tmp_path):
+    """The clobbered state of #1095: the shared manifest is b's, not a's."""
+    _write_manifest(tmp_path / MANIFEST_FILENAME, spec="b.xml")
+    assert find_spec_manifest(tmp_path, "a.xml") is None
+
+
+def test_find_spec_manifest_accepts_an_unattributed_legacy_manifest(tmp_path):
+    legacy = _write_manifest(tmp_path / MANIFEST_FILENAME)
+    assert find_spec_manifest(tmp_path, "a.xml") == legacy
+
+
+def test_find_spec_manifest_without_spec_needs_an_unambiguous_root(tmp_path):
+    only = _write_manifest(tmp_path / ".clm-manifest.a.json")
+    assert find_spec_manifest(tmp_path, None) == only
+    _write_manifest(tmp_path / ".clm-manifest.b.json")
+    assert find_spec_manifest(tmp_path, None) is None
+
+
+def test_foreign_manifests_lists_other_specs_only(tmp_path):
+    _write_manifest(tmp_path / ".clm-manifest.a.json")
+    b = _write_manifest(tmp_path / ".clm-manifest.b.json")
+    legacy_c = _write_manifest(tmp_path / MANIFEST_FILENAME, spec="c.xml")
+    assert foreign_manifests(tmp_path, "a.xml") == [(b, "b"), (legacy_c, "c")]
+
+
+def test_foreign_manifests_skip_an_unattributed_legacy_manifest(tmp_path):
+    _write_manifest(tmp_path / MANIFEST_FILENAME)
+    assert foreign_manifests(tmp_path, "a.xml") == []
+
+
+def test_manifest_claims_dir_matches_whole_path_segments():
+    manifest = {"files": [{"path": "course-de/Sec/x.html"}]}
+    assert manifest_claims_dir(manifest, "course-de")
+    assert not manifest_claims_dir(manifest, "course")
+    assert not manifest_claims_dir(manifest, "course-en")
+
+
+def test_write_retires_this_specs_legacy_manifest(course_1):
+    """Migration: the build's own unscoped manifest is replaced, not duplicated."""
+    root = course_1.output_targets[0].output_root
+    _write_manifest(root / MANIFEST_FILENAME, spec="course.xml")
+
+    written = write_provenance_manifests(
+        course_1, source_commit=None, source_dirty=None, built_at=BUILT_AT, spec_name="course.xml"
+    )
+
+    assert [p.name for p in written] == [".clm-manifest.course.json"]
+    assert not (root / MANIFEST_FILENAME).exists()
+
+
+def test_write_keeps_another_specs_legacy_manifest(course_1):
+    """Another spec's unscoped manifest is its only provenance until it rebuilds."""
+    root = course_1.output_targets[0].output_root
+    legacy = _write_manifest(root / MANIFEST_FILENAME, spec="other.xml")
+
+    write_provenance_manifests(
+        course_1, source_commit=None, source_dirty=None, built_at=BUILT_AT, spec_name="course.xml"
+    )
+
+    assert legacy.is_file()
+    assert (root / ".clm-manifest.course.json").is_file()
+
+
+def test_find_course_manifest_with_spec_skips_other_specs_in_the_root(tmp_path):
+    spec = _spec_with_output_root(tmp_path)
+    out = tmp_path / "output"
+    _write_manifest(out / "shared" / ".clm-manifest.other.json")
+    own = _write_manifest(out / "trainer" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own

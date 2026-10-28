@@ -22,6 +22,7 @@ from clm.build import (
     VALID_HTTP_REPLAY_MODES,
     BuildConfig,
     BuildOptionError,
+    OutputDirCollisionError,
     SpecValidationFailure,
     UnownedOutputRootError,
     resolve_explain_rebuilds,
@@ -347,9 +348,9 @@ async def main_build(
         return await run_build(config, watch_runner=watch_and_rebuild)
     except SpecValidationFailure as e:
         raise click.ClickException(str(e)) from None
-    except UnownedOutputRootError as e:
+    except (UnownedOutputRootError, OutputDirCollisionError) as e:
         # The refusal message names the directory and the remedy; a raw
-        # traceback would bury both (finding S11, #798).
+        # traceback would bury both (finding S11, #798; issue #1095).
         raise click.ClickException(str(e)) from None
     except WholeVolumeMountError as e:
         # Same reasoning for the mount-root refusal (finding D7, #798):
@@ -486,7 +487,7 @@ async def main_build(
         "Allow the destructive output operations (--clean's wipe and the "
         "post-build stray-file sweep) to run in an output root clm cannot "
         "prove it owns — one that already held files at build start and "
-        "carries no .clm-manifest.json from an earlier build. Without this "
+        "carries no provenance manifest from an earlier build. Without this "
         "flag such a root is refused and nothing under it is deleted."
     ),
 )
@@ -723,7 +724,7 @@ async def main_build(
     "--provenance-manifest/--no-provenance-manifest",
     default=True,
     help=(
-        "Write a .clm-manifest.json provenance index into each output root "
+        "Write a .clm-manifest.<spec>.json provenance index into each output root "
         "after a successful build, mapping every output file to its source "
         "commit and owning section/topic (issue #208). On by default; "
         "`clm git` excludes it from distributed repos. Pass "

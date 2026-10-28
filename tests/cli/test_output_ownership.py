@@ -368,7 +368,7 @@ class TestOwnershipSnapshot:
         _make_file(tmp_path / "notes.txt")
         reason = snapshot_output_ownership([tmp_path]).reason_for(tmp_path)
         assert reason and "notes.txt" not in reason
-        assert MANIFEST_FILENAME in reason
+        assert "provenance manifest" in reason
 
 
 class TestSweepRefusesUnownedRoots:
@@ -727,3 +727,84 @@ class TestCleanWipeIsGated:
             )
 
         assert precious.exists()
+
+
+# ---------------------------------------------------------------------------
+# Specs sharing an output-target root (issue #1095)
+# ---------------------------------------------------------------------------
+
+
+def _write_spec_manifest(directory: Path, stem: str, files: list[str]) -> Path:
+    import json
+
+    path = directory / f".clm-manifest.{stem}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"spec": f"{stem}.xml", "files": [{"path": f} for f in files]}),
+        encoding="utf-8",
+    )
+    return path
+
+
+class TestSharedOutputRoot:
+    def test_this_specs_manifest_is_evidence(self, tmp_path: Path) -> None:
+        target = tmp_path / "shared"
+        root = target / "a-de"
+        _make_file(root / "x.html")
+        _write_spec_manifest(target, "a", ["a-de/x.html"])
+        ownership = snapshot_output_ownership([root], manifest_roots=[target], spec_name="a.xml")
+        assert ownership.is_owned(root)
+        assert ".clm-manifest.a.json" in (ownership.evidence_for(root) or "")
+
+    def test_another_specs_manifest_still_marks_the_root_as_clms(self, tmp_path: Path) -> None:
+        """Migration safety: a root built under the single shared manifest stays usable.
+
+        The sweep only ever walks this spec's own course directory, so the
+        other spec's directory is not at risk; a directory the other spec
+        *claims* is refused separately by the collision guard.
+        """
+        target = tmp_path / "shared"
+        root = target / "a-de"
+        _make_file(root / "x.html")
+        _write_spec_manifest(target, "b", ["b-de/y.html"])
+        ownership = snapshot_output_ownership([root], manifest_roots=[target], spec_name="a.xml")
+        assert ownership.is_owned(root)
+
+    def test_disjoint_course_dirs_do_not_collide(self, tmp_path: Path) -> None:
+        from clm.build.output_ownership import find_course_dir_collisions
+
+        target = tmp_path / "shared"
+        _write_spec_manifest(target, "b", ["b-de/y.html"])
+        assert (
+            find_course_dir_collisions(
+                [target / "a-de"], manifest_roots=[target], spec_name="a.xml"
+            )
+            == []
+        )
+
+    def test_a_course_dir_claimed_by_another_spec_is_refused(self, tmp_path: Path) -> None:
+        from clm.build.errors import OutputDirCollisionError
+        from clm.build.output_ownership import enforce_no_course_dir_collisions
+
+        target = tmp_path / "shared"
+        other = _write_spec_manifest(target, "b", ["same-de/y.html"])
+        with pytest.raises(OutputDirCollisionError) as excinfo:
+            enforce_no_course_dir_collisions(
+                [target / "same-de"], manifest_roots=[target], spec_name="a.xml"
+            )
+        message = str(excinfo.value)
+        assert "same-de" in message
+        assert str(other) in message
+        assert "<project-slug>" in message
+
+    def test_the_specs_own_manifest_never_collides(self, tmp_path: Path) -> None:
+        from clm.build.output_ownership import find_course_dir_collisions
+
+        target = tmp_path / "shared"
+        _write_spec_manifest(target, "a", ["a-de/x.html"])
+        assert (
+            find_course_dir_collisions(
+                [target / "a-de"], manifest_roots=[target], spec_name="a.xml"
+            )
+            == []
+        )
