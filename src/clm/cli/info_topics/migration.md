@@ -2,6 +2,35 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## One provenance manifest per spec: `.clm-manifest.<spec>.json` (#1095, {version})
+
+**Output change, no spec change.** `clm build` used to write a single
+`.clm-manifest.json` into each output-target root, and every build overwrote
+it. Specs sharing a root — the default `output/shared` / `trainer` /
+`speaker`, or explicit `<output-target>`s with the same `<path>` — therefore
+clobbered each other's manifest, and only the spec built last could
+`clm release sync` (the others failed with "The provenance manifest records
+no 'de' files"). The manifest is now named after the spec file's stem,
+`.clm-manifest.<spec>.json`, so specs can share a root.
+
+What changes:
+
+- `clm release sync`, the shared-destination overlap check and
+  `clm recordings report --spec-file` read the spec's own manifest. An old
+  `.clm-manifest.json` is still read when it was written by that spec (or
+  records no spec), and that spec's next build replaces it. Without a spec
+  (`--ledger/--source/--dest` only), a root holding several specs' manifests
+  is refused as ambiguous — pass `SPEC_FILE`.
+- A build now **refuses** to write into a `<project-slug>-<lang>` directory
+  that another spec's manifest in the same root already claims. Give the
+  specs distinct slugs or paths, or delete a renamed/retired spec's
+  manifest file.
+- `clm git` excludes and gitignores `.clm-manifest*.json`.
+
+What to do: nothing for most courses. Specs that were moved to separate
+output roots only to work around the clobbering can move back to a shared
+root.
+
 ## HTTP replay tags `httpx2`; strict replay refuses untagged requests (#1055, {version})
 
 **Behavior change, no spec change.** `openai` >= 3, `anthropic` and `mcp`

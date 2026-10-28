@@ -27,7 +27,12 @@ from clm.build.engine import (
     process_course_with_backend,
     run_build,
 )
-from clm.build.errors import BuildOptionError, SpecValidationFailure, UnownedOutputRootError
+from clm.build.errors import (
+    BuildOptionError,
+    OutputDirCollisionError,
+    SpecValidationFailure,
+    UnownedOutputRootError,
+)
 from clm.build.output_formatter import OutputFormatter
 from clm.build.reporter import BuildReporter
 
@@ -36,6 +41,7 @@ __all__ = [
     "BuildConfig",
     "BuildOptionError",
     "BuildReporter",
+    "OutputDirCollisionError",
     "OutputFormatter",
     "SpecValidationFailure",
     "UnownedOutputRootError",

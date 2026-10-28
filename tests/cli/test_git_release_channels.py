@@ -530,10 +530,10 @@ class TestChannelGitEndToEnd:
         tracked = _ls_files(channel)
         assert "Sec/01 Intro.ipynb" in tracked
         assert ".clm-released.json" in tracked
-        assert ".clm-manifest.json" not in tracked
+        assert not [f for f in tracked if f.startswith(".clm-manifest")]
         # The gitignore template entry is the human-`git add` / status-noise
         # guard, independent of the staging exclusion — pin it explicitly.
-        assert ".clm-manifest.json" in (channel / ".gitignore").read_text(encoding="utf-8")
+        assert ".clm-manifest*.json" in (channel / ".gitignore").read_text(encoding="utf-8")
 
     def test_commit_channel_excludes_manifest_after_resync(self, tmp_path: Path, git_identity):
         spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
@@ -610,6 +610,22 @@ class TestChannelGitEndToEnd:
         tracked = _ls_files(channel)
         assert ".clm-manifest.json" not in tracked
         assert "Sec/.clm-manifest.json" not in tracked
+        assert ".clm-released.json" in tracked
+
+    def test_per_spec_manifests_are_excluded(self, tmp_path: Path, git_identity):
+        """``.clm-manifest.<spec>.json`` (#1095) is as private as the legacy name."""
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        channel = tmp_path / "solutions" / "jan"
+        _populate_channel(channel)
+        (channel / ".clm-manifest.course.json").write_text("{}", encoding="utf-8")
+        (channel / "Sec" / ".clm-manifest.other.json").write_text("{}", encoding="utf-8")
+
+        result = CliRunner().invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+        assert result.exit_code == 0, result.output
+
+        tracked = _ls_files(channel)
+        assert ".clm-manifest.course.json" not in tracked
+        assert "Sec/.clm-manifest.other.json" not in tracked
         assert ".clm-released.json" in tracked
 
     def test_commit_purges_a_pre_tracked_manifest(self, tmp_path: Path, git_identity):

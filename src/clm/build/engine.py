@@ -332,7 +332,7 @@ def _maybe_start_mitmproxy_transport(
 
 
 def _should_emit_provenance_manifest(summary: BuildSummary | None, config: BuildConfig) -> bool:
-    """Whether to write the ``.clm-manifest.json`` after a finished build.
+    """Whether to write the provenance manifest after a finished build.
 
     Beyond the resolved request flag (``config.write_provenance_manifest``), the
     manifest is written only for a **whole-course** build — mirroring the
@@ -1086,12 +1086,36 @@ def _compute_section_dirs_for_cleanup(course: Course) -> list[Path]:
 def _manifest_roots(course: Course) -> list[Path]:
     """Directories a previous build would have written its manifest into.
 
-    One ``.clm-manifest.json`` per output *target* root (see
+    One provenance manifest per spec and output *target* root (see
     :func:`clm.core.provenance_manifest.write_provenance_manifests`),
     while the swept roots are the per-language directories below them —
     so the ownership snapshot needs both levels.
     """
     return [t.output_root for t in course.output_targets] or [course.output_root]
+
+
+def _snapshot_ownership(
+    course: Course, root_dirs: list[Path], config: BuildConfig
+) -> OutputOwnership:
+    """Refuse cross-spec course-dir collisions, then snapshot and record ownership.
+
+    Both run before anything is created or wiped. The collision check
+    (issue #1095) comes first: a course directory another spec's manifest
+    claims must not be written into, let alone swept.
+    """
+    from clm.build.output_ownership import (
+        enforce_no_course_dir_collisions,
+        snapshot_output_ownership,
+    )
+
+    spec_name = config.spec_file.name
+    manifest_roots = _manifest_roots(course)
+    enforce_no_course_dir_collisions(root_dirs, manifest_roots=manifest_roots, spec_name=spec_name)
+    ownership = snapshot_output_ownership(
+        root_dirs, manifest_roots=manifest_roots, spec_name=spec_name
+    )
+    _record_unowned_roots(config, ownership)
+    return ownership
 
 
 def _record_unowned_roots(config: BuildConfig, ownership: OutputOwnership) -> None:
@@ -1425,11 +1449,10 @@ async def process_course_with_backend(
     # — still before `precreate_output_directories` creates anything and
     # before the `--clean` wipe, which is what the "empty at build start"
     # evidence requires.
-    from clm.build.output_ownership import enforce_owned_roots, snapshot_output_ownership
+    from clm.build.output_ownership import enforce_owned_roots
 
     if ownership is None:
-        ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
-        _record_unowned_roots(config, ownership)
+        ownership = _snapshot_ownership(course, root_dirs, config)
 
     # JupyterLite runs as its own phase after the per-file stages so the
     # progress bar doesn't overrun the HTML stage total. It is skipped in
@@ -1965,15 +1988,14 @@ async def _run_build_impl(
     # S11, #798). ``--clean`` is gated right here — before the databases
     # and the worker pools start — so a refusal costs the user a message
     # rather than a spawned-and-torn-down build.
-    from clm.build.output_ownership import enforce_owned_roots, snapshot_output_ownership
+    from clm.build.output_ownership import enforce_owned_roots
 
     # Before the ownership snapshot: a scratch tree left by a killed build is
     # this build's own leftover, not evidence about who owns the output root
     # (#890).
     discard_implicit_execution_scratch(course)
 
-    ownership = snapshot_output_ownership(root_dirs, manifest_roots=_manifest_roots(course))
-    _record_unowned_roots(config, ownership)
+    ownership = _snapshot_ownership(course, root_dirs, config)
     if config.clean:
         enforce_owned_roots(
             ownership,
@@ -2184,7 +2206,8 @@ async def _run_build_impl(
             except Exception as e:
                 logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)
 
-    # Provenance manifests: one .clm-manifest.json per output root (issue #208).
+    # Provenance manifests: one .clm-manifest.<spec>.json per output root
+    # (issue #208; per spec since #1095, so specs can share a root).
     # On by default since step 3d (and suppressed for --snapshot / --verify-against
     # at the entry point). Only written for a whole-course build — see
     # _should_emit_provenance_manifest, which mirrors the post-build sweep's

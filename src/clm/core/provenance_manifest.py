@@ -63,6 +63,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = ".clm-manifest.json"
+"""The unscoped (legacy) manifest name.
+
+Builds before issue #1095 wrote every target's manifest under this one name,
+so specs sharing an output root overwrote each other's. A build now writes
+:func:`manifest_filename` for its spec instead; this name is only written when
+the spec is unknown, and is still *read* as a migration fallback.
+"""
+
+MANIFEST_GLOB = ".clm-manifest*.json"
+"""Matches the legacy name and every per-spec ``.clm-manifest.<spec>.json``."""
+
 MANIFEST_VERSION = 1
 
 _HASH_CHUNK = 1 << 16
@@ -398,7 +409,12 @@ def write_provenance_manifests(
     failed_topics: frozenset[str] | set[str] | None = None,
     skip_roots: Iterable[Path] = (),
 ) -> list[Path]:
-    """Write one ``.clm-manifest.json`` per built output target.
+    """Write this spec's provenance manifest into every built output target.
+
+    The file is :func:`manifest_filename` for *spec_name*
+    (``.clm-manifest.<spec-stem>.json``), so specs sharing an output root keep
+    separate manifests (issue #1095); a legacy ``.clm-manifest.json`` this
+    same spec wrote earlier is removed once its replacement exists.
 
     Targets whose ``output_root`` does not exist (e.g. a target that produced
     nothing) are skipped. Returns the list of manifest paths written.
@@ -433,7 +449,7 @@ def write_provenance_manifests(
             spec_name=spec_name,
             failed_topics=failed_topics,
         )
-        manifest_path = out_root / MANIFEST_FILENAME
+        manifest_path = manifest_path_for(out_root, spec_name)
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -442,18 +458,156 @@ def write_provenance_manifests(
         logger.info(
             "Wrote provenance manifest %s (%d files)", manifest_path, len(manifest["files"])
         )
+        _retire_legacy_manifest(out_root, spec_name)
     return written
 
 
+def _retire_legacy_manifest(root: Path, spec_name: str | None) -> None:
+    """Delete *root*'s unscoped ``.clm-manifest.json`` once this spec's replaces it.
+
+    Only a legacy manifest this same spec wrote is removed (issue #1095
+    migration): one written by another spec is still that spec's only
+    provenance until it is rebuilt, and one without a ``spec`` field cannot be
+    attributed, so both stay.
+    """
+    stem = spec_stem(spec_name)
+    if stem is None:
+        return
+    legacy = root / MANIFEST_FILENAME
+    if legacy.is_file() and _legacy_manifest_stem(legacy) == stem:
+        legacy.unlink()
+        logger.info("Removed legacy provenance manifest %s (superseded)", legacy)
+
+
 def load_manifest(path: Path) -> dict[str, Any]:
-    """Load a ``.clm-manifest.json`` written by :func:`write_provenance_manifests`."""
+    """Load a manifest written by :func:`write_provenance_manifests`."""
     return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def spec_stem(spec_name: str | os.PathLike[str] | None) -> str | None:
+    """The spec file's stem (``course.xml`` → ``course``), or ``None``.
+
+    Manifests record ``spec`` as the file *name*; a stem is what identifies a
+    spec within one course repository and keys its manifest file.
+    """
+    if spec_name is None:
+        return None
+    stem = Path(spec_name).stem
+    return stem or None
+
+
+def manifest_filename(spec_name: str | os.PathLike[str] | None) -> str:
+    """The manifest file name for *spec_name* (issue #1095).
+
+    ``.clm-manifest.<spec-stem>.json``, so several specs can share one output
+    root without overwriting each other's provenance — mirroring the
+    per-stream ``.clm-released.<stream>.json`` freeze records. Without a spec
+    name the unscoped legacy :data:`MANIFEST_FILENAME` is used.
+    """
+    stem = spec_stem(spec_name)
+    return MANIFEST_FILENAME if stem is None else f".clm-manifest.{stem}.json"
+
+
+def manifest_path_for(root: Path, spec_name: str | os.PathLike[str] | None) -> Path:
+    """Where the build of *spec_name* writes its manifest in output *root*."""
+    return root / manifest_filename(spec_name)
+
+
+def is_manifest_filename(name: str) -> bool:
+    """Whether *name* is a provenance manifest (legacy or per-spec)."""
+    return name == MANIFEST_FILENAME or (
+        name.startswith(".clm-manifest.") and name.endswith(".json") and len(name) > 19
+    )
+
+
+def manifest_files_in(root: Path) -> list[Path]:
+    """Every provenance manifest file directly in *root*, sorted by name."""
+    if not root.is_dir():
+        return []
+    return sorted(
+        p for p in root.glob(MANIFEST_GLOB) if p.is_file() and is_manifest_filename(p.name)
+    )
+
+
+def _legacy_manifest_stem(path: Path) -> str | None:
+    """The spec stem recorded in a legacy manifest, ``None`` if unrecorded/unreadable."""
+    try:
+        recorded = load_manifest(path).get("spec")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return spec_stem(recorded) if isinstance(recorded, str) else None
+
+
+def manifest_owner_stem(path: Path) -> str | None:
+    """The spec stem a manifest file belongs to, ``None`` when it cannot be told.
+
+    A per-spec manifest names its spec in the file name; a legacy one only in
+    its ``spec`` field.
+    """
+    if path.name == MANIFEST_FILENAME:
+        return _legacy_manifest_stem(path)
+    return path.name[len(".clm-manifest.") : -len(".json")] or None
+
+
+def find_spec_manifest(root: Path, spec_name: str | os.PathLike[str] | None) -> Path | None:
+    """This spec's manifest in output *root*, or ``None`` (issue #1095).
+
+    With a spec: its ``.clm-manifest.<stem>.json``; failing that, a legacy
+    ``.clm-manifest.json`` whose ``spec`` is this spec or unrecorded (a tree
+    built before per-spec manifests). A legacy manifest written by *another*
+    spec is never returned — that is exactly the clobbered state #1095 is about.
+
+    Without a spec: the legacy manifest, else the root's only per-spec one;
+    several per-spec manifests are ambiguous and yield ``None``.
+    """
+    stem = spec_stem(spec_name)
+    legacy = root / MANIFEST_FILENAME
+    if stem is None:
+        if legacy.is_file():
+            return legacy
+        candidates = manifest_files_in(root)
+        return candidates[0] if len(candidates) == 1 else None
+    own = manifest_path_for(root, spec_name)
+    if own.is_file():
+        return own
+    if legacy.is_file() and _legacy_manifest_stem(legacy) in (stem, None):
+        return legacy
+    return None
+
+
+def foreign_manifests(
+    root: Path, spec_name: str | os.PathLike[str] | None
+) -> list[tuple[Path, str | None]]:
+    """Manifests in *root* that belong to a spec other than *spec_name*.
+
+    Returns ``(path, owner_stem)`` pairs. A legacy manifest without a recorded
+    spec is attributable to nobody and is left out.
+    """
+    stem = spec_stem(spec_name)
+    result: list[tuple[Path, str | None]] = []
+    for path in manifest_files_in(root):
+        owner = manifest_owner_stem(path)
+        if owner is not None and owner != stem:
+            result.append((path, owner))
+    return result
+
+
+def manifest_claims_dir(manifest: dict[str, Any], rel_dir: str) -> bool:
+    """Whether *manifest* records any file at or below root-relative *rel_dir*."""
+    rel_dir = rel_dir.strip("/")
+    if rel_dir in ("", "."):
+        return bool(manifest.get("files"))
+    prefix = rel_dir + "/"
+    return any(
+        entry.get("path", "") == rel_dir or entry.get("path", "").startswith(prefix)
+        for entry in manifest.get("files", [])
+    )
 
 
 def find_course_manifest_path(
     spec_file: Path | None = None, *, output_root: Path | None = None
 ) -> Path | None:
-    """Locate the ``.clm-manifest.json`` for a spec's built output, if any.
+    """Locate the provenance manifest for a spec's built output, if any.
 
     Recording drift (issue #208 follow-up) needs the build manifest but is
     handed only a spec file — the recordings dashboard builds its ``Course``
@@ -464,9 +618,14 @@ def find_course_manifest_path(
     1. ``output_root`` if given (the ``clm recordings report --source`` /
        ``--manifest`` override); otherwise the default build output root
        ``course_root/output`` from :func:`resolve_course_paths`.
-    2. ``<output_root>/.clm-manifest.json`` (single default target), else
-    3. the first ``<output_root>/<target>/.clm-manifest.json`` in sorted
-       order (multi-target builds key each target by name).
+    2. The spec's manifest directly in ``output_root`` (single default
+       target), else
+    3. the first ``<output_root>/<target>/`` holding one, in sorted order
+       (multi-target builds key each target by name).
+
+    "The spec's manifest" is :func:`find_spec_manifest`: with *spec_file*,
+    only its own ``.clm-manifest.<stem>.json`` (or a legacy manifest it
+    wrote), never another spec's that shares the root (issue #1095).
 
     Returns ``None`` when no manifest exists — callers treat that as
     "slide provenance unknown", never an error. The lookup is deterministic
@@ -476,6 +635,7 @@ def find_course_manifest_path(
     Either ``spec_file`` or ``output_root`` must be given; with neither there
     is nothing to resolve and ``None`` is returned.
     """
+    spec_name = spec_file.name if spec_file is not None else None
     if output_root is None:
         if spec_file is None:
             return None
@@ -483,13 +643,15 @@ def find_course_manifest_path(
 
         _course_root, output_root = resolve_course_paths(spec_file)
 
-    direct = output_root / MANIFEST_FILENAME
-    if direct.is_file():
+    direct = find_spec_manifest(output_root, spec_name)
+    if direct is not None:
         return direct
     if output_root.is_dir():
         for sub in sorted(output_root.iterdir()):
-            candidate = sub / MANIFEST_FILENAME
-            if candidate.is_file():
+            if not sub.is_dir():
+                continue
+            candidate = find_spec_manifest(sub, spec_name)
+            if candidate is not None:
                 return candidate
     return None
 

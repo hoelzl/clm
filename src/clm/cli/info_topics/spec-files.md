@@ -826,7 +826,7 @@ another disk keeps working.
 
 Beyond the spec, the destructive operations verify at run time that the
 output root is CLM's before deleting anything: it must have been empty (or
-absent) when the build started, or carry the `.clm-manifest.json`
+absent) when the build started, or carry the `.clm-manifest.<spec>.json`
 provenance index a previous `clm build` wrote. A directory that fails both
 tests is refused with its path named, and nothing under it is deleted —
 see `clm info migration` for the impact on output trees created
@@ -1095,7 +1095,8 @@ behavior (`clm info releases` has the details):
 #### Provenance and freeze records
 
 The build artifact that makes per-topic promotion possible is the **provenance
-manifest** (`.clm-manifest.json`, written by `clm build` — on by default since
+manifest** (`.clm-manifest.<spec>.json`, one per spec, so specs may share an
+output root — written by `clm build`, on by default since
 CLM {version}); it maps each output file to its owning topic, which the output
 path alone cannot recover. The manifest is private and is automatically excluded
 from every distributed repo by `clm git`. The per-cohort **frozen manifest**

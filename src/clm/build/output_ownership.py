@@ -16,7 +16,10 @@ anything**, which roots CLM can prove it owns:
 
 * the root did not exist, or was empty, at build start;
 * the root (or a declared output-target root above it) carries a
-  ``.clm-manifest.json`` provenance index from an earlier build.
+  provenance manifest from an earlier build — this spec's
+  ``.clm-manifest.<spec>.json``, another spec's sharing the root, or a
+  legacy ``.clm-manifest.json`` (issue #1095; see
+  :func:`snapshot_output_ownership` for why another spec's counts).
 
 The sweep adds a third, registry-based line of evidence that only it can
 produce — if the walk finds nothing unexpected, there is nothing to
@@ -37,8 +40,14 @@ from pathlib import Path
 
 from attrs import frozen
 
-from clm.build.errors import UnownedOutputRootError
-from clm.core.provenance_manifest import MANIFEST_FILENAME
+from clm.build.errors import OutputDirCollisionError, UnownedOutputRootError
+from clm.core.provenance_manifest import (
+    find_spec_manifest,
+    foreign_manifests,
+    load_manifest,
+    manifest_claims_dir,
+    manifest_files_in,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +139,26 @@ def _manifest_dirs_for(root: Path, manifest_roots: Sequence[Path]) -> list[Path]
     return candidates
 
 
+def _manifest_evidence(directory: Path, spec_name: str | None) -> Path | None:
+    """A manifest in *directory* that marks it as a clm output root, if any.
+
+    This spec's own manifest is preferred (it makes the clearest evidence
+    message); any other provenance manifest qualifies too. ``is_file``, not
+    ``exists``: a *directory* named like a manifest is not one and must not
+    authorize deletion.
+    """
+    own = find_spec_manifest(directory, spec_name)
+    if own is not None:
+        return own
+    present = manifest_files_in(directory)
+    return present[0] if present else None
+
+
 def snapshot_output_ownership(
     root_dirs: Iterable[Path],
     *,
     manifest_roots: Iterable[Path] = (),
+    spec_name: str | None = None,
 ) -> OutputOwnership:
     """Record ownership evidence for *root_dirs* as they are right now.
 
@@ -146,7 +171,21 @@ def snapshot_output_ownership(
             ``--clean``, wipe).
         manifest_roots: Declared output-target roots, i.e. the
             directories a previous build would have written its
-            ``.clm-manifest.json`` into.
+            provenance manifest into.
+        spec_name: The spec being built; its own manifest is the
+            preferred evidence.
+
+    Any provenance manifest in a covering target root counts — this
+    spec's, a legacy ``.clm-manifest.json``, or *another* spec's that
+    shares the root (issue #1095). That keeps the trust level of the
+    single shared manifest that preceded per-spec manifests: it proves
+    the target root is a clm output tree, and *root_dirs* are always this
+    spec's own course directories below it, so the sweep and ``--clean``
+    never reach into another spec's directory. A course directory that
+    another spec's manifest claims is refused before the build starts by
+    :func:`find_course_dir_collisions` instead. Accepting only this
+    spec's manifest would strand every spec but the last one rebuilt in a
+    root migrated from the legacy single manifest.
     """
     manifest_root_list = list(manifest_roots)
     entries: list[RootOwnership] = []
@@ -189,22 +228,16 @@ def snapshot_output_ownership(
             entries.append(RootOwnership(root, evidence="was empty at build start"))
             continue
 
-        manifest_dir = next(
+        evidence = next(
             (
-                candidate
+                found
                 for candidate in _manifest_dirs_for(root, manifest_root_list)
-                # ``is_file``, not ``exists``: a *directory* named
-                # ``.clm-manifest.json`` is not a manifest, and must not
-                # authorize deletion (same test
-                # ``provenance_manifest.find_course_manifest_path`` uses).
-                if (candidate / MANIFEST_FILENAME).is_file()
+                if (found := _manifest_evidence(candidate, spec_name)) is not None
             ),
             None,
         )
-        if manifest_dir is not None:
-            entries.append(
-                RootOwnership(root, evidence=f"{manifest_dir / MANIFEST_FILENAME} is present")
-            )
+        if evidence is not None:
+            entries.append(RootOwnership(root, evidence=f"{evidence} is present"))
             continue
 
         entries.append(
@@ -212,8 +245,8 @@ def snapshot_output_ownership(
                 root,
                 evidence=None,
                 reason=(
-                    f"the directory already holds files and carries no "
-                    f"{MANIFEST_FILENAME} from a previous clm build"
+                    "the directory already holds files and carries no "
+                    "provenance manifest from a previous clm build"
                 ),
             )
         )
@@ -251,8 +284,9 @@ def describe_refusal(
         "Move the files out of the way (or empty the directory), point "
         "<output-target><path> at a directory clm owns, or — if this tree "
         f"really is clm's — pass {OVERRIDE_FLAG} once, which deletes the "
-        f"unaccounted-for files and writes the {MANIFEST_FILENAME} "
-        "provenance index that marks the tree as clm's from then on."
+        "unaccounted-for files and writes the provenance manifest "
+        "(.clm-manifest.<spec>.json) that marks the tree as "
+        "clm's from then on."
     )
     return "\n".join(lines)
 
@@ -286,3 +320,92 @@ def enforce_owned_roots(
         )
         return
     raise UnownedOutputRootError(describe_refusal(ownership, operation=operation))
+
+
+@frozen
+class CourseDirCollision:
+    """A course directory this build writes that another spec's manifest claims."""
+
+    course_dir: Path
+    manifest: Path
+    other_spec: str
+
+
+def find_course_dir_collisions(
+    root_dirs: Iterable[Path],
+    *,
+    manifest_roots: Iterable[Path],
+    spec_name: str | None,
+) -> list[CourseDirCollision]:
+    """Course directories of this build that another spec already builds into.
+
+    Specs may share an output-target root (issue #1095): each keeps its own
+    ``.clm-manifest.<spec>.json`` there, and each build only writes, sweeps
+    and wipes its own course directories (*root_dirs*). Two specs resolving
+    to the *same* course directory — same ``<project-slug>`` (or localized
+    directory name) under the same root — would silently overwrite each
+    other's output and both claim it. This finds that case from the other
+    specs' manifests, so the build can refuse before it writes anything.
+
+    Without a known spec nothing is foreign, so nothing is reported.
+    """
+    if spec_name is None:
+        return []
+    targets = list(manifest_roots)
+    loaded: dict[Path, dict | None] = {}
+    collisions: list[CourseDirCollision] = []
+    for root in dict.fromkeys(root_dirs):
+        for target_root in targets:
+            if not (target_root == root or target_root in root.parents):
+                continue
+            rel = root.relative_to(target_root).as_posix()
+            for path, owner in foreign_manifests(target_root, spec_name):
+                if path not in loaded:
+                    try:
+                        loaded[path] = load_manifest(path)
+                    except (OSError, ValueError) as exc:
+                        logger.warning("Cannot read provenance manifest %s: %s", path, exc)
+                        loaded[path] = None
+                manifest = loaded[path]
+                if manifest is not None and manifest_claims_dir(manifest, rel):
+                    collisions.append(CourseDirCollision(root, path, owner or "?"))
+    return collisions
+
+
+def enforce_no_course_dir_collisions(
+    root_dirs: Iterable[Path],
+    *,
+    manifest_roots: Iterable[Path],
+    spec_name: str | None,
+) -> None:
+    """Refuse the build when another spec already builds into one of its course dirs.
+
+    Deliberately not overridable by ``--allow-unowned-output``: that flag
+    adopts a tree nobody can prove is clm's, while here another spec
+    demonstrably owns the directory. The remedies are structural (a
+    distinct ``<project-slug>`` or output-target ``<path>``), or deleting
+    the other spec's manifest when that spec no longer builds there.
+
+    Raises:
+        OutputDirCollisionError: When any course directory is claimed.
+    """
+    collisions = find_course_dir_collisions(
+        root_dirs, manifest_roots=manifest_roots, spec_name=spec_name
+    )
+    if not collisions:
+        return
+    lines = [
+        f"{spec_name} would build into course director"
+        f"{'y' if len(collisions) == 1 else 'ies'} that another spec already owns:"
+    ]
+    for collision in collisions:
+        lines.append(
+            f"  {collision.course_dir} — claimed by {collision.other_spec} ({collision.manifest})"
+        )
+    lines.append(
+        "Specs may share an output root, but each needs its own course directory. "
+        "Nothing was written. Give the specs different <project-slug>s or point their "
+        "<output-target><path>s at different roots. If the other spec no longer builds "
+        "there (it was renamed or retired), delete its manifest file named above."
+    )
+    raise OutputDirCollisionError("\n".join(lines))

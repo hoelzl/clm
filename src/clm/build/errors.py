@@ -33,3 +33,14 @@ class UnownedOutputRootError(Exception):
     The message names every offending directory and the two remedies:
     empty the directory yourself, or pass ``--allow-unowned-output``.
     """
+
+
+class OutputDirCollisionError(Exception):
+    """Two specs would build into the same course directory (issue #1095).
+
+    Specs may share an output root — each keeps its own
+    ``.clm-manifest.<spec>.json`` there — but not a course directory below
+    it: the build would overwrite the other spec's files and both manifests
+    would claim them. Raised before the build writes anything; the message
+    names the directory, the other spec, and the remedies.
+    """

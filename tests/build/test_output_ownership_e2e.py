@@ -29,7 +29,7 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands import build as build_module
-from clm.core.provenance_manifest import MANIFEST_FILENAME
+from clm.core.provenance_manifest import manifest_filename
 
 _SPEC = """<?xml version="1.0" encoding="UTF-8"?>
 <course>
@@ -117,7 +117,7 @@ def test_an_unverified_tree_is_never_adopted_by_a_first_build(
     first = _build(spec, data, out, tmp_path, *first_build_flags)
     assert first.exit_code == 0, first.output
     assert precious.exists(), "the first build must not delete an unverified tree"
-    assert not (out / "shared" / MANIFEST_FILENAME).exists(), (
+    assert not (out / "shared" / manifest_filename(spec.name)).exists(), (
         "the unverified target root must not receive the ownership credential"
     )
 
@@ -140,9 +140,9 @@ def test_healthy_targets_keep_their_manifest(tmp_path: Path) -> None:
     result = _build(spec, data, out, tmp_path)
 
     assert result.exit_code == 0, result.output
-    assert not (out / "shared" / MANIFEST_FILENAME).exists()
-    assert (out / "trainer" / MANIFEST_FILENAME).is_file()
-    assert (out / "speaker" / MANIFEST_FILENAME).is_file()
+    assert not (out / "shared" / manifest_filename(spec.name)).exists()
+    assert (out / "trainer" / manifest_filename(spec.name)).is_file()
+    assert (out / "speaker" / manifest_filename(spec.name)).is_file()
 
 
 def test_the_override_adopts_the_tree_once(tmp_path: Path) -> None:
@@ -160,7 +160,7 @@ def test_the_override_adopts_the_tree_once(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert not precious.exists(), "the override must actually sweep"
-    assert (out / "shared" / MANIFEST_FILENAME).is_file()
+    assert (out / "shared" / manifest_filename(spec.name)).is_file()
 
 
 def test_a_fresh_tree_is_marked_and_swept(tmp_path: Path) -> None:
@@ -174,7 +174,7 @@ def test_a_fresh_tree_is_marked_and_swept(tmp_path: Path) -> None:
 
     first = _build(spec, data, out, tmp_path)
     assert first.exit_code == 0, first.output
-    assert (out / "shared" / MANIFEST_FILENAME).is_file()
+    assert (out / "shared" / manifest_filename(spec.name)).is_file()
 
     stray = out / "shared" / "course-en" / "stale.html"
     stray.write_text("from a renamed section", encoding="utf-8")

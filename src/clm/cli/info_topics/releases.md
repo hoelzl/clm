@@ -11,7 +11,7 @@ never rewrite what students already received.
 |---|---|
 | **Channel** | One student cohort's git repository, declared in the spec |
 | **Ledger** | Plain-text list of released topic ids for that cohort (`release/<name>.txt`) |
-| **Provenance manifest** | `.clm-manifest.json` — maps every built output file to its source topic; written by `clm build`; never distributed |
+| **Provenance manifest** | `.clm-manifest.<spec>.json` — maps every built output file to its source topic; written by `clm build`; never distributed |
 | **Frozen manifest** | `.clm-released.<stream>.json` (legacy `.clm-released.json` for a single unnamed stream) — per-cohort, per-stream freeze record inside the cohort repo; distributed to students |
 
 ## Spec configuration
@@ -58,11 +58,22 @@ variables
 control_flow
 ```
 
-### Provenance manifest (`.clm-manifest.json`)
+### Provenance manifest (`.clm-manifest.<spec>.json`)
 
 Written by `clm build` into each output target root. Maps output files to topics.
 **Private — never committed or distributed.** `clm git commit/sync` excludes it
 automatically.
+
+The file name carries the spec's file stem (`course.xml` →
+`.clm-manifest.course.json`), so **several specs can share one output root**
+(e.g. the default `output/shared`, each in its own `<project-slug>-<lang>`
+directory) and each keeps its own provenance. `clm release sync` reads only
+the manifest of the spec it is given; if the root holds only other specs'
+manifests it names them and asks you to build this spec. A build refuses to
+write into a course directory another spec's manifest already claims (same
+slug, same root). Roots built before {version} hold one unscoped
+`.clm-manifest.json`; it is still read for the spec that wrote it, and that
+spec's next build replaces it.
 
 ```json
 {
@@ -377,7 +388,7 @@ stays 0 either way.
 
 All `clm git` subcommands operate on output targets by default; add
 `--channel NAME` or `--all-channels` to operate on cohort repos instead.
-`.clm-manifest.json` is always excluded from staging; the frozen manifests
+`.clm-manifest.<spec>.json` is always excluded from staging; the frozen manifests
 (`.clm-released*.json`) are always included. Channels sharing a destination
 are visited once per repo, not once per channel.
 
@@ -456,7 +467,7 @@ clm release sync course.xml --channel jan --push -m "Update NEWS"
   which follow the latest build by design.
 - **Provenance-driven** — files are promoted via manifest lookup, not path inference.
 - **Idempotent syncs** — re-running sync is safe; frozen topics are skipped.
-- **Manifest exclusion** — `.clm-manifest.json` is never distributed; the per-stream frozen manifests (`.clm-released.<stream>.json`) are.
+- **Manifest exclusion** — `.clm-manifest.<spec>.json` is never distributed; the per-stream frozen manifests (`.clm-released.<stream>.json`) are.
 - **Stream-scoped freezing** — streams sharing one destination repo freeze independently; presence-as-frozen protects the shared skeleton.
 
 See `clm info commands` for the full flag reference.

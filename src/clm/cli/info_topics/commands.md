@@ -100,7 +100,7 @@ Key options:
 | `--http-replay [replay\|once\|new-episodes\|refresh\|disabled]` | HTTP replay record mode for topics with `http-replay="yes"` in the spec. `replay` requires a cassette (strict, CI default); `once` records on first run, replays thereafter (strict on new requests); `new-episodes` replays recorded requests and records any new ones (local default); `refresh` re-records every run; `disabled` bypasses replay. Defaults to `replay` when `CI=true`, else `new-episodes`. Also settable via `CLM_HTTP_REPLAY_MODE`. |
 | `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell/notebook error **or a dropped companion voiceover** (a `for_slide` with no matching `slide_id`, since CLM {version}). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
 | `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
-| `--provenance-manifest / --no-provenance-manifest` | Write a `.clm-manifest.json` provenance index into each output root, mapping every output file to its source commit and owning section/topic (issue #208 — needed by the per-topic solution-release workflow). **On by default since CLM {version}**; `clm git` excludes it from every distributed repo. Pass `--no-provenance-manifest` to skip it. Always suppressed under `--snapshot` / `--verify-against` (it embeds a timestamp + commit, so it must not enter a byte-reproducibility baseline). |
+| `--provenance-manifest / --no-provenance-manifest` | Write a `.clm-manifest.<spec>.json` provenance index into each output root, mapping every output file to its source commit and owning section/topic (issue #208 — needed by the per-topic solution-release workflow). **On by default since CLM {version}**; `clm git` excludes it from every distributed repo. Pass `--no-provenance-manifest` to skip it. Always suppressed under `--snapshot` / `--verify-against` (it embeds a timestamp + commit, so it must not enter a byte-reproducibility baseline). |
 | `--log-level [DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL]` | What gets *captured*, for the host and (via the effective level) the workers. Defaults to `INFO`; overrides `[logging] log_level` / `CLM_LOGGING__LOG_LEVEL`. This is **not** the console threshold — see "Where the log goes" below. |
 | `--verbose-logging` | Echo log messages to the console at `--log-level`. Off by default: the console shows warnings and errors only. |
 
@@ -329,12 +329,24 @@ across the wipe.
 
 #### Output-root ownership
 
+Several specs may build into the same output-target root — each writes
+its own `.clm-manifest.<spec>.json` there, and the sweep and `--clean` only
+ever touch the spec's own `<project-slug>-<lang>` course directories. Two
+specs may **not** share a course directory: when another spec's manifest
+already claims one this build would write, the build stops before writing
+anything and names the directory and the other spec. Give the specs
+different `<project-slug>`s or `<output-target><path>`s; if the other spec
+no longer builds there (renamed or retired), delete its manifest file.
+`--allow-unowned-output` does not override this.
+
 Both destructive operations — the sweep and the `--clean` wipe — delete
 files CLM did not write, so since {version} they first check that the
 output root is CLM's. A root qualifies when it
 
 - was **empty, or did not exist, when the build started**, or
-- carries a **`.clm-manifest.json`** provenance index from an earlier
+- carries a **provenance manifest** (`.clm-manifest.<spec>.json` of this
+  or another spec sharing the root, or a pre-{version} `.clm-manifest.json`)
+  from an earlier
   `clm build` (written by default; `--no-provenance-manifest` skips it),
 - or — for the sweep only — contains nothing the build did not write,
   in which case there is nothing to delete anyway.
@@ -343,7 +355,7 @@ Otherwise the operation is refused: `--clean` fails the build before
 deleting anything; the sweep leaves that root untouched and reports it on
 stderr. Both name the directory and the remedy.
 
-A refused root also gets **no `.clm-manifest.json`** — the manifest is the
+A refused root also gets **no provenance manifest** — the manifest is the
 evidence, so writing it would let the next build delete what this one
 declined to touch. Re-running the build therefore refuses again: move the
 files out of the way (or empty the directory), point
@@ -491,7 +503,7 @@ written once when the watch session ends and reflects the initial build only.
   "output_dedup_count": 0, "output_large_file_collision_count": 0,
   "output_conflicts": [],
   "log_directory": "…/clm/Logs", "worker_log_directory": "…/clm/Logs/workers",
-  "provenance_manifests": ["…/output/shared/.clm-manifest.json"],
+  "provenance_manifests": ["…/output/shared/.clm-manifest.course.json"],
   "spec_file": "…/course-specs/python.xml",
   "report_written_at": "2026-09-25T14:03:11+00:00"
 }
@@ -514,7 +526,7 @@ written once when the watch session ends and reflects the initial build only.
 provenance (issue #860): a cached error was *replayed*, not re-executed —
 each entry also carries `from_cache`. `flaky_files` lists decks that passed
 only after a retry (issue #330); `rebuild_reasons` is filled under
-`--explain-rebuilds`; `provenance_manifests` names the `.clm-manifest.json`
+`--explain-rebuilds`; `provenance_manifests` names the `.clm-manifest.<spec>.json`
 files the build wrote (empty when the manifest was suppressed or the build
 was not a whole-course build). `clm kernel-triage` consumes the same envelope
 from its `-O json` subprocess.
@@ -4101,7 +4113,7 @@ detect and add them as origin. The behavior matrix:
 spec's `<release-channels>` block (see `clm info spec-files`) instead of the
 `<output-targets>` repos — same init/status/commit/push/sync/reset behavior,
 pointed at the cohort working trees. The private provenance manifest
-(`.clm-manifest.json`) is always excluded from staging (and a copy a pre-exclusion
+(`.clm-manifest.<spec>.json`) is always excluded from staging (and a copy a pre-exclusion
 commit already tracked is purged on the next commit); the per-cohort frozen
 manifests (`.clm-released*.json`) are committed normally. The course must declare a
 `<release-channels>` block or these flags error. Populating these working trees
@@ -4178,7 +4190,7 @@ Key options for `release sync`:
 | `--channel NAME` | Resolve ledger/source/dest from the spec's `<release-channels>` (use `STREAM/CHANNEL` with several streams). Repeatable, and a glob (`'materials/*'`) syncs every matching channel in turn (CLM {version}+). |
 | `--all-channels` | Sync every channel in every `<release-channels>` block (CLM {version}+). Mutually exclusive with explicit `--ledger`/`--source`/`--dest`. |
 | `--ledger PATH` | Channel release ledger (overrides `--channel` resolution; single channel only). |
-| `--source DIR` | Built frozen-source output root (must contain `.clm-manifest.json`). |
+| `--source DIR` | Built frozen-source output root (must contain `.clm-manifest.<spec>.json`). |
 | `--dest DIR` | Cohort destination repository (created if absent). |
 | `--language de\|en` | Promote only this language's files, re-rooted at the language directory (issue #293). Overrides the channel's `lang` attribute; requires `SPEC_FILE`; `--source` must point at the output-target root. |
 | `--refreeze TOPIC` | Re-copy and re-freeze an already-frozen topic (e.g. a bug fix). Repeatable. |
@@ -4218,7 +4230,7 @@ still write no manifest.
 Examples:
 
 ```bash
-clm build course.xml                                       # writes .clm-manifest.json
+clm build course.xml                                       # writes .clm-manifest.<spec>.json
 clm release add course.xml functions lists --channel jan   # release two topics to a cohort
 clm release week course.xml "name:Week 1" --channel jan    # release a whole section's topics
 clm release section course.xml "name:Week 1" --channel jan # the same, structural spelling (#1009)
@@ -5313,8 +5325,8 @@ clm recordings report [PATH] [OPTIONS]
 |--------|-------------|
 | `PATH` | Course root, topic directory or deck file to scan (default: `.`) |
 | `--all` | Also list split decks on disk that have no recorded part (`unrecorded`) |
-| `--manifest PATH` | A specific `.clm-manifest.json`, enabling the secondary `built_output_changed` flag (overrides `--source` and the spec) |
-| `--source PATH` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/`) |
+| `--manifest PATH` | A specific `.clm-manifest.<spec>.json`, enabling the secondary `built_output_changed` flag (overrides `--source` and the spec) |
+| `--source PATH` | Built output root containing `.clm-manifest.<spec>.json` (overrides the spec's default `output/`) |
 | `--spec-file PATH` | Course spec XML; its default `output/` root is searched for the manifest |
 | `--json` | Emit the machine-readable envelope (`schema`, `tool`, `verb`, `is_clean`, `needs_attention`, `counts`, `ledger_errors`, `decks`) on stdout; diagnostics go to stderr |
 

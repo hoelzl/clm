@@ -21,7 +21,7 @@ The workflow has four moving parts:
 |---|---|---|
 | **Channel** | One student cohort = one git repository | declared in `<release-channels>` in the spec |
 | **Ledger** | Plain-text list of released topic ids (one per line) | a file in your **course source** repo (e.g. `release/jan.txt`) |
-| **Provenance manifest** | Maps each built output file → its owning topic | `.clm-manifest.json`, written by `clm build` (on by default) |
+| **Provenance manifest** | Maps each built output file → its owning topic | `.clm-manifest.<spec>.json`, written by `clm build` (on by default) |
 | **Frozen manifest** | The per-cohort, per-stream freeze record (what was promoted, and the bytes' hash) | `.clm-released.<stream>.json` (legacy `.clm-released.json` for a single unnamed stream), committed inside the cohort repo |
 
 The **ledger** is the volatile state — it grows every week as you release more
@@ -29,7 +29,7 @@ topics — and it deliberately lives *outside* the spec so the spec stays
 diff-clean. The **provenance manifest** is what makes per-topic promotion
 possible at all: a built output path (e.g. `output/.../03 Functions.html`) does
 not by itself tell CLM which source topic produced it, so `clm build` records
-that mapping in `.clm-manifest.json`.
+that mapping in `.clm-manifest.<spec>.json`.
 
 ## 1. Configure channels in the spec
 
@@ -61,7 +61,7 @@ for the full attribute table and remote-URL derivation.
 Build the frozen source as usual. The manifest is written by default:
 
 ```bash
-clm build course.xml        # writes .clm-manifest.json under each output root
+clm build course.xml        # writes .clm-manifest.<spec>.json under each output root
 ```
 
 (The manifest is suppressed for `--snapshot`, `--verify-against`,
@@ -298,7 +298,7 @@ clm git sync course.xml --channel jan -m "..."  # commit + push one cohort
 
 `clm release sync` is what *populates* a cohort working tree; `clm git --channel`
 is what *versions and distributes* it. (`release sync --push` simply chains the
-two for convenience.) The private `.clm-manifest.json` is always kept out of the
+two for convenience.) The private `.clm-manifest.<spec>.json` is always kept out of the
 distributed repos; the per-cohort freeze records (`.clm-released*.json`) are
 committed normally. A destination shared by several streams is one repo to
 `clm git`: `--all-channels` visits it once, and `clm git reset` on it discards

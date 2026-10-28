@@ -412,7 +412,7 @@ def _lecture_status(lecture) -> str:
     "--source",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     default=None,
-    help="Built output root containing .clm-manifest.json, for the secondary "
+    help="Built output root containing the provenance manifest, for the secondary "
     "`built_output_changed` flag (overrides the spec's default output/ location).",
 )
 @click.option(
@@ -420,14 +420,16 @@ def _lecture_status(lecture) -> str:
     "manifest_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Path to a specific .clm-manifest.json (overrides --source and the spec).",
+    help="Path to a specific provenance manifest, e.g. .clm-manifest.<spec>.json "
+    "(overrides --source and the spec).",
 )
 @click.option(
     "--spec-file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Course spec XML; its default output/ root is searched for the manifest "
-    "when --source/--manifest are not given.",
+    help="Course spec XML; its default output/ root is searched for its manifest "
+    "when --source/--manifest are not given (with --source, selects the spec's "
+    "manifest in that root).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 def report(
@@ -780,7 +782,9 @@ def _resolve_report_manifest(
     if manifest_path is not None:
         return manifest_path
     if source is not None:
-        return find_course_manifest_path(output_root=source)
+        # With --spec-file too, pick that spec's manifest out of a root other
+        # specs share (issue #1095).
+        return find_course_manifest_path(spec_file, output_root=source)
     if spec_file is not None:
         return find_course_manifest_path(spec_file)
     return None

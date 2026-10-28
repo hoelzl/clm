@@ -36,9 +36,12 @@ from clm.core.course_spec import (
     validate_output_target_path,
 )
 from clm.core.provenance_manifest import (
-    MANIFEST_FILENAME,
+    find_spec_manifest,
+    foreign_manifests,
     load_manifest,
+    manifest_filename,
     manifest_files_by_topic,
+    manifest_files_in,
     restrict_manifest_to_language,
 )
 from clm.release.frozen_manifest import FROZEN_FILENAME, load_frozen_manifest
@@ -277,8 +280,10 @@ def _check_shared_destination_overlap(
         target = next((t for t in spec.output_targets if t.name == other_block.source_target), None)
         if target is None:
             continue
-        other_manifest_path = _abs_under(course_root, target.path) / MANIFEST_FILENAME
-        if not other_manifest_path.is_file():
+        other_manifest_path = find_spec_manifest(
+            _abs_under(course_root, target.path), spec_file.name
+        )
+        if other_manifest_path is None:
             click.echo(
                 f"Note: '{other_ref}' shares this destination but its source "
                 f"target is not built; the cross-stream overlap check will run "
@@ -882,7 +887,7 @@ def status_cmd(
     "source_path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Built frozen-source output root (contains .clm-manifest.json).",
+    help="Built frozen-source output root (contains the spec's provenance manifest).",
 )
 @click.option(
     "--dest",
@@ -1091,6 +1096,42 @@ def _result_payload(result: SyncResult) -> dict[str, object]:
     }
 
 
+def _missing_manifest_message(source_path: Path, spec_file: Path | None) -> str:
+    """Why ``release sync`` found no manifest in *source_path*, and the remedy.
+
+    The common cause since several specs may share an output root (issue
+    #1095) is that this spec simply was not built there yet while another
+    one was; name that spec instead of hinting at a missing language build.
+    """
+    if spec_file is None:
+        present = manifest_files_in(source_path)
+        if len(present) > 1:
+            names = ", ".join(p.name for p in present)
+            return (
+                f"{source_path} holds provenance manifests of several specs ({names}). "
+                f"Pass the SPEC_FILE argument so the sync knows which one to promote."
+            )
+        return (
+            f"No provenance manifest in {source_path}. Build the source with "
+            f"`clm build --provenance-manifest` first."
+        )
+    expected = source_path / manifest_filename(spec_file.name)
+    others = foreign_manifests(source_path, spec_file.name)
+    if others:
+        owners = ", ".join(f"{owner} ({path.name})" for path, owner in others)
+        return (
+            f"No provenance manifest for {spec_file.name} in {source_path} "
+            f"(expected {expected.name}). The output root was built by other "
+            f"spec(s) only: {owners}. Several specs share this output root; "
+            f"build {spec_file} (`clm build {spec_file}`) so it writes its own "
+            f"manifest, then sync again."
+        )
+    return (
+        f"No provenance manifest at {expected}. Build the source with "
+        f"`clm build {spec_file}` first."
+    )
+
+
 def _sync_one_channel(
     *,
     spec_file: Path | None,
@@ -1131,12 +1172,11 @@ def _sync_one_channel(
     if not source_path.is_dir():
         raise click.ClickException(f"Source output root not found: {source_path}")
 
-    manifest_path = source_path / MANIFEST_FILENAME
-    if not manifest_path.is_file():
-        raise click.ClickException(
-            f"No provenance manifest at {manifest_path}. Build the source with "
-            f"`clm build --provenance-manifest` first."
-        )
+    manifest_path = find_spec_manifest(
+        source_path, spec_file.name if spec_file is not None else None
+    )
+    if manifest_path is None:
+        raise click.ClickException(_missing_manifest_message(source_path, spec_file))
     manifest = load_manifest(manifest_path)
 
     # Language scoping (issue #293): restrict the manifest to one language and

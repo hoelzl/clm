@@ -16,7 +16,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from clm.cli.commands import build as build_module
-from clm.core.provenance_manifest import MANIFEST_FILENAME
+from clm.core.provenance_manifest import MANIFEST_GLOB
 
 _SPEC = """<?xml version="1.0" encoding="UTF-8"?>
 <course>
@@ -51,7 +51,8 @@ def _build(spec: Path, data: Path, out: Path, tmp_path: Path):
 
 
 def _manifest_paths(target_root: Path) -> set[str]:
-    manifest = json.loads((target_root / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    (manifest_file,) = target_root.glob(MANIFEST_GLOB)
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     return {entry["path"] for entry in manifest["files"]}
 
 
