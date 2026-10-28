@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.35.1] - 2026-10-28
+
+### Fixed
+
+- **Specs sharing an output root no longer clobber each other's provenance manifest** (#1095). `clm build` now writes `.clm-manifest.<spec-stem>.json` instead of one `.clm-manifest.json` per output-target root, so every spec building into a shared root (the default `output/shared`, `trainer`, `speaker`, or explicit targets with the same `<path>`) keeps its own provenance and can `clm release sync` — previously only the spec built last could, and the others failed with a misleading "records no 'de' files" error. `release sync`, the shared-destination overlap check and `clm recordings report` read the spec's own manifest; a legacy `.clm-manifest.json` is still read for the spec that wrote it and replaced by that spec's next build. When the root holds only other specs' manifests, `release sync` now names them and says to build this spec. A build refuses (before writing anything) to write into a `<slug>-<lang>` course directory another spec's manifest already claims. `clm git` excludes and gitignores `.clm-manifest*.json`. The default output structure is unchanged.
+
 ## [1.35.0] - 2026-10-23
 
 ### Added

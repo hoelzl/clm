@@ -46,7 +46,7 @@ rebuild from scratch. `clm docker --help` lists the remaining subcommands
 ### PlantUML Converter
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-plantuml-converter:1.35.0`
+- `docker.io/mhoelzl/clm-plantuml-converter:1.35.1`
 - `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Base Image:** `python:3.12-slim`
@@ -69,7 +69,7 @@ docker build -f docker/plantuml/Dockerfile -t docker.io/mhoelzl/clm-plantuml-con
 ### Draw.io Converter
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-drawio-converter:1.35.0`
+- `docker.io/mhoelzl/clm-drawio-converter:1.35.1`
 - `docker.io/mhoelzl/clm-drawio-converter:latest`
 
 **Base Image:** `python:3.12-slim`
@@ -103,8 +103,8 @@ The notebook processor has **two variants** to support different use cases:
 **Best for:** Courses without deep learning, or running on Apple Silicon Macs.
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-notebook-processor:1.35.0` (default)
-- `docker.io/mhoelzl/clm-notebook-processor:1.35.0-lite`
+- `docker.io/mhoelzl/clm-notebook-processor:1.35.1` (default)
+- `docker.io/mhoelzl/clm-notebook-processor:1.35.1-lite`
 - `docker.io/mhoelzl/clm-notebook-processor:latest` (default)
 - `docker.io/mhoelzl/clm-notebook-processor:lite`
 
@@ -138,7 +138,7 @@ docker build -f docker/notebook/Dockerfile \
 courses on Apple Silicon (arm64, CPU-only).
 
 **Image Tags:**
-- `docker.io/mhoelzl/clm-notebook-processor:1.35.0-full`
+- `docker.io/mhoelzl/clm-notebook-processor:1.35.1-full`
 - `docker.io/mhoelzl/clm-notebook-processor:full`
 
 **Base Image:**
@@ -228,12 +228,12 @@ The build scripts automatically set these arguments.
 All images use the Hub namespace (`docker.io/mhoelzl/clm-*`) for consistency:
 
 **PlantUML/DrawIO:**
-- `docker.io/mhoelzl/clm-plantuml-converter:1.35.0`
+- `docker.io/mhoelzl/clm-plantuml-converter:1.35.1`
 - `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
 **Notebook (with variants):**
-- **Lite (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.35.0`, `:lite`, `:1.35.0-lite`
-- **Full:** `docker.io/mhoelzl/clm-notebook-processor:full`, `:1.35.0-full`
+- **Lite (default):** `docker.io/mhoelzl/clm-notebook-processor:latest`, `:1.35.1`, `:lite`, `:1.35.1-lite`
+- **Full:** `docker.io/mhoelzl/clm-notebook-processor:full`, `:1.35.1-full`
 
 `clm docker build notebook` creates all six notebook tags, and
 `clm docker push notebook-processor` publishes all six. Push refuses to start
