@@ -309,9 +309,10 @@ spelling recorded verbatim). Unmatched fields keep their exact bytes.
 A body that is not text — a binary upload — is recorded untouched; there
 are no parameters to filter in it. So is a form body with a non-UTF-8
 parameter *name*, and a JSON body too deeply nested to walk: leaving them
-alone is the only safe answer, because a filter that *raises* is treated
-as "unfilterable" and sends the request to the live network without
-recording it.
+alone is the only safe answer, because a request whose filter *raises*
+can be neither matched nor safely recorded: the proxy refuses it with a
+`clm_replay_miss` 404 in every mode (it is never sent to the live
+network), which would break the cell.
 
 Request filtering is the half that can bite you later, because request
 bodies and query parameters are part of the replay match key and the

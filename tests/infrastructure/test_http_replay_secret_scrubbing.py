@@ -102,9 +102,9 @@ class TestJsonContentTypeIsMatchedByPrefix:
     def test_a_body_that_is_not_valid_json_is_still_recorded(self) -> None:
         """A parse failure must not silently stop the recording.
 
-        ``_filter_request`` treats an exception as "forward without
-        recording", so a JSON content-type on a non-JSON body would have
-        turned into a silently missing interaction.
+        The addon refuses a request whose filter raised (issue #1067;
+        before that it forwarded it unrecorded), so a JSON content-type on
+        a non-JSON body would have broken the request.
         """
         out = _filtered(
             _request(headers={"content-type": "application/json"}, body=b"not json at all")
@@ -378,11 +378,11 @@ class TestRequestFiltersCoverTheRecordedShapes:
         """A PNG upload must still be *recorded*.
 
         The form branch decodes every ``&``-chunk as UTF-8. Raising there
-        makes ``_filter_request`` return None, which the addon treats as
-        an ignore-host: the request is forwarded to the live network in
-        every mode — including strict replay in CI — and never recorded.
-        Silent egress, no miss, no cassette entry. Dropping the POST gate
-        routed binary uploads (a presigned S3 PUT) straight into it.
+        used to forward the request to the live network in every mode —
+        including strict replay in CI — and never record it. Since #1067
+        the addon refuses such a request instead, which still breaks a
+        legitimate upload (a presigned S3 PUT) — so the filter must not
+        raise.
         """
         body = b"\x89PNG\r\n\x1a\n" + bytes(range(64))
         out = _filtered(
@@ -395,10 +395,11 @@ class TestRequestFiltersCoverTheRecordedShapes:
         """``X-Title: Übung 3`` must not become a network bypass either.
 
         Header decoding happens *upstream* of the filter, so an ASCII-strict
-        decode raised before any filtering — and the addon reads that as
-        "unfilterable", i.e. forward to the live network in every mode and
-        record nothing. A German deck setting OpenRouter's documented
-        ``X-Title`` is enough to trigger it through ``requests``.
+        decode raised before any filtering — and the addon used to read
+        that as "forward to the live network in every mode, record
+        nothing" (since #1067: refuse the request). A German deck setting
+        OpenRouter's documented ``X-Title`` is enough to trigger it through
+        ``requests``.
         """
         request = cf.vcr_request_from_parts(
             "POST",
@@ -415,7 +416,8 @@ class TestRequestFiltersCoverTheRecordedShapes:
         """``RecursionError`` guards the request side as well as the response.
 
         Same reasoning as the parse guard next to it — raising here means
-        the request is forwarded live and never recorded.
+        the addon refuses the request in every mode (issue #1067; before
+        that it was forwarded live and never recorded).
         """
         body = ("[" * 20000 + "]" * 20000).encode()
         out = _filtered(_request(headers={"content-type": "application/json"}, body=body))
@@ -544,10 +546,9 @@ class TestRequestBodyFilteringRecurses:
         costs at least one frame per level, and 400 levels cannot fit in
         300. Reproducing the other regime here beats discovering it in CI.
 
-        Refusing is the expensive failure. ``_filter_request`` returning
-        ``None`` is handled like an ignore-host: the request goes to the
-        live network in every mode, including strict replay, and nothing
-        is recorded.
+        Raising is the expensive failure: the addon refuses a request
+        whose filter raised in every mode (issue #1067; before that it went
+        to the live network unrecorded, strict replay included).
         """
         depth = 400
         body = ('{"a":' * depth + '{"api_key":"SHHH"}' + "}" * depth).encode()
@@ -586,9 +587,9 @@ class TestRequestBodyFilteringRecurses:
         defensive ``deepcopy`` before the guard is reached, so the guard
         cannot help there. A **cyclic** one is the case it does catch:
         ``deepcopy``'s memo resolves the cycle and the walk is what runs
-        away. Either way the request must come back unrefused — a raising
-        filter is read as an ignore-host and sent to the live network in
-        every mode, recording nothing.
+        away. Either way the request must come back unrefused — the addon
+        refuses a request whose filter raised, in every mode (issue #1067;
+        before that it went to the live network, recording nothing).
         """
         body: dict = {"outer": {"api_key": "SHHH"}}
         body["outer"]["self"] = body

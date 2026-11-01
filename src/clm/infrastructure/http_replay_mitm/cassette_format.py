@@ -149,12 +149,12 @@ def _decode_ascii(value: object) -> str:
     """Decode a header name/value to ``str`` the way vcrpy does (ASCII).
 
     vcrpy raises on a non-ASCII header byte. CLM cannot afford to: this
-    runs *upstream* of the request filter, and the addon reads any filter
-    exception as "unfilterable", which it handles like an ignore-host —
-    forwarding the request to the live network in every mode, including
-    strict replay in CI, and recording nothing (finding S9, #798). A
-    German deck setting OpenRouter's ``X-Title`` to ``"Übung 3"`` is
-    enough to trigger it through ``requests``.
+    runs *upstream* of the request filter, and the addon refuses any
+    request whose filter raised with a ``clm_replay_miss`` 404 in every
+    mode (issue #1067; before that it forwarded such a request to the live
+    network, strict replay included — finding S9, #798). A German deck
+    setting OpenRouter's ``X-Title`` to ``"Übung 3"`` is enough to trigger
+    it through ``requests``, and a refused request breaks the deck.
 
     So a non-ASCII byte is replaced rather than raised. Headers are not
     part of the replay match key, so the substitution cannot cause a
@@ -328,11 +328,13 @@ def build_request_filter(
     the in-kernel vcrpy path filters it:
 
     * each filter-list entry maps to a ``(name, None)`` removal,
+    * an ignore-host check returns ``None`` to signal "do not record" — the
+      addon treats that as "pass straight through to the network", the
+      out-of-process analogue of vcrpy's ``ignore_hosts``. It runs *before*
+      the filters so a scrubber failure can never turn an ignored host into
+      a refused request (issue #1067),
     * filters run header → query → post-data (the order vcrpy uses), each
-      after a defensive ``copy.deepcopy`` so the caller's request is untouched,
-    * an ignore-host check then returns ``None`` to signal "do not record" —
-      the addon treats that as "pass straight through to the network", the
-      out-of-process analogue of vcrpy's ``ignore_hosts``.
+      after a defensive ``copy.deepcopy`` so the caller's request is untouched.
 
     Because the recorded request is the *filtered* one and the replay lookup
     filters the incoming request the same way before matching, secret removal
@@ -356,13 +358,17 @@ def build_request_filter(
     hosts_to_ignore = set(ignore_hosts)
 
     def before_record_request(request: Request) -> Request | None:
+        # Ignore-host check FIRST (issue #1067): whether a host passes through
+        # must not depend on the secret scrubber succeeding, because the addon
+        # refuses any request whose filter raises. The result is the same as
+        # checking after filtering (the filters never change the host).
+        if getattr(request, "host", None) in hosts_to_ignore:
+            return None
         request = copy.deepcopy(request)
         for fn in funcs:
             if request is None:
                 break
             request = fn(request)
-        if request is not None and getattr(request, "host", None) in hosts_to_ignore:
-            return None
         return request
 
     return before_record_request
@@ -566,9 +572,9 @@ def build_response_filter(
             # Mislabelled, truncated, or pathologically nested body: leave
             # the bytes exactly as recorded rather than guessing at their
             # structure. ``RecursionError`` is the load-bearing one — the
-            # addon reads a raised filter as "unfilterable" and handles it
-            # like an ignore-host, forwarding to the **live network** in
-            # every mode and recording nothing.
+            # addon refuses a request whose filter raised (a 404 miss in
+            # every mode, issue #1067), so raising here would break a
+            # legitimate request.
             return filtered
         if redacted == payload and not shadowed_names:
             # Nothing matched — keep the original bytes rather than

@@ -84,11 +84,15 @@ is not installed. Do not add a `clm` import to either.
 ## 3. Landmines
 
 - **A filter that raises is far worse than one that does nothing.**
-  `_filter_request` returning `None` means "unfilterable", and the addon handles
-  that **exactly like an ignore-host** — the request goes to the **live
-  network** in every mode including strict `replay`, and nothing is recorded.
-  One warning line, no miss. This is why every guard in this code prefers
-  "leave it alone" to raising.
+  Since issue #1067 a raising filter makes `_filter_request` raise
+  `_RequestFilterError` (distinct from the `None` an ignore-host returns), and
+  the addon **refuses** the request with a `clm_replay_miss` 404 in every mode
+  — the deck's cell fails. (Before #1067 it was handled exactly like an
+  ignore-host: the request went to the **live network** in every mode,
+  strict `replay` included, and nothing was recorded.) Either way, this is why
+  every guard in this code prefers "leave it alone" to raising. The
+  ignore-host check runs *before* the filters, so a scrubber crash cannot
+  refuse LangSmith telemetry.
 - **A dropped response is not a loud miss.** `_select_serve_index` repeats the
   last match, so a dropped response to a *repeated* request replays the previous
   one — silently different output.
@@ -146,7 +150,8 @@ What landed:
 - Parse, walk *and* `json.dumps` under one guard on the JSON branch; the
   (CLM-unreachable) `dict`-body branch, which only walks, got the same
   `RecursionError` guard. An escaping `RecursionError` reads to the addon as
-  "unfilterable" → live network in every mode, nothing recorded. The limb
+  "unfilterable" → live network in every mode, nothing recorded (since #1067:
+  a refused request instead). The limb
   actually reproduced escaping is the new Python-level *walk*, at
   `setrecursionlimit(300)` / depth 400; on this box's CPython 3.13 the parse
   always blows before `json.dumps` would, so the dumps half is hardening

@@ -32,6 +32,11 @@ merged or committed, so it is a forensic record and never a replay source
 recorded there; in a strict mode (``replay``/``once``) it is refused with
 the non-retryable 404 miss response. A build must not depend on what an
 earlier local build happened to record into that file.
+
+A request the secret filter cannot process (the filter raised) is refused
+with the same 404 miss response in **every** mode (issue #1067): it can be
+neither matched nor safely recorded, and it must never be forwarded live.
+``ignore_hosts`` hosts keep passing through unrecorded.
 """
 
 from __future__ import annotations
@@ -99,9 +104,34 @@ _TAG_HEADER = "x-clm-cassette"
 _FLOW_TAG_KEY = "clm_cassette_tag"
 _FLOW_SERVED_KEY = "clm_served_from_cache"
 # Set when request() decided this flow must NOT be recorded (an ``ignore_hosts``
-# host such as LangSmith telemetry, or an unfilterable request): it is forwarded
-# upstream untouched and response() skips persisting it.
+# host such as LangSmith telemetry): it is forwarded upstream untouched and
+# response() skips persisting it. An *unfilterable* request is not this case —
+# it is refused, never forwarded (issue #1067; see ``_RequestFilterError``).
 _FLOW_IGNORED_KEY = "clm_ignored_no_record"
+
+
+def _redact_query(url_or_path: str) -> str:
+    """Replace the query string of a URL or path with ``?<redacted>``.
+
+    Used wherever an *unscrubbed* request (its filter failed, issue #1067) is
+    echoed into a response, log or trace: the query may carry ``api_key=…``.
+    """
+    base, sep, _query = url_or_path.partition("?")
+    return f"{base}?<redacted>" if sep else base
+
+
+class _RequestFilterError(Exception):
+    """The request filter could not process a request (it raised, or is unset).
+
+    Raised by ``ClmReplayAddon._filter_request`` so a filter failure can never
+    be confused with an ``ignore_hosts`` match (its ``None`` result). Before
+    issue #1067 both returned ``None`` and a crashing filter forwarded the
+    request to the live network in every mode, strict replay included. Now
+    ``request()`` refuses such a flow with the non-retryable ``clm_replay_miss``
+    404 in every mode — proven by
+    ``tests/infrastructure/test_http_replay_mitm_filter_error.py``.
+    """
+
 
 # Staging filename infix. Must start with ``.staging-`` so the host-side
 # ``merge_staging_into_canonical`` glob (``<name>.staging-*``) finds it. The
@@ -387,10 +417,32 @@ class ClmReplayAddon:
         # Filter first: secrets are removed and an ignore_hosts host yields None.
         # The filtered request is what we match against (and what we record), so
         # secret removal and matching stay consistent on both sides.
-        filtered = self._filter_request(flow.request)
+        try:
+            filtered = self._filter_request(flow.request)
+        except _RequestFilterError as exc:
+            # The filter could not process this request (issue #1067). Refuse
+            # it in EVERY mode, before routing, with the non-retryable miss:
+            # * strict modes (replay/once-present) must never reach the network,
+            #   and a crashing filter is no exception to that;
+            # * recording modes cannot record a request they could not scrub
+            #   (it may carry secrets), and forwarding it unrecorded would leave
+            #   a cassette that silently misses on the next strict replay.
+            # Proven by tests/infrastructure/test_http_replay_mitm_filter_error.py.
+            # The scrubber did not run, so the URL is echoed with its query
+            # string redacted (it may hold ``?api_key=…``).
+            logger.error(
+                "Request filtering failed for %s %s (%s); refusing the request "
+                "instead of forwarding it",
+                flow.request.method,
+                self._query_redacted_url(flow.request),
+                exc,
+            )
+            flow.response = self._filter_error_response(flow, exc)
+            self._trace_request(flow, tag, "miss", filter_error=True)
+            return
         if filtered is None:
-            # ignore_hosts (e.g. LangSmith telemetry) or an unfilterable request:
-            # forward upstream untouched, record nothing, never a miss response.
+            # ignore_hosts (e.g. LangSmith telemetry): forward upstream
+            # untouched, record nothing, never a miss response.
             flow.metadata[_FLOW_IGNORED_KEY] = True
             self._trace_request(flow, tag, "ignored")
             return
@@ -456,7 +508,7 @@ class ClmReplayAddon:
         if cf is None or flow.response is None:
             return
         if flow.metadata.get(_FLOW_IGNORED_KEY):
-            return  # ignore_hosts / unfilterable: never record
+            return  # ignore_hosts: never record
         if flow.metadata.get(_FLOW_SERVED_KEY):
             return  # served from cassette this build — nothing new to record
         if flow.response.status_code == _REPLAY_MISS_STATUS and self._is_replay_miss_marker(
@@ -472,7 +524,22 @@ class ClmReplayAddon:
         if not record:
             return
 
-        request = self._filter_request(flow.request)
+        try:
+            request = self._filter_request(flow.request)
+        except _RequestFilterError as exc:
+            # request() filtered this same request successfully (or the flow
+            # would have been refused), so only a non-deterministic filter gets
+            # here. Never record it unscrubbed; say loudly that the cassette is
+            # now short one interaction, as _filter_response does.
+            logger.error(
+                "Request filtering failed while recording %s %s (%s); this "
+                "interaction is NOT recorded, so the cassette will be short one "
+                "response — re-record this deck",
+                flow.request.method,
+                self._query_redacted_url(flow.request),
+                exc,
+            )
+            return
         if request is None:
             return  # defensive: should have been flagged ignored in request()
 
@@ -552,14 +619,17 @@ class ClmReplayAddon:
         *,
         filtered=None,
         target: _Target | None = None,
+        filter_error: bool = False,
     ) -> None:
         """Emit one ``proxy.request`` forensic event for this flow.
 
         ``action`` is the addon's decision for the request: ``served`` (cassette
         hit), ``miss`` (strict-replay 404 — including an untagged flow refused
         in a strict mode, which has ``has_tag`` false and no ``cassette``; issue
-        #1055), ``ignored`` (ignore_hosts, forwarded
-        not recorded), ``forward`` (recording mode, will hit upstream) or
+        #1055; and a request refused in any mode because its filter failed,
+        which carries ``filter_error`` true, no ``cassette`` and a
+        query-redacted ``path``; issue #1067), ``ignored`` (ignore_hosts,
+        forwarded not recorded), ``forward`` (recording mode, will hit upstream) or
         ``passthrough`` (untagged, no catch-all). The analyzer uses these as the
         interception-evidence stream that replaces the (now-dark) ``vcr`` stream.
 
@@ -579,6 +649,10 @@ class ClmReplayAddon:
         }
         if action == "miss":
             data["path"] = flow.request.path
+            if filter_error:
+                # The scrubber did not run: never log a raw query string.
+                data["path"] = _redact_query(flow.request.path)
+                data["filter_error"] = True
             if target is not None:
                 data["cassette"] = str(target.canonical)
                 data["recorded_requests"] = len(target.recorded)
@@ -673,16 +747,20 @@ class ClmReplayAddon:
     def _filter_request(self, request: http.Request):
         """Build the filtered vcr Request for matching/recording, or ``None``.
 
-        ``None`` means "do not record, pass straight through" — either an
-        ignore_hosts host or (defensively) a request the vcrpy filters could not
-        process. Returning the unfiltered request is never an option: it could
-        leak a secret-bearing ``authorization`` header into the cassette.
+        ``None`` means exactly one thing: an ``ignore_hosts`` host — "do not
+        record, pass straight through". A filter that *cannot* process the
+        request (it raised, or was never built) raises
+        :class:`_RequestFilterError` instead, so callers can never mistake a
+        filter failure for an ignored host (issue #1067: that conflation
+        forwarded the request live even under strict replay). Returning the
+        unfiltered request is never an option either: it could leak a
+        secret-bearing ``authorization`` header into the cassette.
         """
         request_filter = self._request_filter
         if request_filter is None:
             # running() always builds the filter before any flow is handled;
-            # if it somehow hasn't, fail safe (don't record) rather than leak.
-            return None
+            # if it somehow hasn't, we can neither scrub nor match: fail closed.
+            raise _RequestFilterError("the request filter was never initialized")
         try:
             vcr_request = cf.vcr_request_from_parts(
                 request.method,
@@ -692,12 +770,7 @@ class ClmReplayAddon:
             )
             return request_filter(vcr_request)
         except Exception as exc:  # noqa: BLE001 — never crash the proxy
-            logger.warning(
-                "Request filtering failed (%s: %s); forwarding without recording",
-                type(exc).__name__,
-                exc,
-            )
-            return None
+            raise _RequestFilterError(f"{type(exc).__name__}: {exc}") from exc
 
     def _filter_response(self, response: dict):
         """Scrub a response dict before it is recorded, or return ``None``.
@@ -779,6 +852,29 @@ class ClmReplayAddon:
             "make this request through one of them."
         )
         return self._miss_response(method, url, message, {"untagged": True})
+
+    def _filter_error_response(
+        self, flow: http.HTTPFlow, error: _RequestFilterError
+    ) -> http.Response:
+        # Same non-retryable, SDK-shaped 404 and ``clm_replay_miss`` marker as a
+        # strict-replay miss (so response() never records it), naming the
+        # filter error so the cause is visible in the kernel's NotFoundError.
+        method = flow.request.method
+        # The scrubber did not run, so the query (``?api_key=…``) is redacted:
+        # this message lands in the executed notebook's cell output.
+        url = self._query_redacted_url(flow.request)
+        message = (
+            f"clm_replay_miss: the HTTP-replay request filter failed on {method} {url} "
+            f"({error}); the proxy refuses the request instead of contacting the real "
+            "server, because it can neither match nor safely record a request it "
+            "could not scrub. This is a CLM bug — please report it."
+        )
+        return self._miss_response(method, url, message, {"filter_error": True})
+
+    @staticmethod
+    def _query_redacted_url(request: http.Request) -> str:
+        """``pretty_url`` with any query string replaced by a placeholder."""
+        return _redact_query(request.pretty_url)
 
     @staticmethod
     def _miss_response(method: str, url: str, message: str, extra: dict[str, Any]) -> http.Response:
