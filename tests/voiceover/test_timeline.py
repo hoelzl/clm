@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -52,6 +53,15 @@ class TestProbeDuration:
             "R", (), {"returncode": 0, "stderr": "", "stdout": "123.45\n"}
         )()
         assert probe_duration(video) == pytest.approx(123.45)
+
+    @patch("clm.voiceover.timeline.subprocess.run")
+    def test_ffprobe_does_not_inherit_caller_stdin(self, mock_run, tmp_path):
+        """Regression test for #1103: ffprobe must not read the caller's stdin."""
+        video = tmp_path / "test.mp4"
+        video.write_text("fake")
+        mock_run.return_value = type("R", (), {"returncode": 0, "stderr": "", "stdout": "1.0\n"})()
+        probe_duration(video)
+        assert mock_run.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
 
 # ---------------------------------------------------------------------------

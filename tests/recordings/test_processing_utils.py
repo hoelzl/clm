@@ -373,6 +373,57 @@ class TestRunSubprocess:
         _, called_kwargs = mock_run.call_args
         assert "creationflags" not in called_kwargs
 
+    def test_child_stdin_is_devnull_by_default(self):
+        """Regression test for #1103: children must not inherit the caller's stdin."""
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch(
+            "clm.recordings.processing.utils.subprocess.run", return_value=fake_result
+        ) as mock_run:
+            run_subprocess(["ffmpeg", "-version"])
+        _, called_kwargs = mock_run.call_args
+        assert called_kwargs["stdin"] is subprocess.DEVNULL
+
+    def test_explicit_input_is_not_overridden(self):
+        """A caller that feeds ``input=`` keeps it (stdin and input are exclusive)."""
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch(
+            "clm.recordings.processing.utils.subprocess.run", return_value=fake_result
+        ) as mock_run:
+            run_subprocess(["cat"], input="data")
+        _, called_kwargs = mock_run.call_args
+        assert called_kwargs["input"] == "data"
+        assert "stdin" not in called_kwargs
+
+    def test_does_not_consume_parent_stdin(self, tmp_path: Path):
+        """Regression test for #1103, end to end.
+
+        A parent process with piped stdin calls ``run_subprocess`` on a child
+        that reads stdin; afterwards the parent must still see all its input.
+        Before the fix the child inherited the pipe and swallowed it -- exactly
+        what made ``while read ...; do clm harvest report ...; done`` skip lines.
+        """
+        script = tmp_path / "parent.py"
+        script.write_text(
+            "import sys\n"
+            "from clm.recordings.processing.utils import run_subprocess\n"
+            "child = run_subprocess(\n"
+            "    [sys.executable, '-c', 'import sys; print(repr(sys.stdin.read()))']\n"
+            ")\n"
+            "print('CHILD', child.stdout.strip())\n"
+            "print('PARENT', repr(sys.stdin.read()))\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            input="line1\nline2\nline3\n",
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "CHILD ''" in proc.stdout
+        assert "PARENT 'line1\\nline2\\nline3\\n'" in proc.stdout
+
 
 class TestGetAudioDuration:
     def test_parses_ffprobe_output(self):

@@ -474,6 +474,7 @@ def extract_audio(
 
     cmd = [
         "ffmpeg",
+        "-nostdin",  # never read the caller's stdin (#1103)
         "-i",
         str(video_path),
         "-vn",  # no video
@@ -493,6 +494,7 @@ def extract_audio(
         cmd,
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,
     )
 
     if result.returncode != 0:
@@ -567,7 +569,7 @@ def _ffmpeg_pcm16_mono(path: Path, sample_rate: int) -> bytes:
         str(sample_rate),
         "-",
     ]
-    result = subprocess.run(cmd, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -618,7 +620,8 @@ def _transcribe_in_subprocess(
         device,
     )
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    # stdin=DEVNULL: the worker must not consume the caller's stdin (#1103).
+    proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
 
     # Check if result file was written (subprocess may crash during
     # CUDA shutdown after writing the result — that's OK)
