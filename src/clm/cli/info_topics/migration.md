@@ -2,6 +2,21 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## HTTP replay refuses a request its secret filter cannot process (#1067, {version})
+
+**Behavior change, no spec change.** When the HTTP-replay proxy's secret
+filter raised on a request, older CLM forwarded that request to the real
+server unrecorded, in every mode. That included strict `--http-replay=replay`,
+so a filter bug turned into a live, possibly billed call. The proxy now
+refuses such a request in **every** mode, recording modes included. The
+deck's cell fails with `clm_replay_miss: the HTTP-replay request filter
+failed on …`, and the message names the filter error. `ignore_hosts` hosts
+(LangSmith telemetry) still pass through.
+
+What to do: nothing, unless a build now fails with that message. That
+message points to a CLM filter bug, so report it with the deck. Before this
+change the same request went out to the real server without being recorded.
+
 ## One provenance manifest per spec: `.clm-manifest.<spec>.json` (#1095, {version})
 
 **Output change, no spec change.** `clm build` used to write a single

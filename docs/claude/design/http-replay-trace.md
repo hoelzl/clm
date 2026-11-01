@@ -330,7 +330,9 @@ as `TraceWriter`). Written to `proxy-<pid>.jsonl`.
 - `proxy.request` — `{method, scheme, host, port, has_tag, action}` where
   `action ∈ {served, miss, ignored, forward, passthrough}` (the addon's
   decision: cassette hit / strict-404 / ignore_hosts-forwarded / record-mode
-  upstream / untagged-no-catch-all).
+  upstream / untagged-no-catch-all). A `miss` whose request filter raised
+  (refused in every mode, issue #1067) also carries `filter_error: true` and
+  a query-redacted `path`.
 - `proxy.response` — `{host, port, status, recorded}` (emitted when an upstream
   reply is persisted to a staging cassette).
 

@@ -626,9 +626,9 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
             except RecursionError:
                 # Same guard as the JSON branch below: this branch could not
                 # recurse before, so it could not overflow either, and an
-                # escaping ``RecursionError`` reads to the addon as
-                # "unfilterable" — live network in every mode, nothing
-                # recorded.
+                # escaping ``RecursionError`` makes the addon refuse the
+                # request (a 404 miss in every mode, issue #1067; before
+                # that: live network, nothing recorded).
                 #
                 # It buys less than it looks like, and the limit is worth
                 # knowing. ``build_request_filter`` ``deepcopy``s the request
@@ -661,9 +661,9 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
             except (ValueError, UnicodeDecodeError, RecursionError):
                 # A JSON content-type on a body that will not parse —
                 # malformed, mislabelled, or nested past the recursion
-                # limit. vcrpy would raise here; the addon turns any
-                # filter exception into "unfilterable", which it forwards
-                # to the live network without recording. Leave the body
+                # limit. vcrpy would raise here; the addon refuses any
+                # request whose filter raised (issue #1067), which would
+                # break a legitimate deck. Leave the body
                 # untouched instead — there is nothing to filter in
                 # something we cannot read (finding S9, #798). The
                 # response filter guards the same three cases.
@@ -678,11 +678,10 @@ def replace_post_data_parameters(request: Request, replacements) -> Request:
                 # A body that is not text at all — a PNG upload, a latin-1
                 # payload. There are no form parameters to filter in it,
                 # and raising would be far worse than doing nothing: the
-                # addon treats an unfilterable request as an ignore-host,
-                # forwarding it to the live network in *every* mode
-                # (including strict replay) and recording nothing. That
-                # silent bypass is what removing the POST gate would
-                # otherwise have opened up (finding S9, #798).
+                # addon refuses a request whose filter raised, in *every*
+                # mode (issue #1067 — before that it was a silent bypass to
+                # the live network, which removing the POST gate would
+                # otherwise have opened up; finding S9, #798).
                 return request
             request.body = form_body
     return request
