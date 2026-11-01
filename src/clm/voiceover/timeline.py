@@ -56,7 +56,8 @@ def probe_duration(video_path: Path) -> float:
         str(video_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # stdin=DEVNULL: never consume the caller's stdin (#1103).
+    result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
 
     if result.returncode != 0:
         raise RuntimeError(

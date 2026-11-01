@@ -260,6 +260,11 @@ def run_subprocess(
 
     On Windows, suppresses console window popups via CREATE_NO_WINDOW.
 
+    The child's stdin is ``subprocess.DEVNULL`` unless the caller passes
+    ``stdin=`` or ``input=``: ffmpeg (and any other child) would otherwise
+    inherit and consume the caller's stdin, breaking shell loops that pipe
+    input into clm (#1103).
+
     Args:
         args: Command and arguments.
         check: Raise CalledProcessError on non-zero exit.
@@ -276,6 +281,8 @@ def run_subprocess(
     if sys.platform == "win32":
         CREATE_NO_WINDOW = 0x08000000
         extra_kwargs["creationflags"] = CREATE_NO_WINDOW
+    if "stdin" not in kwargs and "input" not in kwargs:
+        extra_kwargs["stdin"] = subprocess.DEVNULL
 
     result = subprocess.run(
         str_args,
