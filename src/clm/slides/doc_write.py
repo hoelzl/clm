@@ -279,8 +279,11 @@ def write_changed_files(
     A ``None`` emission is skipped — a writer never deletes a file; layout
     removals empty it instead. A changed file the bundle has no path for
     (a freshly minted companion) goes to :func:`new_companion_path`.
-    Raises :class:`OSError` on write failure; nothing is partially written
-    (the ``atomic_write_all`` boundary ``split``/``unify`` also use).
+    Raises :class:`OSError` on write failure (the ``atomic_write_all``
+    boundary ``split``/``unify`` also use): transient Windows replace errors
+    are retried, and a replace that still fails rolls back the files already
+    replaced, best-effort — see :func:`atomic_write_all` for the exact
+    guarantee (no cross-file atomicity against a crash).
     """
     from clm.infrastructure.utils.path_utils import atomic_write_all
 

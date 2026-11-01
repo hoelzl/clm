@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.utils.path_utils import atomic_write_bytes
+from clm.infrastructure.utils.path_utils import atomic_write_all, atomic_write_bytes
 
 
 class TestAtomicWriteBytes:
@@ -118,3 +118,135 @@ class TestAtomicWriteBytes:
         # We saw at least two different temp names.
         assert len(seen_temps) >= 2
         assert len(set(seen_temps)) == len(seen_temps)
+
+
+def _flaky_replace_for(monkeypatch, failing_name: str, *, times: int) -> dict[str, int]:
+    """Make ``os.replace`` onto ``failing_name`` raise WinError-5-style
+    ``PermissionError`` the first ``times`` times; stub the backoff sleep."""
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        if Path(dst).name == failing_name and calls["n"] < times:
+            calls["n"] += 1
+            raise PermissionError(errno.EACCES, "Access is denied", str(dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+    monkeypatch.setattr("clm.infrastructure.utils.path_utils.time.sleep", lambda _s: None)
+    return calls
+
+
+class TestAtomicWriteAllReplacePhase:
+    """Regression tests for #1099: the multi-file replace phase.
+
+    ``atomic_write_all`` used a bare ``os.replace`` per target, so one
+    transient Windows ``PermissionError`` (Defender / indexer / editor
+    handle) on the second file left the first one replaced — a one-sided
+    DE/EN pair.
+    """
+
+    def _pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        de = tmp_path / "bullets.de.py"
+        en = tmp_path / "bullets.en.py"
+        de.write_text("old de\n", encoding="utf-8")
+        en.write_text("old en\n", encoding="utf-8")
+        return de, en
+
+    def test_transient_replace_error_is_retried(self, tmp_path, monkeypatch):
+        de, en = self._pair(tmp_path)
+        calls = _flaky_replace_for(monkeypatch, en.name, times=1)
+
+        atomic_write_all([(de, "new de\n"), (en, "new en\n")])
+
+        assert calls["n"] == 1
+        assert de.read_text(encoding="utf-8") == "new de\n"
+        assert en.read_text(encoding="utf-8") == "new en\n"
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_persistent_replace_error_rolls_back_replaced_targets(self, tmp_path, monkeypatch):
+        de, en = self._pair(tmp_path)
+        _flaky_replace_for(monkeypatch, en.name, times=10_000)
+
+        with pytest.raises(PermissionError):
+            atomic_write_all([(de, "new de\n"), (en, "new en\n")])
+
+        # The already-replaced DE target is restored: no one-sided pair.
+        assert de.read_text(encoding="utf-8") == "old de\n"
+        assert en.read_text(encoding="utf-8") == "old en\n"
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_rollback_removes_targets_that_did_not_exist(self, tmp_path, monkeypatch):
+        created = tmp_path / "voiceover_t.de.py"
+        existing = tmp_path / "voiceover_t.en.py"
+        existing.write_text("old en\n", encoding="utf-8")
+        _flaky_replace_for(monkeypatch, existing.name, times=10_000)
+
+        with pytest.raises(PermissionError):
+            atomic_write_all([(created, "new de\n"), (existing, "new en\n")])
+
+        assert not created.exists()
+        assert existing.read_text(encoding="utf-8") == "old en\n"
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_interrupt_during_backoff_rolls_back(self, tmp_path, monkeypatch):
+        de, en = self._pair(tmp_path)
+        _flaky_replace_for(monkeypatch, en.name, times=10_000)
+
+        def interrupted_sleep(_s):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("clm.infrastructure.utils.path_utils.time.sleep", interrupted_sleep)
+
+        with pytest.raises(KeyboardInterrupt):
+            atomic_write_all([(de, "new de\n"), (en, "new en\n")])
+
+        assert de.read_text(encoding="utf-8") == "old de\n"
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_zero_retries_still_replaces(self, tmp_path):
+        de, en = self._pair(tmp_path)
+
+        atomic_write_all([(de, "new de\n"), (en, "new en\n")], max_retries=0)
+
+        assert de.read_text(encoding="utf-8") == "new de\n"
+        assert en.read_text(encoding="utf-8") == "new en\n"
+
+    def test_half_written_temp_is_cleaned_up(self, tmp_path, monkeypatch):
+        de, en = self._pair(tmp_path)
+        real_write_text = Path.write_text
+
+        def failing_write_text(self, data, *args, **kwargs):
+            if self.name == en.name + ".tmp":
+                real_write_text(self, data[:3], *args, **kwargs)
+                raise OSError(errno.ENOSPC, "No space left", str(self))
+            return real_write_text(self, data, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", failing_write_text)
+
+        with pytest.raises(OSError):
+            atomic_write_all([(de, "new de\n"), (en, "new en\n")])
+
+        assert de.read_text(encoding="utf-8") == "old de\n"
+        assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_non_transient_replace_error_is_not_retried(self, tmp_path, monkeypatch):
+        de, en = self._pair(tmp_path)
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def enospc_on_en(src, dst):
+            if Path(dst).name == en.name:
+                calls["n"] += 1
+                raise OSError(errno.ENOSPC, "No space left", str(dst))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", enospc_on_en)
+
+        with pytest.raises(OSError) as excinfo:
+            atomic_write_all([(de, "new de\n"), (en, "new en\n")])
+
+        assert excinfo.value.errno == errno.ENOSPC
+        assert calls["n"] == 1
+        assert de.read_text(encoding="utf-8") == "old de\n"
+        assert list(tmp_path.glob("*.tmp")) == []

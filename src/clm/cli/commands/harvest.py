@@ -663,7 +663,9 @@ def harvest_accept_cmd(
 
     \b
     Exit codes: 0 applied (and recorded, if requested) · 1 applied but the
-    ledger record was refused by the structural gate · 2 rejected / error.
+    ledger record was refused by the structural gate (or the ledger write
+    failed) · 2 rejected / error (a failed deck write is rolled back and
+    rejects).
     """
     from clm.slides.agent_task import (
         EXIT_CLEAN,
@@ -699,17 +701,21 @@ def harvest_accept_cmd(
                     f"--slide {handle} does not match the answer's item {parsed.item}"
                 )
         outcome = accept_answer(bundle, parsed, record=record, dry_run=dry_run)
-    except AcceptRejected as exc:
+    except (AcceptRejected, OSError) as exc:
+        # #1099: an I/O failure must never traceback or look like success.
+        # (The deck write itself is turned into an AcceptRejected by
+        # accept_answer; the OSError arm is the backstop for any other I/O.)
+        reason = str(exc) if isinstance(exc, AcceptRejected) else f"I/O error: {exc}"
         if as_json:
             click.echo(
                 json.dumps(
-                    rejection_payload(1, tool="harvest", verb="accept", reason=str(exc)),
+                    rejection_payload(1, tool="harvest", verb="accept", reason=reason),
                     indent=2,
                     ensure_ascii=False,
                 )
             )
         else:
-            click.echo(f"rejected: {exc}", err=True)
+            click.echo(f"rejected: {reason}", err=True)
         sys.exit(EXIT_ERROR)
 
     if as_json:

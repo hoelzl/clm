@@ -805,14 +805,34 @@ def accept_answer(
         outcome.applied = True
         return outcome
 
-    outcome.written_paths = write_changed_files(bundle, finals, changed)
+    try:
+        outcome.written_paths = write_changed_files(bundle, finals, changed)
+    except OSError as exc:
+        # #1099: atomic_write_all retried transient errors and rolled back
+        # what it had replaced; surface it as a rejection, never a traceback.
+        rollback_notes = getattr(exc, "__notes__", None)
+        state = (
+            "the rollback was incomplete — inspect the pair: " + "; ".join(rollback_notes)
+            if rollback_notes
+            else "the pair was left unchanged"
+        )
+        raise AcceptRejected(f"write failed ({exc}) — {state}; nothing was recorded") from exc
     outcome.applied = True
 
     if record:
         assert answer.video_fingerprint is not None
-        outcome.record_refused = _record_members(
-            bundle, written, video_fingerprint=answer.video_fingerprint
-        )
+        try:
+            outcome.record_refused = _record_members(
+                bundle, written, video_fingerprint=answer.video_fingerprint
+            )
+        except OSError as exc:
+            # The files are written; only the ledger bank failed — the same
+            # "applied, record withheld" state as a structural-gate refusal.
+            outcome.record_refused = [
+                f"ledger record failed ({exc}) — the files are written but not banked; "
+                "do not `sync record` a one-sided write: restore the pair (git) and "
+                "re-run `harvest accept --record`"
+            ]
         outcome.recorded = not outcome.record_refused
     return outcome
 

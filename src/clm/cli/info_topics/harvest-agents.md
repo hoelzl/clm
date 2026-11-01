@@ -99,8 +99,12 @@ can explain *why* the sides diverge and trace the write to the exact
 recording. It never blesses the stale twin. Use it whenever you accept.
 
 Exit codes: `0` applied · `1` applied but the ledger record was withheld by
-the structural gate (fix the pair, then `clm slides sync record`) · `2`
-rejected (nothing written).
+the structural gate (fix the pair, then `clm slides sync record`) — or the
+ledger record itself failed with an I/O error ("ledger record failed": the
+files are written but unbanked; do **not** `sync record` a one-sided write —
+restore the pair from git and re-run `harvest accept --record`) · `2`
+rejected (nothing written — this includes a deck write that failed and was
+rolled back).
 
 ## port/compare — revision history without a video
 
@@ -261,6 +265,7 @@ multi-part too); `--transcript FILE` skips only ASR (single video).
 | `transcript_adds_material` | judge; only accept if the speech truly adds |
 | `unmatched_speech` entries | read; fold into the right slide's task or ignore noise |
 | `accept` exit 2 "changed since the task" | re-run `task`, re-judge on fresh inputs |
+| `accept` exit 2 "write failed" | a file was locked (editor, antivirus); the pair was restored — close the lock, re-run the same `accept` (if the reason says the rollback was incomplete, check the pair first) |
 | `verify` lists `pending_twins` | expected — run the `clm slides sync` loop next |
 | twin translation work | `clm slides sync report` → its `task`/`accept` (see `clm info sync-agents`) |
 
