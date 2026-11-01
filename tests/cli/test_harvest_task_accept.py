@@ -331,6 +331,97 @@ class TestHarvestAccept:
         assert "no slide id:missing" in result.output
 
 
+class TestHarvestAcceptWriteFailure:
+    """Regression tests for #1099: a write failure must not look like success.
+
+    A persistent ``PermissionError`` replacing the EN companion must leave
+    the pair two-sided (DE rolled back), bank nothing into the ledger, and
+    exit with ``EXIT_ERROR`` (with the rejection envelope under ``--json``)
+    instead of a traceback.
+    """
+
+    def _bilingual_answer(self, tmp_path: Path, de_path: Path, video: Path) -> dict:
+        task = _task_for(tmp_path, de_path, video, "s0")
+        return _single_update_answer(
+            task,
+            {"de": ["Alpha, neu kuratiert."], "en": ["Alpha, freshly curated."]},
+            member="id:s0-vo",
+        )
+
+    def _break_en_companion_replace(self, monkeypatch) -> None:
+        import errno
+        import os
+
+        real_replace = os.replace
+
+        def failing_replace(src, dst):
+            if Path(dst).name == "voiceover_t.en.py":
+                raise PermissionError(errno.EACCES, "Access is denied", str(dst))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", failing_replace)
+        monkeypatch.setattr("clm.infrastructure.utils.path_utils.time.sleep", lambda _s: None)
+
+    def test_json_write_failure_is_a_rejection_with_exit_error(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        de_companion = tmp_path / "voiceover" / "voiceover_t.de.py"
+        en_companion = tmp_path / "voiceover" / "voiceover_t.en.py"
+        de_before = de_companion.read_text(encoding="utf-8")
+        en_before = en_companion.read_text(encoding="utf-8")
+        answer = self._bilingual_answer(tmp_path, de_path, video)
+        self._break_en_companion_replace(monkeypatch)
+
+        result = _accept(tmp_path, de_path, answer, "--record")
+
+        assert result.exit_code == 2, result.output
+        payload = _json_from(result)
+        assert payload["applied"] is False
+        assert payload["outcome"] == "rejected"
+        assert "voiceover_t.en.py" in payload["reason"]
+        # No one-sided pair, nothing banked.
+        assert de_companion.read_text(encoding="utf-8") == de_before
+        assert en_companion.read_text(encoding="utf-8") == en_before
+        assert not (tmp_path / ".clm" / "sync-ledger.json").exists()
+
+    def test_human_write_failure_reports_on_stderr(self, tmp_path: Path, monkeypatch) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        answer = self._bilingual_answer(tmp_path, de_path, video)
+        self._break_en_companion_replace(monkeypatch)
+        answer_path = tmp_path / "answer.json"
+        answer_path.write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+
+        result = _invoke(["accept", str(de_path), "--answer", str(answer_path)])
+
+        assert result.exit_code == 2, result.output
+        assert "write failed" in result.output
+        assert "accepted" not in result.output
+
+    def test_ledger_write_failure_is_applied_but_record_withheld(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The files landed; only the ledger bank failed → exit 1, not 0."""
+        from clm.slides import doc_ledger
+
+        de_path, video = _write_fixture(tmp_path)
+        answer = self._bilingual_answer(tmp_path, de_path, video)
+
+        def failing_save(*_args, **_kwargs):
+            raise PermissionError(13, "Access is denied", "sync-ledger.json")
+
+        monkeypatch.setattr(doc_ledger, "save", failing_save)
+
+        result = _accept(tmp_path, de_path, answer, "--record")
+
+        assert result.exit_code == 1, result.output
+        payload = _json_from(result)
+        assert payload["applied"] is True
+        assert payload["recorded"] is False
+        en_companion = tmp_path / "voiceover" / "voiceover_t.en.py"
+        assert "# - Alpha, freshly curated." in en_companion.read_text(encoding="utf-8")
+
+
 class TestMultiNarrativeSlides:
     """Slides with several narrative cells (one per code cell) — the
     ubiquitous shape the answer's per-member ``updates`` exist for."""

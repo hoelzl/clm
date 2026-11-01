@@ -4606,7 +4606,10 @@ concurrent edit rejects, never overwrites); single-cell body guards; the
 mutated bundle must re-parse through the v3 lens. Bullets render into the
 deck's `#\n# - …` narrative cell style; a missing voiceover member is
 created (own minted `slide_id`, `for_slide` owner, companion or inline
-following the deck's convention) and the ≤4 files land atomically.
+following the deck's convention) and the ≤4 files land together: each
+file is replaced with retries on transient Windows file locks, and if a
+replace still fails the files already replaced are restored, the command
+rejects with exit `2`, and nothing is recorded.
 
 A one-language answer writes that side only: the pair becomes a deliberate,
 representable divergence that the next `clm slides sync report` frames as
@@ -4620,7 +4623,9 @@ blessed. The ledger save is gated on the structural verify; a refused gate
 leaves the files written and reports the reasons.
 
 **Exit codes:** `0` applied (and recorded if requested) · `1` applied but
-the ledger record was refused by the structural gate · `2` rejected/error.
+the ledger record was refused by the structural gate or failed with an I/O
+error · `2` rejected/error (including a failed deck write; `--json` emits
+the rejection envelope).
 
 #### `clm harvest verify` (CLM {version}+)
 
