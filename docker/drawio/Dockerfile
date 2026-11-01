@@ -45,8 +45,8 @@ ARG DRAWIO_SHA256_ARM64=e573eb171f88a66cdd057c733b0308ed31d03c9c9d7cf280b2f25ace
 # drawio-arm64-*.deb as separate assets. We select the one matching TARGETARCH
 # and verify it against the matching checksum so apt can resolve native
 # dependencies on both x86_64 and Apple Silicon hosts.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-drawio,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=clm-apt-lists-drawio,sharing=locked \
     set -eu && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \

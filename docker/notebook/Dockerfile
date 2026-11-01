@@ -51,8 +51,12 @@ RUN mkdir -p /root/.jupyter /root/course
 
 # Install system dependencies for lite
 # Note: software-properties-common is not needed on Debian (no PPA support)
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+# Apt cache mounts carry explicit per-image ids (#1042): without id= BuildKit
+# keys the cache on the target path, so with sharing=locked every apt step of
+# every clm image on the daemon queued behind one lock. Lite (Debian) and full
+# (Ubuntu) get separate ids: their package lists and .debs are not interchangeable.
+RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-notebook-lite,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=clm-apt-lists-notebook-lite,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
@@ -93,8 +97,8 @@ ENV MAMBA_ROOT_PREFIX=/opt/conda
 RUN mkdir -p /root/.jupyter /root/course
 
 # Install system dependencies for full (includes CUDA-specific setup)
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-notebook-full,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=clm-apt-lists-notebook-full,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \

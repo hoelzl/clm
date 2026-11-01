@@ -5182,3 +5182,124 @@ class TestOrderMirrorAroundPositionalCells:
             *self._parts("en", ["b", "a", "code"])
         )
         deck.assert_converged()
+
+
+class TestIdReorderPlusPoolReorder:
+    """Regression tests for #1071, end to end through the real structural
+    verify.
+
+    One group: EN reorders two id'd voiceovers *and* the un-id'd code cells
+    around them (``[vo A] [c1] [vo B] [c2]`` -> ``[vo B] [c2] [c1] [vo A]``).
+    Applying the pool ``mirror_order`` and the scope ``mirror_order``
+    separately used to land a layout where a code cell sat on different
+    sides of a voiceover on the two halves; verify missed it, the ledger
+    recorded it, and the next pass split the cell into one-sided members and
+    framed ``copy_new_shared`` -- duplicating the code cell on both halves.
+
+    Now (since #1052 round 4 / #1074) the scope mirror lands alone while the
+    pool is held as ``pool_pairing_shifted``, the remaining placement frames
+    as one ``pool_placement_divergence`` question, and answering it converges
+    with identical layouts and no duplicated cell.
+    """
+
+    BASE = ["a", "c1", "b", "c2"]
+    MOVED = ["b", "c2", "c1", "a"]
+
+    @staticmethod
+    def _gate(deck: _Deck):
+        from clm.slides.sync_verify import apply_verify_gate
+
+        return apply_verify_gate(deck.de_path, deck.en_path, "#")
+
+    @staticmethod
+    def _vo(lang: str, slug: str, text: str) -> str:
+        return (
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{slug}"\n#\n# - {text}\n\n'
+        )
+
+    def _parts(self, lang: str, order: list[str], edited: bool = False) -> tuple[str, ...]:
+        suffix = " edited" if edited else ""
+        cells = {
+            "a": self._vo(lang, "vo-a", f"A {lang}{suffix}"),
+            "b": self._vo(lang, "vo-b", f"B {lang}{suffix}"),
+            "c1": _code("c1 = 1"),
+            "c2": _code("c2 = 2"),
+        }
+        return (
+            HEADER_DE if lang == "de" else HEADER_EN,
+            _slide("intro", lang, "T"),
+            *(cells[name] for name in order),
+            _slide("next", lang, "N"),
+        )
+
+    def _deck(self, tmp_path: Path, *, edited: bool = False) -> _Deck:
+        deck = _Deck(
+            tmp_path, _build(*self._parts("de", self.BASE)), _build(*self._parts("en", self.BASE))
+        )
+        deck.record()
+        deck.write_en(*self._parts("en", self.MOVED, edited))
+        return deck
+
+    def _run_to_convergence(self, deck: _Deck, max_passes: int = 6) -> list[list[tuple[str, str]]]:
+        """Drive report -> apply, answering every question ``en`` (and
+        translating, then confirming, edited voiceovers) until the diff is
+        clean. Returns the framed ``(key, action)`` rows of each pass."""
+        passes: list[list[tuple[str, str]]] = []
+        for _ in range(max_passes):
+            _, diff = deck.diff()
+            if diff.is_clean:
+                return passes
+            rows = [(i.key, i.action) for i in diff.items]
+            passes.append(rows)
+            assert "copy_new_shared" not in {action for _, action in rows}, passes
+            decisions: dict[str, doc_apply.Decision] = {}
+            for item in diff.items:
+                if item.action == "pool_placement_divergence":
+                    decisions[item.key] = doc_apply.Decision(key=item.key, choice="en")
+                elif item.action == "translate_edit":
+                    letter = item.key.removeprefix("id:vo-").upper()
+                    decisions[item.key] = doc_apply.Decision(
+                        key=item.key, body=f"#\n# - {letter} de edited"
+                    )
+                elif item.action == "verify_translation":
+                    decisions[item.key] = doc_apply.Decision(key=item.key, choice="confirm")
+            outcome = deck.apply(decisions, verify_gate=self._gate(deck))
+            assert outcome.error is None, outcome.to_payload()
+        raise AssertionError(f"no convergence after {max_passes} passes: {passes}")
+
+    def _assert_identical_layouts(self, deck: _Deck, *, edited: bool = False) -> None:
+        de = deck.de_path.read_text(encoding="utf-8")
+        en = deck.en_path.read_text(encoding="utf-8")
+        for text in (de, en):
+            # No duplicated code cell on either half.
+            assert text.count("c1 = 1") == 1, text
+            assert text.count("c2 = 2") == 1, text
+        assert de == _build(*self._parts("de", self.MOVED, edited))
+        assert en == _build(*self._parts("en", self.MOVED, edited))
+        deck.assert_converged()
+
+    def test_1071_filed_shape_converges_without_duplication(self, tmp_path: Path):
+        deck = self._deck(tmp_path)
+        passes = self._run_to_convergence(deck)
+        # The scope mirror lands while the pool is held; the remaining
+        # placement is one framed question; then the orders are recorded.
+        assert passes == [
+            [
+                ("pos:intro/pool.code/0", "pool_pairing_shifted"),
+                ("pos:intro/order.deck/0", "mirror_order"),
+            ],
+            [
+                ("pos:intro/code/1", "pool_placement_divergence"),
+                ("pos:intro/pool.code/0", "mirror_order"),
+                ("pos:intro/order.deck/0", "record_order"),
+            ],
+            [("pos:intro/pool.code/0", "record_order")],
+        ]
+        self._assert_identical_layouts(deck)
+
+    def test_1071_with_voiceover_bodies_edited_in_the_same_pass(self, tmp_path: Path):
+        deck = self._deck(tmp_path, edited=True)
+        passes = self._run_to_convergence(deck)
+        assert ("id:vo-a", "translate_edit") in passes[0]
+        assert ("pos:intro/code/1", "pool_placement_divergence") in passes[1]
+        self._assert_identical_layouts(deck, edited=True)

@@ -244,9 +244,9 @@ unless every tag exists locally, so build both variants before pushing.
 All Dockerfiles use BuildKit cache mounts to speed up builds:
 
 ```dockerfile
-# APT cache
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+# APT cache -- always with an explicit per-image id (see below)
+RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-<image>,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=clm-apt-lists-<image>,sharing=locked \
     apt-get install ...
 
 # Pip cache (for uv)
@@ -257,6 +257,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/opt/conda/pkgs,id=conda-pkgs,sharing=locked \
     micromamba install ...
 ```
+
+Every apt cache mount must set an explicit `id=` unique to its image and base
+distro (the notebook image uses `notebook-lite` for its Debian stage and
+`notebook-full` for its Ubuntu/CUDA stage, whose package lists and `.deb`s are
+not interchangeable). Without `id=`, BuildKit keys the cache on the target
+path, so every image shares one cache, and `sharing=locked` then serializes
+every apt step of every concurrent build on the daemon behind a single lock
+(#1042). `sharing=locked` stays: apt cannot tolerate two writers on one cache.
+`tests/infrastructure/workers/test_dockerfile_cache_mounts.py` enforces this.
 
 **Important:** Do not use `--no-cache` with Docker build commands, as this disables cache mounts and makes builds significantly slower.
 
