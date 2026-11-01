@@ -320,6 +320,12 @@ _SPECIFIERS = (
     r"|friend|unsigned|signed|long|short|mutable|thread_local)\s+)*"
 )
 _TYPE_TOKEN = r"[\w:]+(?:<[^;{}]*>)?"
+# A declared type: one type token, optionally followed by the placeholder of a
+# C++20 constrained placeholder type (``std::integral auto``,
+# ``Concept<Args> decltype(auto)``). Without the optional tail the declaration
+# regexes saw ``Concept auto f(...)`` as two type tokens and the item fell
+# through to the expression fallback (issue #1062).
+_DECL_TYPE = rf"{_TYPE_TOKEN}(?:\s+(?:auto\b|decltype\s*\(\s*auto\s*\)))?"
 _CONTROL_KW = (
     "if",
     "for",
@@ -336,22 +342,22 @@ _CONTROL_KW = (
 
 _QUAL = r"(?:\w+(?:<[^;{}()]*>)?\s*::\s*)*"
 _FN_RE = re.compile(
-    rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)+"
+    rf"^{_SPECIFIERS}{_DECL_TYPE}(?:\s+const\b|\s*[&*]+|\s+)+"
     rf"({_QUAL}~?\w+(?:<[^;{{}}()]*>)?|{_QUAL}operator\s*\S+)\s*\(",
 )
 # Out-of-class ctor/dtor definitions have no return type: MyVector<T>::MyVector(...)
 _CTOR_RE = re.compile(r"^((?:\w+(?:<[^;{}()]*>)?\s*::\s*)+~?\w+)\s*\(")
 _VAR_RE = re.compile(
-    rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)+(\w+)\s*"
+    rf"^{_SPECIFIERS}{_DECL_TYPE}(?:\s+const\b|\s*[&*]+|\s+)+(\w+)\s*"
     rf"((?:\[[^\]]*\]\s*)*)(\{{|=|;|\(|,)",
 )
 # Function-pointer variables: bool (*pf)(double, double){&is_less};
 _FNPTR_VAR_RE = re.compile(
-    rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)*\(\s*\*+\s*(\w+)\s*\)\s*\(",
+    rf"^{_SPECIFIERS}{_DECL_TYPE}(?:\s+const\b|\s*[&*]+|\s+)*\(\s*\*+\s*(\w+)\s*\)\s*\(",
 )
 # Out-of-class static member definitions: std::allocator<T> MyVector<T>::allocator{};
 _MEMBER_VAR_RE = re.compile(
-    rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)+{_QUAL}(\w+)\s*(\{{|=|;)",
+    rf"^{_SPECIFIERS}{_DECL_TYPE}(?:\s+const\b|\s*[&*]+|\s+)+{_QUAL}(\w+)\s*(\{{|=|;)",
 )
 _TYPE_DEF_RE = re.compile(r"^(?:class|struct|union|enum(?:\s+(?:class|struct))?)\s+(\w+)")
 # Parenthesized initializer that cannot be a parameter list: starts with a
