@@ -1178,6 +1178,92 @@ class TestConceptDefinition:
         assert files.workshop_lecture_uses == {1: ("SignedNumber",)}
 
 
+class TestConstrainedPlaceholder:
+    """Issue #1062: ``Concept auto`` is one placeholder type, not two tokens.
+
+    The declaration regexes allowed exactly one type token before the
+    declarator, so ``SignedNumber auto twice(...) {...}`` fell through to the
+    expression fallback and the emitter wrapped the definition in
+    ``CLM_DISPLAY(...)`` inside its section function.
+    """
+
+    @pytest.mark.parametrize(
+        "src, name",
+        [
+            ("SignedNumber auto twice(SignedNumber auto x) { return 2 * x; }", "twice"),
+            ("std::integral auto f(int x) { return x; }", "f"),
+            ("std::convertible_to<int> auto g(int x) { return x; }", "g"),
+            ("static std::integral auto h(int x) { return x; }", "h"),
+            ("inline constexpr std::integral auto k(int x) { return x; }", "k"),
+            ("std::integral decltype(auto) m(int x) { return x; }", "m"),
+            ("std::integral auto const& ref(const int& x) { return x; }", "ref"),
+        ],
+    )
+    def test_function_definition(self, src, name):
+        (item,) = classify_source(src)
+        assert (item.category, item.name) == ("fn_def", name)
+
+    def test_function_template_definition(self):
+        (item,) = classify_source(
+            "template <typename T> std::integral auto twice(T x) { return 2 * x; }"
+        )
+        assert (item.category, item.name) == ("fn_def", "twice")
+
+    @pytest.mark.parametrize(
+        "src, name",
+        [
+            ("SignedNumber auto twice(SignedNumber auto x);", "twice"),
+            ("std::integral auto f(int x);", "f"),
+        ],
+    )
+    def test_function_declaration(self, src, name):
+        (item,) = classify_source(src)
+        assert (item.category, item.name) == ("fn_decl", name)
+
+    @pytest.mark.parametrize(
+        "src, name",
+        [
+            ("std::integral auto x = 1;", "x"),
+            ("std::integral auto y{2};", "y"),
+            ("const std::integral auto z = 3;", "z"),
+            ("std::convertible_to<long> auto w = 4;", "w"),
+            ("SignedNumber auto const v = -1;", "v"),
+        ],
+    )
+    def test_variable(self, src, name):
+        (item,) = classify_source(src)
+        assert (item.category, item.name) == ("var_decl", name)
+
+    @pytest.mark.parametrize(
+        "src, category",
+        [
+            ("twice(21)", "call_stmt"),
+            ("SignedNumber<int>", "expr_display"),
+            ("std::integral<decltype(x)>", "expr_display"),
+            ("auto_value + 1", "expr_display"),
+            ("std::integral<int>", "expr_display"),
+            ("x + y", "expr_display"),
+            ("twice(21);", "call_stmt"),
+        ],
+    )
+    def test_expressions_are_unchanged(self, src, category):
+        (item,) = classify_source(src)
+        assert item.category == category
+
+    def test_definition_is_hoisted_out_of_the_section(self):
+        tu = emit(
+            slide("Constrained", "constrained"),
+            code("#include <concepts>"),
+            code(_CONCEPT_CELL),
+            code("SignedNumber auto twice(SignedNumber auto x) { return 2 * x; }"),
+            code("twice(21)"),
+        )
+        body = _function_body(tu, "slide_constrained")
+        assert "twice(SignedNumber auto x)" not in body
+        assert "CLM_DISPLAY(SignedNumber" not in tu
+        assert "\nSignedNumber auto twice(SignedNumber auto x)" in tu
+
+
 class TestParenInitialization:
     """``int i2(20);`` is a variable, not a function declaration (#928)."""
 
@@ -1736,5 +1822,18 @@ class TestEmittedCodeCompiles:
             code(_CONCEPT_CELL),
             code("auto twice(SignedNumber auto x) { return 2 * x; }"),
             code("twice(21)"),
+        )
+        self._check(tu, tmp_path)
+
+    def test_constrained_placeholder_return_type_compiles(self, tmp_path):
+        # #1062: `Concept auto f(...)` must be hoisted, not display-wrapped.
+        tu = emit(
+            slide("Constrained", "constrained"),
+            code("#include <concepts>"),
+            code(_CONCEPT_CELL),
+            code("SignedNumber auto twice(SignedNumber auto x) { return 2 * x; }"),
+            code("std::integral auto answer = twice(21);"),
+            code("twice(21)"),
+            code("answer"),
         )
         self._check(tu, tmp_path)

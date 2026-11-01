@@ -107,6 +107,21 @@ class TestExtractAudio:
         assert str(video) in call_args
         assert str(output) in call_args
 
+    @patch("clm.voiceover.transcribe.subprocess.run")
+    def test_ffmpeg_does_not_read_caller_stdin(self, mock_run, tmp_path):
+        """Regression test for #1103: ffmpeg reads stdin for its interactive
+        ``q`` command unless told not to, so it swallowed shell-loop input."""
+        video = tmp_path / "test.mp4"
+        video.write_text("fake")
+        mock_run.return_value = MagicMock(returncode=0)
+
+        extract_audio(video, tmp_path / "out.wav")
+
+        cmd = mock_run.call_args[0][0]
+        assert "-nostdin" in cmd
+        assert cmd.index("-nostdin") < cmd.index("-i")
+        assert mock_run.call_args.kwargs["stdin"] is subprocess.DEVNULL
+
 
 class TestFasterWhisperBackend:
     def test_lazy_model_loading(self):
@@ -201,6 +216,9 @@ class TestLoadWhisperAudio:
         assert cmd[cmd.index("-ac") + 1] == "1"
         assert cmd[cmd.index("-f") + 1] == "s16le"
         assert audio.tolist() == [0.5, -0.5]
+        # #1103: never inherit the caller's stdin.
+        assert "-nostdin" in cmd
+        assert run.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
     def test_non_wav_input_goes_through_ffmpeg(self, tmp_path):
         pytest.importorskip("numpy")
@@ -593,6 +611,23 @@ class TestTranscribeInSubprocess:
 
         cmd = mock_run.call_args[0][0]
         assert "--language" not in cmd
+
+    @patch("clm.voiceover.transcribe.subprocess.run")
+    def test_worker_does_not_inherit_caller_stdin(self, mock_run, tmp_path):
+        """Regression test for #1103: the ASR worker child gets DEVNULL stdin."""
+        mock_run.side_effect = self._write_result_json
+        audio = tmp_path / "audio.wav"
+        audio.write_text("fake")
+
+        _transcribe_in_subprocess(
+            audio,
+            backend_name="faster-whisper",
+            model_size="tiny",
+            device="cpu",
+            language=None,
+        )
+
+        assert mock_run.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
 
 class TestTranscribeWorker:

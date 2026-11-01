@@ -60,35 +60,114 @@ def find_project_root(start: Path | None = None) -> Path:
     return base
 
 
-def atomic_write_all(writes: list[tuple[Path, str]]) -> None:
+def atomic_write_all(
+    writes: list[tuple[Path, str]],
+    *,
+    max_retries: int = 5,
+    base_delay: float = 0.05,
+) -> None:
     """Write several ``(path, text)`` outputs as atomically as the FS allows.
 
     Every text is first written to a sibling ``*.tmp`` file; only after **all**
-    temp writes succeed are they ``os.replace``-d into place back-to-back. A
-    failure during the temp phase (the common one — disk full, permission)
-    therefore leaves every real target untouched; the replace phase has only a
-    tiny residual window, and leftover temps are cleaned up either way.
+    temp writes succeed are they ``os.replace``-d into place back-to-back.
+
+    What is guaranteed:
+
+    * A failure during the temp phase (disk full, permission) leaves every
+      real target untouched.
+    * Each ``os.replace`` is retried with backoff on the transient Windows
+      errnos (:data:`_TRANSIENT_WRITE_ERRNOS` — an antivirus / indexer /
+      editor handle briefly held on the target), exactly like
+      :func:`atomic_write_bytes` (#1099).
+    * If a replace still fails, the targets already replaced in this call are
+      **rolled back** best-effort: each is restored from the bytes it held
+      before the call (read just before the replace phase), or removed if it
+      did not exist. The original error is then re-raised.
+    * Leftover temps are cleaned up either way.
+
+    What is NOT guaranteed: cross-file atomicity. A crash (power loss, kill)
+    mid-replace, or a rollback write that itself fails, can still leave some
+    targets new and some old — that needs a journal. A failed rollback is
+    logged and attached to the raised exception as a note.
 
     Shared by the slide rewriters that emit several coupled files in one op —
-    ``split`` / ``unify`` (a deck plus its voiceover companion) and the paired
-    ``voiceover extract`` (two slide halves plus two companions). With plain
-    per-file writes a mid-operation failure could leave a one-sided companion
-    (the very orphaning these seams prevent). Cross-file atomicity is not
-    achievable without a journal, but this upgrades direct per-file writes so
-    the likely failure is safe.
+    ``split`` / ``unify`` (a deck plus its voiceover companion), the paired
+    ``voiceover extract`` (two slide halves plus two companions), and the v3
+    write surface (``harvest accept`` et al.). With plain per-file writes a
+    mid-operation failure could leave a one-sided companion (the very
+    orphaning these seams prevent).
     """
     temps: list[tuple[Path, Path]] = []
     try:
         for path, text in writes:
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(text, encoding="utf-8", newline="\n")
+            # Registered before the write so a half-written temp is cleaned up.
             temps.append((tmp, path))
-        for tmp, path in temps:
-            os.replace(tmp, path)
+            tmp.write_text(text, encoding="utf-8", newline="\n")
+        # Snapshot the pre-call state of every target so a mid-replace
+        # failure can undo the replaces that already landed.
+        originals: list[bytes | None] = [
+            path.read_bytes() if path.exists() else None for _tmp, path in temps
+        ]
+        for index, (tmp, path) in enumerate(temps):
+            try:
+                _replace_with_retry(tmp, path, max_retries=max_retries, base_delay=base_delay)
+            except BaseException as exc:
+                # BaseException too: a Ctrl-C during the retry backoff must
+                # not leave the earlier targets replaced either.
+                _roll_back(
+                    [(p, originals[i]) for i, (_t, p) in enumerate(temps[:index])],
+                    exc,
+                )
+                raise
     finally:
         for tmp, _ in temps:
-            if tmp.exists():
-                tmp.unlink()
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove leftover temp file %s", tmp)
+
+
+def _replace_with_retry(src: Path, dst: Path, *, max_retries: int, base_delay: float) -> None:
+    """``os.replace(src, dst)``, retrying transient Windows errnos with backoff.
+
+    Always makes at least one attempt, so ``max_retries <= 0`` can never
+    silently skip the replace.
+    """
+    max_retries = max(1, max_retries)
+    for attempt in range(max_retries):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as exc:
+            if exc.errno not in _TRANSIENT_WRITE_ERRNOS or attempt + 1 >= max_retries:
+                raise
+            logger.warning(
+                "Transient OSError replacing %s (errno=%s, attempt %d/%d): %s — retrying",
+                dst,
+                exc.errno,
+                attempt + 1,
+                max_retries,
+                exc,
+            )
+            time.sleep(base_delay * (2**attempt))
+
+
+def _roll_back(replaced: list[tuple[Path, bytes | None]], cause: BaseException) -> None:
+    """Best-effort restore of already-replaced targets after a failed replace.
+
+    Never raises: a restore failure is logged and noted on ``cause`` so the
+    caller's original error stays the one that propagates.
+    """
+    for path, original in reversed(replaced):
+        try:
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write_bytes(path, original)
+        except OSError as restore_exc:
+            logger.error("Rollback of %s failed after a write error: %s", path, restore_exc)
+            cause.add_note(f"rollback of {path} failed: {restore_exc}")
 
 
 # Errnos that, on Windows, are routinely produced when antivirus, the

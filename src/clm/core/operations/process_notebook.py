@@ -27,7 +27,7 @@ from clm.core.worker_identity import effective_worker_image_identity
 
 logger = logging.getLogger(__name__)
 
-NOTEBOOK_OUTPUT_EPOCH = 1
+NOTEBOOK_OUTPUT_EPOCH = 2
 """Version of everything clm ships that shapes executed/rendered notebook output.
 
 Folded into :func:`compute_template_fingerprint` in place of the clm release
