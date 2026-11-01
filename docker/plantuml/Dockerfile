@@ -24,8 +24,8 @@ ARG DOCKER_PATH=docker/plantuml
 
 # Install system dependencies (Java for PlantUML)
 # This is the most expensive step for this service
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-plantuml,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=clm-apt-lists-plantuml,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
