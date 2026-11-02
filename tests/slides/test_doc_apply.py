@@ -5381,3 +5381,45 @@ class TestIdReorderPlusPoolReorder:
         assert ("pos:intro/code/0", "propagate_shared_edit") not in ledger_rows
         snapshot_actions = {i.action for i in self._diff_mode(complete=True, code=code).items}
         assert "pool_pairing_shifted" not in snapshot_actions
+
+    def test_1124_unmoved_sibling_keeps_1052_one_pass_propagation(self, tmp_path: Path):
+        """#1124 review: the suspension keys on the guessed pairing implying a
+        pool reorder, not on the pool's size. A lone code cell straddling the
+        swapped voiceovers, beside an unrelated code cell that did not move,
+        keeps #1052's rule: its edit propagates with the scope mirror in the
+        same pass -- no suspension, no extra pass."""
+
+        def parts(lang: str, order: list[str], c1: str) -> tuple[str, ...]:
+            cells = {
+                "x": _code("x = 0"),
+                "a": self._vo(lang, "vo-a", f"A {lang}"),
+                "b": self._vo(lang, "vo-b", f"B {lang}"),
+                "c1": _code(c1),
+            }
+            return (
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("intro", lang, "T"),
+                *(cells[name] for name in order),
+                _slide("next", lang, "N"),
+            )
+
+        base, moved = ["x", "a", "c1", "b"], ["x", "b", "c1", "a"]
+        deck = _Deck(
+            tmp_path,
+            _build(*parts("de", base, "c1 = 1")),
+            _build(*parts("en", base, "c1 = 1")),
+        )
+        deck.record()
+        deck.write_en(*parts("en", moved, "c1 = 10"))
+        passes = self._run_to_convergence(deck)
+        # #1052's shape: the edit propagates WITH the scope mirror, and the
+        # mechanical record_symmetric_edit follows -- nothing suspended.
+        assert passes == [
+            [
+                ("pos:intro/code/1", "propagate_shared_edit"),
+                ("pos:intro/order.deck/0", "mirror_order"),
+            ],
+            [("pos:intro/code/1", "record_symmetric_edit")],
+        ], passes
+        assert deck.de_path.read_text(encoding="utf-8") == _build(*parts("de", moved, "c1 = 10"))
+        deck.assert_converged()
