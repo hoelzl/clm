@@ -3138,6 +3138,11 @@ class _Differ:
         if self.base is not None and not self.base.complete:
             shift_cause = self._shifted_pools.get((group, kind))
 
+        #: #1124: the pool carries a slot whose cross-span pairing is a
+        #: positional guess (``changed`` on a half) across a crossing — its
+        #: order evidence is incomplete, so the pool is held like a moved one.
+        order_unproven = False
+        ledger_mode = self.base is not None and not self.base.complete
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
             en_state, en_member = status["en"][idx]
@@ -3150,6 +3155,45 @@ class _Differ:
                     # halves order differently — the order row's question,
                     # not a placement one (see _crossed_only).
                     self._crossed_exempt_pools.setdefault((group, kind), crossed)
+                    states: dict[Lang, str] = {"de": de_state, "en": en_state}
+                    guessed = [lang for lang in _SIDES if states[lang] == "changed"]
+                    if ledger_mode and any(len(per_side[lang]) > 1 for lang in guessed):
+                        # #1124: a ``changed`` verdict is a positional guess,
+                        # never identity (_align_pool_sides) — and this one
+                        # pairs cells across the crossing in a pool whose
+                        # changed half holds siblings it could be confused
+                        # with, so it cannot tell an edit from a move.
+                        # Classified on content it framed an edit beside the
+                        # scope mirror whose joint projection mis-paired the
+                        # pool (the #1071 layout): the verify gate withheld
+                        # both rows every pass, a silent livelock. Suspend
+                        # the slot for the pass and hold the pool; once the
+                        # order row lands the crossing is gone and the slot
+                        # re-derives against uncrossed sync points. A lone
+                        # cell on the changed half has no sibling to swap
+                        # with — its edit still propagates with the mirror
+                        # (#1052's rule); snapshot mode keeps the raw
+                        # reading, as for every #826 suspension.
+                        order_unproven = True
+                        self._emit_pool_shift_frame(
+                            group,
+                            entry,
+                            f"the reorder of {crossed} (this pass's order row)",
+                            de_state,
+                            en_state,
+                            de_member,
+                            en_member,
+                            detail=(
+                                f"this slot's cells sit on opposite sides of {crossed}, "
+                                f"which the halves order differently, and one half's "
+                                f"cell changed (per-side states: de {de_state}, en "
+                                f"{en_state}) — its pairing cannot tell an edit from a "
+                                f"move while the order differs, so its row is suspended "
+                                f"for this pass; let the order row land, then re-report "
+                                f"and the slot re-derives"
+                            ),
+                        )
+                        continue
                     spans = None
             self._classify_pool_slot(
                 group,
@@ -3169,6 +3213,11 @@ class _Differ:
                 f"the reorder of {self._crossed_exempt_pools[(group, kind)]} "
                 f"(this pass's order row)"
             )
+        if order_unproven:
+            # #1124: the suspended slot's pairing is no order evidence either
+            # way; hold the pool's order row (an answerless frame) so no
+            # pool-order verdict records against a guessed pairing.
+            moved_sides = {"de": True, "en": True}
         self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=move_cause)
 
     def _emit_pool_shift_frame(
@@ -3180,6 +3229,8 @@ class _Differ:
         en_state: str,
         de_member: Member | None,
         en_member: Member | None,
+        *,
+        detail: str | None = None,
     ) -> None:
         """The #826 suspension row: one answerless frame per affected slot.
 
@@ -3193,13 +3244,16 @@ class _Differ:
             "conflict",
             "pool_pairing_shifted",
             "none",
-            f"this pool's cross-side pairing shifted this pass: the in-flight "
-            f"transition on {cause} took a cell out of the shared pool, so this "
-            f"slot's pairing is an order guess (per-side states: de {de_state}, "
-            f"en {en_state}) and its row is suspended — complete or revert that "
-            f"transition (answer its framed row where one is advertised, or "
-            f"complete/revert it in the files), then re-report; slots whose "
-            f"sides sit at base re-derive mechanically",
+            detail
+            or (
+                f"this pool's cross-side pairing shifted this pass: the in-flight "
+                f"transition on {cause} took a cell out of the shared pool, so this "
+                f"slot's pairing is an order guess (per-side states: de {de_state}, "
+                f"en {en_state}) and its row is suspended — complete or revert that "
+                f"transition (answer its framed row where one is advertised, or "
+                f"complete/revert it in the files), then re-report; slots whose "
+                f"sides sit at base re-derive mechanically"
+            ),
             group=group,
             member=de_member or en_member,
             base=entry,
