@@ -1192,7 +1192,7 @@ class _Executor(DeckEmitter):
             if group == "~groups":
                 self._mirror_group_order(source, part)
             else:
-                self._mirror_scope_order(group, part, source)
+                self._mirror_scope_order(group, part, source, item.pool_twins)
         else:
             raise _ItemError(f"unrecognized order scope {key}")
 
@@ -1261,8 +1261,26 @@ class _Executor(DeckEmitter):
         for part, members in by_part.items():
             self._permute_occupants(target, part, members)
 
-    def _mirror_scope_order(self, group: str, part: str, source: Lang) -> None:
+    def _mirror_scope_order(
+        self,
+        group: str,
+        part: str,
+        source: Lang,
+        pool_twins: tuple[tuple[Member, Member], ...] = (),
+    ) -> None:
+        """Permute the target's id'd scope members into the source's order.
+
+        With ``pool_twins`` (#1130: crossed-exempt pools folded into this
+        row by the differ) the paired positional cells join the permutation:
+        each source cell's slot twin takes the matching place on the target,
+        so the scope lands in the source's order in one step instead of
+        leaving the positional cells beside the wrong neighbours for a later
+        pass. Unpaired positional cells keep their slots.
+        """
         target = _other(source)
+        if pool_twins:
+            self._mirror_scope_order_with_pools(group, part, source, pool_twins)
+            return
         scope: dict[Lang, list[Member]] = {"de": [], "en": []}
         for member, owner_group in iter_with_groups(self.deck):
             if member.key.scheme != "id":
@@ -1280,6 +1298,43 @@ class _Executor(DeckEmitter):
         target_ids = {id(m) for m in scope[target]}
         common = [m for m in scope[source] if id(m) in target_ids]
         self._permute_occupants(target, part, common)
+
+    def _mirror_scope_order_with_pools(
+        self,
+        group: str,
+        part: str,
+        source: Lang,
+        pool_twins: tuple[tuple[Member, Member], ...],
+    ) -> None:
+        target = _other(source)
+        twin_of: dict[int, Member] = {}
+        for de_member, en_member in pool_twins:
+            src, tgt = (de_member, en_member) if source == "de" else (en_member, de_member)
+            if id(src) in twin_of:
+                raise _ItemError(
+                    f"order scope {group}: a positional cell pairs twice — re-run report"
+                )
+            twin_of[id(src)] = tgt
+        if len({id(m) for m in twin_of.values()}) != len(twin_of):
+            raise _ItemError(f"order scope {group}: two cells share one twin — re-run report")
+        idd: set[int] = set()
+        for member, owner_group in iter_with_groups(self.deck):
+            if member.key.scheme != "id" or member_group_token(member, owner_group) != group:
+                continue
+            de, en = member.de, member.en
+            if de is not None and en is not None and de.part == part and en.part == part:
+                idd.add(id(member))
+        target_stream = self.streams.get((target, part), [])
+        on_target = {id(m) for m in target_stream}
+        desired: list[Member] = []
+        for member in self.streams.get((source, part), []):
+            if id(member) in idd:
+                desired.append(member)
+            elif id(member) in twin_of:
+                desired.append(twin_of[id(member)])
+        if any(id(m) not in on_target for m in desired):
+            raise _ItemError(f"order scope {group}: a twin left the target — re-run report")
+        self._permute_occupants(target, part, desired)
 
     def _mirror_group_order(self, source: Lang, part: str) -> None:
         """Reorder whole slide groups on the target side to the source order.
@@ -1551,9 +1606,16 @@ def _record_item(
             part = tail[len("order.") :]
             if group == "~groups":
                 record_group_order(target, fresh)
-            else:
-                record_order_scope(target, fresh, group, part)
-            return set()
+                return set()
+            record_order_scope(target, fresh, group, part)
+            # #1130: the pools folded into this row moved with it — their
+            # order is this row's to record, as their own row would have.
+            rerecorded: set[tuple[str, str]] = set()
+            for kind in item.pool_kinds:
+                if (group, kind) not in frozen_pools:
+                    rerecord_pool(target, fresh, group, kind)
+                    rerecorded.add((group, kind))
+            return rerecorded
         return set()
     if action in ("record_preamble", "propagate_preamble", "conflict_preamble") or (
         key in _PREAMBLE_HANDLES
@@ -2961,6 +3023,16 @@ def apply_deck(
     # on — yet its fresh snapshot still contains the absorbed estranged twin,
     # and a landed answerable sibling would re-record exactly that.
     frozen_pools = _frozen_pools(unresolved_items) | set(diff.shifted_pools) | deferred_pool_scopes
+    # #1130: a pool the differ folded into its scope's order row records only
+    # when that row landed — otherwise its cells still sit where the order
+    # row would have moved them, and it stays frozen as its suspension kept it.
+    landed_keys = {item.key for item, _ in landed}
+    frozen_pools |= {
+        (item.group, kind)
+        for item in diff.items
+        if item.pool_kinds and item.group is not None and item.key not in landed_keys
+        for kind in item.pool_kinds
+    }
     rerecorded_pools: set[tuple[str, str]] = set()
     #: `record_neutral` keys to re-stamp once every record has landed (#764).
     structural_keys: set[str] = set()
