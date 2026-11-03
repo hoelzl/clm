@@ -3134,18 +3134,10 @@ class _Differ:
         # once the causing transition resolves (frame, never guess — the Y5
         # doctrine at the pool pairing authority). Snapshot mode (`--since`,
         # the forensic view) keeps the raw reading — nothing executes there.
-        ledger_mode = self.base is not None and not self.base.complete
         shift_cause: str | None = None
-        if ledger_mode:
+        if self.base is not None and not self.base.complete:
             shift_cause = self._shifted_pools.get((group, kind))
 
-        #: #1124: per half, the pool's cell order counting ``changed``
-        #: (positional-guess) pairings too — ``moved_sides`` counts identity
-        #: pairs only, so an edited cell that also moved hides the reorder.
-        guessed_moved = (
-            self._guess_reorders(status, per_side) if ledger_mode and shift_cause is None else {}
-        )
-        order_unproven = False
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
             en_state, en_member = status["en"][idx]
@@ -3158,46 +3150,6 @@ class _Differ:
                     # halves order differently — the order row's question,
                     # not a placement one (see _crossed_only).
                     self._crossed_exempt_pools.setdefault((group, kind), crossed)
-                    states: dict[Lang, str] = {"de": de_state, "en": en_state}
-                    if any(
-                        states[lang] == "changed" and guessed_moved.get(lang, False)
-                        for lang in _SIDES
-                    ):
-                        # #1124: a ``changed`` verdict is a positional guess,
-                        # never identity (_align_pool_sides), so it is no
-                        # order evidence — yet counted with it, this half's
-                        # pool cells are out of base order: the cell may have
-                        # MOVED, not just changed. Classified on content it
-                        # framed an edit beside the scope mirror whose joint
-                        # projection mis-paired the pool (the #1071 layout);
-                        # the verify gate withheld both rows every pass, a
-                        # silent livelock. Suspend the slot for the pass and
-                        # hold the pool's order row; once the scope order
-                        # lands the crossing is gone and the slot re-derives
-                        # against uncrossed sync points. A guessed pairing
-                        # that keeps the pool in base order is #1052's case:
-                        # the edit still propagates with the mirror. Ledger
-                        # mode only, and a #826-shifted pool keeps its own
-                        # suspension (its cause, its remedy).
-                        order_unproven = True
-                        self.emit(
-                            entry.key,
-                            "conflict",
-                            "pool_pairing_shifted",
-                            "none",
-                            f"this slot's cells sit on opposite sides of {crossed}, which "
-                            f"the halves order differently, and one half's cell changed "
-                            f"while its pool order changed too (per-side states: de "
-                            f"{de_state}, en {en_state}) — the pairing cannot tell an edit "
-                            f"from a move while the order differs, so its row is suspended "
-                            f"for this pass; let the order row land, then re-report and "
-                            f"the slot re-derives",
-                            group=group,
-                            member=de_member or en_member,
-                            base=entry,
-                            twin=_pair_twin(de_member, en_member),
-                        )
-                        continue
                     spans = None
             self._classify_pool_slot(
                 group,
@@ -3217,35 +3169,7 @@ class _Differ:
                 f"the reorder of {self._crossed_exempt_pools[(group, kind)]} "
                 f"(this pass's order row)"
             )
-        if order_unproven:
-            # #1124: the guessed pairing says the pool moved on that half;
-            # hold the pool's order row (an answerless frame, move_cause is
-            # the crossing) so no pool-order verdict records against a guess.
-            moved_sides = {lang: moved_sides[lang] or guessed_moved[lang] for lang in _SIDES}
         self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=move_cause)
-
-    @staticmethod
-    def _guess_reorders(
-        status: dict[Lang, list[tuple[str, Member | None]]],
-        per_side: dict[Lang, list[_PoolCell]],
-    ) -> dict[Lang, bool]:
-        """Per half: are the pool's cells out of base order once ``changed``
-        pairings (positional guesses) are counted alongside identity pairs?
-
-        :meth:`_align_pool_sides` keeps guesses out of its reorder test on
-        purpose — a guess is no identity evidence. This is the converse
-        question #1124 needs: could the half have moved, given the guesses?
-        """
-        out: dict[Lang, bool] = {}
-        for lang in _SIDES:
-            position = {id(cell.member): j for j, cell in enumerate(per_side[lang])}
-            cur = [
-                position[id(member)]
-                for state, member in status[lang]
-                if state in ("same", "changed") and member is not None and id(member) in position
-            ]
-            out[lang] = any(b < a for a, b in zip(cur, cur[1:], strict=False))
-        return out
 
     def _emit_pool_shift_frame(
         self,
