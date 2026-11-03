@@ -2649,7 +2649,21 @@ their changes; an introduced violation that names no slide (`order-parity`,
 a mixed / cross-language layout), or names an id the deck does not have,
 withholds **everything — nothing is written**. So `apply` never writes a structural
 violation the pair did not already have: a pair that passed `verify` before
-still passes it after. The mutated bundle is also re-parsed before anything
+still passes it after. The same pre-write step also checks **content
+conservation** (CLM {version}, issue #1130), on cell contents alone, never on
+how the engine paired DE and EN cells. Over the shared cells of each half:
+- content both halves agreed on must survive on each half;
+- an edit the ledger never recorded must survive on its half;
+- no content may end up with more copies than either half had.
+
+A pass that would break this (typically a moved, un-id'd cell paired with
+the wrong twin) is withheld the same way. Its `verify_violations` entry
+reads `this pass would remove content both halves agree on from DE: '…'`,
+`… would drop an unrecorded edit …` or `… would duplicate content …`. An
+explicit answer that discards content (a side choice on a conflict,
+`remove`, `body`) exempts exactly the cells it names. If the same rows stay
+withheld pass after pass, the cell's pairing is a guess. Give the moved cell
+a `slide_id` (on both halves), or move it back, and re-report. The mutated bundle is also re-parsed before anything
 touches disk and written atomically (≤4 files); landed items are recorded
 into the ledger **on fully resolved members only**, **gated on the
 structural verify per slide** (issue #992) once more after the write: a

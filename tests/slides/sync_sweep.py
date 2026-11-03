@@ -43,7 +43,7 @@ from __future__ import annotations
 import itertools
 import json
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,7 +165,12 @@ def _final_order(text: str, bodies: dict[str, str]) -> tuple[str, ...]:
     return tuple(sorted(markers, key=lambda name: text.index(markers[name])))
 
 
-def run_case(case: Case) -> tuple[str, list[list[tuple[str, str]]]]:
+#: ``trace(pass_index, rows, outcome_payload, de_text, en_text)``, called
+#: after each pass's apply (``scripts/update_sync_sweep_baseline.py --trace``).
+Tracer = Callable[[int, list[tuple[str, str]], dict, str, str], None]
+
+
+def run_case(case: Case, trace: Tracer | None = None) -> tuple[str, list[list[tuple[str, str]]]]:
     """``(status, passes)``: ``converged`` or a failure kind, plus each
     pass's framed ``(key, action)`` rows."""
     base, code = DOMAINS[case.domain]
@@ -203,8 +208,28 @@ def run_case(case: Case) -> tuple[str, list[list[tuple[str, str]]]]:
             outcome = _apply(de_path, en_path, decisions)
             if outcome.error is not None:
                 return "apply_error", passes
-            withheld = bool(outcome.to_payload().get("verify_withheld"))
+            payload = outcome.to_payload()
+            withheld = bool(payload.get("verify_withheld"))
+            if trace is not None:
+                trace(
+                    len(passes) - 1,
+                    passes[-1],
+                    payload,
+                    de_path.read_text(encoding="utf-8"),
+                    en_path.read_text(encoding="utf-8"),
+                )
     return ("livelock_withheld" if withheld else "livelock_stalled"), passes
+
+
+def final_order(text: str, case: Case) -> tuple[str, ...]:
+    """The group's cells by name in ``text``; an edited body shows as ``name'``."""
+    _, code = DOMAINS[case.domain]
+    markers = {"a": 'slide_id="vo-a"', "b": 'slide_id="vo-b"'}
+    for name, body in code.items():
+        for variant, shown in ((body, name), (f"{body}0", f"{name}'")):
+            if f"\n{variant}\n" in text:
+                markers[shown] = f"\n{variant}\n"
+    return tuple(sorted(markers, key=lambda name: text.index(markers[name])))
 
 
 def load_baseline() -> dict[str, str]:
