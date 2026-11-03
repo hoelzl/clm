@@ -5217,13 +5217,20 @@ class TestIdReorderPlusPoolReorder:
             f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{slug}"\n#\n# - {text}\n\n'
         )
 
-    def _parts(self, lang: str, order: list[str], edited: bool = False) -> tuple[str, ...]:
+    def _parts(
+        self,
+        lang: str,
+        order: list[str],
+        edited: bool = False,
+        code: dict[str, str] | None = None,
+    ) -> tuple[str, ...]:
         suffix = " edited" if edited else ""
+        code = {"c1": "c1 = 1", "c2": "c2 = 2", **(code or {})}
         cells = {
             "a": self._vo(lang, "vo-a", f"A {lang}{suffix}"),
             "b": self._vo(lang, "vo-b", f"B {lang}{suffix}"),
-            "c1": _code("c1 = 1"),
-            "c2": _code("c2 = 2"),
+            "c1": _code(code["c1"]),
+            "c2": _code(code["c2"]),
         }
         return (
             HEADER_DE if lang == "de" else HEADER_EN,
@@ -5232,12 +5239,14 @@ class TestIdReorderPlusPoolReorder:
             _slide("next", lang, "N"),
         )
 
-    def _deck(self, tmp_path: Path, *, edited: bool = False) -> _Deck:
+    def _deck(
+        self, tmp_path: Path, *, edited: bool = False, code: dict[str, str] | None = None
+    ) -> _Deck:
         deck = _Deck(
             tmp_path, _build(*self._parts("de", self.BASE)), _build(*self._parts("en", self.BASE))
         )
         deck.record()
-        deck.write_en(*self._parts("en", self.MOVED, edited))
+        deck.write_en(*self._parts("en", self.MOVED, edited, code))
         return deck
 
     def _run_to_convergence(self, deck: _Deck, max_passes: int = 6) -> list[list[tuple[str, str]]]:
@@ -5267,15 +5276,18 @@ class TestIdReorderPlusPoolReorder:
             assert outcome.error is None, outcome.to_payload()
         raise AssertionError(f"no convergence after {max_passes} passes: {passes}")
 
-    def _assert_identical_layouts(self, deck: _Deck, *, edited: bool = False) -> None:
+    def _assert_identical_layouts(
+        self, deck: _Deck, *, edited: bool = False, code: dict[str, str] | None = None
+    ) -> None:
         de = deck.de_path.read_text(encoding="utf-8")
         en = deck.en_path.read_text(encoding="utf-8")
+        final = {"c1": "c1 = 1", "c2": "c2 = 2", **(code or {})}
         for text in (de, en):
             # No duplicated code cell on either half.
-            assert text.count("c1 = 1") == 1, text
-            assert text.count("c2 = 2") == 1, text
-        assert de == _build(*self._parts("de", self.MOVED, edited))
-        assert en == _build(*self._parts("en", self.MOVED, edited))
+            for body in final.values():
+                assert text.count(f"\n{body}\n") == 1, text
+        assert de == _build(*self._parts("de", self.MOVED, edited, code))
+        assert en == _build(*self._parts("en", self.MOVED, edited, code))
         deck.assert_converged()
 
     def test_1071_filed_shape_converges_without_duplication(self, tmp_path: Path):
@@ -5303,3 +5315,168 @@ class TestIdReorderPlusPoolReorder:
         assert ("id:vo-a", "translate_edit") in passes[0]
         assert ("pos:intro/code/1", "pool_placement_divergence") in passes[1]
         self._assert_identical_layouts(deck, edited=True)
+
+    # -- #1124 / #1130: a reorder plus a shared-cell edit in the same pass -----
+    #
+    # #1129 suspended a crossed-exempt slot whose positional guess implied a
+    # pool reorder. It fixed the filed shapes but livelocked shapes that
+    # converged before (an adversarial review's brute-force probe: 36 fixed,
+    # 54 broken), and was reverted. The root cause -- one move+edit split into
+    # rows that are only verify-clean jointly under the #1051 B2 gate -- is
+    # #1130. These tests pin both sides: the shapes a fix must make converge
+    # (strict xfail) and the shapes that converge today and must keep doing so.
+
+    def _shape_deck(
+        self,
+        tmp_path: Path,
+        en_order: list[str],
+        *,
+        en_code: dict[str, str] | None = None,
+        de_code: dict[str, str] | None = None,
+    ) -> _Deck:
+        deck = _Deck(
+            tmp_path, _build(*self._parts("de", self.BASE)), _build(*self._parts("en", self.BASE))
+        )
+        deck.record()
+        deck.write_en(*self._parts("en", en_order, code=en_code))
+        if de_code:
+            deck.write_de(*self._parts("de", self.BASE, code=de_code))
+        return deck
+
+    def _assert_edits_kept(self, deck: _Deck, edits: dict[str, str]) -> None:
+        """Converged, no duplicated cell, and no edit lost on either half."""
+        final = {"c1": "c1 = 1", "c2": "c2 = 2", **edits}
+        for path in (deck.de_path, deck.en_path):
+            text = path.read_text(encoding="utf-8")
+            for name, body in final.items():
+                assert text.count(f"\n{body}\n") == 1, (name, text)
+        deck.assert_converged()
+
+    @pytest.mark.xfail(strict=True, reason="#1124/#1130: gate-withheld livelock")
+    @pytest.mark.parametrize("edited_vo", [False, True], ids=["code-only", "with-vo-edits"])
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param({"c1": "c1 = 10"}, id="c1-edited"),
+            pytest.param({"c1": "c1 = 10", "c2": "c2 = 20"}, id="both-edited-1128"),
+        ],
+    )
+    def test_1124_filed_shape_with_shared_cell_edit_converges(
+        self, tmp_path: Path, code: dict[str, str], edited_vo: bool
+    ):
+        """#1124: the #1071 reorder plus an EN edit of a shared code cell.
+        The edited slot pairs across the voiceover crossing as a positional
+        guess, classifies as ``propagate_shared_edit`` beside the scope
+        ``mirror_order``, and their joint projection is the #1071 mis-paired
+        layout: the pre-write verify withholds both rows every pass."""
+        deck = self._deck(tmp_path, edited=edited_vo, code=code)
+        self._run_to_convergence(deck)
+        self._assert_identical_layouts(deck, edited=edited_vo, code=code)
+
+    @pytest.mark.parametrize("edited_vo", [False, True], ids=["code-only", "with-vo-edits"])
+    def test_1071_reorder_with_c2_edit_converges(self, tmp_path: Path, edited_vo: bool):
+        """The filed #1124 reorder with the non-straddling cell edited
+        converges today (pinned so a #1130 fix keeps it)."""
+        code = {"c2": "c2 = 20"}
+        deck = self._deck(tmp_path, edited=edited_vo, code=code)
+        self._run_to_convergence(deck)
+        self._assert_identical_layouts(deck, edited=edited_vo, code=code)
+
+    @pytest.mark.xfail(strict=True, reason="#1130: gate-withheld livelock")
+    @pytest.mark.parametrize(
+        ("en_order", "en_code", "de_code"),
+        [
+            pytest.param(
+                ["c1", "b", "a", "c2"], {"c1": "c1 = 10", "c2": "c2 = 20"}, None, id="en-1"
+            ),
+            pytest.param(
+                ["c2", "b", "a", "c1"], {"c1": "c1 = 10", "c2": "c2 = 20"}, None, id="en-2"
+            ),
+            pytest.param(["c2", "b", "c1", "a"], {"c1": "c1 = 10"}, None, id="en-3"),
+            pytest.param(
+                ["c1", "b", "a", "c2"], None, {"c1": "c1 = 10", "c2": "c2 = 20"}, id="de-1"
+            ),
+        ],
+    )
+    def test_1130_reorder_plus_edit_livelocks(
+        self,
+        tmp_path: Path,
+        en_order: list[str],
+        en_code: dict[str, str] | None,
+        de_code: dict[str, str] | None,
+    ):
+        """Shapes #1129 made converge (besides the filed one) and that
+        livelock on master: the regression set a #1130 fix must turn green."""
+        deck = self._shape_deck(tmp_path, en_order, en_code=en_code, de_code=de_code)
+        self._run_to_convergence(deck)
+        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})})
+
+    @pytest.mark.parametrize(
+        ("en_order", "en_code", "de_code"),
+        [
+            pytest.param(["c2", "c1", "b", "a"], {"c2": "c2 = 20"}, None, id="en-1"),
+            pytest.param(["c2", "b", "a", "c1"], {"c2": "c2 = 20"}, None, id="en-2"),
+            pytest.param(["c2", "b", "c1", "a"], {"c2": "c2 = 20"}, None, id="en-3"),
+            pytest.param(
+                ["b", "c2", "c1", "a"], None, {"c1": "c1 = 10", "c2": "c2 = 20"}, id="de-1"
+            ),
+            pytest.param(
+                ["c2", "b", "c1", "a"], None, {"c1": "c1 = 10", "c2": "c2 = 20"}, id="de-2"
+            ),
+        ],
+    )
+    def test_1129_regression_shapes_keep_converging(
+        self,
+        tmp_path: Path,
+        en_order: list[str],
+        en_code: dict[str, str] | None,
+        de_code: dict[str, str] | None,
+    ):
+        """#1129 review: shapes that converge on master and that #1129's
+        suspension turned into a gate-withheld livelock (the slot was
+        suspended, and the next pass's placement answer moved a cell without
+        its edit). A #1130 fix must keep them converging with every edit."""
+        deck = self._shape_deck(tmp_path, en_order, en_code=en_code, de_code=de_code)
+        self._run_to_convergence(deck)
+        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})})
+
+    def test_unmoved_sibling_keeps_1052_one_pass_propagation(self, tmp_path: Path):
+        """#1129 review: whatever fixes #1130 must not suspend on pool size.
+        A lone code cell straddling the swapped voiceovers, beside an
+        unrelated code cell that did not move, keeps #1052's rule: its edit propagates with the scope mirror in the
+        same pass -- no suspension, no extra pass."""
+
+        def parts(lang: str, order: list[str], c1: str) -> tuple[str, ...]:
+            cells = {
+                "x": _code("x = 0"),
+                "a": self._vo(lang, "vo-a", f"A {lang}"),
+                "b": self._vo(lang, "vo-b", f"B {lang}"),
+                "c1": _code(c1),
+            }
+            return (
+                HEADER_DE if lang == "de" else HEADER_EN,
+                _slide("intro", lang, "T"),
+                *(cells[name] for name in order),
+                _slide("next", lang, "N"),
+            )
+
+        base, moved = ["x", "a", "c1", "b"], ["x", "b", "c1", "a"]
+        deck = _Deck(
+            tmp_path,
+            _build(*parts("de", base, "c1 = 1")),
+            _build(*parts("en", base, "c1 = 1")),
+        )
+        deck.record()
+        deck.write_en(*parts("en", moved, "c1 = 10"))
+        passes = self._run_to_convergence(deck)
+        # #1052's shape: the edit propagates WITH the scope mirror, and the
+        # mechanical record_symmetric_edit follows -- nothing suspended.
+        assert passes == [
+            [
+                ("pos:intro/code/1", "propagate_shared_edit"),
+                ("pos:intro/order.deck/0", "mirror_order"),
+            ],
+            [("pos:intro/code/1", "record_symmetric_edit")],
+        ], passes
+        assert deck.de_path.read_text(encoding="utf-8") == _build(*parts("de", moved, "c1 = 10"))
+        deck.assert_converged()
