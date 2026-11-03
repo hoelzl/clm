@@ -8,8 +8,14 @@ Each case:
   other half).
 
 It then drives ``report -> apply`` through the real pre-write verify gate
-(``apply_verify_gate``), answering every placement / order question ``en``
-(EN is the half that moved), until the diff is clean or ``MAX_PASSES`` runs out.
+(``apply_verify_gate``) until the diff is clean or ``MAX_PASSES`` runs out.
+It answers every question a careful agent would answer, so a failure is the
+engine's, not the harness's:
+- placement / order questions: ``en`` (EN is the half that moved);
+- ``conflict_shared``: the half holding the case's edit.
+
+Any other answerable row is reported as ``unanswered_question``, so a new
+question kind can never pass for a livelock.
 
 A case **converges** when:
 - the diff is clean;
@@ -17,8 +23,14 @@ A case **converges** when:
 - every final code body (base bodies with the case's edits applied) appears
   exactly once on each half, so no edit was lost and no cell was duplicated.
 
-Anything else is a failure kind: ``livelock``, ``apply_error`` or
-``lost_or_duplicated``. ``sync_sweep_baseline.json`` records today's failures
+Anything else is a failure kind:
+- ``livelock_withheld``: the last pass's pre-write verify withheld rows, so
+  the gate rejects the same rows every pass (#1130);
+- ``livelock_stalled``: the last pass withheld nothing, yet the diff never
+  turns clean;
+- ``unanswered_question``, ``apply_error`` or ``lost_or_duplicated``.
+
+``sync_sweep_baseline.json`` records today's failures
 as a ratchet; regenerate it with ``python scripts/update_sync_sweep_baseline.py``.
 """
 
@@ -135,12 +147,17 @@ def _apply(de_path: Path, en_path: Path, decisions: dict[str, doc_apply.Decision
     return outcome
 
 
+#: Fixed answers by action; ``conflict_shared`` takes the edited half.
+_ANSWERS = {"pool_placement_divergence": "en", "order_decision": "en"}
+
+
 def run_case(case: Case) -> tuple[str, list[list[tuple[str, str]]]]:
     """``(status, passes)``: ``converged`` or a failure kind, plus each
     pass's framed ``(key, action)`` rows."""
     base, code = DOMAINS[case.domain]
     edited = _edited(code, case.edits)
     passes: list[list[tuple[str, str]]] = []
+    withheld = False
     with tempfile.TemporaryDirectory() as tmp:
         de_path = Path(tmp) / "slides_t.de.py"
         en_path = Path(tmp) / "slides_t.en.py"
@@ -160,14 +177,18 @@ def run_case(case: Case) -> tuple[str, list[list[tuple[str, str]]]]:
                         return "lost_or_duplicated", passes
                 return "converged", passes
             passes.append([(i.key, i.action) for i in diff.items])
-            decisions = {
-                i.key: doc_apply.Decision(key=i.key, choice="en")
-                for i in diff.items
-                if i.action in ("pool_placement_divergence", "order_decision")
-            }
-            if _apply(de_path, en_path, decisions).error is not None:
+            decisions: dict[str, doc_apply.Decision] = {}
+            for item in diff.items:
+                choice = _ANSWERS.get(item.action, case.edit_side)
+                if item.action in _ANSWERS or item.action == "conflict_shared":
+                    decisions[item.key] = doc_apply.Decision(key=item.key, choice=choice)
+                elif doc_apply.item_answers(item):
+                    return "unanswered_question", passes
+            outcome = _apply(de_path, en_path, decisions)
+            if outcome.error is not None:
                 return "apply_error", passes
-    return "livelock", passes
+            withheld = bool(outcome.to_payload().get("verify_withheld"))
+    return ("livelock_withheld" if withheld else "livelock_stalled"), passes
 
 
 def load_baseline() -> dict[str, str]:
