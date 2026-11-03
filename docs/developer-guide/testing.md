@@ -469,6 +469,57 @@ string needs `rich.markup.escape`. `[/INST]` — Mistral's and Llama's instruct
 delimiter, i.e. ordinary recorded LLM traffic — raised `MarkupError` as a
 traceback out of `clm cassette doctor`.
 
+## Sync-engine sweeps: the ratchet and the probe
+
+Two brute-force harnesses drive the bilingual sync engine (`clm slides sync`)
+through `report -> apply` with the real pre-write verify. They answer every
+question the way a careful agent would, and check the final pair against
+what the case intended. Each case ends `converged`, in a *visible* failure
+(a livelock, an unanswerable question, an error), or in a *silent* one: the
+diff is clean but the halves are wrong (`misplaced`, `lost_or_duplicated`).
+
+**The sweep** (`tests/slides/sync_sweep.py`, 2,112 cases, `slow` tier, so on
+every PR in CI) is a ratchet. `tests/slides/sync_sweep_baseline.json`
+records today's failures:
+- a baseline case xfails while it fails the same way;
+- any other case must converge.
+
+When a fix makes cases converge, regenerate the baseline:
+
+```bash
+python scripts/update_sync_sweep_baseline.py --jobs 12
+python scripts/update_sync_sweep_baseline.py --summary            # failures grouped by last-pass rows
+python scripts/update_sync_sweep_baseline.py --trace "five|en|a b x c1 c2|x"   # one case, pass by pass
+```
+
+The script refuses to write when any case got worse than the committed
+baseline, meaning converged -> failure or visible -> silent.
+`--accept-worse` overrides that for a deliberate trade, which the PR must
+name.
+
+**The probe** (`tests/slides/sync_probe.py`, about 19,000 cases) covers the
+shapes the sweep does not:
+- DE reordering;
+- both halves reordering;
+- markdown and mixed pools;
+- subslides and three id'd cells;
+- inserts and deletes;
+- two slide groups;
+- byte-identical cells;
+- a second round on the ledger the first one wrote.
+
+It takes about 2.5 minutes per engine on 12 workers, too slow for CI. **Run
+its gate by hand before merging a sync-engine change:**
+
+```bash
+python scripts/sync_probe.py gate --workers 12        # vs origin/master; exit 1 if any case got worse
+python scripts/sync_probe.py gate --allow-visible     # fail only on cases that became silent failures
+```
+
+`gate` extracts the base ref's `src/` into a temporary directory, probes it
+and the working tree, and compares the two per case. Paste its summary line
+(`N cases better, M worse (K now fail silently)`) into the PR.
+
 ## Troubleshooting
 
 ### "I don't see any logs during test execution"

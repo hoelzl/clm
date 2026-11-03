@@ -65,6 +65,10 @@ from clm.slides.bilingual_doc import (
     MemberKey,
     SideCell,
 )
+from clm.slides.doc_conserve import (
+    check_conservation,
+    discarded_by_answers,
+)
 from clm.slides.doc_identity import (
     DeckBaseline,
     body_reconciliation_available,
@@ -2808,11 +2812,24 @@ def apply_deck(
     pristine_member_groups = {member.key.render(): token for token, member in pristine_groups}
     item_groups = [_item_group(item, pristine_member_groups) for item in diff.items]
     originals = DeckEmitter(deck=deck).emit_all()
+    pristine_rows = {(item.key, item.action): item for item in diff.items}
     # The preamble-frameability verdict for unmatched decisions must describe
     # the PRE-apply baseline the ``diff`` was computed from — derive it at
     # entry, immune to wherever the apply loop later records landed items
     # into ``ledger``.
     deck_ledger = ledger.decks.get(deck_key)
+    #: Every fingerprint the ledger recorded: what is NOT among them is an
+    #: author's edit, which a pass must never drop (#1130 step 2).
+    baseline_fps: set[str] | None = (
+        {
+            fp
+            for lm in deck_ledger.members.values()
+            for fp in (lm.entry.de_fp, lm.entry.en_fp)
+            if fp is not None
+        }
+        if deck_ledger is not None and deck_ledger.members
+        else None
+    )
     preamble_frameable = _preamble_frameable_parts(
         deck, baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
     )
@@ -2879,16 +2896,47 @@ def apply_deck(
                 outcome.verify_violations = _dedupe_violations(withholding)
                 return outcome
             final_deck = parse.deck
+        # #1130 step 2: content conservation, judged on cell contents only
+        # (never on the differ's pairing). Its violations are by definition
+        # introduced by this pass.
+        conserved: list[StructuralViolation] = []
+        if changed:
+            after_groups = _members_with_group(final_deck)
+            choices: dict[str, list[str]] = {}
+            for row in rows:
+                if row.choice is not None:
+                    choices.setdefault(row.key, []).append(row.choice)
+                if row.body is not None:
+                    choices.setdefault(row.key, []).append("body")
+            # The executor mutates a round's members in place: read each landed
+            # row's cells from the pristine diff, as they were before the pass.
+            landed_rows = [
+                (pristine_rows.get((item.key, item.action), item), provenance)
+                for item, provenance in current.landed
+            ]
+            exempt = discarded_by_answers(landed_rows, choices)
+            conserved.extend(
+                check_conservation(pristine_groups, after_groups, baseline_fps, exempt)
+            )
         if verify_gate is None or not changed:
             projected = []
-            break
-        projected = list(verify_gate(finals))
-        if not projected:
-            break
+            if not conserved:
+                break
+        else:
+            projected = list(verify_gate(finals))
+            if not projected and not conserved:
+                break
         if baseline is None:
-            baseline = Counter(_violation_key(v) for v in verify_gate(originals))
+            baseline = (
+                Counter(_violation_key(v) for v in verify_gate(originals))
+                if verify_gate is not None
+                else Counter()
+            )
         introduced = _withhold_verdict(
-            projected, baseline, holds, _members_with_group(final_deck) + pristine_groups
+            [*projected, *conserved],
+            baseline,
+            holds,
+            _members_with_group(final_deck) + pristine_groups,
         )
         if not introduced:
             break
