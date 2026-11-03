@@ -21,13 +21,17 @@ A case **converges** when:
 - the diff is clean;
 - no apply errored;
 - every final code body (base bodies with the case's edits applied) appears
-  exactly once on each half, so no edit was lost and no cell was duplicated.
+  exactly once on each half, so no edit was lost and no cell was duplicated;
+- both halves end in EN's new order, so no move was undone.
 
 Anything else is a failure kind:
 - ``livelock_withheld``: the last pass's pre-write verify withheld rows, so
   the gate rejects the same rows every pass (#1130);
 - ``livelock_stalled``: the last pass withheld nothing, yet the diff never
   turns clean;
+- ``misplaced``: the diff turns clean with every edit kept, but the cells
+  are not in EN's order. The engine reports success while it silently undid
+  a move (#1130);
 - ``unanswered_question``, ``apply_error`` or ``lost_or_duplicated``.
 
 ``sync_sweep_baseline.json`` records today's failures
@@ -151,6 +155,16 @@ def _apply(de_path: Path, en_path: Path, decisions: dict[str, doc_apply.Decision
 _ANSWERS = {"pool_placement_divergence": "en", "order_decision": "en"}
 
 
+def _final_order(text: str, bodies: dict[str, str]) -> tuple[str, ...]:
+    """The group's cells by name, in file order."""
+    markers = {
+        "a": 'slide_id="vo-a"',
+        "b": 'slide_id="vo-b"',
+        **{name: f"\n{body}\n" for name, body in bodies.items()},
+    }
+    return tuple(sorted(markers, key=lambda name: text.index(markers[name])))
+
+
 def run_case(case: Case) -> tuple[str, list[list[tuple[str, str]]]]:
     """``(status, passes)``: ``converged`` or a failure kind, plus each
     pass's framed ``(key, action)`` rows."""
@@ -175,6 +189,8 @@ def run_case(case: Case) -> tuple[str, list[list[tuple[str, str]]]]:
                     text = path.read_text(encoding="utf-8")
                     if any(text.count(f"\n{body}\n") != 1 for body in edited.values()):
                         return "lost_or_duplicated", passes
+                    if _final_order(text, edited) != case.order:
+                        return "misplaced", passes
                 return "converged", passes
             passes.append([(i.key, i.action) for i in diff.items])
             decisions: dict[str, doc_apply.Decision] = {}
