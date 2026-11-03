@@ -230,6 +230,10 @@ def _member_to_json(lm: LedgerMember) -> dict[str, object]:
         "en_tags": list(e.en_tags) if e.en_tags is not None else None,
         "de_sig": e.de_sig,
         "en_sig": e.en_sig,
+        # #1130: written only when recorded, so a ledger without positional
+        # members (or written before #1130) keeps its exact bytes.
+        **({"de_span": e.de_span} if e.de_span is not None else {}),
+        **({"en_span": e.en_span} if e.en_span is not None else {}),
         "provenance": lm.provenance,
         "state": lm.state,
         "hash_version": lm.hash_version,
@@ -254,6 +258,8 @@ def _member_from_json(key: str, rec: dict) -> LedgerMember | None:
             en_tags=tuple(rec["en_tags"]) if rec.get("en_tags") is not None else None,
             de_sig=rec.get("de_sig"),
             en_sig=rec.get("en_sig"),
+            de_span=rec.get("de_span"),
+            en_span=rec.get("en_span"),
         )
     except (KeyError, TypeError):
         return None  # malformed entry: cold, never a crash
@@ -902,6 +908,9 @@ def rename_group_scopes(target: DeckLedger, old_group: str, new_group: str) -> N
             en_tags=lm.entry.en_tags,
             de_sig=lm.entry.de_sig,
             en_sig=lm.entry.en_sig,
+            # A span names its sync point by handle; the renamed anchor is one.
+            de_span=new_key_id if lm.entry.de_span == old_key else lm.entry.de_span,
+            en_span=new_key_id if lm.entry.en_span == old_key else lm.entry.en_span,
         )
         target.members[new_key] = LedgerMember(
             entry=entry,

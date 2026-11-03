@@ -5052,9 +5052,11 @@ class TestOrderMirrorAroundPositionalCells:
     mirror, the placement answer re-homed the DE cell against the pre-mirror
     order, and DE was written with a divergent id order. Now a placement
     that differs only by way of the crossed id'd cells is no question: the
-    order row lands, and where the positional cell's placement still
-    differs once the id'd order agrees, the next pass frames that placement
-    as its own question (never a mechanical guess at it).
+    order row lands. Since #1130 that row also carries the positional cells
+    (the pool folds into it), so the whole scope lands in one pass. Where the
+    positional cell moved on the mirrored half itself, the pool stays
+    suspended and its placement frames as its own question once the id'd
+    order agrees (never a mechanical guess at it).
     """
 
     @staticmethod
@@ -5133,20 +5135,15 @@ class TestOrderMirrorAroundPositionalCells:
 
     def test_swap_with_the_positional_cell_edited(self, tmp_path: Path):
         # Round-3 review: the cell's own edit lands in the same pass as the
-        # order. Round 4: its pairing crossed the swapped cells, so the pool
-        # banks nothing that pass — the next pass records it mechanically.
+        # order. #1130: the pool folds into the order row, so the pair is
+        # consistent after that pass and the pool records with it; the
+        # round-4 follow-up pass (a mechanical record) is gone.
         deck = self._deck(tmp_path, ["a", "code", "b"], ["a", "code", "b"], ["b", "code", "a"])
         deck.edit_en("c = Color.RED", "c = Color.GREEN")
         self._order_pass(deck)
         expected = _build(*self._parts("de", ["b", "code", "a"])).replace(
             "c = Color.RED", "c = Color.GREEN"
         )
-        assert deck.de_path.read_text(encoding="utf-8") == expected
-        _, diff = deck.diff()
-        assert [(i.key, i.action) for i in diff.items] == [
-            ("pos:intro/code/0", "record_symmetric_edit")
-        ]
-        assert deck.apply(verify_gate=self._gate(deck)).all_applied
         assert deck.de_path.read_text(encoding="utf-8") == expected
         deck.assert_converged()
 
@@ -5159,12 +5156,11 @@ class TestOrderMirrorAroundPositionalCells:
 
     def test_1052_voiceover_moved_past_note_and_positional_cell(self, tmp_path: Path):
         # The filed variant: [vo] [include] [note] -> [include] [note] [vo].
-        # The id'd mirror lands first; the include's placement among them is
-        # then its own framed question, and answering it converges.
+        # #1130: the include rides the order row, so one pass converges (it
+        # used to be a second-pass placement question).
         base, moved = ["a", "inc", "note"], ["inc", "note", "a"]
         deck = self._deck(tmp_path, base, base, moved)
         self._order_pass(deck)
-        self._placement_pass(deck, "en")
         assert deck.de_path.read_text(encoding="utf-8") == _build(*self._parts("de", moved))
         deck.assert_converged()
 
@@ -5196,10 +5192,12 @@ class TestIdReorderPlusPoolReorder:
     recorded it, and the next pass split the cell into one-sided members and
     framed ``copy_new_shared`` -- duplicating the code cell on both halves.
 
-    Now (since #1052 round 4 / #1074) the scope mirror lands alone while the
-    pool is held as ``pool_pairing_shifted``, the remaining placement frames
-    as one ``pool_placement_divergence`` question, and answering it converges
-    with identical layouts and no duplicated cell.
+    #1052 round 4 / #1074 then landed the scope mirror alone while holding
+    the pool as ``pool_pairing_shifted``, and framed the remaining placement
+    as a question on the next pass. With a shared-cell edit in the same pass
+    that in-between layout failed the pre-write verify every pass (#1124 /
+    #1130). Since #1130 the pool folds into the scope ``mirror_order`` and the
+    whole scope lands in one pass, with identical layouts and no duplicate.
     """
 
     BASE = ["a", "c1", "b", "c2"]
@@ -5293,38 +5291,29 @@ class TestIdReorderPlusPoolReorder:
     def test_1071_filed_shape_converges_without_duplication(self, tmp_path: Path):
         deck = self._deck(tmp_path)
         passes = self._run_to_convergence(deck)
-        # The scope mirror lands while the pool is held; the remaining
-        # placement is one framed question; then the orders are recorded.
-        assert passes == [
-            [
-                ("pos:intro/pool.code/0", "pool_pairing_shifted"),
-                ("pos:intro/order.deck/0", "mirror_order"),
-            ],
-            [
-                ("pos:intro/code/1", "pool_placement_divergence"),
-                ("pos:intro/pool.code/0", "mirror_order"),
-                ("pos:intro/order.deck/0", "record_order"),
-            ],
-            [("pos:intro/pool.code/0", "record_order")],
-        ]
+        # #1130: one row orders the whole scope, code cells included.
+        assert passes == [[("pos:intro/order.deck/0", "mirror_order")]], passes
         self._assert_identical_layouts(deck)
 
     def test_1071_with_voiceover_bodies_edited_in_the_same_pass(self, tmp_path: Path):
         deck = self._deck(tmp_path, edited=True)
         passes = self._run_to_convergence(deck)
         assert ("id:vo-a", "translate_edit") in passes[0]
-        assert ("pos:intro/code/1", "pool_placement_divergence") in passes[1]
+        assert not any(
+            action == "pool_placement_divergence" for rows in passes for _, action in rows
+        ), passes
         self._assert_identical_layouts(deck, edited=True)
 
     # -- #1124 / #1130: a reorder plus a shared-cell edit in the same pass -----
     #
     # #1129 suspended a crossed-exempt slot whose positional guess implied a
     # pool reorder. It fixed the filed shapes but livelocked shapes that
-    # converged before (an adversarial review's brute-force probe: 36 fixed,
-    # 54 broken), and was reverted. The root cause -- one move+edit split into
-    # rows that are only verify-clean jointly under the #1051 B2 gate -- is
-    # #1130. These tests pin both sides: the shapes a fix must make converge
-    # (strict xfail) and the shapes that converge today and must keep doing so.
+    # converged before, and was reverted. #1130 found two causes: the pool
+    # alignment borrowed the moving half's current span for the other half's
+    # edited cell (mis-pairing it: a livelock, or a silent misplacement), and
+    # the scope mirror left the code cells for a later pass (an in-between
+    # layout the pre-write verify withholds). Fixed by recorded per-half
+    # spans and by folding the pool into the order row.
 
     def _shape_deck(
         self,
@@ -5343,16 +5332,20 @@ class TestIdReorderPlusPoolReorder:
             deck.write_de(*self._parts("de", self.BASE, code=de_code))
         return deck
 
-    def _assert_edits_kept(self, deck: _Deck, edits: dict[str, str]) -> None:
-        """Converged, no duplicated cell, and no edit lost on either half."""
+    def _assert_edits_kept(self, deck: _Deck, edits: dict[str, str], en_order: list[str]) -> None:
+        """Converged, no duplicated cell, no edit lost on either half, and
+        both halves in EN's order (#1130: two of these shapes used to
+        "converge" with EN's move silently undone)."""
         final = {"c1": "c1 = 1", "c2": "c2 = 2", **edits}
+        markers = {"a": 'slide_id="vo-a"', "b": 'slide_id="vo-b"'}
+        markers |= {name: f"\n{body}\n" for name, body in final.items()}
         for path in (deck.de_path, deck.en_path):
             text = path.read_text(encoding="utf-8")
             for name, body in final.items():
                 assert text.count(f"\n{body}\n") == 1, (name, text)
+            assert sorted(markers, key=lambda n: text.index(markers[n])) == en_order, text
         deck.assert_converged()
 
-    @pytest.mark.xfail(strict=True, reason="#1124/#1130: gate-withheld livelock")
     @pytest.mark.parametrize("edited_vo", [False, True], ids=["code-only", "with-vo-edits"])
     @pytest.mark.parametrize(
         "code",
@@ -5365,10 +5358,9 @@ class TestIdReorderPlusPoolReorder:
         self, tmp_path: Path, code: dict[str, str], edited_vo: bool
     ):
         """#1124: the #1071 reorder plus an EN edit of a shared code cell.
-        The edited slot pairs across the voiceover crossing as a positional
-        guess, classifies as ``propagate_shared_edit`` beside the scope
-        ``mirror_order``, and their joint projection is the #1071 mis-paired
-        layout: the pre-write verify withholds both rows every pass."""
+        It livelocked: the scope ``mirror_order`` left the code cells for a
+        later pass, and that in-between layout failed the pre-write verify
+        every pass (#1130)."""
         deck = self._deck(tmp_path, edited=edited_vo, code=code)
         self._run_to_convergence(deck)
         self._assert_identical_layouts(deck, edited=edited_vo, code=code)
@@ -5382,7 +5374,6 @@ class TestIdReorderPlusPoolReorder:
         self._run_to_convergence(deck)
         self._assert_identical_layouts(deck, edited=edited_vo, code=code)
 
-    @pytest.mark.xfail(strict=True, reason="#1130: gate-withheld livelock")
     @pytest.mark.parametrize(
         ("en_order", "en_code", "de_code"),
         [
@@ -5398,18 +5389,18 @@ class TestIdReorderPlusPoolReorder:
             ),
         ],
     )
-    def test_1130_reorder_plus_edit_livelocks(
+    def test_1130_reorder_plus_edit_converges(
         self,
         tmp_path: Path,
         en_order: list[str],
         en_code: dict[str, str] | None,
         de_code: dict[str, str] | None,
     ):
-        """Shapes #1129 made converge (besides the filed one) and that
-        livelock on master: the regression set a #1130 fix must turn green."""
+        """Shapes #1129 made converge (besides the filed one) that livelocked
+        before #1130."""
         deck = self._shape_deck(tmp_path, en_order, en_code=en_code, de_code=de_code)
         self._run_to_convergence(deck)
-        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})})
+        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})}, en_order)
 
     @pytest.mark.parametrize(
         ("en_order", "en_code", "de_code"),
@@ -5432,19 +5423,20 @@ class TestIdReorderPlusPoolReorder:
         en_code: dict[str, str] | None,
         de_code: dict[str, str] | None,
     ):
-        """#1129 review: shapes that converge on master and that #1129's
-        suspension turned into a gate-withheld livelock (the slot was
-        suspended, and the next pass's placement answer moved a cell without
-        its edit). A #1130 fix must keep them converging with every edit."""
+        """#1129 review: shapes #1129's suspension turned into a gate-withheld
+        livelock (the next pass's placement answer moved a cell without its
+        edit). ``de-1`` / ``de-2`` "converged" before #1130 with EN's move
+        silently undone; the order check now pins the real layout."""
         deck = self._shape_deck(tmp_path, en_order, en_code=en_code, de_code=de_code)
         self._run_to_convergence(deck)
-        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})})
+        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})}, en_order)
 
     def test_unmoved_sibling_keeps_1052_one_pass_propagation(self, tmp_path: Path):
         """#1129 review: whatever fixes #1130 must not suspend on pool size.
         A lone code cell straddling the swapped voiceovers, beside an
-        unrelated code cell that did not move, keeps #1052's rule: its edit propagates with the scope mirror in the
-        same pass -- no suspension, no extra pass."""
+        unrelated code cell that did not move, keeps #1052's rule: its edit
+        propagates with the scope mirror in the same pass, and since #1130
+        the pool records in that pass too -- one pass, nothing suspended."""
 
         def parts(lang: str, order: list[str], c1: str) -> tuple[str, ...]:
             cells = {
@@ -5469,14 +5461,12 @@ class TestIdReorderPlusPoolReorder:
         deck.record()
         deck.write_en(*parts("en", moved, "c1 = 10"))
         passes = self._run_to_convergence(deck)
-        # #1052's shape: the edit propagates WITH the scope mirror, and the
-        # mechanical record_symmetric_edit follows -- nothing suspended.
+        # #1052's shape: the edit propagates WITH the scope mirror.
         assert passes == [
             [
                 ("pos:intro/code/1", "propagate_shared_edit"),
                 ("pos:intro/order.deck/0", "mirror_order"),
             ],
-            [("pos:intro/code/1", "record_symmetric_edit")],
         ], passes
         assert deck.de_path.read_text(encoding="utf-8") == _build(*parts("de", moved, "c1 = 10"))
         deck.assert_converged()

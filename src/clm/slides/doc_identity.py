@@ -195,9 +195,21 @@ class MemberBaseline:
     en_tags: tuple[str, ...] | None
     de_sig: str | None = None  # owner-free signature (see pair_signature)
     en_sig: str | None = None
+    #: Positional members only: the span the cell sat in on each half when
+    #: recorded, i.e. the handle of the nearest preceding sync point on that
+    #: half (``""`` before the first; see :func:`sync_point_spans`). ``None``
+    #: = not recorded (an id-keyed member, an absent side, or a ledger written
+    #: before #1130). The pool alignment reads it as the slot's span on a half
+    #: whose cell lost its fingerprint, instead of borrowing the other half's
+    #: current span: that half may have moved its copy (#1130).
+    de_span: str | None = None
+    en_span: str | None = None
 
     def side_fp(self, lang: Lang) -> str | None:
         return self.de_fp if lang == "de" else self.en_fp
+
+    def side_span(self, lang: Lang) -> str | None:
+        return self.de_span if lang == "de" else self.en_span
 
     def side_sig(self, lang: Lang) -> str | None:
         return self.de_sig if lang == "de" else self.en_sig
@@ -254,6 +266,76 @@ def iter_with_groups(deck: BilingualDeck) -> Iterator[tuple[Member, str]]:
         yield member, ORPHAN_GROUP
 
 
+def anchor_index(deck: BilingualDeck) -> dict[Lang, list[tuple[int, str]]]:
+    """Per side: ``(cell index, group id)`` of each deck-part group anchor, sorted."""
+    index: dict[Lang, list[tuple[int, str]]] = {"de": [], "en": []}
+    for group in deck.groups:
+        if group.anchor is None:
+            continue
+        for lang in _SIDES:
+            cell = group.anchor.side(lang)
+            if cell is not None and cell.part == "deck":
+                index[lang].append((cell.index, group.anchor_id))
+    for lang in _SIDES:
+        index[lang].sort()
+    return index
+
+
+def bracket_of(
+    anchors: dict[Lang, list[tuple[int, str]]], lang: Lang, cell: SideCell
+) -> str | None:
+    """The group whose anchor physically brackets ``cell`` on ``lang``."""
+    token = None
+    for idx, gid in anchors[lang]:
+        if idx <= cell.index:
+            token = gid
+        else:
+            break
+    return token
+
+
+def is_sync_point(member: Member, part: str, anchors: dict[Lang, list[tuple[int, str]]]) -> bool:
+    """An id-keyed member present on both halves in the same place: the same
+    group bracket (deck part) or the same owner (companion part)."""
+    de, en = member.de, member.en
+    if member.key.scheme != "id" or de is None or en is None:
+        return False
+    if de.part != part or en.part != part:
+        return False
+    if part == "companion":
+        return de.for_slide == en.for_slide
+    return bracket_of(anchors, "de", de) == bracket_of(anchors, "en", en)
+
+
+def sync_point_spans(
+    deck: BilingualDeck, skip: set[int] | None = None
+) -> dict[tuple[Lang, str, int], str]:
+    """Per ``(lang, part, cell index)`` of every non-sync-point cell: the
+    handle of the nearest preceding **sync point** on that half, ``""``
+    before the first (#906). ``skip`` names (by ``id()``) sync points to
+    leave out.
+
+    One definition serves the differ (current spans) and the baseline
+    (recorded spans, #1130), so the two always name spans alike.
+    """
+    anchors = anchor_index(deck)
+    streams: dict[tuple[Lang, str], list[tuple[int, Member]]] = {}
+    for member in deck.members():
+        for lang in _SIDES:
+            cell = member.side(lang)
+            if cell is not None:
+                streams.setdefault((lang, cell.part), []).append((cell.index, member))
+    spans: dict[tuple[Lang, str, int], str] = {}
+    for (lang, part), entries in streams.items():
+        current = ""
+        for index, member in sorted(entries, key=lambda e: e[0]):
+            if (skip is None or id(member) not in skip) and is_sync_point(member, part, anchors):
+                current = member.key.render()
+                continue
+            spans[(lang, part, index)] = current
+    return spans
+
+
 def baseline_from_deck(deck: BilingualDeck) -> DeckBaseline:
     """Snapshot a parsed deck as a complete baseline (design §6.1).
 
@@ -264,6 +346,14 @@ def baseline_from_deck(deck: BilingualDeck) -> DeckBaseline:
     """
     base = DeckBaseline(complete=True)
     order: dict[tuple[Lang, str, str], list[tuple[int, str]]] = {}
+    spans = sync_point_spans(deck)
+
+    def span(member: Member, lang: Lang) -> str | None:
+        cell = member.side(lang)
+        if member.key.scheme != "pos" or cell is None:
+            return None
+        return spans.get((lang, cell.part, cell.index), "")
+
     for member, group_token in iter_with_groups(deck):
         entry = MemberBaseline(
             key=member.key.render(),
@@ -280,6 +370,8 @@ def baseline_from_deck(deck: BilingualDeck) -> DeckBaseline:
             en_tags=member.en.tags if member.en else None,
             de_sig=pair_signature(member.de) if member.de else None,
             en_sig=pair_signature(member.en) if member.en else None,
+            de_span=span(member, "de"),
+            en_span=span(member, "en"),
         )
         base.members[entry.key] = entry
         if member.key.scheme != "id":
