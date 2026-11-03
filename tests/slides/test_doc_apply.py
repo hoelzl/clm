@@ -5316,77 +5316,134 @@ class TestIdReorderPlusPoolReorder:
         assert ("pos:intro/code/1", "pool_placement_divergence") in passes[1]
         self._assert_identical_layouts(deck, edited=True)
 
+    # -- #1124 / #1130: a reorder plus a shared-cell edit in the same pass -----
+    #
+    # #1129 suspended a crossed-exempt slot whose positional guess implied a
+    # pool reorder. It fixed the filed shapes but livelocked shapes that
+    # converged before (an adversarial review's brute-force probe: 36 fixed,
+    # 54 broken), and was reverted. The root cause -- one move+edit split into
+    # rows that are only verify-clean jointly under the #1051 B2 gate -- is
+    # #1130. These tests pin both sides: the shapes a fix must make converge
+    # (strict xfail) and the shapes that converge today and must keep doing so.
+
+    def _shape_deck(
+        self,
+        tmp_path: Path,
+        en_order: list[str],
+        *,
+        en_code: dict[str, str] | None = None,
+        de_code: dict[str, str] | None = None,
+    ) -> _Deck:
+        deck = _Deck(
+            tmp_path, _build(*self._parts("de", self.BASE)), _build(*self._parts("en", self.BASE))
+        )
+        deck.record()
+        deck.write_en(*self._parts("en", en_order, code=en_code))
+        if de_code:
+            deck.write_de(*self._parts("de", self.BASE, code=de_code))
+        return deck
+
+    def _assert_edits_kept(self, deck: _Deck, edits: dict[str, str]) -> None:
+        """Converged, no duplicated cell, and no edit lost on either half."""
+        final = {"c1": "c1 = 1", "c2": "c2 = 2", **edits}
+        for path in (deck.de_path, deck.en_path):
+            text = path.read_text(encoding="utf-8")
+            for name, body in final.items():
+                assert text.count(f"\n{body}\n") == 1, (name, text)
+        deck.assert_converged()
+
+    @pytest.mark.xfail(strict=True, reason="#1124/#1130: gate-withheld livelock")
     @pytest.mark.parametrize("edited_vo", [False, True], ids=["code-only", "with-vo-edits"])
     @pytest.mark.parametrize(
         "code",
         [
             pytest.param({"c1": "c1 = 10"}, id="c1-edited"),
-            pytest.param({"c2": "c2 = 20"}, id="c2-edited"),
+            pytest.param({"c1": "c1 = 10", "c2": "c2 = 20"}, id="both-edited-1128"),
+        ],
+    )
+    def test_1124_filed_shape_with_shared_cell_edit_converges(
+        self, tmp_path: Path, code: dict[str, str], edited_vo: bool
+    ):
+        """#1124: the #1071 reorder plus an EN edit of a shared code cell.
+        The edited slot pairs across the voiceover crossing as a positional
+        guess, classifies as ``propagate_shared_edit`` beside the scope
+        ``mirror_order``, and their joint projection is the #1071 mis-paired
+        layout: the pre-write verify withholds both rows every pass."""
+        deck = self._deck(tmp_path, edited=edited_vo, code=code)
+        self._run_to_convergence(deck)
+        self._assert_identical_layouts(deck, edited=edited_vo, code=code)
+
+    @pytest.mark.parametrize("edited_vo", [False, True], ids=["code-only", "with-vo-edits"])
+    def test_1071_reorder_with_c2_edit_converges(self, tmp_path: Path, edited_vo: bool):
+        """The filed #1124 reorder with the non-straddling cell edited
+        converges today (pinned so a #1130 fix keeps it)."""
+        code = {"c2": "c2 = 20"}
+        deck = self._deck(tmp_path, edited=edited_vo, code=code)
+        self._run_to_convergence(deck)
+        self._assert_identical_layouts(deck, edited=edited_vo, code=code)
+
+    @pytest.mark.xfail(strict=True, reason="#1130: gate-withheld livelock")
+    @pytest.mark.parametrize(
+        ("en_order", "en_code", "de_code"),
+        [
             pytest.param(
-                {"c1": "c1 = 10", "c2": "c2 = 20"},
-                id="both-edited",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    reason=(
-                        "#1128: with BOTH pool cells edited no fingerprint survives, "
-                        "so pass 1 pairs the span's cells by position; the gate "
-                        "withholds the mis-paired projection every pass"
-                    ),
-                ),
+                ["c1", "b", "a", "c2"], {"c1": "c1 = 10", "c2": "c2 = 20"}, None, id="en-1"
+            ),
+            pytest.param(
+                ["c2", "b", "a", "c1"], {"c1": "c1 = 10", "c2": "c2 = 20"}, None, id="en-2"
+            ),
+            pytest.param(["c2", "b", "c1", "a"], {"c1": "c1 = 10"}, None, id="en-3"),
+            pytest.param(
+                ["c1", "b", "a", "c2"], None, {"c1": "c1 = 10", "c2": "c2 = 20"}, id="de-1"
             ),
         ],
     )
-    def test_1124_shared_cell_edit_in_the_same_pass_converges(
-        self, tmp_path: Path, code: dict[str, str], edited_vo: bool
+    def test_1130_reorder_plus_edit_livelocks(
+        self,
+        tmp_path: Path,
+        en_order: list[str],
+        en_code: dict[str, str] | None,
+        de_code: dict[str, str] | None,
     ):
-        """Regression test for #1124: the #1071 reorder plus an EN edit of a
-        shared code cell. The edited slot pairs across the voiceover crossing
-        as a positional guess (``changed``), so it used to classify as a plain
-        ``propagate_shared_edit`` beside the scope ``mirror_order``; their
-        joint projection mis-paired the pool, the verify gate withheld both
-        rows, and every pass re-offered them -- a silent livelock. Now the
-        slot is suspended and the pool held while the order row lands, and
-        the edit propagates on the next pass."""
-        deck = self._deck(tmp_path, edited=edited_vo, code=code)
-        passes = self._run_to_convergence(deck)
-        if "c1" in code:
-            # The straddling slot's guessed pairing is suspended, never
-            # executed, in the pass the scope order lands.
-            assert ("pos:intro/code/0", "pool_pairing_shifted") in passes[0], passes
-            assert ("pos:intro/order.deck/0", "mirror_order") in passes[0], passes
-        self._assert_identical_layouts(deck, edited=edited_vo, code=code)
+        """Shapes #1129 made converge (besides the filed one) and that
+        livelock on master: the regression set a #1130 fix must turn green."""
+        deck = self._shape_deck(tmp_path, en_order, en_code=en_code, de_code=de_code)
+        self._run_to_convergence(deck)
+        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})})
 
-    def _diff_mode(self, *, complete: bool, code: dict[str, str]):
-        from clm.slides.doc_ledger import baseline_from_deck
-        from clm.slides.doc_lenses import parse_bundle
-        from clm.slides.sync_diff import diff_outcome
+    @pytest.mark.parametrize(
+        ("en_order", "en_code", "de_code"),
+        [
+            pytest.param(["c2", "c1", "b", "a"], {"c2": "c2 = 20"}, None, id="en-1"),
+            pytest.param(["c2", "b", "a", "c1"], {"c2": "c2 = 20"}, None, id="en-2"),
+            pytest.param(["c2", "b", "c1", "a"], {"c2": "c2 = 20"}, None, id="en-3"),
+            pytest.param(
+                ["b", "c2", "c1", "a"], None, {"c1": "c1 = 10", "c2": "c2 = 20"}, id="de-1"
+            ),
+            pytest.param(
+                ["c2", "b", "c1", "a"], None, {"c1": "c1 = 10", "c2": "c2 = 20"}, id="de-2"
+            ),
+        ],
+    )
+    def test_1129_regression_shapes_keep_converging(
+        self,
+        tmp_path: Path,
+        en_order: list[str],
+        en_code: dict[str, str] | None,
+        de_code: dict[str, str] | None,
+    ):
+        """#1129 review: shapes that converge on master and that #1129's
+        suspension turned into a gate-withheld livelock (the slot was
+        suspended, and the next pass's placement answer moved a cell without
+        its edit). A #1130 fix must keep them converging with every edit."""
+        deck = self._shape_deck(tmp_path, en_order, en_code=en_code, de_code=de_code)
+        self._run_to_convergence(deck)
+        self._assert_edits_kept(deck, {**(en_code or {}), **(de_code or {})})
 
-        de = _build(*self._parts("de", self.BASE))
-        base_parse = parse_bundle(de, _build(*self._parts("en", self.BASE)))
-        base = baseline_from_deck(base_parse.deck)
-        base.complete = complete
-        return diff_outcome(
-            parse_bundle(de, _build(*self._parts("en", self.MOVED, code=code))), base
-        )
-
-    def test_1124_straddling_guess_is_suspended_only_in_ledger_mode(self):
-        """#1124 at the differ: in ledger mode the straddling ``changed``
-        slot frames the answerless suspension and the pool's order row is
-        held; the ``--since`` snapshot view keeps the raw reading (nothing
-        executes there), like every #826 suspension (#1052 review cut 3)."""
-        code = {"c1": "c1 = 10"}
-        ledger_rows = {(i.key, i.action) for i in self._diff_mode(complete=False, code=code).items}
-        assert ("pos:intro/code/0", "pool_pairing_shifted") in ledger_rows
-        assert ("pos:intro/pool.code/0", "pool_pairing_shifted") in ledger_rows
-        assert ("pos:intro/code/0", "propagate_shared_edit") not in ledger_rows
-        snapshot_actions = {i.action for i in self._diff_mode(complete=True, code=code).items}
-        assert "pool_pairing_shifted" not in snapshot_actions
-
-    def test_1124_unmoved_sibling_keeps_1052_one_pass_propagation(self, tmp_path: Path):
-        """#1124 review: the suspension keys on the guessed pairing implying a
-        pool reorder, not on the pool's size. A lone code cell straddling the
-        swapped voiceovers, beside an unrelated code cell that did not move,
-        keeps #1052's rule: its edit propagates with the scope mirror in the
+    def test_unmoved_sibling_keeps_1052_one_pass_propagation(self, tmp_path: Path):
+        """#1129 review: whatever fixes #1130 must not suspend on pool size.
+        A lone code cell straddling the swapped voiceovers, beside an
+        unrelated code cell that did not move, keeps #1052's rule: its edit propagates with the scope mirror in the
         same pass -- no suspension, no extra pass."""
 
         def parts(lang: str, order: list[str], c1: str) -> tuple[str, ...]:
