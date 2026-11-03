@@ -35,7 +35,7 @@ def main() -> int:
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         results = dict(pool.map(_status, all_cases, chunksize=16))
     failures = {k: v for k, v in sorted(results.items()) if v != "converged"}
-    BASELINE_PATH.write_text(json.dumps(failures, indent=1) + "\n", encoding="utf-8")
+    BASELINE_PATH.write_text(json.dumps(failures, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(f"{len(all_cases)} cases: {dict(Counter(results.values()))}")
     print(f"wrote {len(failures)} baseline entries to {BASELINE_PATH.relative_to(ROOT)}")
     return 0
