@@ -498,8 +498,8 @@ baseline, meaning converged -> failure or visible -> silent.
 name.
 
 **The probe** (`tests/slides/sync_probe.py` plus the families in
-`tests/slides/sync_probe_ext.py`, about 45,500 cases) covers the shapes the
-sweep does not:
+`tests/slides/sync_probe_ext.py` and `tests/slides/sync_probe_cross.py`,
+about 68,000 cases) covers the shapes the sweep does not:
 - DE reordering;
 - both halves reordering;
 - markdown and mixed pools;
@@ -509,9 +509,12 @@ sweep does not:
 - byte-identical cells;
 - a second round on the ledger the first one wrote;
 - edits on both halves, with one or both halves moving cells;
-- larger groups, three slide groups, and slide swaps.
+- larger groups, three slide groups, and slide swaps;
+- shared cells moved across slide groups: markdown and mixed cells, slides
+  inserted on one or both halves, chains over three or four groups, both
+  halves moving one cell (#1142).
 
-It takes about 6 minutes per engine on 12 workers, too slow for CI. **Run
+It takes about 9 minutes per engine on 12 workers, too slow for CI. **Run
 its gate by hand before merging a sync-engine change:**
 
 ```bash

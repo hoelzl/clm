@@ -940,6 +940,10 @@ class _Executor(DeckEmitter):
     #: parsed member's own two sides, which may be a positional guess, these
     #: are the differ's alignment (#1130).
     slot_twins: dict[tuple[int, Lang], Member] = field(factory=dict, kw_only=True)
+    #: Source holders of ``mirror_pool_move`` rows (#1142): a move claimed
+    #: as proven without a pairing guess anchors on ids and content only,
+    #: never on a slot twin (the differ's alignment may be positional).
+    _pairing_free: set[int] = field(factory=set, init=False)
     #: Placements landed this pass, re-settled after each new one.
     _placed: list[tuple[Member, Member, Lang, Lang, str]] = field(factory=list, init=False)
 
@@ -1458,6 +1462,8 @@ class _Executor(DeckEmitter):
         target = _other(source)
         src_holder, src_cell = self._moved_cell(item, source)
         tgt_holder, tgt_cell = self._moved_cell(item, target)
+        if item.action == "mirror_pool_move":
+            self._pairing_free.add(id(src_holder))
         # Validate before mutating: a failed item must be a strict no-op.
         if not any(m is src_holder for m in self.streams.get((source, src_cell.part), [])):
             raise _ItemError(f"the {source} cell of {item.key} is unlocatable")
@@ -1618,7 +1624,11 @@ class _Executor(DeckEmitter):
                 if target_groups.get(id(matches[0])) == home:
                     return matches[0]
                 continue
-            twin = self.slot_twins.get((id(prev), source))
+            twin = (
+                None
+                if id(src_holder) in self._pairing_free
+                else self.slot_twins.get((id(prev), source))
+            )
             if twin is not None and any(m is twin for m in target_stream):
                 if target_groups.get(id(twin)) == home:
                     return twin

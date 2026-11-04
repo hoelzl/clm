@@ -136,3 +136,77 @@ def test_byte_identical_cells_are_not_taken_for_a_move():
     assert all(action != "mirror_pool_move" for rows in result.passes for _, action in rows), (
         result.passes
     )
+
+
+# -- shapes the #1142 adversarial review found: no move may be inferred ------
+
+
+def _first_diff_actions(base, de_order, en_order, *, de_edits=(), en_edits=()):
+    """The actions of the first report after one round of changes."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        de, en = Path(tmp) / "slides_t.de.py", Path(tmp) / "slides_t.en.py"
+        none: frozenset[str] = frozenset()
+        de.write_text(sp.deck_text("de", base, none), encoding="utf-8")
+        en.write_text(sp.deck_text("en", base, none), encoding="utf-8")
+        sp._record(de, en)
+        de.write_text(sp.deck_text("de", de_order, frozenset(de_edits)), encoding="utf-8")
+        en.write_text(sp.deck_text("en", en_order, frozenset(en_edits)), encoding="utf-8")
+        _, diff = sp._diff(de, en)
+        return [(i.key, i.action) for i in diff.items]
+
+
+@pytest.mark.parametrize(
+    ("base", "de_order", "en_order", "de_edits", "en_edits"),
+    [
+        pytest.param(
+            ("S0", "a", "c1", "S1", "b", "c2", "S2"),
+            ("S0", "a", "S1", "b", "c2", "S2"),
+            ("S0", "a", "c1", "S1", "b", "S2"),
+            (),
+            ("c1",),
+            id="other-half-deleted-the-slot",  # F1: DE's deletion must stay a question
+        ),
+        pytest.param(
+            ("S0", "a", "c1", "c2", "S1", "b", "c3", "S2"),
+            ("S0", "a", "c1", "S1", "b", "c2", "c3", "S2"),
+            ("S0", "c2", "a", "c1", "S1", "b", "c3", "S2"),
+            (),
+            (),
+            id="both-halves-moved-the-cell",  # F3
+        ),
+        pytest.param(
+            ("S0", "a", "c1", "c2", "S1", "b", "c3", "S2", "e", "c4", "S3"),
+            ("S0", "a", "c1", "c4", "c2", "S1", "b", "c3", "S2", "e", "S3"),
+            ("S0", "a", "c2", "S1", "b", "c3", "S2", "e", "c4", "S3"),
+            (),
+            ("c2",),
+            id="destination-pool-has-its-own-changes",  # F5
+        ),
+        pytest.param(
+            ("S0", "a", "c1", "c2", "S1", "b", "c3", "S2"),
+            ("S0", "a", "S9", "c1", "c2", "S1", "b", "c3", "S2"),
+            ("S0", "a", "c2", "S9", "c1", "S1", "b", "c3", "S2"),
+            (),
+            (),
+            id="slide-inserted-at-different-points",  # probe split_both
+        ),
+    ],
+)
+def test_no_move_is_inferred_where_the_evidence_does_not_prove_it(
+    base, de_order, en_order, de_edits, en_edits
+):
+    actions = _first_diff_actions(base, de_order, en_order, de_edits=de_edits, en_edits=en_edits)
+    assert all(action != "mirror_pool_move" for _, action in actions), actions
+
+
+def test_a_byte_identical_sibling_does_not_hide_a_lost_slot():
+    """F4: DE edits ``d1`` (whose twin ``d2`` keeps the bytes) and deletes
+    ``c2``; EN moves a voiceover. "c2 moved and edited" must not be read."""
+    base = ("S0", "a", "c1", "d1", "S1", "b", "d2", "c2", "S2", "e", "S3")
+    de_order = ("S0", "a", "c1", "d1", "S1", "b", "d2", "S2", "e", "S3")
+    en_order = ("S0", "a", "c1", "d1", "e", "S1", "b", "d2", "c2", "S2", "S3")
+    actions = _first_diff_actions(base, de_order, en_order, de_edits=("d1",))
+    assert all(action != "mirror_pool_move" for _, action in actions), actions

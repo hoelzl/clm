@@ -2550,15 +2550,21 @@ A shared un-id'd cell (code, un-id'd markdown) that one half moved into
 another slide group or subslide is mirrored mechanically
 (`mirror_pool_move`, since CLM {version}, #1142) when the move is proven
 without a pairing guess: the moving half holds the cell's recorded content
-exactly once, in the other group, and the other half still holds it in the
-recorded group, unedited or edited in place (that edit travels with the
-move). A cell the moving half also edited is paired only by elimination:
-it must be that half's only missing cell of its kind and its only
-unrecorded one, so that "moved and edited" and "deleted, plus a new cell
-added there" give the same result. Not covered: byte-identical cells,
-a group that exists on one half only (a slide inserted on one half is a
-group split: mirror the slide, `remove_vs_split`), and cells both halves
-moved. A placement answer never carries a cell into another group.
+exactly once, in another group the ledger knows, and the other half still
+holds it where it was recorded (same group, same id'd neighbour, same
+order among its kind), unedited or edited in place (that edit travels with
+the move). A cell the moving half also edited is paired only by
+elimination: it must be that half's only lost slot of its kind and its only
+unrecorded cell, so that "moved and edited" and "deleted, plus a new cell
+added there" give the same result. The destination must have no other
+changes of that kind in the same pass. Everything else stays framed as
+before: byte-identical cells, a move into a slide new this pass or present
+on one half only (a group split: mirror the slide, `remove_vs_split`),
+cells both halves moved, a slot the other half deleted or edited too. A
+placement answer never carries a cell into another group. Blind spot: a
+code cell and a markdown cell swapped with no id'd cell between them leave
+no trace in the ledger, so if the other half did that to a cell this half
+moved away, the other half's swap is lost silently.
 
 **Mechanical actions** (`apply` executes them deterministically):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
