@@ -1438,10 +1438,13 @@ class _Executor(DeckEmitter):
         the ``twin`` convention the slot's two cells live on different
         parsed members (the lens could not pair them — they sit in
         different spans), so each side is resolved through
-        :meth:`_holder`. The target cell keeps its bytes and its member; only
-        its position in the target stream changes — right after the
-        mirrored predecessor of the source cell, which is the sync point
-        itself or a later cell of the same span.
+        :meth:`_holder`. The target cell keeps its member and moves right
+        after the source cell's nearest predecessor whose target counterpart
+        is known (:meth:`_placement_anchor`; #1130). When exactly one half
+        changed the slot since the record, that content travels with the
+        placement (:meth:`_carry_edit`). A pool where both halves moved
+        cells (``item.legacy_placement``) keeps the pre-#1130 placement:
+        after the mirrored predecessor, the target keeping its bytes.
         """
         target = _other(source)
         src_holder, src_cell = self._moved_cell(item, source)
@@ -1452,6 +1455,13 @@ class _Executor(DeckEmitter):
         if not any(m is tgt_holder for m in self.streams.get((target, tgt_cell.part), [])):
             raise _ItemError(f"the {target} cell of {item.key} is unlocatable")
         self.stream_remove(target, tgt_cell.part, tgt_holder)
+        if item.legacy_placement:
+            # Both halves moved the pool's cells (#1144 review): the
+            # pre-#1130 placement, the target keeping its bytes.
+            self.insert_mirrored(
+                src_holder, source, target, tgt_cell.part, tgt_cell, into=tgt_holder
+            )
+            return
         anchor = self._placement_anchor(src_holder, source, target, tgt_cell.part)
         if anchor is _AMBIGUOUS:
             self.insert_mirrored(
@@ -1486,6 +1496,10 @@ class _Executor(DeckEmitter):
                     moved = True
             if not moved:
                 break
+        else:
+            # The verify and the conservation check still judge the result;
+            # this only says why a later pass may move the cell again.
+            logger.debug("placement of %s did not settle in %d rounds", item.key, len(self._placed))
 
     def _carry_edit(
         self,
@@ -1539,32 +1553,37 @@ class _Executor(DeckEmitter):
         """The target-stream member a placed cell goes right after (#1130).
 
         Walk back from the source cell to its nearest predecessor whose
-        target counterpart is KNOWN: a slot twin the differ paired, or the
-        one target cell with the same id or content. A parsed member's other
-        side is never trusted on its own, since a positional parse pairs
-        cells by a cursor guess: anchoring on it put a cell after the wrong
-        neighbour and the next pass banked the swap. ``None`` means the top
-        of the stream; :data:`_AMBIGUOUS` (content shared by several target
-        cells) falls back to the legacy mirrored insert.
+        target counterpart is KNOWN: first the one target cell with the same
+        id or content (evidence that needs no pairing at all), then a slot
+        twin the differ paired. A twin is only the differ's alignment, and
+        that alignment is itself positional when neither half proves the
+        slot (#1144 review: a twin pairing two different edited cells put a
+        cell after the wrong neighbour). A parsed member's other side is
+        never trusted, since a positional parse pairs cells by a cursor
+        guess. ``None`` means the top of the stream; :data:`_AMBIGUOUS`
+        (content shared by several target cells, no twin) falls back to the
+        legacy mirrored insert.
         """
         source_stream = self.streams.get((source, part), [])
         target_stream = [m for m in self.streams.get((target, part), []) if m is not moving]
         pos = next(i for i, m in enumerate(source_stream) if m is src_holder)
         for prev in reversed(source_stream[:pos]):
+            cell = prev.side(source)
+            label = _anchor_label(prev, cell) if cell is not None else None
+            matches = (
+                [
+                    m
+                    for m in target_stream
+                    if (other := m.side(target)) is not None and _anchor_label(m, other) == label
+                ]
+                if label is not None
+                else []
+            )
+            if len(matches) == 1:
+                return matches[0]
             twin = self.slot_twins.get((id(prev), source))
             if twin is not None and any(m is twin for m in target_stream):
                 return twin
-            cell = prev.side(source)
-            label = _anchor_label(prev, cell) if cell is not None else None
-            if label is None:
-                continue
-            matches = [
-                m
-                for m in target_stream
-                if (other := m.side(target)) is not None and _anchor_label(m, other) == label
-            ]
-            if len(matches) == 1:
-                return matches[0]
             if matches:
                 return _AMBIGUOUS
         return None
@@ -2362,38 +2381,12 @@ def item_with_side(item: DiffItem, side: Lang) -> DiffItem:
     return evolve(item, side=side)
 
 
-def _require_recorded_target(ex: _Executor, item: DiffItem, source: Lang) -> None:
-    """A positional edit propagation may only overwrite the slot's recorded
-    content (#1130 step 2).
-
-    ``propagate_shared_edit`` means "one half edited the slot, the other kept
-    it", so the cell it overwrites must still hold what the ledger recorded
-    for that slot. When it holds something else, the differ paired the edit
-    with another slot's cell (a positional guess), and copying would replace
-    an unrelated cell: the row fails instead, visibly.
-    """
-    if item.base is None or not item.key.startswith("pos:"):
-        return
-    target = _other(source)
-    recorded = item.base.side_fp(target)
-    if recorded is None:
-        return
-    _holder, cell = ex._locate_twin(item, target)
-    if content_fingerprint(cell) != recorded:
-        raise _ItemError(
-            f"the {target} cell this edit would overwrite is not the slot's recorded "
-            f"content — the pairing is a positional guess (a cell moved across an id'd "
-            f"neighbour); give the moved cell a slide_id, or move it back, and re-report"
-        )
-
-
 def _execute_mechanical(ex: _Executor, item: DiffItem) -> None:
     action = item.action
     side = item.side
     if action == "propagate_shared_edit":
         if side is None:
             raise _ItemError("item names no moved side")
-        _require_recorded_target(ex, item, side)
         ex.propagate(item, side)
     elif action == "copy_new_shared":
         if side is None:
