@@ -2585,16 +2585,23 @@ twins' tag sets diverged with no attributable direction — answer `de`/`en` to
 mirror **only that side's tag set** onto the twin, bodies untouched; while it
 is framed it suppresses the member's other rows — body, layout, and owner —
 which re-frame on the next report once the tags are reconciled),
-`ambiguous_alignment`, `verify_cold`, `pool_pairing_shifted` (a class
-transition — fork/unify/id-stamp — shifted a positional pool's per-side
-accounting, so its slots' cross-side pairings are order guesses; the pool's
-rows are suspended for the pass, answerless — resolve the transition and
-re-report, #826), `pool_placement_divergence` (the two halves place a
+`ambiguous_alignment`, `verify_cold`, `pool_pairing_shifted` (a positional
+pool's cross-side pairings are guesses, so its rows are suspended for the
+pass, answerless. Two causes, named in the detail: a class transition —
+fork/unify/id-stamp — shifted the pool's per-side accounting; resolve the
+transition and re-report, #826. Or, since CLM {version}, a half moved AND
+edited the pool's un-id'd cells and a cell was also edited on the other
+half, so which cell is which cannot be told apart and any content answer
+could overwrite another cell's edit; give the moved cells a `slide_id` on
+both halves, or put one half's cells back in the other's order, and
+re-report, #1130), `pool_placement_divergence` (the two halves place a
 positional cell on different sides of an id-keyed sibling — an id-keyed
 member present on both halves is a sync point no positional pairing may
 cross; answer `de`/`en` to adopt that half's placement — the other half's
-cell moves next to it — or mint a `slide_id` on the cell and re-report,
-#906), and friends. Every JSON item carries an
+cell moves next to it, and since CLM {version} an edit made on only one
+half since the last record travels with it, unless both halves moved the
+pool's cells (#1130) — or mint a `slide_id`
+on the cell and re-report, #906), and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
 (`de` / `en`) so an agent can answer without re-reading files. A report whose
