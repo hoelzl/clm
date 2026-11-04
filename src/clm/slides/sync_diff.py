@@ -238,6 +238,7 @@ MECHANICAL_ACTIONS = frozenset(
         "record_owner",  # owner reference moved identically on both
         "retarget_owner",  # owner slide renamed this pass — follow it (#650)
         "mirror_order",  # §6.2 order: one side reordered
+        "mirror_pool_move",  # a shared un-id'd cell moved to another group on one half (#1142)
         "record_order",  # both sides reordered identically
         "record_group_rename",  # anchor id renamed, anchor content matched
         "propagate_preamble",  # file preamble moved on one side
@@ -746,6 +747,9 @@ class _Differ:
         ] = {}
         #: Rendered handles of the crossed sync points (:meth:`_crossed_sync_points`)
         self._crossed_handles: set[str] = set()
+        #: ``(lang, id(member))`` of the cells a proven cross-group move took
+        #: out of the pool alignment (:meth:`_cross_group_pool_moves`, #1142).
+        self._pool_excluded: set[tuple[Lang, int]] = set()
 
     # -- plumbing ---------------------------------------------------------
 
@@ -3000,6 +3004,7 @@ class _Differ:
         # test), before any slot is classified (#1052).
         crossed = self._crossed_sync_points()
         self._uncrossed_spans = self._build_span_index(skip=crossed) if crossed else None
+        moves = self._cross_group_pool_moves(pos_members)
         pools: dict[tuple[str, str], list[Member]] = {}
         for member, group in pos_members:
             if id(member) in self.absorbed_pos:
@@ -3008,6 +3013,7 @@ class _Differ:
             pools.setdefault((token, member.kind), []).append(member)
 
         consumed_base: set[str] = set(self.matched_base_keys)
+        consumed_base |= {move[0].key for move in moves}
         base_pools: dict[tuple[str, str], list[MemberBaseline]] = {}
         for key, entry in self.base.members.items():
             if not key.startswith("pos:") or key in consumed_base:
@@ -3021,6 +3027,210 @@ class _Differ:
         for pool_key in sorted(set(pools) | set(base_pools), key=str):
             group, kind = pool_key
             self._align_pool(group, kind, pools.get(pool_key, []), base_pools.get(pool_key, []))
+        for entry, moved, de_holder, en_holder, dest in moves:
+            self.matched_base_keys.add(entry.key)
+            other: Lang = "en" if moved == "de" else "de"
+            moved_cell = (de_holder if moved == "de" else en_holder).side(moved)
+            other_cell = (en_holder if moved == "de" else de_holder).side(other)
+            assert moved_cell is not None and other_cell is not None
+            proof = (
+                "its recorded content, found nowhere else"
+                if content_fingerprint(moved_cell) == entry.side_fp(moved)
+                else f"edited too: the {moved} side's only missing and only new cell of its kind"
+            )
+            if content_fingerprint(other_cell) != entry.side_fp(other):
+                proof += f"; the {other} side's in-place edit travels with it"
+            self.emit(
+                entry.key,
+                "order",
+                "mirror_pool_move",
+                "de_to_en" if moved == "de" else "en_to_de",
+                f"shared cell moved to group {dest!r} on the {moved} side only "
+                f"({proof}) — mirror the move to the twin",
+                group=dest,
+                side=moved,
+                member=de_holder,
+                twin=en_holder,
+                base=entry,
+            )
+
+    def _cross_group_pool_moves(
+        self, pos_members: list[tuple[Member, str]]
+    ) -> list[tuple[MemberBaseline, Lang, Member, Member, str]]:
+        """Shared un-id'd cells one half moved into another group (#1142).
+
+        Pools pair positional cells per group, so a cell moved into another
+        group reads as a removal in one pool and a cold one-sided cell in
+        the other: neither can execute, and the halves never converge. A
+        move is taken as proven only on fingerprint evidence that needs no
+        pairing: the slot's recorded content on the moving half sits, once
+        in the deck and once in the base, in a different group than the one
+        recorded; the other half still holds its recorded content, once, in
+        the recorded group. Both groups' anchors exist on both halves: a
+        group present on one half only is a group split (#610/#630), where
+        the slide is what must be mirrored, not the cells.
+
+        Returns ``(entry, moving half, DE holder, EN holder, destination
+        group)`` per move. The moved cells leave the pool alignment
+        (``_pool_excluded``); the move row re-homes the twin.
+        """
+        assert self.base is not None
+        if self.base.complete:
+            return []  # snapshot mode: nothing executes there
+        _, two_sided_anchor = self._anchor_brackets()
+
+        current: dict[tuple[Lang, str], list[tuple[Member, str]]] = {}
+        for member, group in pos_members:
+            if id(member) in self.absorbed_pos or member.langness != "shared":
+                continue
+            token = _member_group_token(member, group)
+            for lang in _SIDES:
+                cell = member.side(lang)
+                if cell is not None and cell.part == "deck":
+                    current.setdefault((lang, content_fingerprint(cell)), []).append(
+                        (member, token)
+                    )
+
+        entries: list[tuple[MemberBaseline, str, str]] = []
+        base_count: dict[tuple[Lang, str], int] = {}
+        for key, entry in self.base.members.items():
+            if not key.startswith("pos:"):
+                continue
+            for lang in _SIDES:
+                fp = entry.side_fp(lang)
+                if fp is not None:
+                    base_count[(lang, fp)] = base_count.get((lang, fp), 0) + 1
+            if (
+                key in self.matched_base_keys
+                or entry.langness != "shared"
+                or entry.layout == "companion"
+                or entry.de_fp is None
+                or entry.en_fp is None
+            ):
+                continue
+            token, kind, _ordinal = key.split(":", 1)[1].rsplit("/", 2)
+            entries.append((entry, self.group_map.get(token, token), kind))
+
+        def sole(lang: Lang, fp: str) -> tuple[Member, str] | None:
+            found = current.get((lang, fp), [])
+            if base_count.get((lang, fp)) != 1 or len(found) != 1:
+                return None
+            return found[0]
+
+        def edited_in_place(
+            lang: Lang, entry: MemberBaseline, group: str, kind: str
+        ) -> tuple[Member, str] | None:
+            """The half's copy of ``entry`` when that half edited it where it
+            was: its recorded content is gone from the half, and in the
+            recorded group the half holds exactly one unrecorded cell of the
+            kind while exactly one of the group's slots lost its content."""
+            fp = entry.side_fp(lang)
+            if fp is None or base_count.get((lang, fp)) != 1 or current.get((lang, fp)):
+                return None
+            unrecorded = [
+                (member, token)
+                for (side, cell_fp), found in current.items()
+                if side == lang and (lang, cell_fp) not in base_count
+                for member, token in found
+                if token == group and member.kind == kind
+            ]
+            lost = [
+                e
+                for e, g, k in entries
+                if g == group
+                and k == kind
+                and (e_fp := e.side_fp(lang)) is not None
+                and not current.get((lang, e_fp))
+            ]
+            if len(unrecorded) != 1 or len(lost) != 1:
+                return None
+            return unrecorded[0]
+
+        moves: list[tuple[MemberBaseline, Lang, Member, Member, str]] = []
+        for entry, base_group, kind in entries:
+            for moved in _SIDES:
+                other: Lang = "en" if moved == "de" else "de"
+                moved_fp, other_fp = entry.side_fp(moved), entry.side_fp(other)
+                assert moved_fp is not None and other_fp is not None
+                here = sole(moved, moved_fp)
+                if here is None:
+                    continue
+                # The other half kept the slot where it was: unedited (its
+                # recorded content, once), or edited in place, which the move
+                # row then carries to the moved copy.
+                there = sole(other, other_fp) or edited_in_place(other, entry, base_group, kind)
+                if there is None:
+                    continue
+                (moved_member, dest), (other_member, other_group) = here, there
+                if (
+                    dest == base_group
+                    or other_group != base_group
+                    or moved_member.kind != kind
+                    or other_member.kind != kind
+                    or not two_sided_anchor.get(dest)
+                    or not two_sided_anchor.get(base_group)
+                ):
+                    continue
+                self._pool_excluded.add((moved, id(moved_member)))
+                self._pool_excluded.add((other, id(other_member)))
+                de_holder, en_holder = (
+                    (moved_member, other_member) if moved == "de" else (other_member, moved_member)
+                )
+                moves.append((entry, moved, de_holder, en_holder, dest))
+                break
+
+        # Stage 2: a cell one half moved AND edited has no fingerprint proof.
+        # It is paired by elimination only where that cannot lose content:
+        # the other half still holds the slot unedited in the recorded group,
+        # the slot is the half's only missing one of its kind deck-wide, and
+        # the half's only unrecorded cell of that kind sits in another group.
+        # Then "moved and edited" and "deleted, plus a new cell added there"
+        # land the same bytes in the same place, so the reading cannot be
+        # wrong in effect; the move row carries the edit (_carry_edit).
+        taken = {move[0].key for move in moves}
+        for moved in _SIDES:
+            other = "en" if moved == "de" else "de"
+            missing: dict[str, list[tuple[MemberBaseline, str, Member]]] = {}
+            for entry, base_group, kind in entries:
+                if entry.key in taken:
+                    continue
+                moved_fp, other_fp = entry.side_fp(moved), entry.side_fp(other)
+                assert moved_fp is not None and other_fp is not None
+                there = sole(other, other_fp)
+                if (
+                    current.get((moved, moved_fp))
+                    or there is None
+                    or there[1] != base_group
+                    or (other, id(there[0])) in self._pool_excluded
+                ):
+                    continue
+                missing.setdefault(kind, []).append((entry, base_group, there[0]))
+            unrecorded: dict[str, list[tuple[Member, str]]] = {}
+            for (lang, fp), found in current.items():
+                if lang != moved or (moved, fp) in base_count:
+                    continue
+                for member, token in found:
+                    if (moved, id(member)) not in self._pool_excluded:
+                        unrecorded.setdefault(member.kind, []).append((member, token))
+            for kind, slots in missing.items():
+                news = unrecorded.get(kind, [])
+                if len(slots) != 1 or len(news) != 1:
+                    continue
+                (entry, base_group, other_member), (moved_member, dest) = slots[0], news[0]
+                if (
+                    dest == base_group
+                    or not two_sided_anchor.get(dest)
+                    or not two_sided_anchor.get(base_group)
+                ):
+                    continue
+                self._pool_excluded.add((moved, id(moved_member)))
+                self._pool_excluded.add((other, id(other_member)))
+                de_holder, en_holder = (
+                    (moved_member, other_member) if moved == "de" else (other_member, moved_member)
+                )
+                moves.append((entry, moved, de_holder, en_holder, dest))
+                taken.add(entry.key)
+        return moves
 
     def _align_pool(
         self, group: str, kind: str, members: list[Member], base_entries: list[MemberBaseline]
@@ -3038,6 +3248,7 @@ class _Differ:
                 (cell.part != "deck", cell.index, member, cell)
                 for member in members
                 if (cell := member.side(lang)) is not None
+                and (lang, id(member)) not in self._pool_excluded
             ]
             placed.sort(key=lambda e: (e[0], e[1]))
             per_side[lang] = [

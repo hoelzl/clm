@@ -841,6 +841,7 @@ _PHASES: dict[str, int] = {
     "remove_localized_side": 2,
     "mirror_layout": 3,
     "mirror_order": 4,
+    "mirror_pool_move": 4,
     "order_decision": 4,
     "pool_placement_divergence": 4,
     "propagate_preamble": 5,
@@ -1428,7 +1429,15 @@ class _Executor(DeckEmitter):
         if not any(m is member for m in self.streams.get((source, cell.part), [])):
             raise _ItemError(f"the moved {source} cell of {item.key} is unlocatable")
         self.stream_remove(target, cell.part, member)
-        self.insert_mirrored(member, source, target, cell.part, cell)
+        # #1142: after the nearest predecessor whose counterpart is known
+        # without a pairing guess, as a placement does; the mirrored insert
+        # trusts a positional parse marriage and can land the cell on the
+        # wrong side of a shared cell.
+        anchor = self._placement_anchor(member, source, target, cell.part)
+        if anchor is _AMBIGUOUS:
+            self.insert_mirrored(member, source, target, cell.part, cell)
+        else:
+            self._insert_after(target, cell.part, anchor, member)
 
     def mirror_pool_placement(self, item: DiffItem, source: Lang) -> None:
         """#906 ``de``/``en``: re-home a pool slot's twin cell to the chosen
@@ -1454,24 +1463,43 @@ class _Executor(DeckEmitter):
             raise _ItemError(f"the {source} cell of {item.key} is unlocatable")
         if not any(m is tgt_holder for m in self.streams.get((target, tgt_cell.part), [])):
             raise _ItemError(f"the {target} cell of {item.key} is unlocatable")
+        source_stream = self.streams.get((source, src_cell.part), [])
+        home = _group_label(
+            source_stream,
+            next(i for i, m in enumerate(source_stream) if m is src_holder),
+            source,
+        )
+        target_stream = self.streams.get((target, tgt_cell.part), [])
+        origin = next(i for i, m in enumerate(target_stream) if m is tgt_holder)
         self.stream_remove(target, tgt_cell.part, tgt_holder)
-        if item.legacy_placement:
-            # Both halves moved the pool's cells (#1144 review): the
-            # pre-#1130 placement, the target keeping its bytes.
+        if (
+            item.legacy_placement
+            or (anchor := self._placement_anchor(src_holder, source, target, tgt_cell.part))
+            is _AMBIGUOUS
+        ):
+            # Both halves moved the pool's cells (#1144 review: the pre-#1130
+            # placement, the target keeping its bytes), or no unique anchor:
+            # the mirrored insert. It walks back to ANY mirrored neighbour, so
+            # it may land in another group: a placement never moves a cell
+            # out of the source cell's group (#1142), it fails visibly instead.
             self.insert_mirrored(
                 src_holder, source, target, tgt_cell.part, tgt_cell, into=tgt_holder
             )
-            return
-        anchor = self._placement_anchor(src_holder, source, target, tgt_cell.part)
-        if anchor is _AMBIGUOUS:
-            self.insert_mirrored(
-                src_holder,
-                source,
-                target,
-                tgt_cell.part,
-                self._carry_edit(item, source, src_holder, src_cell, tgt_cell),
-                into=tgt_holder,
-            )
+            stream = self.streams.get((target, tgt_cell.part), [])
+            landed = next(i for i, m in enumerate(stream) if m is tgt_holder)
+            if _group_label(stream, landed, target) != home:
+                self.stream_remove(target, tgt_cell.part, tgt_holder)
+                stream.insert(origin, tgt_holder)
+                raise _ItemError(
+                    f"no neighbour of {item.key} places it inside {home!r} on the "
+                    f"{target} half — reconcile manually"
+                )
+            if not item.legacy_placement:
+                self.set_side(
+                    tgt_holder,
+                    target,
+                    self._carry_edit(item, source, src_holder, src_cell, tgt_cell),
+                )
             return
         self._insert_after(target, tgt_cell.part, anchor, tgt_holder)
         self.set_side(
@@ -1567,6 +1595,13 @@ class _Executor(DeckEmitter):
         source_stream = self.streams.get((source, part), [])
         target_stream = [m for m in self.streams.get((target, part), []) if m is not moving]
         pos = next(i for i, m in enumerate(source_stream) if m is src_holder)
+        # #1142: an anchor must sit in the source cell's own group on the
+        # target half too. A neighbour whose counterpart is still in another
+        # group there (its own cross-group move deferred or pending) would
+        # carry the placed cell into that group: walk on, at the latest to
+        # the group's anchor.
+        home = _group_label(source_stream, pos, source)
+        target_groups = _group_labels(target_stream, target)
         for prev in reversed(source_stream[:pos]):
             cell = prev.side(source)
             label = _anchor_label(prev, cell) if cell is not None else None
@@ -1580,10 +1615,14 @@ class _Executor(DeckEmitter):
                 else []
             )
             if len(matches) == 1:
-                return matches[0]
+                if target_groups.get(id(matches[0])) == home:
+                    return matches[0]
+                continue
             twin = self.slot_twins.get((id(prev), source))
             if twin is not None and any(m is twin for m in target_stream):
-                return twin
+                if target_groups.get(id(twin)) == home:
+                    return twin
+                continue
             if matches:
                 return _AMBIGUOUS
         return None
@@ -1591,6 +1630,32 @@ class _Executor(DeckEmitter):
 
 #: :meth:`_Executor._placement_anchor`'s "no unique anchor" verdict.
 _AMBIGUOUS = object()
+
+
+def _is_group_anchor(member: Member) -> bool:
+    return member.role in ("slide", "subslide")
+
+
+def _group_labels(stream: list[Member], lang: Lang) -> dict[int, str | None]:
+    """Each stream member's group on ``lang``: the label of the nearest group
+    anchor at or before it (``None`` before the first)."""
+    out: dict[int, str | None] = {}
+    current: str | None = None
+    for member in stream:
+        cell = member.side(lang)
+        if cell is not None and _is_group_anchor(member):
+            current = _anchor_label(member, cell)
+        out[id(member)] = current
+    return out
+
+
+def _group_label(stream: list[Member], pos: int, lang: Lang) -> str | None:
+    """The group of the member at ``stream[pos]`` on ``lang``."""
+    for member in reversed(stream[: pos + 1]):
+        cell = member.side(lang)
+        if cell is not None and _is_group_anchor(member):
+            return _anchor_label(member, cell)
+    return None
 
 
 def _anchor_label(member: Member, cell: SideCell) -> str | None:
@@ -1777,6 +1842,19 @@ def _record_item(
                     rerecorded.add((group, kind))
             return rerecorded
         return set()
+    if action == "mirror_pool_move":
+        # #1142: the cell left its recorded pool for another group's, so both
+        # pools (and both scopes' recorded order) are this row's to record.
+        source = _pool_scope(item)
+        moved_pools: set[tuple[str, str]] = set()
+        if source is None:
+            return moved_pools
+        for scope in {source[0], item.group or source[0]}:
+            record_order_scope(target, fresh, scope, "deck")
+            if (scope, source[1]) not in frozen_pools:
+                rerecord_pool(target, fresh, scope, source[1])
+                moved_pools.add((scope, source[1]))
+        return moved_pools
     if action in ("record_preamble", "propagate_preamble", "conflict_preamble") or (
         key in _PREAMBLE_HANDLES
     ):
@@ -2418,6 +2496,10 @@ def _execute_mechanical(ex: _Executor, item: DiffItem) -> None:
         if side is None:
             raise _ItemError("item names no moved side")
         ex.mirror_order(item, side)
+    elif action == "mirror_pool_move":
+        if side is None:
+            raise _ItemError("item names no moved side")
+        ex.mirror_pool_placement(item, side)
     elif action == "propagate_preamble":
         if side is None:
             raise _ItemError("item names no moved side")
@@ -2590,7 +2672,14 @@ def _execute_pass(
         if item.twin is not None and item.member is not None and item.twin is not item.member:
             ex.slot_twins[(id(item.member), "de")] = item.twin
             ex.slot_twins[(id(item.twin), "en")] = item.member
-    ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
+    # #1142: a cross-group pool move runs after its phase's other order rows,
+    # so it anchors on neighbours that already moved this pass. Only that
+    # row: moving placements behind the scope order rows too cost 59 probe
+    # shapes that converged before.
+    ordered = sorted(
+        enumerate(diff.items),
+        key=lambda e: (_item_phase(e[1]), e[1].action == "mirror_pool_move", e[0]),
+    )
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
     unresolved_items: list[DiffItem] = []  # pending / rejected / failed / held
     status: dict[int, str] = {}

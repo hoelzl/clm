@@ -2546,10 +2546,24 @@ confirm-seeded ledger), the divergence frames an `order_decision` — answer
 `de`/`en` to adopt that side's order. An `apply` pass that resolves every
 item seeds order trust for the scopes whose sides agree.
 
+A shared un-id'd cell (code, un-id'd markdown) that one half moved into
+another slide group or subslide is mirrored mechanically
+(`mirror_pool_move`, since CLM {version}, #1142) when the move is proven
+without a pairing guess: the moving half holds the cell's recorded content
+exactly once, in the other group, and the other half still holds it in the
+recorded group, unedited or edited in place (that edit travels with the
+move). A cell the moving half also edited is paired only by elimination:
+it must be that half's only missing cell of its kind and its only
+unrecorded one, so that "moved and edited" and "deleted, plus a new cell
+added there" give the same result. Not covered: byte-identical cells,
+a group that exists on one half only (a slide inserted on one half is a
+group split: mirror the slide, `remove_vs_split`), and cells both halves
+moved. A placement answer never carries a cell into another group.
+
 **Mechanical actions** (`apply` executes them deterministically):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
-`mirror_order`, `mirror_layout`, the `record_*` acknowledgements (both sides
-already agree — ledger-only), the §7.3 transitions (`record_fork`,
+`mirror_order`, `mirror_pool_move`, `mirror_layout`, the `record_*`
+acknowledgements (both sides already agree — ledger-only), the §7.3 transitions (`record_fork`,
 `record_unify`, `stamp_twin_id`, `record_key_migration`), and preamble
 propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
 removal against an already-diverged baseline frames `remove_vs_edit`

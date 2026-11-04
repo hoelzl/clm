@@ -2505,7 +2505,49 @@ class TestRemoveVsSplit:
         EN deletes the boilerplate cell from slide s0 and independently adds
         the same boilerplate to the pre-existing slide s1 (EN half first) —
         no slide was inserted, nothing moved groups; DE is untouched.
+
+        s1 already holds the boilerplate once at base: repeated boilerplate is
+        the shape #630 is about, and it keeps the content from naming a
+        single slot. A boilerplate that was unique at base is a proven move
+        since #1142 (:meth:`test_a_unique_coincidence_is_a_move`).
         """
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                self.BOILER,
+                _shared_code("x"),
+                _slide("s1", "de", "Zweite"),
+                _shared_code("q", 7),
+                self.BOILER,
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                self.BOILER,
+                _shared_code("x"),
+                _slide("s1", "en", "Second"),
+                _shared_code("q", 7),
+                self.BOILER,
+            ),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("x"),
+            _slide("s1", "en", "Second"),
+            _shared_code("q", 7),
+            self.BOILER,
+            self.BOILER,
+        )
+        return deck
+
+    def test_a_unique_coincidence_is_a_move(self, tmp_path: Path):
+        # #1142: with the boilerplate unique at base, "deleted in s0, the same
+        # cell added to s1" and "moved from s0 to s1" land the same bytes in
+        # the same place, so it mirrors mechanically instead of asking.
         deck = _Deck(
             tmp_path,
             _build(
@@ -2526,15 +2568,20 @@ class TestRemoveVsSplit:
             ),
         )
         deck.record()
-        deck.write_en(
-            HEADER_EN,
-            _slide("s0", "en", "Title"),
-            _shared_code("x"),
+        moved = (
             _slide("s1", "en", "Second"),
             _shared_code("q", 7),
             self.BOILER,
         )
-        return deck
+        deck.write_en(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("x"), *moved)
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("pos:s0/code/0", "mirror_pool_move")]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert de.count("b = 9") == 1
+        assert de.index("q = 7") < de.index("b = 9")
 
     def test_coincidental_duplicate_row_advertises_a_remove_answer(self, tmp_path: Path):
         # Regression test for #630 F1: the reframed removal advertised no
@@ -2554,8 +2601,8 @@ class TestRemoveVsSplit:
         row = next(i for i in diff.items if i.action == "remove_vs_split")
         outcome = deck.apply(_decision(row.key, choice="remove"))
         assert _statuses(outcome)[row.key] == "applied", outcome.to_payload()
-        assert "b = 9" not in deck.de_path.read_text(encoding="utf-8")
-        assert "b = 9" in deck.en_path.read_text(encoding="utf-8")
+        assert deck.de_path.read_text(encoding="utf-8").count("b = 9") == 1
+        assert deck.en_path.read_text(encoding="utf-8").count("b = 9") == 2
         _, diff = deck.diff()
         leftover = {(i.key, i.action) for i in diff.items}
         assert all(a == "verify_cold" for _, a in leftover), leftover
@@ -2707,6 +2754,7 @@ class TestRemoveVsSplit:
                 big,
                 _slide("sB", "de", "Zweite"),
                 _shared_code("q", 7),
+                big,
             ),
             _build(
                 HEADER_EN,
@@ -2714,11 +2762,14 @@ class TestRemoveVsSplit:
                 big,
                 _slide("sB", "en", "Second"),
                 _shared_code("q", 7),
+                big,
             ),
         )
         deck.record()
         # EN: s0's cell is split into the new slide sN with an edit, while
-        # the unrelated group sB independently gains a byte-identical copy.
+        # the unrelated group sB independently gains another byte-identical
+        # copy (sB holds one at base, so the content names no single slot
+        # and #1142's proven move does not apply).
         deck.write_en(
             HEADER_EN,
             _slide("s0", "en", "Title"),
@@ -2726,6 +2777,7 @@ class TestRemoveVsSplit:
             edited,
             _slide("sB", "en", "Second"),
             _shared_code("q", 7),
+            big,
             big,
         )
         _, diff = deck.diff()
