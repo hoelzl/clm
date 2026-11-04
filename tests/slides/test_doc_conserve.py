@@ -106,32 +106,37 @@ class TestCheckConservation:
         assert before  # parsed
 
 
-def test_a_mis_paired_cross_group_move_is_withheld_not_written():
-    """The probe's ``two_groups`` shape: EN swaps c1 and c2 across slide
-    groups. The pass master wrote here put ``c1`` on DE twice and dropped
-    ``c2`` there; a later pass happened to repair it. Now nothing is written
-    and the verify names the loss."""
-    base = ("S0", "a", "c1", "b", "S1", "e", "c2", "c3", "S2")
-    moved = ("S0", "c2", "a", "b", "S1", "e", "c1", "c3", "S2")
+def test_a_duplicating_pass_is_withheld_and_nothing_is_ever_duplicated():
+    """A probe ``both_reorder`` shape: both halves reorder the group
+    differently. The second pass mis-pairs a moved cell and would copy
+    ``c1`` onto DE a second time; master wrote that and ended
+    ``lost_or_duplicated`` with a clean report. Now the verify names the
+    duplication, the pass is withheld, and after every pass each shared
+    cell has exactly one copy on each half."""
+    base = ("S0", "a", "c1", "b", "c2", "S1")
+    de_order = ("S0", "a", "c1", "c2", "b", "S1")
+    en_order = ("S0", "b", "a", "c2", "c1", "S1")
+    named = []
     with tempfile.TemporaryDirectory() as tmp:
         de, en = Path(tmp) / "slides_t.de.py", Path(tmp) / "slides_t.en.py"
         de.write_text(deck_text("de", base, NONE), encoding="utf-8")
         en.write_text(deck_text("en", base, NONE), encoding="utf-8")
         _record(de, en)
-        en.write_text(deck_text("en", moved, NONE), encoding="utf-8")
-        before = de.read_text(encoding="utf-8")
-        _, diff = _diff(de, en)
-        decisions = {
-            i.key: doc_apply.Decision(key=i.key, choice="en")
-            for i in diff.items
-            if i.action == "pool_placement_divergence"
-        }
-        outcome = _apply(de, en, decisions)
-        payload = outcome.to_payload()
-        assert de.read_text(encoding="utf-8") == before
-        assert payload["verify_withheld"], payload
-        assert any(
-            "would remove content both halves agree on" in m for m in payload["verify_violations"]
-        )
-        labels, _ = parse_labels(de.read_text(encoding="utf-8"), "de")
-        assert labels.count("body:c1 = 1") == 1
+        de.write_text(deck_text("de", de_order, NONE), encoding="utf-8")
+        en.write_text(deck_text("en", en_order, NONE), encoding="utf-8")
+        for _ in range(4):
+            _, diff = _diff(de, en)
+            if diff.is_clean:
+                break
+            decisions = {
+                i.key: doc_apply.Decision(key=i.key, choice="de")
+                for i in diff.items
+                if i.action in ("pool_placement_divergence", "order_decision")
+            }
+            payload = _apply(de, en, decisions).to_payload()
+            named += [m for m in payload["verify_violations"] if m.startswith("this pass would")]
+            for path, lang in ((de, "de"), (en, "en")):
+                labels, _ = parse_labels(path.read_text(encoding="utf-8"), lang)
+                for body in ("c1 = 1", "c2 = 1"):
+                    assert labels.count(f"body:{body}") == 1, (lang, labels)
+    assert any("would duplicate content on DE" in m for m in named), named

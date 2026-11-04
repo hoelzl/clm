@@ -3119,11 +3119,7 @@ class TestCrossedSyncPointsFrameNoPlacement:
         actions = [(i.key, i.action) for i in diff.items]
         assert ("pos:intro/code/0", "pool_placement_divergence") in actions, actions
 
-    def test_exempt_pool_banks_nothing_and_holds_its_move_row(self):
-        """Round-4 review: a slot exempted by crossing was paired across the
-        crossed cells, so its pool is frozen for the pass (``shifted_pools``)
-        and the pool's own reorder waits for the order row instead of
-        co-executing beside the scope mirror."""
+    def _exempt_pool_diff(self, de_order: list[str], en_order: list[str]):
         cells = {"c1": _code("c1 = 1"), "c2": _code("c2 = 2")}
 
         def deck(lang: str, order: list[str]) -> str:
@@ -3136,11 +3132,32 @@ class TestCrossedSyncPointsFrameNoPlacement:
         base_order = ["a", "c1", "b", "c2"]
         snapshot = _snapshot(deck("de", base_order), deck("en", base_order))
         snapshot.complete = False
-        diff = _diff(snapshot, deck("de", base_order), deck("en", ["b", "c2", "c1", "a"]))
+        return _diff(snapshot, deck("de", de_order), deck("en", en_order))
+
+    def test_exempt_pool_folds_into_the_order_row(self):
+        """#1130: a slot exempted by crossing no longer suspends its pool
+        until the order row has landed (the pass in between left the code
+        cells beside the wrong voiceovers, and the pre-write verify withheld
+        it every pass). The scope's one-sided ``mirror_order`` carries the
+        pool's slot pairs and orders the whole scope; the pool is not frozen."""
+        diff = self._exempt_pool_diff(["a", "c1", "b", "c2"], ["b", "c2", "c1", "a"])
         assert [(i.key, i.action) for i in diff.items] == [
-            ("pos:intro/pool.code/0", "pool_pairing_shifted"),
             ("pos:intro/order.deck/0", "mirror_order"),
         ]
+        [order] = diff.items
+        assert order.pool_kinds == ("code",)
+        pairs = [(de.de.body.strip(), en.en.body.strip()) for de, en in order.pool_twins]
+        assert sorted(pairs) == [("c1 = 1", "c1 = 1"), ("c2 = 2", "c2 = 2")]
+        assert ("intro", "code") not in diff.shifted_pools
+
+    def test_exempt_pool_moved_on_the_mirrored_half_stays_suspended(self):
+        """Round-4 review, still held: when DE moved the code cells itself,
+        mirroring EN's whole scope would undo DE's move, so the pool keeps
+        its suspension row and stays frozen for the pass."""
+        diff = self._exempt_pool_diff(["a", "c2", "b", "c1"], ["b", "c1", "c2", "a"])
+        actions = [(i.key, i.action) for i in diff.items]
+        assert ("pos:intro/pool.code/0", "pool_pairing_shifted") in actions, actions
+        assert all(not i.pool_twins for i in diff.items)
         assert ("intro", "code") in diff.shifted_pools
 
     def test_crossed_sync_points_still_delimit_spans_for_the_alignment(self):

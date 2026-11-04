@@ -68,8 +68,10 @@ from clm.slides.doc_identity import (
     baseline_from_deck,
     body_reconciliation_available,
     content_fingerprint,
+    is_sync_point,
     pre_fork_fingerprint,
     shared_pair_diverged,
+    sync_point_spans,
 )
 from clm.slides.doc_identity import (
     body_fingerprint as _body_fp,
@@ -90,6 +92,10 @@ from clm.slides.doc_lenses import uncrossed_pairs
 from clm.slides.sync_wire import WIRE_SCHEMA
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
+
+#: The suspension cause for a pool whose pairing is a guess between readings
+#: the ledger cannot tell apart (#1144 review).
+AMBIGUOUS_PAIRING = "an ambiguous pairing (cells moved and edited on a half)"
 
 
 #: The ``record_neutral`` detail. Says what was *observed*, not what is assumed:
@@ -436,6 +442,17 @@ class DiffItem:
     #: verify_cold sibling means the pair was never reviewed — the member
     #: re-frames and banks on the next pass (#654 review round 2).
     defer_recording: bool = False
+    #: A scope ``mirror_order`` row only: the ``(de, en)`` holders of each
+    #: paired positional slot of the pools folded into this row (#1130), so
+    #: the executor orders the WHOLE scope, positional cells included, in
+    #: one permutation. ``pool_kinds`` names those pools (the apply freeze).
+    pool_twins: tuple[tuple[Member, Member], ...] = ()
+    pool_kinds: tuple[str, ...] = ()
+    #: A ``pool_placement_divergence`` of a pool BOTH halves moved cells in
+    #: (#1144 review): the executor keeps the pre-#1130 placement (legacy
+    #: mirrored insert, the target keeps its bytes), as the differ kept the
+    #: pre-#1130 pairing for that pool.
+    legacy_placement: bool = False
 
     def payload(self) -> dict:
         entry: dict = {
@@ -712,6 +729,21 @@ class _Differ:
         #: slot's pairing crossed those cells, so the pool banks nothing and
         #: its own move row waits for the order row (one authority per pass).
         self._crossed_exempt_pools: dict[tuple[str, str], str] = {}
+        #: Per pool: the base entry and ``(de, en)`` holders of every slot
+        #: paired on both halves this pass (#1130 — what a folded order row
+        #: carries).
+        self._slot_pairs: dict[tuple[str, str], list[tuple[MemberBaseline, Member, Member]]] = {}
+        #: Set by :meth:`_align_pool_sides`: the slots of the pool it just
+        #: aligned whose recorded-span pairing had an equally plausible rival.
+        self._ambiguous_slots: set[int] = set()
+        #: Set by :meth:`_align_pool_sides`: per half, whether it moved a cell
+        #: of the pool it just aligned out of its recorded span.
+        self._moved_halves: dict[Lang, bool] = {"de": False, "en": False}
+        #: Crossed-exempt pools whose move row waits for the scope order row
+        #: (:meth:`_fold_pools_into_order`): ``(moved_sides, per_side, cause)``.
+        self._fold_candidates: dict[
+            tuple[str, str], tuple[dict[Lang, bool], dict[Lang, list[_PoolCell]], str]
+        ] = {}
         #: Rendered handles of the crossed sync points (:meth:`_crossed_sync_points`)
         self._crossed_handles: set[str] = set()
 
@@ -805,6 +837,7 @@ class _Differ:
         self._diff_cross_group_moves(id_members)
         self._suppress_placement_verify_cold()
         self._diff_order()
+        self._fold_pools_into_order()
         self._diff_preambles()
         return self._finish()
 
@@ -872,6 +905,9 @@ class _Differ:
         )
 
     def _finish(self) -> DeckDiff:
+        # A path that never reached the order diff still owes the suspended
+        # pools their rows (no order row exists, so none folds).
+        self._fold_pools_into_order()
         split_observations = self._reframe_group_split_removals()
         ledger_mode = self.base is not None and not self.base.complete
         return DeckDiff(
@@ -3013,6 +3049,15 @@ class _Differ:
         # no part in that side's alignment (a phantom slot could steal a
         # byte-identical real cell, the review's critical finding).
         status, news, moved_sides = self._align_pool_sides(base_entries, per_side)
+        # #1144 review: the #1130 pairing, fold, placement anchoring and edit
+        # carrying all assume that ONE half moved the pool's cells. When both
+        # halves moved cells, which edited cell is which is a guess either
+        # way, and any new guess is wrong where the old one was right. Such a
+        # pool keeps the pre-#1130 behaviour end to end.
+        legacy = self._moved_halves["de"] and self._moved_halves["en"]
+        if legacy:
+            status, news, moved_sides = self._align_pool_sides(base_entries, per_side, legacy=True)
+        first_item = len(self.items)
 
         # A pending twin that LANDED shows up as a "new" cell on the side
         # its base entry never had: claim it for the entry before the news
@@ -3137,6 +3182,18 @@ class _Differ:
         shift_cause: str | None = None
         if self.base is not None and not self.base.complete:
             shift_cause = self._shifted_pools.get((group, kind))
+        if (
+            shift_cause is None
+            and not legacy
+            and self._pool_conflicts(status, self._ambiguous_slots)
+        ):
+            # #1144 review: a half moved AND edited its cells, and a slot whose
+            # pairing on that half is a guess was edited on both halves. Which
+            # edited cell is which cannot be told apart (the ledger keeps
+            # fingerprints, not bodies), and a content conflict framed on the
+            # wrong pair loses an edit whatever the answer. Suspend the pool
+            # instead of asking.
+            shift_cause = AMBIGUOUS_PAIRING
 
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
@@ -3161,15 +3218,156 @@ class _Differ:
                 shift_cause=shift_cause,
                 spans=spans,
             )
+            paired = ("same", "changed", "landed")
+            if (
+                de_member is not None
+                and en_member is not None
+                and de_state in paired
+                and en_state in paired
+            ):
+                self._slot_pairs.setdefault((group, kind), []).append((entry, de_member, en_member))
 
+        if legacy:
+            for k in range(first_item, len(self.items)):
+                if self.items[k].action == "pool_placement_divergence":
+                    self.items[k] = evolve(self.items[k], legacy_placement=True)
         self._classify_pool_news(group, news["de"], news["en"], localized_pool)
-        move_cause = shift_cause
-        if move_cause is None and (group, kind) in self._crossed_exempt_pools:
-            move_cause = (
+        if shift_cause is None and (group, kind) in self._crossed_exempt_pools:
+            # #1130: decided once the scope's order row exists — folded into
+            # it, or suspended as before (:meth:`_fold_pools_into_order`).
+            self._fold_candidates[(group, kind)] = (
+                moved_sides,
+                per_side,
                 f"the reorder of {self._crossed_exempt_pools[(group, kind)]} "
-                f"(this pass's order row)"
+                f"(this pass's order row)",
             )
-        self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=move_cause)
+            return
+        self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=shift_cause)
+
+    def _fold_pools_into_order(self) -> None:
+        """Fold a crossed-exempt pool into its scope's order row (#1130).
+
+        A pool exempt because id'd cells crossed (#1052) used to suspend its
+        own move row until the order row landed, and the order row moved only
+        the id'd cells: the pass in between left the positional cells beside
+        the wrong neighbours, the pre-write verify saw shared cells diverge,
+        and withheld the group every pass. When the scope's order row is a
+        one-sided ``mirror_order`` and the pool did not move on the OTHER
+        half, the row instead carries the pool's slot pairs and the executor
+        orders the whole scope in one permutation — one order authority,
+        positional cells included. The pool then records like any other.
+
+        Anything else (an ``order_decision``, a pool moved on the half the
+        mirror would overwrite, a pool in a companion part, no pairs) keeps
+        the suspension: folding would undo that half's move.
+        """
+        candidates, self._fold_candidates = self._fold_candidates, {}
+        by_group: dict[str, list[str]] = {}
+        for group, kind in candidates:
+            by_group.setdefault(group, []).append(kind)
+        for group, cand_kinds in by_group.items():
+            handle = MemberKey.positional(group, "order.deck", 0).render()
+            idx = next(
+                (i for i, item in enumerate(self.items) if item.key == handle),
+                None,
+            )
+            order_item = self.items[idx] if idx is not None else None
+            source = order_item.side if order_item is not None else None
+            kinds = self._fold_kinds(group, cand_kinds, candidates, order_item, source)
+            if kinds is None:
+                for kind in cand_kinds:
+                    moved_sides, per_side, cause = candidates[(group, kind)]
+                    self._emit_pool_moves(group, kind, moved_sides, per_side, shift_cause=cause)
+                continue
+            assert idx is not None and order_item is not None
+            twins = tuple(
+                (de_m, en_m) for kind in kinds for _e, de_m, en_m in self._slot_pairs[(group, kind)]
+            )
+            self.items[idx] = evolve(
+                order_item,
+                pool_twins=order_item.pool_twins + twins,
+                pool_kinds=order_item.pool_kinds + tuple(kinds),
+            )
+            for kind in cand_kinds:
+                del self._crossed_exempt_pools[(group, kind)]
+
+    def _fold_kinds(
+        self,
+        group: str,
+        cand_kinds: list[str],
+        candidates: dict[
+            tuple[str, str], tuple[dict[Lang, bool], dict[Lang, list[_PoolCell]], str]
+        ],
+        order_item: DiffItem | None,
+        source: Lang | None,
+    ) -> list[str] | None:
+        """Every positional kind of ``group`` the order row can carry, or
+        ``None`` when the group cannot fold (#1130 review).
+
+        The fold is all or nothing over the scope's positional cells: a kind
+        left out keeps its slots while the permutation moves everything
+        around it, which re-homed cells across sync points (a markdown cell
+        beside folded code cells; a code pool with its own move row beside a
+        folded markdown pool — a duplicated cell). So each positional kind
+        of the group's deck part must be fully paired, and either be a fold
+        candidate or have no row of its own this pass. And the half the
+        mirror overwrites must not have moved any of these cells: each of
+        its cells must still sit in the span the ledger recorded for it on
+        that half (a recorded span is required — without one the move is
+        unknowable, and the pool keeps the #1052 suspension).
+        """
+        if order_item is None or order_item.action != "mirror_order" or source is None:
+            return None
+        other: Lang = "en" if source == "de" else "de"
+        counts: dict[str, dict[Lang, int]] = {}
+        for member, member_group in _iter_with_groups(self.current):
+            if member_group != group or member.key.scheme != "pos":
+                continue
+            kind = member.key.value.rsplit("/", 2)[1]
+            for lang in _SIDES:
+                cell = member.side(lang)
+                if cell is None:
+                    continue
+                if cell.part != "deck":
+                    return None
+                counts.setdefault(kind, {"de": 0, "en": 0})[lang] += 1
+        for kind, per_lang in counts.items():
+            pairs = self._slot_pairs.get((group, kind), [])
+            if len(pairs) != per_lang["de"] or len(pairs) != per_lang["en"]:
+                return None
+            if kind in cand_kinds:
+                moved_sides, per_side, _cause = candidates[(group, kind)]
+                if moved_sides[other]:
+                    return None
+            elif any(
+                item.key.startswith((f"pos:{group}/{kind}/", f"pos:{group}/pool.{kind}/"))
+                for item in self.items
+            ):
+                return None
+            for entry, de_m, en_m in pairs:
+                holder = de_m if other == "de" else en_m
+                cell = holder.side(other)
+                recorded = entry.side_span(other)
+                if cell is None or recorded is None or self._span_of(other, cell) != recorded:
+                    return None
+        return sorted(counts)
+
+    @staticmethod
+    def _pool_conflicts(
+        status: dict[Lang, list[tuple[str, Member | None]]], slots: set[int]
+    ) -> bool:
+        """Whether one of ``slots`` changed on both halves to different
+        content (a ``conflict_shared`` in the making)."""
+        for i, ((de_state, de_member), (en_state, en_member)) in enumerate(
+            zip(status["de"], status["en"], strict=True)
+        ):
+            if i not in slots or de_state != "changed" or en_state != "changed":
+                continue
+            de_cell = de_member.de if de_member is not None else None
+            en_cell = en_member.en if en_member is not None else None
+            if de_cell is not None and en_cell is not None and de_cell.body != en_cell.body:
+                return True
+        return False
 
     def _emit_pool_shift_frame(
         self,
@@ -3193,7 +3391,17 @@ class _Differ:
             "conflict",
             "pool_pairing_shifted",
             "none",
-            f"this pool's cross-side pairing shifted this pass: the in-flight "
+            (
+                f"this pool's un-id'd cells were moved AND edited on a half, and a "
+                f"cell was edited on both halves: which cell is which cannot be "
+                f"told apart (per-side states: de {de_state}, en {en_state}), and "
+                f"any answer to the content conflict could overwrite a different "
+                f"cell's edit — give the moved cells a slide_id on both halves, or "
+                f"put one half's cells back in the other half's order by hand, "
+                f"then re-report"
+            )
+            if cause is AMBIGUOUS_PAIRING
+            else f"this pool's cross-side pairing shifted this pass: the in-flight "
             f"transition on {cause} took a cell out of the shared pool, so this "
             f"slot's pairing is an order guess (per-side states: de {de_state}, "
             f"en {en_state}) and its row is suspended — complete or revert that "
@@ -3271,7 +3479,11 @@ class _Differ:
         )
 
     def _align_pool_sides(
-        self, base_entries: list[MemberBaseline], per_side: dict[Lang, list[_PoolCell]]
+        self,
+        base_entries: list[MemberBaseline],
+        per_side: dict[Lang, list[_PoolCell]],
+        *,
+        legacy: bool = False,
     ) -> tuple[
         dict[Lang, list[tuple[str, Member | None]]],
         dict[Lang, list[Member]],
@@ -3370,8 +3582,60 @@ class _Differ:
                     settled[lang].add(i)
                     pairs[lang].append((i, j))
                     evidence.setdefault(i, {})[lang] = cells[j].span
+        # #1130: a slot whose entry records its per-half spans knows its span
+        # on each half on its own — that half's fingerprint evidence, else
+        # where that half's cell sat when recorded. Borrowing the other
+        # half's CURRENT span (the legacy rule below) is wrong exactly when
+        # that half moved its copy across a sync point while this half
+        # edited its own: the edited cell then paired with the wrong slot and
+        # the reorder was silently undone, or the gate withheld every pass.
+        #
+        # Only that shape: one half proves the slot, the other lost its
+        # fingerprint. With no proof on either half the recorded span is a
+        # guess too (the half may have moved its cell), and the legacy
+        # whole-pool reading keeps byte-identical cells on the two halves
+        # together, which a per-half span would split.
+        #
+        # And only where the lost half still has an unmatched cell in the
+        # recorded span (#1130 review): when that span is empty there, the
+        # half moved (or deleted) its copy too — the same move on both
+        # halves is the common hand edit — and the recorded span would send
+        # the slot to nothing, so stage 3 paired it by position with an
+        # unrelated cell (a removal framed on an edited cell). The legacy
+        # borrow is right in exactly that case.
+        #
+        # Not for a slot whose content another slot of the pool shares: a
+        # byte-identical twin makes "which copy moved" unknowable, so the
+        # fingerprint proof is no proof of THIS slot's position (#1130 review).
+        unmatched_spans = {
+            lang: {c.span for j, c in enumerate(per_side[lang]) if j not in used[lang]}
+            for lang in _SIDES
+        }
+        own_span: dict[Lang, dict[int, str]] = {lang: {} for lang in _SIDES}
+        # Slots whose recorded-span pick had a rival: the borrowed span (the
+        # proving half's current one) also holds an unmatched cell on the lost
+        # half, so that half may have moved its copy too. Either reading fits
+        # the files; nothing in the ledger (fingerprints, no bodies) decides.
+        self._ambiguous_slots = set()
         for i, seen in evidence.items():
-            if len(set(seen.values())) == 1:
+            if len(seen) != 1 or legacy:
+                continue
+            (proven,) = seen
+            lost: Lang = "en" if proven == "de" else "de"
+            if sum(slot_fp(proven, k) == slot_fp(proven, i) for k in range(n)) > 1:
+                continue
+            recorded = base_entries[i].side_span(lost)
+            if (
+                recorded is not None
+                and base_entries[i].side_fp(lost) is not None
+                and recorded in unmatched_spans[lost]
+            ):
+                own_span[proven][i] = seen[proven]
+                own_span[lost][i] = recorded
+                if seen[proven] != recorded and seen[proven] in unmatched_spans[lost]:
+                    self._ambiguous_slots.add(i)
+        for i, seen in evidence.items():
+            if i not in own_span["de"] and len(set(seen.values())) == 1:
                 slot_span[i] = next(iter(seen.values()))
 
         def residue(lang: Lang, span: str | None) -> list[int]:
@@ -3431,20 +3695,21 @@ class _Differ:
             # alone against a residue that also holds such a slot's cell
             # married every later slot to the wrong twin (#1054). A slot
             # between two DIFFERENT spans stays span-less (stage 3).
-            known = [i for i in side_slots[lang] if i in slot_span]
+            spans_here = {**slot_span, **own_span[lang]}
+            known = [i for i in side_slots[lang] if i in spans_here]
             edges = edge_spans[lang]
             grouped: dict[str, list[int]] = {}
             for i in side_slots[lang]:
                 if i in settled[lang] or i in unproven[lang]:
                     continue
-                if i in slot_span:
-                    grouped.setdefault(slot_span[i], []).append(i)
+                if i in spans_here:
+                    grouped.setdefault(spans_here[i], []).append(i)
                     continue
                 if not known:
                     continue
                 at = bisect_left(known, i)
-                lo = slot_span[known[at - 1]] if at > 0 else (edges[0] if edges else None)
-                hi = slot_span[known[at]] if at < len(known) else (edges[1] if edges else None)
+                lo = spans_here[known[at - 1]] if at > 0 else (edges[0] if edges else None)
+                hi = spans_here[known[at]] if at < len(known) else (edges[1] if edges else None)
                 if lo is not None and lo == hi:
                     grouped.setdefault(lo, []).append(i)
             return grouped
@@ -3466,9 +3731,78 @@ class _Differ:
         second: Lang = "en" if first == "de" else "de"
         unknown = [i for i in side_slots[first] if i not in settled[first]]
         match(first, unknown, residue(first, None), learn=True)
+        # Then re-run the witness half's MISSING slots, while it still has
+        # unmatched cells, the way the other half runs (spans just learned
+        # first, the rest whole-pool): two halves with identical contents
+        # must reach identical verdicts. The one whole-pool pass read a
+        # moved, edited duplicate as "removed + new" on this half and
+        # "changed" on the other, so identical halves framed a
+        # remove_vs_edit (#1130 review).
+        missing = [i for i in unknown if status[first][i][0] == "missing"]
+        if missing and residue(first, None) and not legacy:
+            settled[first].difference_update(missing)
+            span_stage(first)
+            rest = [i for i in missing if i not in settled[first]]
+            match(first, rest, residue(first, None), learn=False)
         span_stage(second)
         unknown = [i for i in side_slots[second] if i not in settled[second]]
         match(second, unknown, residue(second, None), learn=False)
+
+        # Slots changed on BOTH halves were paired by position on each half
+        # independently. When the halves hold the same set of distinct
+        # edited contents, identical bytes are the evidence: re-pair the EN
+        # cells to the DE cells with the same content (#1144 review: after a
+        # pass whose edits landed in a frozen pool, both halves held both
+        # edits in different places, and the positional pairing framed a
+        # conflict between two different cells).
+        both = [
+            i
+            for i in range(n)
+            if status["de"][i][0] == "changed" and status["en"][i][0] == "changed"
+        ]
+        if len(both) >= 2 and not legacy:
+            fp_of = {lang: {id(c.member): c.fp for c in per_side[lang]} for lang in _SIDES}
+            de_fp = {i: fp_of["de"][id(status["de"][i][1])] for i in both}
+            en_fp = {i: fp_of["en"][id(status["en"][i][1])] for i in both}
+            if (
+                any(de_fp[i] != en_fp[i] for i in both)
+                and len(set(de_fp.values())) == len(both)
+                and set(de_fp.values()) == set(en_fp.values())
+            ):
+                by_fp = {en_fp[i]: status["en"][i] for i in both}
+                for i in both:
+                    status["en"][i] = by_fp[de_fp[i]]
+
+        # A half that moved cells it also edited: two or more of its slots
+        # lack fingerprint proof, and its unproven cells do not sit in the
+        # spans it recorded for those slots. Which edited cell is which slot
+        # is then a guess on that half (#1144 review).
+        member_span = {lang: {id(c.member): c.span for c in per_side[lang]} for lang in _SIDES}
+        # Per half: whether a slot's cell sits outside the span the ledger
+        # recorded for it on that half (read by :meth:`_align_pool`).
+        self._moved_halves = {
+            lang: any(
+                state in ("same", "changed")
+                and member is not None
+                and (recorded := base_entries[i].side_span(lang)) is not None
+                and member_span[lang][id(member)] != recorded
+                for i, (state, member) in enumerate(status[lang])
+            )
+            for lang in _SIDES
+        }
+        for lang in () if legacy else _SIDES:
+            open_slots = [i for i in side_slots[lang] if status[lang][i][0] != "same"]
+            spans_then = [base_entries[i].side_span(lang) for i in open_slots]
+            if len(open_slots) < 2 or None in spans_then:
+                continue
+            spans_now = [
+                member_span[lang][id(status[lang][i][1])]
+                for i in open_slots
+                if status[lang][i][0] == "changed"
+            ]
+            spans_now += [c.span for j, c in enumerate(per_side[lang]) if j not in used[lang]]
+            if Counter(spans_now) != Counter(spans_then):
+                self._ambiguous_slots.update(open_slots)
 
         news = {
             lang: [c.member for j, c in enumerate(per_side[lang]) if j not in used[lang]]
@@ -3501,24 +3835,7 @@ class _Differ:
         ``skip`` names (by ``id()``) sync points to leave out — the crossed
         ones, for the uncrossed index :meth:`_slot_spans` consults.
         """
-        anchor_index, _ = self._anchor_brackets()
-        streams: dict[tuple[Lang, str], list[tuple[int, Member]]] = {}
-        for member in self.current.members():
-            for lang in _SIDES:
-                cell = member.side(lang)
-                if cell is not None:
-                    streams.setdefault((lang, cell.part), []).append((cell.index, member))
-        spans: dict[tuple[Lang, str, int], str] = {}
-        for (lang, part), entries in streams.items():
-            current = ""
-            for index, member in sorted(entries, key=lambda e: e[0]):
-                if (skip is None or id(member) not in skip) and self._is_sync_point(
-                    member, part, anchor_index
-                ):
-                    current = member.key.render()
-                    continue
-                spans[(lang, part, index)] = current
-        return spans
+        return sync_point_spans(self.current, skip)
 
     def _crossed_sync_points(self) -> set[int]:
         """``id()`` of the sync points the halves order differently relative
@@ -3551,14 +3868,7 @@ class _Differ:
     def _is_sync_point(
         self, member: Member, part: str, anchor_index: dict[Lang, list[tuple[int, str]]]
     ) -> bool:
-        de, en = member.de, member.en
-        if member.key.scheme != "id" or de is None or en is None:
-            return False
-        if de.part != part or en.part != part:
-            return False
-        if part == "companion":
-            return de.for_slide == en.for_slide
-        return self._bracket_of(anchor_index, "de", de) == self._bracket_of(anchor_index, "en", en)
+        return is_sync_point(member, part, anchor_index)
 
     def _span_of(self, lang: Lang, cell: SideCell) -> str:
         return self._spans.get((lang, cell.part, cell.index), "")

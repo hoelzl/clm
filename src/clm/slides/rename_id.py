@@ -267,10 +267,21 @@ def migrate_ledger_key(
             changed = True
 
     # Owner references: a companion owned by the renamed slide points at it.
+    # Recorded spans (#1130) name their sync point by handle the same way.
     for key, member in list(deck.members.items()):
-        if member.entry.owner == old_key:
-            deck.members[key] = evolve(member, entry=evolve(member.entry, owner=new_key))
-            changed = True
+        entry = member.entry
+        if old_key not in (entry.owner, entry.de_span, entry.en_span):
+            continue
+        deck.members[key] = evolve(
+            member,
+            entry=evolve(
+                entry,
+                owner=new_key if entry.owner == old_key else entry.owner,
+                de_span=new_key if entry.de_span == old_key else entry.de_span,
+                en_span=new_key if entry.en_span == old_key else entry.en_span,
+            ),
+        )
+        changed = True
 
     # Member-order value lists carry id: handles (the anchor's own handle among
     # them for the group-rename case) — swap them regardless of scope key. In

@@ -1,7 +1,7 @@
 """Brute-force sync probe: run it, compare two runs, or gate a change (#1130).
 
 The probe (``tests/slides/sync_probe.py``) drives ``report -> apply`` through
-the real pre-write verify over about 19,000 deck shapes, wider than the
+the real pre-write verify over about 47,000 deck shapes (``sync_probe.py`` plus ``sync_probe_ext.py``), wider than the
 ratcheted sweep in ``tests/slides/sync_sweep.py``. Too slow for CI, so it is
 run by hand before merging a sync-engine change:
 
@@ -45,20 +45,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.slides.sync_probe import (  # noqa: E402
-    FAMILIES,
-    SILENT,
-    Case,
-    engine_file,
-    rank,
-    run_case,
-)
+from tests.slides import sync_probe, sync_probe_ext  # noqa: E402
+from tests.slides.sync_probe import SILENT, engine_file, rank  # noqa: E402
+
+#: Every family: the base probe's and the extended ones (#1144 review).
+FAMILIES = {**sync_probe.FAMILIES, **sync_probe_ext.FAMILIES}
 
 
-def _work(case: Case) -> tuple[str, str, str, str, list, dict, float]:
+def _work(case: object) -> tuple[str, str, str, str, list, dict, float]:
     t = time.time()
     try:
-        r = run_case(case)
+        r = sync_probe_ext.run_any(case)
         return case.id, case.family, r.status, r.detail, r.passes, r.questions, time.time() - t
     except Exception as exc:  # noqa: BLE001 - a crash is an outcome to report
         return case.id, case.family, "harness_exception", repr(exc)[:300], [], {}, time.time() - t
@@ -66,7 +63,7 @@ def _work(case: Case) -> tuple[str, str, str, str, list, dict, float]:
 
 def run(out: Path, families: list[str], workers: int) -> int:
     print("engine:", engine_file(), flush=True)
-    cases: list[Case] = []
+    cases: list = []
     for name in families:
         found = list(dict.fromkeys(FAMILIES[name]()))
         print(f"{name}: {len(found)} cases", flush=True)

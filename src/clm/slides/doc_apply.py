@@ -67,6 +67,7 @@ from clm.slides.bilingual_doc import (
 )
 from clm.slides.doc_conserve import (
     check_conservation,
+    content_key,
     discarded_by_answers,
 )
 from clm.slides.doc_identity import (
@@ -932,6 +933,14 @@ class _Executor(DeckEmitter):
 
     bundle: LoadedBundle = field(kw_only=True)
     comment_token: str = field(kw_only=True)
+    #: Slot twins the differ paired across different parsed members (a row's
+    #: ``member`` / ``twin``), keyed by ``(id(holder), half)``: one parsed
+    #: member may hold one slot's DE cell and another slot's EN cell. Unlike a
+    #: parsed member's own two sides, which may be a positional guess, these
+    #: are the differ's alignment (#1130).
+    slot_twins: dict[tuple[int, Lang], Member] = field(factory=dict, kw_only=True)
+    #: Placements landed this pass, re-settled after each new one.
+    _placed: list[tuple[Member, Member, Lang, Lang, str]] = field(factory=list, init=False)
 
     @staticmethod
     def _holder(item: DiffItem, lang: Lang) -> Member | None:
@@ -1196,7 +1205,7 @@ class _Executor(DeckEmitter):
             if group == "~groups":
                 self._mirror_group_order(source, part)
             else:
-                self._mirror_scope_order(group, part, source)
+                self._mirror_scope_order(group, part, source, item.pool_twins)
         else:
             raise _ItemError(f"unrecognized order scope {key}")
 
@@ -1265,8 +1274,26 @@ class _Executor(DeckEmitter):
         for part, members in by_part.items():
             self._permute_occupants(target, part, members)
 
-    def _mirror_scope_order(self, group: str, part: str, source: Lang) -> None:
+    def _mirror_scope_order(
+        self,
+        group: str,
+        part: str,
+        source: Lang,
+        pool_twins: tuple[tuple[Member, Member], ...] = (),
+    ) -> None:
+        """Permute the target's id'd scope members into the source's order.
+
+        With ``pool_twins`` (#1130: crossed-exempt pools folded into this
+        row by the differ) the paired positional cells join the permutation:
+        each source cell's slot twin takes the matching place on the target,
+        so the scope lands in the source's order in one step instead of
+        leaving the positional cells beside the wrong neighbours for a later
+        pass. Unpaired positional cells keep their slots.
+        """
         target = _other(source)
+        if pool_twins:
+            self._mirror_scope_order_with_pools(group, part, source, pool_twins)
+            return
         scope: dict[Lang, list[Member]] = {"de": [], "en": []}
         for member, owner_group in iter_with_groups(self.deck):
             if member.key.scheme != "id":
@@ -1284,6 +1311,43 @@ class _Executor(DeckEmitter):
         target_ids = {id(m) for m in scope[target]}
         common = [m for m in scope[source] if id(m) in target_ids]
         self._permute_occupants(target, part, common)
+
+    def _mirror_scope_order_with_pools(
+        self,
+        group: str,
+        part: str,
+        source: Lang,
+        pool_twins: tuple[tuple[Member, Member], ...],
+    ) -> None:
+        target = _other(source)
+        twin_of: dict[int, Member] = {}
+        for de_member, en_member in pool_twins:
+            src, tgt = (de_member, en_member) if source == "de" else (en_member, de_member)
+            if id(src) in twin_of:
+                raise _ItemError(
+                    f"order scope {group}: a positional cell pairs twice — re-run report"
+                )
+            twin_of[id(src)] = tgt
+        if len({id(m) for m in twin_of.values()}) != len(twin_of):
+            raise _ItemError(f"order scope {group}: two cells share one twin — re-run report")
+        idd: set[int] = set()
+        for member, owner_group in iter_with_groups(self.deck):
+            if member.key.scheme != "id" or member_group_token(member, owner_group) != group:
+                continue
+            de, en = member.de, member.en
+            if de is not None and en is not None and de.part == part and en.part == part:
+                idd.add(id(member))
+        target_stream = self.streams.get((target, part), [])
+        on_target = {id(m) for m in target_stream}
+        desired: list[Member] = []
+        for member in self.streams.get((source, part), []):
+            if id(member) in idd:
+                desired.append(member)
+            elif id(member) in twin_of:
+                desired.append(twin_of[id(member)])
+        if any(id(m) not in on_target for m in desired):
+            raise _ItemError(f"order scope {group}: a twin left the target — re-run report")
+        self._permute_occupants(target, part, desired)
 
     def _mirror_group_order(self, source: Lang, part: str) -> None:
         """Reorder whole slide groups on the target side to the source order.
@@ -1374,10 +1438,13 @@ class _Executor(DeckEmitter):
         the ``twin`` convention the slot's two cells live on different
         parsed members (the lens could not pair them — they sit in
         different spans), so each side is resolved through
-        :meth:`_holder`. The target cell keeps its bytes and its member; only
-        its position in the target stream changes — right after the
-        mirrored predecessor of the source cell, which is the sync point
-        itself or a later cell of the same span.
+        :meth:`_holder`. The target cell keeps its member and moves right
+        after the source cell's nearest predecessor whose target counterpart
+        is known (:meth:`_placement_anchor`; #1130). When exactly one half
+        changed the slot since the record, that content travels with the
+        placement (:meth:`_carry_edit`). A pool where both halves moved
+        cells (``item.legacy_placement``) keeps the pre-#1130 placement:
+        after the mirrored predecessor, the target keeping its bytes.
         """
         target = _other(source)
         src_holder, src_cell = self._moved_cell(item, source)
@@ -1388,7 +1455,151 @@ class _Executor(DeckEmitter):
         if not any(m is tgt_holder for m in self.streams.get((target, tgt_cell.part), [])):
             raise _ItemError(f"the {target} cell of {item.key} is unlocatable")
         self.stream_remove(target, tgt_cell.part, tgt_holder)
-        self.insert_mirrored(src_holder, source, target, tgt_cell.part, tgt_cell, into=tgt_holder)
+        if item.legacy_placement:
+            # Both halves moved the pool's cells (#1144 review): the
+            # pre-#1130 placement, the target keeping its bytes.
+            self.insert_mirrored(
+                src_holder, source, target, tgt_cell.part, tgt_cell, into=tgt_holder
+            )
+            return
+        anchor = self._placement_anchor(src_holder, source, target, tgt_cell.part)
+        if anchor is _AMBIGUOUS:
+            self.insert_mirrored(
+                src_holder,
+                source,
+                target,
+                tgt_cell.part,
+                self._carry_edit(item, source, src_holder, src_cell, tgt_cell),
+                into=tgt_holder,
+            )
+            return
+        self._insert_after(target, tgt_cell.part, anchor, tgt_holder)
+        self.set_side(
+            tgt_holder, target, self._carry_edit(item, source, src_holder, src_cell, tgt_cell)
+        )
+        # A cell placed earlier this pass may have anchored on a neighbour this
+        # placement just moved: re-settle every placement until none moves, so
+        # the result does not depend on the order the answers execute in.
+        self._placed.append((src_holder, tgt_holder, source, target, tgt_cell.part))
+        for _round in range(len(self._placed) + 1):
+            moved = False
+            for src, tgt, src_lang, tgt_lang, part in self._placed:
+                where = self._placement_anchor(src, src_lang, tgt_lang, part, moving=tgt)
+                if where is _AMBIGUOUS:
+                    continue
+                stream = self.streams.get((tgt_lang, part), [])
+                at = next(i for i, m in enumerate(stream) if m is tgt)
+                current = stream[at - 1] if at > 0 else None
+                if current is not where:
+                    self.stream_remove(tgt_lang, part, tgt)
+                    self._insert_after(tgt_lang, part, where, tgt)
+                    moved = True
+            if not moved:
+                break
+        else:
+            # The verify and the conservation check still judge the result;
+            # this only says why a later pass may move the cell again.
+            logger.debug("placement of %s did not settle in %d rounds", item.key, len(self._placed))
+
+    def _carry_edit(
+        self,
+        item: DiffItem,
+        source: Lang,
+        src_holder: Member,
+        src_cell: SideCell,
+        tgt_cell: SideCell,
+    ) -> SideCell:
+        """The slot's one-sided edit travels with its placement (#1130 step 4).
+
+        The answer adopts the source half's POSITION. Its content is
+        separate: when exactly one half changed the slot since the last
+        record, both halves take that half's content, as a mechanical
+        ``propagate_shared_edit`` would — the target cell is returned with
+        the source's edit, or the source cell takes the target's. Both
+        changed is a content conflict and stays one (the ``conflict_shared``
+        row frames on the next pass). Returns the target's cell to land.
+        """
+        if item.base is None:
+            return tgt_cell
+        target = _other(source)
+        src_changed = content_fingerprint(src_cell) != item.base.side_fp(source)
+        tgt_changed = content_fingerprint(tgt_cell) != item.base.side_fp(target)
+        if src_changed and not tgt_changed:
+            return evolve(tgt_cell, lines=_with_slide_id_of(src_cell.lines, tgt_cell.header))
+        if tgt_changed and not src_changed:
+            self.set_side(
+                src_holder,
+                source,
+                evolve(src_cell, lines=_with_slide_id_of(tgt_cell.lines, src_cell.header)),
+            )
+        return tgt_cell
+
+    def _insert_after(self, lang: Lang, part: str, anchor: object, member: Member) -> None:
+        stream = self.streams.setdefault((lang, part), [])
+        at = 0
+        if anchor is not None:
+            at = next(i for i, m in enumerate(stream) if m is anchor) + 1
+        stream.insert(at, member)
+
+    def _placement_anchor(
+        self,
+        src_holder: Member,
+        source: Lang,
+        target: Lang,
+        part: str,
+        *,
+        moving: Member | None = None,
+    ) -> Member | None | object:
+        """The target-stream member a placed cell goes right after (#1130).
+
+        Walk back from the source cell to its nearest predecessor whose
+        target counterpart is KNOWN: first the one target cell with the same
+        id or content (evidence that needs no pairing at all), then a slot
+        twin the differ paired. A twin is only the differ's alignment, and
+        that alignment is itself positional when neither half proves the
+        slot (#1144 review: a twin pairing two different edited cells put a
+        cell after the wrong neighbour). A parsed member's other side is
+        never trusted, since a positional parse pairs cells by a cursor
+        guess. ``None`` means the top of the stream; :data:`_AMBIGUOUS`
+        (content shared by several target cells, no twin) falls back to the
+        legacy mirrored insert.
+        """
+        source_stream = self.streams.get((source, part), [])
+        target_stream = [m for m in self.streams.get((target, part), []) if m is not moving]
+        pos = next(i for i, m in enumerate(source_stream) if m is src_holder)
+        for prev in reversed(source_stream[:pos]):
+            cell = prev.side(source)
+            label = _anchor_label(prev, cell) if cell is not None else None
+            matches = (
+                [
+                    m
+                    for m in target_stream
+                    if (other := m.side(target)) is not None and _anchor_label(m, other) == label
+                ]
+                if label is not None
+                else []
+            )
+            if len(matches) == 1:
+                return matches[0]
+            twin = self.slot_twins.get((id(prev), source))
+            if twin is not None and any(m is twin for m in target_stream):
+                return twin
+            if matches:
+                return _AMBIGUOUS
+        return None
+
+
+#: :meth:`_Executor._placement_anchor`'s "no unique anchor" verdict.
+_AMBIGUOUS = object()
+
+
+def _anchor_label(member: Member, cell: SideCell) -> str | None:
+    """A pairing-free name for a cell: its id, or a shared cell's content."""
+    if member.key.scheme == "id":
+        return "id:" + strip_preserve_marker(member.key.value)
+    if member.langness == "shared":
+        return "body:" + content_key(cell)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1555,9 +1766,16 @@ def _record_item(
             part = tail[len("order.") :]
             if group == "~groups":
                 record_group_order(target, fresh)
-            else:
-                record_order_scope(target, fresh, group, part)
-            return set()
+                return set()
+            record_order_scope(target, fresh, group, part)
+            # #1130: the pools folded into this row moved with it — their
+            # order is this row's to record, as their own row would have.
+            rerecorded: set[tuple[str, str]] = set()
+            for kind in item.pool_kinds:
+                if (group, kind) not in frozen_pools:
+                    rerecord_pool(target, fresh, group, kind)
+                    rerecorded.add((group, kind))
+            return rerecorded
         return set()
     if action in ("record_preamble", "propagate_preamble", "conflict_preamble") or (
         key in _PREAMBLE_HANDLES
@@ -2368,6 +2586,10 @@ def _execute_pass(
     matched: set[int] = set()
     outcome = ApplyOutcome(dry_run=dry_run)
     ex = _Executor(bundle=bundle, deck=deck, comment_token=bundle.comment_token)
+    for item in diff.items:
+        if item.twin is not None and item.member is not None and item.twin is not item.member:
+            ex.slot_twins[(id(item.member), "de")] = item.twin
+            ex.slot_twins[(id(item.twin), "en")] = item.member
     ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
     unresolved_items: list[DiffItem] = []  # pending / rejected / failed / held
@@ -3009,6 +3231,16 @@ def apply_deck(
     # on — yet its fresh snapshot still contains the absorbed estranged twin,
     # and a landed answerable sibling would re-record exactly that.
     frozen_pools = _frozen_pools(unresolved_items) | set(diff.shifted_pools) | deferred_pool_scopes
+    # #1130: a pool the differ folded into its scope's order row records only
+    # when that row landed — otherwise its cells still sit where the order
+    # row would have moved them, and it stays frozen as its suspension kept it.
+    landed_keys = {item.key for item, _ in landed}
+    frozen_pools |= {
+        (item.group, kind)
+        for item in diff.items
+        if item.pool_kinds and item.group is not None and item.key not in landed_keys
+        for kind in item.pool_kinds
+    }
     rerecorded_pools: set[tuple[str, str]] = set()
     #: `record_neutral` keys to re-stamp once every record has landed (#764).
     structural_keys: set[str] = set()

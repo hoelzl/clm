@@ -497,8 +497,9 @@ baseline, meaning converged -> failure or visible -> silent.
 `--accept-worse` overrides that for a deliberate trade, which the PR must
 name.
 
-**The probe** (`tests/slides/sync_probe.py`, about 19,000 cases) covers the
-shapes the sweep does not:
+**The probe** (`tests/slides/sync_probe.py` plus the families in
+`tests/slides/sync_probe_ext.py`, about 45,500 cases) covers the shapes the
+sweep does not:
 - DE reordering;
 - both halves reordering;
 - markdown and mixed pools;
@@ -506,9 +507,11 @@ shapes the sweep does not:
 - inserts and deletes;
 - two slide groups;
 - byte-identical cells;
-- a second round on the ledger the first one wrote.
+- a second round on the ledger the first one wrote;
+- edits on both halves, with one or both halves moving cells;
+- larger groups, three slide groups, and slide swaps.
 
-It takes about 2.5 minutes per engine on 12 workers, too slow for CI. **Run
+It takes about 6 minutes per engine on 12 workers, too slow for CI. **Run
 its gate by hand before merging a sync-engine change:**
 
 ```bash
@@ -518,7 +521,10 @@ python scripts/sync_probe.py gate --allow-visible     # fail only on cases that 
 
 `gate` extracts the base ref's `src/` into a temporary directory, probes it
 and the working tree, and compares the two per case. Paste its summary line
-(`N cases better, M worse (K now fail silently)`) into the PR.
+(`N cases better, M worse (K now fail silently)`) into the PR. A PR that
+merges with cases worse must list them and say why (#1144 did: when both
+halves move *and* edit a slide's un-id'd cells, no pairing rule is right for
+every case, and only ids close that class).
 
 ## Troubleshooting
 
