@@ -318,6 +318,15 @@ jobs:
       actions: write
 
     steps:
+    # Three images on one runner can exhaust its disk (`[Errno 28] No space
+    # left on device`, #1167). None of these pre-installed host tools is used
+    # by this job: the Dockerfiles fetch what they need inside the images.
+    - name: Free runner disk space
+      run: |
+        df -h /
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+
     # The notebook/plantuml/drawio build inputs (deno, ijava, drawio .deb) are
     # now fetched + SHA-256-verified inside the Dockerfiles, so the only LFS
     # object the image builds need is the small drawio font.

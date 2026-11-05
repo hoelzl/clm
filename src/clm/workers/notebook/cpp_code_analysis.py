@@ -247,6 +247,42 @@ def extract_preprocessor(src: str) -> tuple[list[str], str]:
 _EXPR_CONTINUATION_CHARS = frozenset(".,)]([<>+-*/%&|^?:!~=")
 
 
+def _is_brace_mem_initializer(src: str, start: int, open_brace: int) -> bool:
+    """Whether the ``{`` at ``open_brace`` opens a constructor's mem-initializer.
+
+    ``T::T(int x) : a_{x} { }`` (issue #1145): the ``}`` of ``a_{x}`` returns to
+    depth 0 with the body still to come. The group is a mem-initializer when
+    the ``{`` directly follows a name (``a_``, ``ns::Base``, ``Base<int>``),
+    unlike the body itself, which follows ``)`` or ``}``, and the item starting
+    at ``start`` has reached that name through a parameter list and a ``:``.
+    That rules out ``int a{1}`` (no ``:``), ``struct D : B {`` (no parameter
+    list), ``for (int v : vs) {`` (the ``:`` is inside the parens) and
+    ``c ? f() : T{1}`` (a conditional's ``:``).
+    """
+    before = src[start:open_brace].rstrip()
+    if not before or not (before[-1].isalnum() or before[-1] in "_>"):
+        return False
+    depth = 0
+    saw_parameter_list = False
+    k = 0
+    while k < len(before):
+        c = before[k]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            saw_parameter_list = saw_parameter_list or (c == ")" and depth == 0)
+        elif depth == 0:
+            if c == "?":
+                return False
+            if c == ":":
+                if before[k + 1 : k + 2] != ":":
+                    return saw_parameter_list
+                k += 1  # step over the second colon of `::`
+        k += 1
+    return False
+
+
 def split_top_level_spans(src: str) -> list[tuple[int, int]]:
     """Like :func:`split_top_level`, but return ``(start, end)`` char spans.
 
@@ -259,6 +295,7 @@ def split_top_level_spans(src: str) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     brace = paren = bracket = 0
     start = 0
+    open_brace = 0  # where the current outermost brace group opened
     i, n = 0, len(src)
 
     def emit(end: int) -> None:
@@ -270,6 +307,8 @@ def split_top_level_spans(src: str) -> list[tuple[int, int]]:
     while i < n:
         c = src[i]
         if c == "{":
+            if brace == 0:
+                open_brace = i
             brace += 1
         elif c == "}":
             brace -= 1
@@ -283,7 +322,12 @@ def split_top_level_spans(src: str) -> list[tuple[int, int]]:
                 else:
                     word = re.match(r"(else|while|catch)\b", src[j : j + 8])
                     expr_continues = j < n and src[j] in _EXPR_CONTINUATION_CHARS
-                    if not word and not expr_continues:
+                    body_follows = (
+                        j < n
+                        and src[j] == "{"
+                        and _is_brace_mem_initializer(src, start, open_brace)
+                    )
+                    if not word and not expr_continues and not body_follows:
                         emit(i + 1)
         elif c == "(":
             paren += 1
@@ -305,8 +349,10 @@ def split_top_level(src: str) -> list[str]:
 
     Splits on ``;`` at depth 0 and on a ``}`` that closes back to depth 0 —
     except when the closing brace is followed by ``;`` (the ``;`` ends the
-    item) or by ``else``/``while``/``catch`` (an ``if {} else {}``,
-    ``do {} while``, or ``try {} catch`` continuation of the same item).
+    item), by ``else``/``while``/``catch`` (an ``if {} else {}``,
+    ``do {} while``, or ``try {} catch`` continuation of the same item), or by
+    the ``{`` of a constructor body after a brace mem-initializer
+    (``T::T(int x) : a_{x} { }``).
     """
     return [src[a:b].strip() for a, b in split_top_level_spans(src)]
 

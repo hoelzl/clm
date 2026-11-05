@@ -1,14 +1,14 @@
 {
-  "epoch": 2,
+  "epoch": 3,
   "decision": {
-    "action": "keep",
-    "reason": "#1067 changes behaviour only when the request filter raises (that request used to go live; now it gets a clm_replay_miss 404). Requests that filter successfully are recorded and replayed byte-identically, and running ignore_hosts before the scrubber does not change what an ignored host passes through, so no cached notebook output built under a working filter can change."
+    "action": "bump",
+    "reason": ""
   },
   "sources": {
     "clm/core/cpp_export_files.py": "32d55d727cc7b300dd1d966f5898c481c28f7af12402818b27f4744849866f6c",
     "clm/core/cross_references.py": "0b293a27219c07cd011498a703aa641c00070d18c7e085681759f0ba731d3643",
     "clm/core/messaging/notebook_classes.py": "ee75027d2ad7a2a14a905d10c910f85560b797851e2544bf7bf63e9fd778c5a2",
-    "clm/core/operations/process_notebook.py": "51d312b34dab5af05d460ce0fd9dba11c37a8df08f15af770c3c816e66362a4c",
+    "clm/core/operations/process_notebook.py": "9415971f76bf00ce41f81d1b8b216bcaeefa8d05417c57b27b007365fb89b658",
     "clm/core/tags.py": "f28e6bdacdc89f7223d851a85ff16eb5623f745b8b28080d1f7cdf036516ea85",
     "clm/core/utils/prog_lang_utils.py": "ebaebaf30ab1facca6cd7ac16a6aa1e7c698abc794380718e25ad18caa132581",
     "clm/core/utils/text_utils.py": "b30fbd3fe330f86ea369adc22845371e43a41dcbde2f967b7632713658cb9cd7",
@@ -25,7 +25,7 @@
     "clm/workers/notebook/__main__.py": "15ad57191657c74596e6f4bda36b56acc8156f5ac6a96240ca1d3bc12317b75d",
     "clm/workers/notebook/cassette_doctor.py": "ff7aec5f90fe5732cdcea83d1245e3390a025be84921a2dbf86f813f3ffe252c",
     "clm/workers/notebook/commented_installs.py": "8c056e6e8a36aaae61ec7772fee7ad74fd23fb7e364694b9bff1463b343e2ed2",
-    "clm/workers/notebook/cpp_code_analysis.py": "ace46f19678a057b0218e224f0fb332889d36e9c258a7cb94542990efa2074c7",
+    "clm/workers/notebook/cpp_code_analysis.py": "555387facc24fe1fbba0d9f81d12bc4cc624b6c79314f742c88780add6fa68f2",
     "clm/workers/notebook/cpp_code_emitter.py": "3a6fa932a274ac771448e2c88e756f8ca189ad3ca9d0ff9829cf9d937b3ea507",
     "clm/workers/notebook/notebook_processor.py": "c3ab212ba288b73432047d7b50c74020c4c16bba2540bc5318ae00481d09d07c",
     "clm/workers/notebook/notebook_worker.py": "82383af421265fc675811387842f72c992cd423c6dea4bf9e05f2e762ec2ad60",

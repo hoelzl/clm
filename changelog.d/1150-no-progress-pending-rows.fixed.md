@@ -1,0 +1,1 @@
+- **`clm slides sync apply`: `no_progress` no longer fires while an answerable row is pending** (#1150). Its advice said "No answer can change this" even when an unanswered question, such as a `translate_new`, was what the held slide waited for. `manual` rows have no answers and don't suppress it.
