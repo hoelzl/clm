@@ -446,7 +446,7 @@ def build_buckets(weeks: list[ScheduleWeek]) -> list[Bucket]:
     ]
 
 
-def _md_cell(text: str) -> str:
+def md_cell(text: str) -> str:
     """Escape a value for a Markdown table cell."""
     return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
 
@@ -497,7 +497,7 @@ def render_markdown(
             label_text = day.label + (
                 disabled_tag if (day.disabled and not week.disabled and mark_disabled) else ""
             )
-            day_label = _md_cell(label_text)
+            day_label = md_cell(label_text)
             # One row per deck, then one per activity (no-deck entries render the
             # day label like a deck but leave the Topic column empty).
             rows: list[tuple[str, str]] = [(deck.video_title, deck.topic_id) for deck in day.decks]
@@ -510,11 +510,11 @@ def render_markdown(
                 continue
             for index, (video_title, topic_id) in enumerate(rows):
                 first = day_label if index == 0 else ""
-                video = _md_cell(video_title)
+                video = md_cell(video_title)
                 if no_topic:
                     lines.append(f"| {first} | {video} |")
                 else:
-                    topic_cell = _md_cell(topic_id) if topic_id else empty_cell
+                    topic_cell = md_cell(topic_id) if topic_id else empty_cell
                     lines.append(f"| {first} | {video} | {topic_cell} |")
         lines.append("")
 

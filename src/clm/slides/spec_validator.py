@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import xml.etree.ElementTree as ETree
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,12 +18,15 @@ from typing import Any
 
 import tomllib
 
+from clm.core.agenda import build_agenda, spec_uses_blocks
 from clm.core.course_spec import (
     REQUIRED_WORKDAYS,
     WEEKDAY_ORDER,
     CourseSpec,
     IncludeSpec,
     SectionSpec,
+    SubsectionSpec,
+    find_unknown_elements,
 )
 from clm.core.include_ledger import LEDGER_NAME, Ledger
 from clm.core.topic_resolver import (
@@ -94,6 +98,8 @@ def validate_spec(
     - Empty sections
     - ``<include>`` source missing / shadowed / inside a topic dir
     - ``<include>`` dependencies (info) and section-level inheritance (info)
+    - Agenda rules for specs that use ``<block>`` (issue #1163)
+    - Elements the spec parser does not read (``unknown_element``, #1163)
 
     Args:
         course_spec_path: Path to the course spec XML file.
@@ -167,8 +173,11 @@ def validate_spec(
                 )
             )
 
-        # Empty section check
+        # Empty section check. A planning week whose days hold only topic-less
+        # agenda <block>s (issue #1163) is planned, not empty.
         if not section.topics:
+            if any(sub.blocks for sub in section.subsections):
+                continue
             findings.append(
                 SpecFinding(
                     severity="warning",
@@ -289,6 +298,12 @@ def validate_spec(
         check_workdays=check_workdays,
     )
 
+    # Agenda rules, only for specs that use <block> (issue #1163).
+    _validate_agenda(spec=spec, findings=findings, suffix=_suffix)
+
+    # Elements the parser does not read (issue #1163) — always on.
+    _validate_unknown_elements(course_spec_path=course_spec_path, findings=findings)
+
     # Dir-group path checks
     course_root = slides_dir.parent
     for dg in spec.dictionaries:
@@ -344,6 +359,182 @@ def validate_spec(
         topics_total=topics_total,
         findings=findings,
     )
+
+
+def _validate_unknown_elements(*, course_spec_path: Path, findings: list[SpecFinding]) -> None:
+    """Warn about every spec element the parser does not read (issue #1163).
+
+    The parser skips an unknown element together with everything inside it,
+    so a typo like ``<subsecton>`` used to drop its ``<topic>``s from the
+    build silently. One warning per outermost unknown element, naming its
+    path in the document.
+    """
+    root = ETree.parse(course_spec_path).getroot()
+    for unknown in find_unknown_elements(root):
+        if unknown.attribute is not None:
+            hint = (
+                ' The prototype attribute "ue" is now "units".' if unknown.attribute == "ue" else ""
+            )
+            findings.append(
+                SpecFinding(
+                    severity="warning",
+                    type="unknown_attribute",
+                    section=unknown.section,
+                    message=(
+                        f"Unknown attribute {unknown.attribute}= on <{unknown.tag}> at "
+                        f"{unknown.path}: clm ignores it.{hint}"
+                    ),
+                    suggestion="See 'clm info spec-files' for the valid attributes.",
+                    details={
+                        "path": unknown.path,
+                        "element": unknown.tag,
+                        "attribute": unknown.attribute,
+                    },
+                )
+            )
+            continue
+        parent_path = unknown.path.rsplit("/", 1)[0]
+        parent_tag = parent_path.rsplit("/", 1)[-1].split("[", 1)[0]
+        findings.append(
+            SpecFinding(
+                severity="warning",
+                type="unknown_element",
+                section=unknown.section,
+                message=(
+                    f"Unknown element <{unknown.tag}> at {unknown.path}: clm ignores it "
+                    f"and everything inside it (including any <topic>s)."
+                ),
+                suggestion=(
+                    f"Check the spelling and placement — <{unknown.tag}> is not a "
+                    f"valid child of <{parent_tag}>. See 'clm info spec-files'."
+                ),
+                details={"path": unknown.path, "element": unknown.tag},
+            )
+        )
+
+
+def _subsection_label(sub: SubsectionSpec) -> str:
+    """Weekday tokens, else the name, else ``(unnamed)`` — for finding messages."""
+    return ",".join(sub.weekdays) or (sub.name.en or sub.name.de if sub.name else "") or "(unnamed)"
+
+
+def _validate_agenda(
+    *,
+    spec: CourseSpec,
+    findings: list[SpecFinding],
+    suffix: Callable[[bool, str], str],
+) -> None:
+    """Agenda rules for specs that use ``<block>`` (issue #1163). All warnings.
+
+    Per block (every parsed subsection): ``agenda_block_without_units`` and
+    ``agenda_unblocked_topic`` (a bare ``<topic>`` in a subsection that has
+    blocks belongs to no block, so it is missing from the agenda).
+
+    Against ``<agenda-targets>``, each only when its target is set, over the
+    agenda weeks ``clm export agenda`` lists by default (enabled, not
+    optional): ``agenda_day_units`` (units-per-day × the days a subsection
+    spans), ``agenda_week_units`` (units-per-day × days-per-week) and
+    ``agenda_total_units`` (units-total).
+    """
+    if not spec_uses_blocks(spec):
+        return
+
+    for section in spec.sections:
+        section_name = section.name.en or section.name.de
+        for sub in section.subsections:
+            if not sub.blocks:
+                continue
+            disabled = not section.enabled or not sub.enabled
+            label = _subsection_label(sub)
+            for index, block in enumerate(sub.blocks, start=1):
+                if block.units is None:
+                    block_label = (
+                        f"'{block.name.en or block.name.de}'" if block.name else f"#{index}"
+                    )
+                    findings.append(
+                        SpecFinding(
+                            severity="warning",
+                            type="agenda_block_without_units",
+                            section=section_name,
+                            message=suffix(
+                                disabled,
+                                f"Section '{section_name}', subsection '{label}': "
+                                f"block {block_label} has no units attribute.",
+                            ),
+                            suggestion='Add units="N" (teaching units) to the <block>.',
+                        )
+                    )
+            for topic in sub.unblocked_topics:
+                findings.append(
+                    SpecFinding(
+                        severity="warning",
+                        type="agenda_unblocked_topic",
+                        topic_id=topic.id,
+                        section=section_name,
+                        message=suffix(
+                            disabled,
+                            f"Topic '{topic.id}' in section '{section_name}', subsection "
+                            f"'{label}' belongs to no <block>: it is built but missing "
+                            f"from the agenda.",
+                        ),
+                        suggestion="Move the <topic> into the <block> it is taught in.",
+                    )
+                )
+
+    targets = spec.agenda_targets
+    if targets is None:
+        return
+    weeks = build_agenda(spec)
+    if targets.units_per_day is not None:
+        for week in weeks:
+            section_name = week.section.name.en or week.section.name.de
+            for day in week.days:
+                expected = targets.units_per_day * day.span
+                if day.units != expected:
+                    findings.append(
+                        SpecFinding(
+                            severity="warning",
+                            type="agenda_day_units",
+                            section=section_name,
+                            message=(
+                                f"Section '{section_name}', day {day.label} "
+                                f"('{_subsection_label(day.subsection)}'): {day.units} units, "
+                                f"expected {expected} (units-per-day={targets.units_per_day}"
+                                + (f" × {day.span} days" if day.span > 1 else "")
+                                + ")."
+                            ),
+                        )
+                    )
+    if targets.units_per_day is not None and targets.days_per_week is not None:
+        expected_week = targets.units_per_day * targets.days_per_week
+        for week in weeks:
+            if week.units != expected_week:
+                section_name = week.section.name.en or week.section.name.de
+                findings.append(
+                    SpecFinding(
+                        severity="warning",
+                        type="agenda_week_units",
+                        section=section_name,
+                        message=(
+                            f"Section '{section_name}': {week.units} units, expected "
+                            f"{expected_week} (units-per-day={targets.units_per_day} × "
+                            f"days-per-week={targets.days_per_week})."
+                        ),
+                    )
+                )
+    if targets.units_total is not None:
+        total = sum(week.units for week in weeks)
+        if total != targets.units_total:
+            findings.append(
+                SpecFinding(
+                    severity="warning",
+                    type="agenda_total_units",
+                    message=(
+                        f"The agenda totals {total} units, expected {targets.units_total} "
+                        f"(units-total)."
+                    ),
+                )
+            )
 
 
 def _validate_tasks(
@@ -570,16 +761,13 @@ def _validate_subsections(
 
         # --- Check 3: empty days ---
         for sub in enabled_subs:
-            label = (
-                ",".join(sub.weekdays)
-                or (sub.name.en or sub.name.de if sub.name else "")
-                or "(unnamed)"
-            )
+            label = _subsection_label(sub)
             if not sub.topics:
                 # An activity-only day (project work, exam, …) is intentionally
                 # deck-free — it fills the schedule without a topic, so it is
-                # not an "empty day".
-                if sub.activities:
+                # not an "empty day". Likewise a day planned with deck-less
+                # agenda <block>s (exercises, learning checks, issue #1163).
+                if sub.activities or sub.blocks:
                     continue
                 findings.append(
                     SpecFinding(

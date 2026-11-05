@@ -827,7 +827,7 @@ clm run release-week course.xml "name:Week 09"
 ### `clm export`
 
 Group for the **course-document exports** — commands that turn a course spec
-into a document: `outline`, `schedule`, `summary`, `context`, and `agent-guide`.
+into a document: `outline`, `schedule`, `agenda`, `summary`, `context`, and `agent-guide`.
 (The first three replace the former flat `clm outline` / `clm schedule` /
 `clm summarize` top-level commands, which were removed.) `agent-guide` is the
 odd one out — it documents *CLM itself* for agents rather than a course's
@@ -968,6 +968,62 @@ clm export schedule course.xml --include-disabled   # Show disabled days, tagged
 clm export schedule course.xml --include-disabled=merge   # Show disabled days, no tag
 clm export schedule course.xml -o schedule.md   # Write to a file
 clm export schedule course.xml -d ./docs        # Write into a directory
+```
+
+#### `clm export agenda` (CLM {version}+)
+
+Export the **certification agenda with teaching units** (e.g. AZAV: per day a
+table `Tag | Thema | Inhalte | Form | UE`, a weekly subtitle and outcome, plus
+an overview of the weeks). Built from the spec's agenda layer — `<section>`
+weeks with an optional `<agenda>`, `<subsection>` days and `<block units=…
+form=…>` time blocks, with `<agenda-targets unit-minutes=…>` on the course;
+see `clm info spec-files`. Pure spec data: no topic is resolved on disk, so
+it renders planning specs whose material does not exist yet.
+
+```
+clm export agenda [OPTIONS] SPEC_FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `-L, --language`, `--lang [de\|en]` | Language of the agenda (default: `de`). |
+| `-f, --format [md\|csv]` | Output format (default: `md`). |
+| `-o, --output FILE` / `-d, --output-dir DIR` | Write to FILE / to a directory (filename `<course>-agenda-<lang>.<ext>`). |
+| `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). |
+
+Agenda weeks are the sections with an `<agenda>` or at least one `<block>`;
+disabled content is never listed. A week takes the number its section name
+starts with (`Woche 05: …` → 5), else its 1-based position among the agenda
+weeks, so skipping a week does not renumber the rest. Days are
+numbered 1… within each week (a multi-day subsection takes several numbers,
+`1–2`).
+
+- **`--format md`** (default): a header with the total and the unit length;
+  an overview table `Woche | Thema | UE` (`Week | Title | Units`) with a
+  total row — the title drops a leading `Woche NN:`/`Week NN:` from the
+  section name; then per week a heading `<section name> (N UE)`, the
+  `<agenda>` subtitle in italics, a table `Tag | Thema | Inhalte | Form | UE`
+  (`Day | Block | Contents | Form | Units`) with one row per block and a
+  week-total row, and `**Ergebnis:**`/`**Outcome:**` with the outcome. `form`
+  is localized (Theorie / Praxis / Theorie/Praxis; Theory / Practice /
+  Theory/Practice); `status="planned"`/`"adapt"` blocks carry a marker
+  (*(geplant)*, *(anzupassen)*; *(planned)*, *(to adapt)*); a block without
+  `units` shows `—`; a day without blocks renders a `—` row with 0 units.
+- **`--format csv`**: one row per block, header
+  `week,week_title,day,weekday,block,contents,form,units,status,standalone,pace,topics`.
+  `form`/`status`/`pace` hold the spec tokens (not localized), `standalone` is
+  `true`/`false`, `topics` the block's topic ids separated by spaces.
+
+Word/`.docx` output with a template is not available yet.
+
+Examples:
+
+```bash
+clm export agenda course.xml                 # German Markdown to stdout
+clm export agenda course.xml -L en           # English agenda
+clm export agenda course.xml -f csv          # CSV, one row per block
+clm export agenda course.xml -o agenda.md    # Write to a file
+clm export agenda course.xml -d ./docs       # Write into a directory
 ```
 
 ### `clm calendar`
@@ -1466,6 +1522,22 @@ clm validate [OPTIONS] SPEC_FILE
 Checks that all referenced topic IDs resolve to exactly one existing
 topic directory, that there are no duplicate topic references, and
 that referenced dir-group paths exist.
+
+Two spec-structure checks added in CLM {version} (both **warnings**):
+
+- **`unknown_element`** — always on: an element the spec parser does not read,
+  anywhere in the spec, named by its path (e.g.
+  `course/sections/section[3]/topics/subsecton`). The parser skips such an
+  element with everything inside it, so a typo or a misplaced element would
+  otherwise drop its `<topic>`s from the build silently. Only the outermost
+  unknown element is reported. Unknown attributes on the agenda elements
+  `<block>`, `<agenda>`, `<agenda-targets>` are `unknown_attribute` warnings.
+- **Agenda rules** — only when the spec uses `<block>` (see `clm info
+  spec-files`, *`<block>` — agenda time blocks*): `agenda_block_without_units`,
+  `agenda_unblocked_topic` (a bare `<topic>` in a subsection that has blocks),
+  and, against the `<agenda-targets>` that are set, `agenda_day_units`,
+  `agenda_week_units`, `agenda_total_units`. The unit checks count what `clm
+  export agenda` lists by default (enabled, not optional).
 
 > **Structure-OK is not decks-clean.** By default `clm validate <spec.xml>`
 > validates only the spec *structure* (topic resolution, duplicates, dir-group

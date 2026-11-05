@@ -37,6 +37,13 @@ They use XML format and are typically named `course.xml`.
 </course>
 ```
 
+**Unknown elements.** The parser skips any element it does not know —
+together with everything inside it, including nested `<topic>`s. Since CLM
+{version}, `clm validate` warns about each one (`unknown_element`, with its
+path, e.g. `course/sections/section[3]/topics/subsecton`), so a typo or a
+misplaced element no longer drops material silently. Every element this
+reference documents, in the documented place, is known.
+
 ## Required Elements
 
 Bilingual elements (`<name>`, `<description>`, `<certificate>`,
@@ -322,6 +329,144 @@ to zero decks), and (info) bare topics mixed with subsections (they appear under
 no day). A fifth **opt-in** check, `clm validate --check-workdays`, warns
 (`missing_workday`) when a section that uses the day-of-week layer leaves a
 Mon–Fri workday uncovered.
+
+#### `<block>` — agenda time blocks with teaching units (Optional, CLM {version}+)
+
+Certification agendas (e.g. AZAV) list, per day, **time blocks** with
+**teaching units** ("Unterrichtseinheiten", UE — 45 minutes by default), a
+form (theory/practice) and a description. The spec carries them as a layer
+below the day: `<section>` = week, `<subsection>` = day, `<block>` = time
+block. `clm export agenda` renders the agenda; `clm validate` checks the
+units against `<agenda-targets>`.
+
+```xml
+<course>
+    …
+    <agenda-targets unit-minutes="45" units-per-day="8" days-per-week="5" units-total="480"/>
+    <sections>
+        <section module="module_550_ml_azav">
+            <name><de>Woche 05: LLM-APIs in der Praxis</de><en>Week 05: LLM APIs in practice</en></name>
+            <agenda>
+                <subtitle><de>Von der Chat-Oberfläche zum Code</de><en>From the chat UI to code</en></subtitle>
+                <outcome><de>Eigener Chatbot, der ein LLM über eine API anspricht</de><en>A chatbot of your own that calls an LLM API</en></outcome>
+            </agenda>
+            <topics>
+                <subsection weekday="mon">
+                    <block units="4" form="theory">
+                        <name><de>API-Schlüssel und Modelle</de><en>API keys and models</en></name>
+                        <contents><de>Anbieter, Modelle, Kosten</de><en>Providers, models, cost</en></contents>
+                        <topic>llm_apis</topic>
+                    </block>
+                    <block units="4" form="practice" status="planned">   <!-- no deck yet -->
+                        <name><de>Übungen: erster API-Aufruf</de><en>Exercises: a first API call</en></name>
+                    </block>
+                </subsection>
+                <subsection weekday="fri">
+                    <block units="6" form="theory-practice" pace="recap">
+                        <name><de>Wiederholung</de><en>Review</en></name>
+                        <topic>llm_apis_recap</topic>
+                    </block>
+                    <block units="2" form="theory-practice" standalone="true">   <!-- learning check -->
+                        <name><de>Lernzielkontrolle</de><en>Learning check</en></name>
+                    </block>
+                </subsection>
+            </topics>
+        </section>
+    </sections>
+</course>
+```
+
+**Blocks are presentation/planning only.** A block's `<topic>`s flatten into
+its subsection in **document order**, interleaved with any bare `<topic>`
+siblings, and from there into the section exactly like subsection topics: a
+spec with `<block>` wrappers **builds byte-identically** to the same spec
+without them, and `clm export outline` / `clm export schedule` are unchanged.
+A block may hold any number of `<topic>`s, including none (exercises, learning
+checks, project days, material not yet written). Granularity is topic-level:
+one topic's decks cannot be split across blocks.
+
+**Placement is strict:** a `<block>` is allowed **only directly inside a
+`<subsection>`**. A `<block>` anywhere else (directly under `<topics>` or
+`<section>`, inside a `<topic>`, nested in another `<block>`, in a disabled
+section) is a **hard parse error**, never a silent drop of its topics.
+
+`<block>` children: an optional `<name>` (the block's title) and `<contents>`
+(its description), both bilingual-or-simple like every name, plus zero or
+more `<topic>` elements with the usual topic grammar.
+
+`<block>` attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `units` | Teaching units, a positive integer (`units="4"`). Optional for parsing — a block without `units` is a `clm validate` warning, not an error. Any other value (`0`, `-1`, `2.5`, `four`, empty) is a hard parse error. The unit length is `<agenda-targets unit-minutes>`. |
+| `form` | `theory`, `practice` or `theory-practice` (case-insensitive), localized at render time (Theorie / Praxis / Theorie/Praxis; Theory / Practice / Theory/Practice). Optional; an unknown value is a hard parse error. |
+| `status` | `ready` (default), `planned` (no material yet) or `adapt` (material exists but needs a variant for this course). Shown as a marker in the Markdown agenda. Unknown value: hard error. |
+| `standalone` | `"true"`/`"false"` (default). A learning check or project day — a block that stands on its own rather than presenting material. |
+| `pace` | `full` (default) or `recap` — a refresher block that only skims its decks. Unknown value: hard error. |
+
+`status`, `standalone` and `pace` are planning metadata: they never affect
+the build and appear as columns in `clm export agenda -f csv`.
+
+##### `<agenda>` on `<section>` (Optional)
+
+The week's subtitle and outcome ("Ergebnis") for the agenda, both
+bilingual-or-simple and both optional: `<agenda><subtitle>…</subtitle>
+<outcome>…</outcome></agenda>`. A section with an `<agenda>` is an agenda
+week even before it has blocks.
+
+##### `<agenda-targets>` on `<course>` (Optional)
+
+| Attribute | Description |
+|-----------|-------------|
+| `unit-minutes` | Length of one teaching unit in minutes (default `45`). Rendered in the agenda header. |
+| `units-per-day` | Expected units per day. Checked per subsection (× the number of weekdays a multi-day subsection spans). |
+| `days-per-week` | Days per week; with `units-per-day`, each week is checked against `units-per-day × days-per-week`. |
+| `units-total` | Expected units for the whole agenda. |
+
+All are positive integers; an invalid value is a hard parse error.
+
+##### Which sections and days are in the agenda
+
+A section is an agenda **week** when it has an `<agenda>` or at least one
+`<block>`; other sections (an intro, an appendix) are left out. Disabled
+sections and subsections are never listed; `optional="true"` ones only with
+`clm export agenda --include-optional` (and the unit checks of `clm validate`
+count only what the default agenda lists). A week takes the number its
+section name starts with (`Woche 05: …`, `Week 5 – …`, German name first),
+so leaving out an unplanned or optional week does not renumber the rest; a
+name without one gets its 1-based position among the agenda weeks. Days are
+numbered 1… within the week from the listed subsections, a multi-day
+subsection taking several numbers (`1–2`). Like every enabled section, an
+agenda week needs a `<topics>` element — an empty `<topics/>` is fine for a
+week that is not planned yet; without it the section is dropped.
+`<activity>` rows are not part of the agenda: plan such a day with a
+topic-less `<block>` (e.g. `standalone="true"` for an exam).
+
+##### Agenda validation
+
+When the spec uses `<block>`, `clm validate` adds these **warnings**:
+
+| Type | Fires when |
+|------|------------|
+| `agenda_block_without_units` | A `<block>` has no `units` attribute. |
+| `agenda_unblocked_topic` | A bare `<topic>` sits in a subsection that has blocks: it belongs to no block, so it is built but missing from the agenda. |
+| `agenda_day_units` | A day's units differ from `units-per-day` (× its weekday count). Only when `units-per-day` is set. |
+| `agenda_week_units` | A week's units differ from `units-per-day × days-per-week`. Only when both are set. |
+| `agenda_total_units` | The agenda's total differs from `units-total`. Only when it is set. |
+
+A subsection that holds only topic-less blocks is **not** an `empty_day`, and
+a week whose days hold only topic-less blocks is not an `empty_section`.
+Unknown attributes on `<block>`, `<agenda>` and `<agenda-targets>` are
+`unknown_attribute` warnings (the prototype's `ue=` gets a hint to `units=`):
+an ignored `enabled="false"` on a block would otherwise look effective while
+the block's decks are still built.
+
+> **Migrating from the PythonCourses prototype** (`tools/course_agenda.py`):
+> its *flat* `<block ue="…">` markers (topics following a marker belong to
+> it) become nested blocks — move each marker's following `<topic>`s inside
+> the `<block>` and rename `ue=` to `units=`. Unmigrated specs still parse
+> (the markers become empty blocks); `clm validate` reports every block
+> without `units` and every topic outside a block.
 
 ### `<author>` (Optional)
 

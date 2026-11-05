@@ -2,6 +2,33 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `<block>` is a spec element; unknown elements are reported (#1163, {version})
+
+**Spec change.** `<block>` (an agenda time block with teaching units, see
+`clm info spec-files`) is now parsed — and allowed **only directly inside a
+`<subsection>`**. Older CLM ignored every `<block>` (and silently dropped any
+`<topic>` nested in one). Now a `<block>` anywhere else (under `<topics>`, in
+a `<topic>`, nested in another `<block>`, even in a disabled section) is a
+**hard parse error**, and an invalid `units` value or an unknown
+`form`/`status`/`pace` token fails every command that reads the spec.
+
+`clm validate` also warns about every element the parser does not read
+(`unknown_element`) and about unknown attributes on `<block>`,
+`<agenda>` and `<agenda-targets>` (`unknown_attribute`).
+
+What to do:
+
+- **Prototype flat markers** (PythonCourses `tools/course_agenda.py`): the
+  `<topic>`s following a `<block ue="…">` marker belong to it. Move them
+  inside the `<block>`, rename `ue=` to `units=`, and add
+  `<agenda-targets unit-minutes="45" units-per-day="8" days-per-week="5"
+  units-total="480"/>` to `<course>` to get the unit checks. Drop the
+  prototype's `note=` attribute. Unmigrated specs still parse (each marker
+  becomes an empty block); `clm validate` lists every block without
+  `units`, every topic outside a block and every `ue=`.
+- Run `clm validate` on each spec and fix (or remove) what `unknown_element`
+  reports: that content was never part of the build.
+
 ## `clm build` fails on build errors by default (#1139, {version})
 
 **Behavior change, no spec change.** `--fail-on-error` is now **on by
