@@ -7,7 +7,10 @@ already curated) and the target side's existing voiceover, if any.
 Rules:
 
 1. **Translate the source bullets faithfully**, one target bullet per source
-   bullet, preserving order and inline markdown formatting.
+   bullet, preserving order, nesting, and inline markdown formatting. A
+   source bullet with sub-bullets becomes `{"text": "…", "children":
+   ["…", …]}` (one level); every other bullet is a single-line string —
+   `accept` wraps it to the deck style, so never break lines yourself.
 2. **Preserve target bullets that already say the same thing** — prefer
    minimally editing an existing good translation over re-translating from
    scratch; keep established terminology consistent with the target deck.

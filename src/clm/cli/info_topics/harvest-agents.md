@@ -66,6 +66,25 @@ a trailing reference solution — an `answer` / `alt` cell or a
 `start`/`completed` pair — so the spoken part closes before the silent
 solution).
 
+Each update's `bullets` maps a language to its ordered bullets. A bullet is
+a **single-line string** (no leading `- `, no manual line breaks), or — for
+one level of sub-bullets — an object `{"text": "…", "children": ["…", …]}`
+whose children are plain strings (deeper nesting is rejected):
+
+```json
+"bullets": {"de": [
+  "Ein Vektor wächst automatisch.",
+  {"text": "Zwei Varianten:", "children": ["`push_back`", "`emplace_back`"]}
+]}
+```
+
+You never wrap lines yourself: `accept` wraps every
+bullet it renders to the deck style — 80 columns, continuation indented
+under the bullet text (`#   ` / `//   `; a child renders as `#   - …` with
+its continuation under its own text), never breaking inside a backtick code
+span or a URL (an over-long word stays whole on its own line). Only the
+cells your answer edits are rendered; other cells are never re-wrapped.
+
 ## accept — the write you own
 
 ```
@@ -76,7 +95,8 @@ Validation is strict and all-or-nothing: schema shape, per-member
 fingerprint freshness against the **live** deck (a concurrent edit — or a
 narrative cell added/removed since the task — rejects; re-run `task`),
 single-cell body guards, and the v3 re-parse gate. Bullets render into the
-deck's narrative cell style. New members are always `voiceover` cells
+deck's narrative cell style, wrapped at 80 columns (see above). New members
+are always `voiceover` cells
 (never `notes` — those are live-trainer hints, not recorded narration) with
 a minted `<owner>-vo` id; their layout follows the deck's existing
 **voiceover** cells (inline `notes` do not count), defaulting to the
