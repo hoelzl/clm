@@ -25,8 +25,10 @@ def cpp_show_cmd(paths: tuple[Path, ...], dry_run: bool, as_json: bool, verbose:
     slide file under PATHS, each bare expression or call the classifier
     reports becomes ``SHOW(<expr>);`` (comments kept in place) and the deck
     gains ``#include <clm/display.hpp>``. Cells tagged ``global`` are left
-    alone and reported: ``SHOW`` at namespace scope is ill-formed. Running
-    the command twice changes nothing.
+    alone and reported: ``SHOW`` at namespace scope is ill-formed. A display
+    holding an inline lambda is left alone and reported too: ``SHOW`` around
+    one kills the xeus-cpp kernel, so name the lambda first. Running the
+    command twice changes nothing.
     """
     report: list[dict[str, object]] = []
     total = 0
@@ -34,11 +36,16 @@ def cpp_show_cmd(paths: tuple[Path, ...], dry_run: bool, as_json: bool, verbose:
     warnings = 0
     for path in iter_cpp_slide_files(paths):
         result: DeckRewrite = rewrite_deck_file(path, dry_run=dry_run)
-        if not result.changed and not result.skipped_global and not result.unmatched:
+        if (
+            not result.changed
+            and not result.skipped_global
+            and not result.skipped_lambda
+            and not result.unmatched
+        ):
             continue
         total += len(result.rewrites)
         files_changed += 1 if result.changed else 0
-        warnings += len(result.skipped_global) + len(result.unmatched)
+        warnings += len(result.skipped_global) + len(result.skipped_lambda) + len(result.unmatched)
         report.append(
             {
                 "file": str(path),
@@ -49,6 +56,9 @@ def cpp_show_cmd(paths: tuple[Path, ...], dry_run: bool, as_json: bool, verbose:
                 "include_added": result.include_added,
                 "skipped_global": [
                     {"line": line, "expr": expr} for line, expr in result.skipped_global
+                ],
+                "skipped_lambda": [
+                    {"line": line, "expr": expr} for line, expr in result.skipped_lambda
                 ],
                 "unmatched": [{"line": line, "expr": expr} for line, expr in result.unmatched],
             }
@@ -65,6 +75,11 @@ def cpp_show_cmd(paths: tuple[Path, ...], dry_run: bool, as_json: bool, verbose:
                 click.echo(f"    L{r.line_number}: {r.before!r} -> {r.after!r}")
         for line, expr in result.skipped_global:
             click.echo(f"    WARNING L{line}: display in a `global` cell left as is: {expr!r}")
+        for line, expr in result.skipped_lambda:
+            click.echo(
+                f"    WARNING L{line}: display with an inline lambda left as is "
+                f"(SHOW would kill the kernel; name the lambda first): {expr!r}"
+            )
         for line, expr in result.unmatched:
             click.echo(f"    WARNING L{line}: could not locate verbatim, left as is: {expr!r}")
     if as_json:

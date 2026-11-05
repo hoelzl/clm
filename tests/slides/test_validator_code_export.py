@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import textwrap
 
+import pytest
+
 from clm.slides.validator import validate_file
 from clm.workers.notebook.cpp_code_analysis import (
     classify_item,
@@ -508,3 +510,242 @@ class TestCheckScope:
         )
         result = validate_file(p)
         assert any(f.category == "code_export" for f in result.findings)
+
+
+# ---------------------------------------------------------------------------
+# SHOW / CLM_DISPLAY authoring rules (#1119, #1044)
+# ---------------------------------------------------------------------------
+
+
+def _deck_with_cell(tmp_path, body, header="// %%"):
+    p = tmp_path / "slides_test.cpp"
+    p.write_text(f"{header}\n{body}\n", encoding="utf-8")
+    return p
+
+
+def _show_findings(path, needle):
+    return [f for f in _code_export_findings(path) if needle in f.message]
+
+
+class TestShowInGlobalCell:
+    """Regression tests for #1119: the export emits a ``global`` cell at
+    namespace scope, where the ``SHOW`` statement does not compile."""
+
+    GLOBAL = '// %% tags=["global"]'
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "SHOW(x);",
+            "CLM_DISPLAY(x);",
+            "int x{1};\nSHOW (x);",
+            "SHOW(x)",
+            "namespace demo {\nSHOW(x);\n}",
+            'extern "C" {\nSHOW(x);\n}',
+        ],
+    )
+    def test_call_at_namespace_scope_warns(self, tmp_path, body):
+        findings = _show_findings(_deck_with_cell(tmp_path, body, self.GLOBAL), "`global` cell")
+        assert len(findings) == 1
+        assert findings[0].severity == "warning"
+        assert findings[0].category == "code_export"
+        assert findings[0].line == 1
+        assert "non-global cell" in findings[0].suggestion
+
+    def test_each_call_is_reported_with_its_text(self, tmp_path):
+        p = _deck_with_cell(tmp_path, "SHOW(a);\nCLM_DISPLAY(b);", self.GLOBAL)
+        messages = [f.message for f in _show_findings(p, "`global` cell")]
+        assert len(messages) == 2
+        assert "SHOW(a)" in messages[0]
+        assert "CLM_DISPLAY(b)" in messages[1]
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # Well-formed: the call sits in a body that only runs when called.
+            "void report(int x) {\n    SHOW(x);\n}",
+            "namespace demo {\nvoid report(int x) { SHOW(x); }\n}",
+            "struct Reporter {\n    void report(int x) { SHOW(x); }\n};",
+            "auto report = [](int x) { SHOW(x); };",
+            "template <typename T>\nvoid report(T x) {\n    SHOW(x);\n}",
+            'extern "C" int report(int x) { SHOW(x); return x; }',
+            'extern "C" {\nint report(int x) { SHOW(x); return x; }\n}',
+            # Not the macro at all.
+            "// SHOW(x);",
+            "/* SHOW(x); */",
+            'const char* s{"SHOW(x);"};',
+            'const char* s{R"(SHOW(x);)"};',
+            "int RESHOW(int x);\nint y{RESHOW(1)};",
+            "int SHOW_ALL(int x);\nint y{SHOW_ALL(1)};",
+            "int y = ns::SHOW(1);",
+            "int y = obj.SHOW(1);",
+            "int y = ptr->SHOW(1);",
+            "int SHOW(int x);",
+            "#define DUMP(x) SHOW(x)",
+            "#define DUMP(x) \\\n    SHOW(x)",
+        ],
+    )
+    def test_silent(self, tmp_path, body):
+        assert _show_findings(_deck_with_cell(tmp_path, body, self.GLOBAL), "`global`") == []
+
+    def test_non_global_cell_is_silent(self, tmp_path):
+        assert _show_findings(_deck_with_cell(tmp_path, "SHOW(x);"), "`global`") == []
+
+    def test_del_cell_is_in_no_output(self, tmp_path):
+        p = _deck_with_cell(tmp_path, "SHOW(x);", '// %% tags=["global", "del"]')
+        assert _show_findings(p, "`global`") == []
+
+    def test_start_cell_is_exported_to_the_code_along_view(self, tmp_path):
+        p = _deck_with_cell(tmp_path, "SHOW(x);", '// %% tags=["global", "start"]')
+        assert len(_show_findings(p, "`global`")) == 1
+
+    def test_other_languages_are_not_checked(self, tmp_path):
+        p = tmp_path / "slides_test.py"
+        p.write_text('# %% tags=["global"]\nSHOW(x)\n', encoding="utf-8")
+        assert _show_findings(p, "`global`") == []
+
+    def test_crlf_deck(self, tmp_path):
+        p = tmp_path / "slides_test.cpp"
+        p.write_bytes(b'// %% tags=["global"]\r\nint x{1};\r\nSHOW(x);\r\n')
+        assert len(_show_findings(p, "`global`")) == 1
+
+
+class TestShowWithInlineLambda:
+    """Regression tests for #1044 (guard only): these shapes kill the xcpp20
+    kernel, which fails the whole deck. The boundary below was measured in
+    ``mhoelzl/clm-notebook-processor:1.34.3-lite``, each shape in a fresh
+    kernel, except where a comment says otherwise."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "SHOW([](int a, int b) { return a + b; }(1, 2));",
+            "CLM_DISPLAY([](int a) { return a; }(1));",
+            "SHOW(std::accumulate(v.begin(), v.end(), 0,\n"
+            "                     [](int s, int n) { return s + n * n; }));",
+            "SHOW([&](int a) { return a + k; }(1));",
+            "SHOW([](auto a) { return a; }(1));",
+            "SHOW([]<typename T>(T a) { return a; }(1));",
+            "SHOW([]() -> int { return 1; }());",
+            "SHOW([]() mutable { return 1; }());",
+            "SHOW([]() noexcept { return 1; }());",
+            "SHOW([=] { return k; }());",
+            "SHOW(+[](int a) { return a; }(1));",
+            "SHOW(std::invoke([](int a) { return a; }, 1));",
+            "SHOW([] { int x{1}; return x; }());",
+            # Survives, but only just: any body beyond a lone `return` dies (above), as
+            # does the same call in a `for`. No exemption is worth that boundary.
+            "SHOW([] { return 1; }());",
+            "int q{1}; SHOW([](int a) { return a; }(q));",
+            # These top-level statements do not protect the call either.
+            "for (int i = 0; i < 1; ++i) { SHOW([](int a) { return a; }(i)); }",
+            "for (int x : v) SHOW([](int a) { return a; }(x));",
+            "switch (1) { case 1: SHOW([](int a) { return a; }(1)); break; default: break; }",
+            "{ SHOW([](int a) { return a; }(1)); }",
+            "for (int i = 0; i < 1; ++i) { if (true) { SHOW([](int a) { return a; }(i)); } }",
+            # Not even a body nested in them does.
+            "for (int i = 0; i < 1; ++i) { auto l = [] { SHOW([](int a) { return a; }(1)); }; }",
+            "{ auto l = [] { SHOW([](int a) { return a; }(1)); }; l(); }",
+            # The lambda need not follow punctuation.
+            "SHOW(x > [](int a) { return a; }(1));",
+            "SHOW(not [](int a) { return a; }(1));",
+            "SHOW(b and [](int a) { return a; }(1));",
+        ],
+    )
+    def test_warns_and_says_how_to_fix(self, tmp_path, body):
+        findings = _show_findings(_deck_with_cell(tmp_path, body), "inline lambda")
+        assert len(findings) == 1
+        assert findings[0].severity == "warning"
+        assert findings[0].category == "code_export"
+        assert "Name the lambda first" in findings[0].suggestion
+        assert "#1044" in findings[0].suggestion
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # The kernel survives all of these.
+            "auto add = [](int a, int b) { return a + b; };\nSHOW(add(1, 2));",
+            "auto add = [](int s, int n) { return s + n; };\n"
+            "SHOW(std::accumulate(v.begin(), v.end(), 0, add));",
+            "int t{std::accumulate(v.begin(), v.end(), 0, [](int s, int n) { return s + n; })};\n"
+            "SHOW(t);",
+            "int r{[](int a) { return a; }(1)};\nSHOW(r);",
+            "auto report = [](int a) { SHOW(a); };",
+            "void g() { SHOW([](int a) { return a; }(1)); }",
+            "namespace n { void g() { SHOW([](int a) { return a; }(1)); } }",
+            "struct S { void f() { SHOW([](int a) { return a; }(1)); } };",
+            "auto l = [] { SHOW([](int a) { return a; }(1)); };",
+            "if (true) { SHOW([](int a) { return a; }(1)); }",
+            "if (true) SHOW([](int a) { return a; }(1));",
+            "if (false) { } else { SHOW([](int a) { return a; }(1)); }",
+            "while (w < 1) { ++w; SHOW([](int a) { return a; }(w)); }",
+            "do { ++d; SHOW([](int a) { return a; }(d)); } while (d < 1);",
+            "try { SHOW([](int a) { return a; }(1)); } catch (...) { }",
+            "if (a) SHOW(1); else SHOW([](int z) { return z; }(1));",
+            "if (a) SHOW(1); else if (!a) SHOW([](int z) { return z; }(1));",
+            "while (w++ < 1) SHOW([](int a) { return a; }(w));",
+            "void g() { for (int i = 0; i < 1; ++i) { SHOW([](int a) { return a; }(i)); } }",
+            "if (true) { for (int i = 0; i < 1; ++i) { SHOW([](int a) { return a; }(i)); } }",
+            "SHOW(v[0]);",
+            "SHOW(table[0](1));",
+            "SHOW(*new int[2]{1, 2});",
+            'SHOW(std::string{"[](){}"}.size());',
+            "for (int i = 0; i < 1; ++i) { SHOW(l(i)); }",
+            # Not executed: lexically not a lambda, or not the macro.
+            "SHOW(f()[0]);",
+            "SHOW(obj.operator[](1));",
+            "SHOW(m[k](1)[2]);",
+            'SHOW("abc"[0]);',
+            "SHOW(T{}[0]);",
+            "SHOW(a[i] + b[j]);",
+            "// SHOW([](int a) { return a; }(1));",
+            "/* SHOW([](int a) { return a; }(1)); */",
+            'const char* s{"SHOW([](int a) { return a; }(1));"};',
+            "SHOW(x);  // not [](int a) { return a; }(1)",
+            "SHOW(x /* [](int a) { return a; }(1) */);",
+            'SHOW(s == "[](int a) { return a; }(1)");',
+            "#define DUMP(x) SHOW([](int a) { return a; }(x))",
+            "int y = ns::SHOW([](int a) { return a; }(1));",
+            "MY_SHOW([](int a) { return a; }(1));",
+            "foo([](int a) { return a; }(1));",
+            "SHOW(std::array<int, 2>{[0] = 1});",
+        ],
+    )
+    def test_silent(self, tmp_path, body):
+        assert _show_findings(_deck_with_cell(tmp_path, body), "inline lambda") == []
+
+    @pytest.mark.parametrize("tag", ["start", "del"])
+    def test_cell_that_is_never_executed_is_silent(self, tmp_path, tag):
+        body = "SHOW([](int a) { return a; }(1));"
+        p = _deck_with_cell(tmp_path, body, f'// %% tags=["{tag}"]')
+        assert _show_findings(p, "inline lambda") == []
+
+    def test_completed_cell_is_executed(self, tmp_path):
+        body = "SHOW([](int a) { return a; }(1));"
+        p = _deck_with_cell(tmp_path, body, '// %% tags=["completed"]')
+        assert len(_show_findings(p, "inline lambda")) == 1
+
+    def test_one_finding_per_show_not_per_lambda(self, tmp_path):
+        body = "SHOW(f([](int a) { return a; }, [](int b) { return b; }));"
+        assert len(_show_findings(_deck_with_cell(tmp_path, body), "inline lambda")) == 1
+
+    def test_nested_show_is_one_finding(self, tmp_path):
+        body = "SHOW([] { SHOW(1); return 2; }());"
+        assert len(_show_findings(_deck_with_cell(tmp_path, body), "inline lambda")) == 1
+
+    def test_unterminated_call_is_silent(self, tmp_path):
+        body = "SHOW([](int a) { return a; }(1)"
+        assert _show_findings(_deck_with_cell(tmp_path, body), "inline lambda") == []
+
+    def test_global_cell_gets_both_findings(self, tmp_path):
+        p = _deck_with_cell(tmp_path, "SHOW([](int a) { return a; }(1));", '// %% tags=["global"]')
+        assert len(_show_findings(p, "inline lambda")) == 1
+        assert len(_show_findings(p, "`global` cell")) == 1
+
+    def test_long_call_is_shortened_in_the_message(self, tmp_path):
+        args = ", ".join(f"arg{i}" for i in range(50))
+        body = f"SHOW(f([](int a) {{ return a; }},\n    {args}));"
+        message = _show_findings(_deck_with_cell(tmp_path, body), "inline lambda")[0].message
+        assert len(message) < 160
+        assert "\n" not in message
+        assert "..." in message

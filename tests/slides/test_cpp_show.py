@@ -143,6 +143,56 @@ class TestRewriteDeckText:
         assert result.skipped_global == [(7, "g")]
         assert 'tags=["global"]\nint g{1};\ng\n' in result.text
 
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "1 + [](int a, int b) { return a + b; }(1, 2)",
+            "obj.apply([](int a) { return a; })",
+            "x > [](int a) { return a; }(1)",
+            "not [](int a) { return a; }(1)",
+            "std::accumulate(v.begin(), v.end(), 0,\n    [](int s, int n) { return s + n; })",
+            "apply([&](int a) { return a; }, 1)",
+        ],
+    )
+    def test_inline_lambda_is_skipped_and_reported(self, expr: str):
+        """Regression test for #1044: wrapping this would kill the kernel."""
+        text = deck(code("#include <numeric>"), code(expr))
+        result = rewrite_deck_text(text)
+        assert result.rewrites == []
+        assert result.skipped_lambda == [(7, expr)]
+        assert not result.include_added
+        assert result.text == text
+
+    def test_a_bare_immediately_invoked_lambda_is_no_display_at_all(self):
+        """The classifier has no category for it, so it was never wrapped."""
+        text = deck(code("[](int a) { return a; }(1)"))
+        result = rewrite_deck_text(text)
+        assert result.rewrites == []
+        assert result.skipped_lambda == []
+        assert result.text == text
+
+    def test_inline_lambda_does_not_stop_the_other_displays_of_the_cell(self):
+        result = rewrite_deck_text(deck(code("f([](int a) { return a; });\ng(1)"), code("x")))
+        assert [r.after for r in result.rewrites] == ["SHOW(g(1));", "SHOW(x);"]
+        assert result.skipped_lambda == []
+
+        result = rewrite_deck_text(deck(code("int y{1};\nf([](int a) { return a; })"), code("x")))
+        assert [r.after for r in result.rewrites] == ["SHOW(x);"]
+        assert result.skipped_lambda == [(4, "f([](int a) { return a; })")]
+        assert "SHOW(f" not in result.text
+
+    def test_subscript_and_named_lambda_are_still_wrapped(self):
+        result = rewrite_deck_text(deck(code("v[0]"), code("add(1, 2)")))
+        assert [r.after for r in result.rewrites] == ["SHOW(v[0]);", "SHOW(add(1, 2));"]
+        assert result.skipped_lambda == []
+
+    def test_skipped_lambda_stays_skipped_on_a_second_run(self):
+        once = rewrite_deck_text(deck(code("f([](int a) { return a; })"), code("x")))
+        twice = rewrite_deck_text(once.text)
+        assert twice.rewrites == []
+        assert [expr for _, expr in twice.skipped_lambda] == ["f([](int a) { return a; })"]
+        assert twice.text == once.text
+
     def test_markdown_and_j2_cells_are_untouched(self):
         text = deck(md("x"), md("y + 1", "// %% [markdown]"), code("int x{1};"))
         assert rewrite_deck_text(text).text == text
@@ -240,3 +290,24 @@ class TestCli:
         result = CliRunner().invoke(cpp_show_cmd, [str(path)])
         assert result.exit_code == 1
         assert "WARNING" in result.output and "global" in result.output
+
+    def test_inline_lambda_is_a_warning_and_exit_1(self, course: Path):
+        """Regression test for #1044."""
+        path = course / "module_100_basics" / "topic_110_vars" / "slides_vars.en.cpp"
+        original = deck(code("#include <iostream>"), code("f([](int a) { return a; })"))
+        path.write_text(original, encoding="utf-8")
+        result = CliRunner().invoke(cpp_show_cmd, [str(path)])
+        assert result.exit_code == 1
+        assert "WARNING" in result.output and "inline lambda" in result.output
+        assert "1 warning(s)" in result.output
+        assert path.read_text(encoding="utf-8") == original
+
+    def test_inline_lambda_is_in_the_json_report(self, course: Path):
+        path = course / "module_100_basics" / "topic_110_vars" / "slides_vars.en.cpp"
+        path.write_text(deck(code("f([](int a) { return a; })")), encoding="utf-8")
+        result = CliRunner().invoke(cpp_show_cmd, ["--json", str(path)])
+        assert result.exit_code == 1
+        report = json.loads(result.output[result.output.index("{") :])
+        assert report["files"][0]["skipped_lambda"] == [
+            {"line": 4, "expr": "f([](int a) { return a; })"}
+        ]

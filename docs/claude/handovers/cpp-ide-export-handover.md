@@ -575,8 +575,8 @@ Next Steps) — not something a session can fake.
   processor tests cover the snapshot path, slide_id-named sections, no
   metadata leak, and the code-along TODO. 240 passed in those two files;
   `tests/slides tests/core tests/workers/notebook tests/cli` 5,945 passed.
-- **Open / deferred**: `SHOW` in `global` cells is ill-formed and not yet
-  diagnosed by validate; `int i(value);` paren-init stays namespace-scope;
+- **Open / deferred**: `SHOW` in `global` cells is ill-formed (diagnosed by
+  validate since #1119); `int i(value);` paren-init stays namespace-scope;
   markdown-only trailing sections read fine but a section whose opener is a
   code cell takes its heading from a *following* markdown heading if any
   (rare, cosmetic).
@@ -591,7 +591,7 @@ Next Steps) — not something a session can fake.
    `full` variant was not rebuilt (ML-only image, never used for C++).
    Direct-mode kernels (`clm provision kernel-env`) do not get the header
    — add an include path there if Direct mode is ever used for C++. A
-   validator rule for `SHOW` in `global` cells is still open.
+   validator rule for `SHOW` in `global` cells landed with #1119.
 1. **Merge order**: clm PR first (emitter + cache fixes), then the
    CppCourses PR — its master push triggers `code-export-compile.yml`,
    which installs clm from git master. Watch that run: it is the first

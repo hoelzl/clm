@@ -36,7 +36,10 @@ is installed in the notebook worker image and vendored by the C++ code
 export, where `SHOW(i1);` prints `i1 = 10`; standard containers, pairs,
 tuples, optionals and scoped enums print too, e.g. `v = {1, 2, 3}`). `clm slides cpp-show` converts
 a deck that still relies on bare expressions. Never put a `SHOW` in a
-`global` cell — it is ill-formed at namespace scope.
+`global` cell — it is ill-formed at namespace scope. Never write a lambda
+inside a top-level `SHOW(...)` — the kernel dies on it and the whole deck
+fails; bind the lambda to a name first and pass the name. `clm validate`
+warns on both (since CLM {version}).
 
 ## Magics, shell escapes, and install hints
 

@@ -1720,7 +1720,7 @@ clm validate [OPTIONS] PATH
 | Option | Description |
 |--------|-------------|
 | `--kind [slides\|spec]` | Force a validator instead of inferring from the path (`.xml` → spec, `.py`/directory → slides). |
-| `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_quality`, `voiceover`, `completeness` (CLI default: all deterministic) |
+| `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_export` (`.cpp` decks only), `code_quality`, `voiceover`, `completeness` (CLI default: all deterministic) |
 | `--quick` | Fast syntax-only check (format + tags + slide_ids). Useful for PostToolUse hooks |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
@@ -1787,6 +1787,17 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | voiceover companion `for_slide` matches no `slide_id` in its own deck | `error` | (since CLM {version}) The build's voiceover merge **silently drops** such narration from the output — usually because a `slide_id` was renamed or its slide moved to another deck. This is the static, pre-build equivalent of the build's dropped-companion error; it reuses the build matcher (so `for_slide="title"` and `vo_anchor` placement are not false positives) and a voiceover-less deck (no companion) stays silent. Fix by re-aligning the `for_slide`, or move the narration into the companion of the deck that now owns the slide. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 | shared (no-`lang`) **code** cell of a split pair contains German text in a comment or string | `error` | **Cross-file** (issue #772; born a `warning`, promoted to `error` in CLM {version} after the corpus cleanup reached 0 findings — issue #782): shared cells are emitted verbatim into *both* language outputs, so German comments/strings leak into the English deck — and once `sync record` banks the cell as `shared`, a later one-sided fix frames a mechanical byte copy that would overwrite the German half. Scans comments and string literals only (identifiers/keywords are English by construction); German signal = umlaut/eszett or ≥2 German function words. Intentional German (a DE↔EN dictionary example) opts out per cell with the `allow-untranslated` tag. English text in shared cells is *not* flagged. Reported once per offending cell (a deck with several German shared cells gets several errors), always on the `.de.py` side — never duplicated onto the `.en.py` half. |
+
+The `code_export` check group (`.cpp` decks only) includes two authoring rules
+for the display macros of `clm/display.hpp`, since CLM {version}. Comments,
+string literals and preprocessor lines are ignored (the code between `#if` and
+`#endif` is still read), and each call gets its own finding at the line of its
+cell header:
+
+| Finding | Severity | Fires when | Stays silent on |
+|---------|----------|------------|-----------------|
+| `` `SHOW(x)` in a `global` cell will not compile in the export `` | `warning` | A `SHOW(...)` / `CLM_DISPLAY(...)` in a `global` cell, outside all braces (a `namespace` or `extern "C"` block does not count). The export emits the cell at namespace scope, where the macro's statement is ill-formed, so the failure would otherwise surface only in the downstream compile gate. Fix: move the call into a non-global cell. | A call in any other braces of a `global` cell, such as a function or lambda body (well-formed; the rule does not judge what else the braces might be); any `del` cell (in no output). |
+| `` `SHOW(...)` holds an inline lambda, which kills the kernel `` | `warning` | A `SHOW(...)` / `CLM_DISPLAY(...)` whose arguments contain a lambda expression, as a top-level statement of its cell or anywhere inside a top-level `for`, `switch` or bare `{ }` block. The xeus-cpp kernel dies on this and the whole deck fails. Fix: name the lambda first (`auto f = [](int a) { return a; };`, then `SHOW(f(1));`). | A named lambda passed or called in `SHOW`; a lambda in a plain declaration (`int t{std::accumulate(..., [](int s, int n) { return s + n; })};`); a `SHOW` inside a top-level function, lambda or class definition, or inside a top-level `if`, `else`, `while`, `do` or `try` (the kernel survives all of these); subscripts (`v[0]`); `start` and `del` cells (never executed). |
 
 Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
 count parity, per-pair tag/type consistency, and DE/EN adjacency) are
@@ -2237,7 +2248,11 @@ stay where they were — and the deck gains `#include <clm/display.hpp>`
 first code cell). Files are rewritten losslessly; a second run changes
 nothing. Cells tagged `global` are left alone and reported with exit code 1:
 `SHOW` at namespace scope is ill-formed, so such a display needs the author.
-`--dry-run` reports without writing, `--json` emits the report as JSON, `-v`
+A display holding an inline lambda (a call such as
+`std::accumulate(v.begin(), v.end(), 0, [](int s, int n) { return s + n; })`)
+is left alone and reported the same way, in `skipped_lambda` with `--json`
+(since CLM {version}): `SHOW` around it would kill the xeus-cpp kernel, so name
+the lambda first. `--dry-run` reports without writing, `--json` emits the report as JSON, `-v`
 lists every rewrite.
 
 ### `clm slides rename-id`
