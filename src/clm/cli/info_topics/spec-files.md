@@ -431,9 +431,16 @@ A section is an agenda **week** when it has an `<agenda>` or at least one
 `<block>`; other sections (an intro, an appendix) are left out. Disabled
 sections and subsections are never listed; `optional="true"` ones only with
 `clm export agenda --include-optional` (and the unit checks of `clm validate`
-count only what the default agenda lists). Weeks are numbered 1… in that
-order; days are numbered 1… within the week from the listed subsections, a
-multi-day subsection taking several numbers (`1–2`).
+count only what the default agenda lists). A week takes the number its
+section name starts with (`Woche 05: …`, `Week 5 – …`, German name first),
+so leaving out an unplanned or optional week does not renumber the rest; a
+name without one gets its 1-based position among the agenda weeks. Days are
+numbered 1… within the week from the listed subsections, a multi-day
+subsection taking several numbers (`1–2`). Like every enabled section, an
+agenda week needs a `<topics>` element — an empty `<topics/>` is fine for a
+week that is not planned yet; without it the section is dropped.
+`<activity>` rows are not part of the agenda: plan such a day with a
+topic-less `<block>` (e.g. `standalone="true"` for an exam).
 
 ##### Agenda validation
 
@@ -447,7 +454,12 @@ When the spec uses `<block>`, `clm validate` adds these **warnings**:
 | `agenda_week_units` | A week's units differ from `units-per-day × days-per-week`. Only when both are set. |
 | `agenda_total_units` | The agenda's total differs from `units-total`. Only when it is set. |
 
-A subsection that holds only topic-less blocks is **not** an `empty_day`.
+A subsection that holds only topic-less blocks is **not** an `empty_day`, and
+a week whose days hold only topic-less blocks is not an `empty_section`.
+Unknown attributes on `<block>`, `<agenda>` and `<agenda-targets>` are
+`unknown_attribute` warnings (the prototype's `ue=` gets a hint to `units=`):
+an ignored `enabled="false"` on a block would otherwise look effective while
+the block's decks are still built.
 
 > **Migrating from the PythonCourses prototype** (`tools/course_agenda.py`):
 > its *flat* `<block ue="…">` markers (topics following a marker belong to

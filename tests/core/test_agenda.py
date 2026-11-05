@@ -51,6 +51,27 @@ def test_sections_without_blocks_or_agenda_are_not_weeks():
     assert weeks[1].units == 0
 
 
+def test_week_number_comes_from_section_name_so_skipped_weeks_keep_numbering():
+    """Review finding: positional numbering clashed with the author's 'Woche NN:'."""
+    xml = _course(
+        """
+        <section><name><de>Woche 01: A</de><en>Week 01: A</en></name><topics>
+            <subsection weekday="mon"><block units="8"/></subsection>
+        </topics></section>
+        <section><name>Woche 02: noch offen</name><topics><topic>x</topic></topics></section>
+        <section optional="true"><name>Woche 03: Bonus</name><topics>
+            <subsection weekday="mon"><block units="8"/></subsection>
+        </topics></section>
+        <section><name><de>Woche 04: RAG</de><en>Week 04: RAG</en></name><topics>
+            <subsection weekday="mon"><block units="8"/></subsection>
+        </topics></section>
+        <section><name>Anhang</name><agenda/><topics/></section>
+        """
+    )
+    weeks = build_agenda(_parse(xml))
+    assert [w.number for w in weeks] == [1, 4, 3]
+
+
 def test_multi_weekday_subsection_spans_days():
     xml = _course(
         """

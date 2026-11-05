@@ -991,8 +991,10 @@ clm export agenda [OPTIONS] SPEC_FILE
 | `-o, --output FILE` / `-d, --output-dir DIR` | Write to FILE / to a directory (filename `<course>-agenda-<lang>.<ext>`). |
 | `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). |
 
-Agenda weeks are the sections with an `<agenda>` or at least one `<block>`,
-numbered 1… in document order; disabled content is never listed. Days are
+Agenda weeks are the sections with an `<agenda>` or at least one `<block>`;
+disabled content is never listed. A week takes the number its section name
+starts with (`Woche 05: …` → 5), else its 1-based position among the agenda
+weeks, so skipping a week does not renumber the rest. Days are
 numbered 1… within each week (a multi-day subsection takes several numbers,
 `1–2`).
 
@@ -1528,7 +1530,8 @@ Two spec-structure checks added in CLM {version} (both **warnings**):
   `course/sections/section[3]/topics/subsecton`). The parser skips such an
   element with everything inside it, so a typo or a misplaced element would
   otherwise drop its `<topic>`s from the build silently. Only the outermost
-  unknown element is reported.
+  unknown element is reported. Unknown attributes on the agenda elements
+  `<block>`, `<agenda>`, `<agenda-targets>` are `unknown_attribute` warnings.
 - **Agenda rules** — only when the spec uses `<block>` (see `clm info
   spec-files`, *`<block>` — agenda time blocks*): `agenda_block_without_units`,
   `agenda_unblocked_topic` (a bare `<topic>` in a subsection that has blocks),

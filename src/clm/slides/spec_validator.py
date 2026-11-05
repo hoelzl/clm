@@ -173,8 +173,11 @@ def validate_spec(
                 )
             )
 
-        # Empty section check
+        # Empty section check. A planning week whose days hold only topic-less
+        # agenda <block>s (issue #1163) is planned, not empty.
         if not section.topics:
+            if any(sub.blocks for sub in section.subsections):
+                continue
             findings.append(
                 SpecFinding(
                     severity="warning",
@@ -368,6 +371,28 @@ def _validate_unknown_elements(*, course_spec_path: Path, findings: list[SpecFin
     """
     root = ETree.parse(course_spec_path).getroot()
     for unknown in find_unknown_elements(root):
+        if unknown.attribute is not None:
+            hint = (
+                ' The prototype attribute "ue" is now "units".' if unknown.attribute == "ue" else ""
+            )
+            findings.append(
+                SpecFinding(
+                    severity="warning",
+                    type="unknown_attribute",
+                    section=unknown.section,
+                    message=(
+                        f"Unknown attribute {unknown.attribute}= on <{unknown.tag}> at "
+                        f"{unknown.path}: clm ignores it.{hint}"
+                    ),
+                    suggestion="See 'clm info spec-files' for the valid attributes.",
+                    details={
+                        "path": unknown.path,
+                        "element": unknown.tag,
+                        "attribute": unknown.attribute,
+                    },
+                )
+            )
+            continue
         parent_path = unknown.path.rsplit("/", 1)[0]
         parent_tag = parent_path.rsplit("/", 1)[-1].split("[", 1)[0]
         findings.append(
@@ -389,6 +414,7 @@ def _validate_unknown_elements(*, course_spec_path: Path, findings: list[SpecFin
 
 
 def _subsection_label(sub: SubsectionSpec) -> str:
+    """Weekday tokens, else the name, else ``(unnamed)`` — for finding messages."""
     return ",".join(sub.weekdays) or (sub.name.en or sub.name.de if sub.name else "") or "(unnamed)"
 
 
@@ -735,11 +761,7 @@ def _validate_subsections(
 
         # --- Check 3: empty days ---
         for sub in enabled_subs:
-            label = (
-                ",".join(sub.weekdays)
-                or (sub.name.en or sub.name.de if sub.name else "")
-                or "(unnamed)"
-            )
+            label = _subsection_label(sub)
             if not sub.topics:
                 # An activity-only day (project work, exam, …) is intentionally
                 # deck-free — it fills the schedule without a topic, so it is

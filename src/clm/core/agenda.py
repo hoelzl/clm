@@ -16,6 +16,10 @@ Selection rules (shared by the export and the validator):
   an appendix) are not part of the agenda.
 * Disabled sections and subsections are never listed. Optional ones are
   listed only with ``include_optional`` (same as ``clm export schedule``).
+* A week's number is the one its section name starts with (``"Woche 05:"``,
+  ``"Week 5 –"``), so skipping an unplanned or optional week keeps the
+  author's numbering; a name without one gets its 1-based position among the
+  agenda weeks.
 * Every listed subsection of a week is a **day**, numbered 1.. within the
   week; a subsection spanning several weekdays (``weekday="mon,tue"``)
   occupies that many day numbers (label ``"1–2"``).
@@ -37,6 +41,21 @@ FORM_LABELS: dict[str, Text] = {
 }
 
 _WEEK_PREFIX = re.compile(r"^\s*(?:woche|week)\s*\d+\s*[:.\-–—]\s*(?=\S)", re.IGNORECASE)
+_WEEK_NUMBER = re.compile(r"^\s*(?:woche|week)\s*(\d+)", re.IGNORECASE)
+
+
+def week_number_from_name(section: SectionSpec) -> int | None:
+    """The week number a section name starts with (``"Woche 05: …"`` -> 5), if any.
+
+    German name first, then English. Used to number agenda weeks the way the
+    author did, so a skipped week (unplanned, optional) does not shift the
+    numbers of the following weeks.
+    """
+    for title in (section.name.de, section.name.en):
+        match = _WEEK_NUMBER.match(title or "")
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def strip_week_prefix(title: str) -> str:
@@ -68,7 +87,7 @@ class AgendaDay:
 class AgendaWeek:
     """One week (``<section>``) of the agenda."""
 
-    number: int  # 1-based position among the agenda weeks
+    number: int  # from a "Woche NN"/"Week NN" name prefix, else 1-based position
     section: SectionSpec
     days: list[AgendaDay] = field(default_factory=list)
 
@@ -105,5 +124,6 @@ def build_agenda(spec: CourseSpec, *, include_optional: bool = False) -> list[Ag
             label = str(next_day) if span == 1 else f"{next_day}–{last}"
             days.append(AgendaDay(label=label, span=span, subsection=sub, blocks=list(sub.blocks)))
             next_day = last + 1
-        weeks.append(AgendaWeek(number=len(weeks) + 1, section=section, days=days))
+        number = week_number_from_name(section) or len(weeks) + 1
+        weeks.append(AgendaWeek(number=number, section=section, days=days))
     return weeks

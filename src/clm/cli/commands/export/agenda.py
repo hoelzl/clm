@@ -28,6 +28,7 @@ from clm.cli.commands._export_shared import (
     output_options,
     spec_argument,
 )
+from clm.cli.commands.export.schedule import _md_cell
 from clm.core.agenda import FORM_LABELS, AgendaWeek, build_agenda, strip_week_prefix
 from clm.core.course_spec import BlockSpec, CourseSpec, CourseSpecError
 from clm.core.utils.text_utils import sanitize_file_name
@@ -88,11 +89,6 @@ _CSV_FIELDS = [
 ]
 
 _EMPTY = "—"
-
-
-def _md_cell(text: str) -> str:
-    """Escape a value for a Markdown table cell."""
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
 
 
 def _oneline(text: str) -> str:

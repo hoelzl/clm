@@ -3272,6 +3272,20 @@ class UnknownElement:
     tag: str
     path: str
     section: str | None = None
+    # Set for an unknown *attribute* on a known element (see
+    # :data:`SPEC_ELEMENT_ATTRIBUTES`); ``tag``/``path`` then name that element.
+    attribute: str | None = None
+
+
+# Attribute vocabulary of the agenda elements (issue #1163), checked by
+# ``clm validate`` (``unknown_attribute``). Limited to these new elements, which
+# have no legacy specs: an ignored attribute such as ``enabled="false"`` on a
+# <block> would otherwise look like it disabled the block's decks.
+SPEC_ELEMENT_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "block": frozenset({"units", "form", "status", "standalone", "pace"}),
+    "agenda": frozenset(),
+    "agenda-targets": frozenset({"unit-minutes", "units-per-day", "days-per-week", "units-total"}),
+}
 
 
 def _element_section_name(section_elem: ETree.Element) -> str | None:
@@ -3289,7 +3303,9 @@ def find_unknown_elements(root: ETree.Element) -> list[UnknownElement]:
 
     Reports the outermost unknown element only — its descendants are skipped
     by the parser along with it, so one finding covers them. Comments and
-    processing instructions are ignored.
+    processing instructions are ignored. Also reports unknown attributes on
+    the elements listed in :data:`SPEC_ELEMENT_ATTRIBUTES` (entries with
+    ``attribute`` set).
     """
     found: list[UnknownElement] = []
 
@@ -3307,6 +3323,14 @@ def find_unknown_elements(root: ETree.Element) -> list[UnknownElement]:
             if child.tag not in allowed:
                 found.append(UnknownElement(tag=child.tag, path=child_path, section=section))
                 continue
+            known_attrs = SPEC_ELEMENT_ATTRIBUTES.get(child.tag)
+            if known_attrs is not None:
+                for attr in sorted(set(child.attrib) - known_attrs):
+                    found.append(
+                        UnknownElement(
+                            tag=child.tag, path=child_path, section=section, attribute=attr
+                        )
+                    )
             child_section = _element_section_name(child) if child.tag == "section" else section
             walk(child, child_path, child_section)
 

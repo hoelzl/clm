@@ -284,6 +284,39 @@ class TestAgendaRules:
         assert findings[0].severity == "warning"
         assert findings[0].topic_id == "a"
 
+    def test_week_of_topic_less_blocks_is_not_an_empty_section(self, tmp_path):
+        spec = _write(
+            tmp_path,
+            _course(
+                """<section><name>W1</name><topics>
+                  <subsection weekday="mon"><block units="8" status="planned"/></subsection>
+                </topics></section>"""
+            ),
+        )
+        result = validate_spec(spec, tmp_path / "slides")
+        assert _of(result, "empty_section") == []
+        assert _of(result, "empty_day") == []
+
+    def test_unknown_block_attribute_is_flagged(self, tmp_path):
+        spec = _write(
+            tmp_path,
+            _course(
+                """<section><name>W1</name><topics>
+                  <subsection weekday="mon">
+                    <block units="4" enabled="false"/>
+                    <block ue="4"/>
+                  </subsection>
+                </topics></section>""",
+                course_extra='<agenda-targets units-per-day="8" per-week="40"/>',
+            ),
+        )
+        findings = _of(validate_spec(spec, tmp_path / "slides"), "unknown_attribute")
+        assert sorted(f.details["attribute"] for f in findings) == ["enabled", "per-week", "ue"]
+        assert all(f.severity == "warning" for f in findings)
+        ue = next(f for f in findings if f.details["attribute"] == "ue")
+        assert '"units"' in ue.message
+        assert ue.details["path"] == "course/sections/section/topics/subsection/block[2]"
+
     def test_optional_content_does_not_count_towards_targets(self, tmp_path):
         spec = _write(
             tmp_path,
