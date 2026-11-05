@@ -40,9 +40,32 @@ TASK_KINDS = ("curate", "translate", "port", "compare")
 #: function this label names.
 ANSWER_VALIDATOR = "harvest-bullets"
 
+_BULLET_TEXT_SCHEMA: dict[str, Any] = {"type": "string", "minLength": 1}
+
+#: One side's bullets: plain strings, or one level of nesting (#1101).
+_BULLET_LIST_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "minItems": 1,
+    "items": {
+        "oneOf": [
+            _BULLET_TEXT_SCHEMA,
+            {
+                "type": "object",
+                "required": ["text", "children"],
+                "additionalProperties": False,
+                "properties": {
+                    "text": _BULLET_TEXT_SCHEMA,
+                    "children": {"type": "array", "minItems": 1, "items": _BULLET_TEXT_SCHEMA},
+                },
+            },
+        ]
+    },
+}
+
 #: The bullet-list answer contract (proposal §4/§8, extended for
 #: multi-narrative slides): a list of per-member updates, each carrying
-#: per-language ordered bullet strings, plus the `dropped` audit list,
+#: per-language ordered bullets (strings, or ``{"text", "children"}`` for
+#: one nesting level — #1101), plus the `dropped` audit list,
 #: echoing the freshness tokens the task framed. Validated by
 #: `harvest accept` (validator :data:`ANSWER_VALIDATOR`).
 ANSWER_SCHEMA: dict[str, Any] = {
@@ -86,17 +109,14 @@ ANSWER_SCHEMA: dict[str, Any] = {
                         "type": "object",
                         "minProperties": 1,
                         "additionalProperties": False,
+                        "description": "per-language ordered bullets, one single-line "
+                        "string each (no leading '- ', no manual line breaks: accept "
+                        "wraps every bullet to the deck style, 80 columns). A bullet "
+                        'with sub-bullets is {"text": "…", "children": ["…", …]} '
+                        "(one nesting level; children are plain strings)",
                         "properties": {
-                            "de": {
-                                "type": "array",
-                                "minItems": 1,
-                                "items": {"type": "string", "minLength": 1},
-                            },
-                            "en": {
-                                "type": "array",
-                                "minItems": 1,
-                                "items": {"type": "string", "minLength": 1},
-                            },
+                            "de": _BULLET_LIST_SCHEMA,
+                            "en": _BULLET_LIST_SCHEMA,
                         },
                     },
                 },

@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from attrs import define, evolve, field
 
+from clm.core.slide_text.bullet_wrap import wrap_bullet
 from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.agent_task import VALIDATORS, AnswerRejected, envelope, freshness_mismatch
 from clm.slides.bilingual_doc import (
@@ -72,6 +73,7 @@ __all__ = [
     "AcceptOutcome",
     "AcceptRejected",
     "Answer",
+    "Bullet",
     "Update",
     "accept_answer",
     "parse_answer",
@@ -94,12 +96,20 @@ class AcceptRejected(AnswerRejected):
     """The answer was rejected; the message names the reason. Nothing was written."""
 
 
+@define(frozen=True)
+class Bullet:
+    """One answer bullet: its text and (one nesting level) child bullets."""
+
+    text: str
+    children: tuple[str, ...] = ()
+
+
 @define
 class Update:
     """One per-member edit: an existing member's new bullets, or a new cell."""
 
     member: str | None  # id:… handle, or None = create
-    bullets: dict[str, list[str]]  # side -> ordered bullet strings
+    bullets: dict[str, list[Bullet]]  # side -> ordered bullets
     after: str | None = None  # create only: place after this narrative member
 
 
@@ -149,24 +159,67 @@ class AcceptOutcome:
 # ---------------------------------------------------------------------------
 
 
-def _parse_bullets(bullets: Any, where: str) -> dict[str, list[str]]:
+_NESTED_KEYS = frozenset({"text", "children"})
+
+
+def _parse_text(value: Any, where: str) -> str:
+    """One bullet's text: a non-empty single-line string, ``- `` prefix dropped."""
+    if not isinstance(value, str) or not value.strip():
+        raise AcceptRejected(f"{where} must be a non-empty string")
+    if "\n" in value:
+        raise AcceptRejected(
+            f"{where} contains a newline — one bullet per string, markdown inline "
+            "formatting only (accept wraps long bullets itself; nest with "
+            '{"text": …, "children": […]})'
+        )
+    return _BULLET_PREFIX.sub("", value.strip())
+
+
+def _parse_bullet(entry: Any, where: str) -> Bullet:
+    """A plain string, or ``{"text": str, "children": [str, …]}`` (#1101)."""
+    if isinstance(entry, str):
+        return Bullet(_parse_text(entry, where))
+    if not isinstance(entry, dict):
+        raise AcceptRejected(
+            f'{where} must be a non-empty string or a {{"text": …, "children": […]}} object'
+        )
+    unknown = sorted(set(entry) - _NESTED_KEYS)
+    if unknown:
+        raise AcceptRejected(
+            f"{where} has unknown key(s) {', '.join(map(repr, unknown))} — a nested "
+            'bullet is exactly {"text": "…", "children": ["…", …]}'
+        )
+    if "text" not in entry:
+        raise AcceptRejected(f'{where} is a nested bullet without "text"')
+    text = _parse_text(entry["text"], f"{where}.text")
+    children = entry.get("children")
+    if not isinstance(children, list) or not children:
+        raise AcceptRejected(
+            f"{where}.children must be a non-empty list of strings (a bullet without "
+            "children is a plain string)"
+        )
+    parsed: list[str] = []
+    for j, child in enumerate(children):
+        child_where = f"{where}.children[{j}]"
+        if isinstance(child, dict | list):
+            raise AcceptRejected(
+                f"{child_where}: nesting is limited to one level — children must be plain strings"
+            )
+        parsed.append(_parse_text(child, child_where))
+    return Bullet(text, tuple(parsed))
+
+
+def _parse_bullets(bullets: Any, where: str) -> dict[str, list[Bullet]]:
     if not isinstance(bullets, dict) or not bullets or set(bullets) - {"de", "en"}:
         raise AcceptRejected(f"{where}.bullets must map at least one of de/en to a bullet list")
-    parsed: dict[str, list[str]] = {}
+    parsed: dict[str, list[Bullet]] = {}
     for side, entries in bullets.items():
         if not isinstance(entries, list) or not entries:
-            raise AcceptRejected(f"{where}.bullets.{side} must be a non-empty list of strings")
-        cleaned: list[str] = []
-        for i, bullet in enumerate(entries):
-            if not isinstance(bullet, str) or not bullet.strip():
-                raise AcceptRejected(f"{where}.bullets.{side}[{i}] must be a non-empty string")
-            if "\n" in bullet:
-                raise AcceptRejected(
-                    f"{where}.bullets.{side}[{i}] contains a newline — one bullet per "
-                    "string, markdown inline formatting only"
-                )
-            cleaned.append(_BULLET_PREFIX.sub("", bullet.strip()))
-        parsed[side] = cleaned
+            raise AcceptRejected(f"{where}.bullets.{side} must be a non-empty list of bullets")
+        parsed[side] = [
+            _parse_bullet(bullet, f"{where}.bullets.{side}[{i}]")
+            for i, bullet in enumerate(entries)
+        ]
     return parsed
 
 
@@ -237,10 +290,21 @@ def parse_answer(payload: Any) -> Answer:
     )
 
 
-def _render_body(bullets: list[str], comment_token: str) -> str:
-    """Bullets → the cell body (the deck's `#\\n# - …` narrative style)."""
+def _render_body(bullets: list[Bullet], comment_token: str) -> str:
+    """Bullets → the cell body (the deck's `#\\n# - …` narrative style).
+
+    Each bullet is wrapped to the deck style (#1101): 80 columns, the
+    continuation aligned under the bullet text (``#   ``/``//   ``); a child
+    renders as ``#   - …`` with its continuation under *its* text. Only these
+    rendered bullets are wrapped — cells the answer does not edit are never
+    touched."""
+    top, top_cont = f"{comment_token} - ", f"{comment_token}   "
+    child, child_cont = f"{comment_token}   - ", f"{comment_token}     "
     lines = [comment_token]
-    lines.extend(f"{comment_token} - {b}" for b in bullets)
+    for bullet in bullets:
+        lines.extend(wrap_bullet(bullet.text, top, top_cont))
+        for text in bullet.children:
+            lines.extend(wrap_bullet(text, child, child_cont))
     return "\n".join(lines)
 
 

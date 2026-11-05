@@ -797,3 +797,181 @@ class TestTrailingSolutionCount:
         assert count([("start",), ("completed",)]) == 2
         assert count([(), ("completed",)]) == 1
         assert count([("alt",), ()]) == 0  # not trailing
+
+
+def _member_body(companion_text: str, slug: str) -> list[str]:
+    """The body lines (after the header) of the companion cell ``slug``."""
+    lines = companion_text[companion_text.index(f'slide_id="{slug}"') :].split("\n")[1:]
+    return lines[: lines.index("")] if "" in lines else lines
+
+
+class TestBulletWrapAndNesting:
+    """Regression tests for #1101: ``accept`` wraps the bullets it renders to
+    the deck style (80 columns, ``#   `` continuation) and renders one level
+    of nested bullets; cells the answer does not edit are never re-wrapped."""
+
+    _LONG_DE = (
+        "Ein `std::vector<int>` wächst automatisch, wenn wir mit `push_back` neue "
+        "Elemente anhängen, und Details stehen unter "
+        "https://en.cppreference.com/w/cpp/container/vector/push_back im Netz."
+    )
+
+    def _companion_de(self, tmp_path: Path) -> str:
+        return (tmp_path / "voiceover" / "voiceover_t.de.py").read_text(encoding="utf-8")
+
+    def test_long_bullet_is_wrapped_to_80_columns(self, tmp_path: Path) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s1")
+        answer = _single_update_answer(task, {"de": [self._LONG_DE, "Kurz."]}, member=None)
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+
+        body = _member_body(self._companion_de(tmp_path), "s1-vo")
+        assert body[0] == "#"
+        assert body[1].startswith("# - Ein `std::vector<int>`")
+        assert body[-1] == "# - Kurz."
+        continuation = body[2:-1]
+        assert continuation, body
+        assert all(line.startswith("#   ") and line[4] != " " for line in continuation)
+        assert all(len(line) <= 80 for line in body), body
+        assert any(
+            "https://en.cppreference.com/w/cpp/container/vector/push_back" in line for line in body
+        )
+        rejoined = " ".join([body[1][len("# - ") :]] + [line[4:] for line in continuation])
+        assert rejoined == self._LONG_DE
+
+    def test_nested_bullets_render_under_their_parent(self, tmp_path: Path) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s1")
+        answer = _single_update_answer(
+            task,
+            {
+                "de": [
+                    {"text": "Zwei Varianten:", "children": ["- Erste Variante", "Zweite"]},
+                    "Danach geht es weiter.",
+                ]
+            },
+            member=None,
+        )
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+        assert _member_body(self._companion_de(tmp_path), "s1-vo") == [
+            "#",
+            "# - Zwei Varianten:",
+            "#   - Erste Variante",
+            "#   - Zweite",
+            "# - Danach geht es weiter.",
+        ]
+
+        # The rendered body round-trips through the v3 lens as one member.
+        from clm.slides.doc_lenses import load_bundle
+
+        bundle = load_bundle(de_path)
+        assert bundle.outcome.deck is not None
+        keys = {m.key.render() for m in bundle.outcome.deck.members()}
+        assert "id:s1-vo" in keys
+
+    def test_long_child_bullet_wraps_under_its_own_text(self, tmp_path: Path) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s1")
+        answer = _single_update_answer(
+            task, {"de": [{"text": "Eltern", "children": [self._LONG_DE]}]}, member=None
+        )
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+        body = _member_body(self._companion_de(tmp_path), "s1-vo")
+        assert body[:2] == ["#", "# - Eltern"]
+        assert body[2].startswith("#   - Ein ")
+        assert len(body) > 3
+        assert all(line.startswith("#     ") and line[6] != " " for line in body[3:])
+        assert all(len(line) <= 80 for line in body), body
+
+    def test_untouched_cells_are_never_rewrapped(self, tmp_path: Path) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        companion = tmp_path / "voiceover" / "voiceover_t.de.py"
+        long_line = "# - Bestand Gamma " + "mit sehr viel Text " * 6 + "am Stück."
+        assert len(long_line) > 80
+        hand_wrapped = "# - Bestand Gamma\n#     eigenwillig eingerückt."
+        original = companion.read_text(encoding="utf-8").replace(
+            "# - Bestand Gamma.", f"{long_line}\n{hand_wrapped}"
+        )
+        companion.write_text(original, encoding="utf-8")
+
+        task = _task_for(tmp_path, de_path, video, "s0")
+        answer = _single_update_answer(task, {"de": [self._LONG_DE]}, member="id:s0-vo")
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+        text = companion.read_text(encoding="utf-8")
+        assert f"{long_line}\n{hand_wrapped}\n" in text
+        assert all(len(line) <= 80 for line in _member_body(text, "s0-vo"))
+
+    def test_plain_short_bullets_render_exactly_as_before(self, tmp_path: Path) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s1")
+        answer = _single_update_answer(
+            task, {"de": ["- Beta  ist wichtig.", "  Beta hat Kanten.  "]}, member=None
+        )
+        result = _accept(tmp_path, de_path, answer)
+        assert result.exit_code == 0, result.output
+        assert _member_body(self._companion_de(tmp_path), "s1-vo") == [
+            "#",
+            "# - Beta  ist wichtig.",
+            "# - Beta hat Kanten.",
+        ]
+
+    def test_malformed_nested_bullets_reject_with_a_clear_reason(self, tmp_path: Path) -> None:
+        de_path, video = _write_fixture(tmp_path)
+        task = _task_for(tmp_path, de_path, video, "s1")
+        before = self._companion_de(tmp_path)
+        cases = [
+            ({"text": "x"}, "children"),
+            ({"children": ["y"]}, "text"),
+            ({"text": "", "children": ["y"]}, "text"),
+            ({"text": "x", "children": []}, "children"),
+            ({"text": "x", "children": "y"}, "children"),
+            ({"text": "x", "children": [""]}, "children[0]"),
+            ({"text": "x", "children": ["a\nb"]}, "newline"),
+            ({"text": "a\nb", "children": ["y"]}, "newline"),
+            ({"text": "x", "children": [{"text": "y", "children": ["z"]}]}, "one level"),
+            ({"text": "x", "children": ["y"], "extra": 1}, "extra"),
+            (42, "string or"),
+            (["x"], "string or"),
+        ]
+        for entry, reason in cases:
+            answer = _single_update_answer(task, {"de": [entry]}, member=None)
+            result = _accept(tmp_path, de_path, answer)
+            assert result.exit_code == 2, f"{entry!r}: {result.output}"
+            assert reason in result.output, f"{entry!r}: {result.output}"
+        assert self._companion_de(tmp_path) == before
+
+
+def test_task_schema_and_instructions_advertise_nesting_and_wrapping() -> None:
+    """#1101: agents learn the nested shape and that wrapping is automatic."""
+    from clm.voiceover.harvest_task import ANSWER_SCHEMA, _instructions
+
+    bullets = ANSWER_SCHEMA["properties"]["updates"]["items"]["properties"]["bullets"]
+    variants = bullets["properties"]["de"]["items"]["oneOf"]
+    assert {"type": "string", "minLength": 1} in variants
+    nested = next(v for v in variants if v.get("type") == "object")
+    assert nested["required"] == ["text", "children"]
+    assert "wraps" in bullets["description"]
+    for kind in ("curate", "translate"):
+        text = _instructions(kind)
+        assert '"children"' in text
+        assert "wrap" in text
+
+
+def test_render_body_uses_the_deck_comment_token() -> None:
+    """#1101: C-family decks wrap with ``//   `` and nest with ``//   - ``."""
+    from clm.voiceover.harvest_accept import Bullet, _render_body
+
+    long_text = " ".join(["Wort"] * 30)
+    body = _render_body([Bullet(long_text), Bullet("Eltern", ("Kind " + long_text,))], "//")
+    lines = body.split("\n")
+    assert lines[0] == "//"
+    assert lines[1].startswith("// - Wort")
+    assert all(len(line) <= 80 for line in lines)
+    parent = lines.index("// - Eltern")
+    assert all(line.startswith("//   ") for line in lines[2:parent])
+    assert lines[parent + 1].startswith("//   - Kind ")
+    assert all(line.startswith("//     ") for line in lines[parent + 2 :])

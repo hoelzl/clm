@@ -21,10 +21,16 @@ Rules (these replace the old embedded-model merge — apply them yourself):
    into the answer's `dropped` list — that is the audit trail.
 4. **No hallucination.** Add nothing the transcript or baseline does not
    support.
-5. **Bullet form**: one thought per bullet, markdown inline formatting
-   allowed within a bullet, no nested block structure. Stay in the recorded
-   language (translation is a separate `translate` task — but you MAY
-   answer bilingually if you also translate every bullet for the twin side).
+5. **Bullet form**: one thought per bullet, each a single-line string
+   (no leading `- `, no manual line breaks — `accept` wraps every bullet to
+   the deck style, 80 columns, never inside backticks or a URL), markdown
+   inline formatting allowed within a bullet. One level of sub-bullets is
+   allowed: write `{"text": "…", "children": ["…", "…"]}` in place of a
+   plain string — use it where the baseline already nests, or where points
+   genuinely belong under a parent; children are plain strings. Stay in the
+   recorded language (translation is a separate `translate` task — but you
+   MAY answer bilingually if you also translate every bullet for the twin
+   side).
 6. **`revisited_segments`** are passages spoken when the presenter navigated
    *back* to this slide after having moved past it (aligner backtracking
    groups, in order of return). They often revisit or correct earlier

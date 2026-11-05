@@ -4680,7 +4680,12 @@ Validation (all-or-nothing; nothing is written on failure): answer schema
 shape; per-side `baseline_fingerprint` freshness against the live deck (a
 concurrent edit rejects, never overwrites); single-cell body guards; the
 mutated bundle must re-parse through the v3 lens. Bullets render into the
-deck's `#\n# - …` narrative cell style; a missing voiceover member is
+deck's `#\n# - …` narrative cell style, wrapped to 80 columns with the
+continuation indented under the bullet text (`#   ` / `//   `), never inside
+a backtick code span or a URL — only the cells the answer edits are
+rendered, other cells are never re-wrapped. A bullet is a single-line
+string or, for one level of sub-bullets, `{"text": "…", "children": ["…"]}`
+(rendered `#   - …`); deeper nesting is rejected. A missing voiceover member is
 created (own minted `slide_id`, `for_slide` owner, companion or inline
 following the deck's convention) and the ≤4 files land together: each
 file is replaced with retries on transient Windows file locks, and if a
