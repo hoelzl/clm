@@ -67,28 +67,34 @@ def get_authoring_rules(
     # Load common rules
     common_rules = _read_common_rules(specs_dir)
 
-    # Determine which course(s) to load rules for
+    # Determine which course(s) to load rules for. Each entry carries the
+    # directory of the spec file itself when it lives outside course-specs/
+    # (e.g. course-specs.planning/), so its companion .authoring.md is found
+    # next to it (issue #1151). Slide-path resolution deliberately scans only
+    # course-specs/: specs parked elsewhere must not leak into slide edits.
+    courses: list[tuple[str, Path | None]]
     if course_spec:
-        course_names = _resolve_course_spec_names(course_spec, specs_dir)
+        courses = _resolve_course_spec_names(course_spec, specs_dir, data_dir)
     else:
         assert slide_path is not None
-        course_names = _resolve_slide_to_courses(slide_path, data_dir)
+        courses = [(name, None) for name in _resolve_slide_to_courses(slide_path, data_dir)]
 
     result = AuthoringRulesResult(common_rules=common_rules)
 
-    if not course_names:
+    if not courses:
         result.notes.append("No matching course spec found.")
 
     # Load course-specific rules
-    for name in course_names:
-        authoring_path = specs_dir / f"{name}.authoring.md"
-        if authoring_path.is_file():
+    for name, spec_dir in courses:
+        candidates = _authoring_candidates(name, spec_dir, specs_dir)
+        authoring_path = next((p for p in candidates if p.is_file()), None)
+        if authoring_path is not None:
             rules_text = authoring_path.read_text(encoding="utf-8")
             result.course_rules.append(CourseRulesEntry(course_spec=name, rules=rules_text))
         else:
             result.notes.append(
                 f"No authoring rules file found for course '{name}' "
-                f"(expected {authoring_path.name})."
+                f"(expected {candidates[0].name})."
             )
 
     # Build merged text
@@ -104,34 +110,55 @@ def _read_common_rules(specs_dir: Path) -> str | None:
     return None
 
 
-def _resolve_course_spec_names(course_spec: str, specs_dir: Path) -> list[str]:
-    """Resolve a course_spec argument to a list of course base names.
+def _authoring_candidates(name: str, spec_dir: Path | None, specs_dir: Path) -> list[Path]:
+    """Where to look for ``<name>.authoring.md``, in priority order.
+
+    Next to the spec file first (when it was located outside
+    ``course-specs/``), then the conventional ``course-specs/`` location.
+    """
+    filename = f"{name}.authoring.md"
+    candidates: list[Path] = []
+    if spec_dir is not None and spec_dir.resolve() != specs_dir.resolve():
+        candidates.append(spec_dir / filename)
+    candidates.append(specs_dir / filename)
+    return candidates
+
+
+def _resolve_course_spec_names(
+    course_spec: str, specs_dir: Path, data_dir: Path | None = None
+) -> list[tuple[str, Path | None]]:
+    """Resolve a course_spec argument to ``(course base name, spec dir)`` pairs.
 
     Accepts:
     - A slug like ``"machine-learning-azav"`` → looks for
       ``machine-learning-azav.xml`` in specs_dir
-    - A path (absolute or relative) to an XML file → extracts the stem
+    - A path to an XML file — absolute, or relative to *data_dir* → the
+      stem, plus the file's directory so a companion ``.authoring.md``
+      next to a spec outside ``course-specs/`` is found
+
+    The spec dir is ``None`` when the spec was not located on disk (or is a
+    bare slug); rules are then looked up in ``course-specs/`` only.
     """
     spec_path = Path(course_spec)
 
     # If it's an absolute path or has an XML suffix, use it directly
     if spec_path.is_absolute() or spec_path.suffix == ".xml":
-        if spec_path.is_absolute() and spec_path.is_file():
-            return [spec_path.stem]
+        if spec_path.is_absolute():
+            if spec_path.is_file():
+                return [(spec_path.stem, spec_path.parent)]
+        elif data_dir is not None and (data_dir / spec_path).is_file():
+            located = data_dir / spec_path
+            return [(located.stem, located.parent)]
         # Try relative to specs_dir
         candidate = specs_dir / spec_path.name
         if candidate.is_file():
-            return [candidate.stem]
+            return [(candidate.stem, None)]
         # Try the stem as-is (the slug might just not have an XML file)
-        return [spec_path.stem]
+        return [(spec_path.stem, None)]
 
-    # Bare slug: check if corresponding XML exists
-    xml_path = specs_dir / f"{course_spec}.xml"
-    if xml_path.is_file():
-        return [course_spec]
-
-    # Still return the slug so we can report "no authoring rules found"
-    return [course_spec]
+    # Bare slug: still return it (with or without an XML file) so the
+    # caller can report "no authoring rules found".
+    return [(course_spec, None)]
 
 
 def _resolve_slide_to_courses(slide_path: str, data_dir: Path) -> list[str]:
