@@ -1466,8 +1466,8 @@ class TestBuildExitCodeOnCellErrors:
     """Issue #90: ``clm build`` must exit non-zero when cell errors are
     present, at minimum under ``--http-replay=replay``.
 
-    These tests intentionally fail on master (current code always exits 0
-    on cell errors). They pass after Phases 2-3:
+    Issue #1139 made the policy default-on in every replay mode (it was
+    replay-only). Original #90 phase notes:
 
     * Phase 2 threads the ``BuildSummary`` returned by
       :meth:`BuildReporter.finish_build` back from ``main_build``.
@@ -1526,20 +1526,60 @@ class TestBuildExitCodeOnCellErrors:
             f"output:\n{result.output}"
         )
 
-    def test_build_exits_zero_under_new_episodes_default_with_cell_errors(
+    @pytest.mark.parametrize("mode", ["new-episodes", "once", "refresh", "disabled"])
+    def test_build_exits_nonzero_by_default_in_non_replay_modes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
+        """Issue #1139: ``--fail-on-error`` is on by default in EVERY
+        replay mode, not only ``replay``. A build that reported errors
+        (e.g. a missing kernel failing every cell) wrote a wrong output
+        tree, so a caller checking ``$?`` must see a failure."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+        monkeypatch.delenv("CLM_FAIL_ON_ERROR", raising=False)
+
+        result = _invoke_build([f"--http-replay={mode}", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 1, (
+            f"Expected exit 1 by default under --http-replay={mode} with "
+            f"cell errors; got {result.exit_code}. "
+            f"exception={result.exception!r}\noutput:\n{result.output}"
+        )
+        assert "Build failed: 1 error(s)" in result.output
+
+    def test_build_exits_zero_under_new_episodes_with_no_fail_on_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Default policy under non-replay modes is opt-in: cell errors
-        do NOT fail the build unless ``--fail-on-error`` is explicit."""
+        """Issue #1139: the opt-out still restores exit 0 locally."""
         spec, _ = _setup_mocked_build_pipeline(
             tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
         )
 
+        result = _invoke_build(
+            ["--http-replay=new-episodes", "--no-fail-on-error", str(spec)],
+            tmp_path=tmp_path,
+        )
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 with --no-fail-on-error; got {result.exit_code}. "
+            f"exception={result.exception!r}"
+        )
+
+    def test_clm_fail_on_error_env_disables_failure_under_new_episodes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1139: ``CLM_FAIL_ON_ERROR=0`` is the env opt-out."""
+        spec, _ = _setup_mocked_build_pipeline(
+            tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
+        )
+        monkeypatch.setenv("CLM_FAIL_ON_ERROR", "0")
+
         result = _invoke_build(["--http-replay=new-episodes", str(spec)], tmp_path=tmp_path)
 
         assert result.exit_code == 0, (
-            f"Expected exit 0 under --http-replay=new-episodes (opt-in "
-            f"only); got {result.exit_code}. exception={result.exception!r}"
+            f"Expected exit 0 with CLM_FAIL_ON_ERROR=0; got {result.exit_code}. "
+            f"exception={result.exception!r}"
         )
 
     def test_build_exits_nonzero_under_new_episodes_with_explicit_fail_on_error(
@@ -1571,7 +1611,8 @@ class TestBuildExitCodeOnCellErrors:
     def test_clm_fail_on_error_env_forces_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``CLM_FAIL_ON_ERROR=1`` forces failure under non-replay mode."""
+        """``CLM_FAIL_ON_ERROR=1`` forces failure under non-replay mode
+        (also the default since #1139; kept as an explicit-env check)."""
         spec, _ = _setup_mocked_build_pipeline(
             tmp_path, monkeypatch, summary_errors=[_make_cell_error()]
         )

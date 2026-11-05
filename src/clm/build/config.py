@@ -74,10 +74,15 @@ def resolve_fail_on_error(cli_value: bool | None, resolved_http_replay_mode: str
     build summary reports errors (issue #90).
 
     Precedence: explicit CLI flag > ``CLM_FAIL_ON_ERROR`` env var >
-    replay-mode default. The default policy is **on** under
-    ``--http-replay=replay`` (the CI-strict mode) and **off** under all
-    other replay modes — local iterative work over partial / transient
-    failures must not start exiting non-zero by default.
+    default. Since issue #1139 the default is **on** in every replay mode:
+    a build that reports errors (e.g. a missing kernel failing every cell)
+    has written a wrong output tree, and a caller checking ``$?`` must see
+    that. Transient failures are retried and reported as flaky files
+    (#330), so clean local builds are unaffected. ``--no-fail-on-error`` /
+    ``CLM_FAIL_ON_ERROR=0`` opt out. Watch mode never drives exit policy.
+
+    ``resolved_http_replay_mode`` is kept in the signature for API
+    stability; it no longer affects the default.
     """
     import os
 
@@ -93,14 +98,15 @@ def resolve_fail_on_error(cli_value: bool | None, resolved_http_replay_mode: str
         raise BuildOptionError(
             f"Invalid CLM_FAIL_ON_ERROR={env_value!r}. Valid values: 1/true/yes/0/false/no."
         )
-    return resolved_http_replay_mode == "replay"
+    del resolved_http_replay_mode  # default no longer depends on the mode (#1139)
+    return True
 
 
 def resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_mode: str) -> bool:
     """Resolve whether an unresolved ``clm:`` cross-reference target fails the
     build (issue #17).
 
-    Precedence mirrors ``resolve_fail_on_error`` exactly: explicit CLI flag >
+    Precedence mirrors ``resolve_fail_on_error``: explicit CLI flag >
     ``CLM_FAIL_ON_MISSING_XREF`` env var > replay-mode default. The default is
     **on** under ``--http-replay=replay`` (the CI-strict mode) and **off**
     otherwise, so a developer building a single section locally legitimately

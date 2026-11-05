@@ -98,7 +98,7 @@ Key options:
 | `--image-format [png\|svg]` | Image output format |
 | `--inline-images` | Embed images as base64 in notebooks |
 | `--http-replay [replay\|once\|new-episodes\|refresh\|disabled]` | HTTP replay record mode for topics with `http-replay="yes"` in the spec. `replay` requires a cassette (strict, CI default); `once` records on first run, replays thereafter (strict on new requests); `new-episodes` replays recorded requests and records any new ones (local default); `refresh` re-records every run; `disabled` bypasses replay. Defaults to `replay` when `CI=true`, else `new-episodes`. Also settable via `CLM_HTTP_REPLAY_MODE`. |
-| `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell/notebook error **or a dropped companion voiceover** (a `for_slide` with no matching `slide_id`, since CLM {version}). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
+| `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell/notebook error **or a dropped companion voiceover** (a `for_slide` with no matching `slide_id`, since CLM {version}). Defaults to **on** in every `--http-replay` mode (since CLM {version}, issue #1139; previously only under `replay`); `--no-fail-on-error` opts out. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. Watch mode never exits on errors. See "Exit codes" below. |
 | `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
 | `--provenance-manifest / --no-provenance-manifest` | Write a `.clm-manifest.<spec>.json` provenance index into each output root, mapping every output file to its source commit and owning section/topic (issue #208 — needed by the per-topic solution-release workflow). **On by default since CLM {version}**; `clm git` excludes it from every distributed repo. Pass `--no-provenance-manifest` to skip it. Always suppressed under `--snapshot` / `--verify-against` (it embeds a timestamp + commit, so it must not enter a byte-reproducibility baseline). |
 | `--log-level [DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL]` | What gets *captured*, for the host and (via the effective level) the workers. Defaults to `INFO`; overrides `[logging] log_level` / `CLM_LOGGING__LOG_LEVEL`. This is **not** the console threshold — see "Where the log goes" below. |
@@ -533,20 +533,22 @@ from its `-O json` subprocess.
 
 #### Exit codes
 
-Starting in CLM {version}, `clm build` exits non-zero when the build
-summary reports any cell or notebook error, **by default under
-`--http-replay=replay`** (the CI-strict mode). This closes a gap where
-CI and pre-commit hooks could not gate on cell failures — the build
-summary listed the errors, but the process still exited 0.
+`clm build` exits non-zero when the build summary reports any cell or
+notebook error, **by default in every `--http-replay` mode** (since CLM
+{version}, issue #1139; earlier versions failed by default only under
+`--http-replay=replay`). A build that reports errors — for example a
+missing Jupyter kernel failing every cell — has written a wrong output
+tree, so a script or agent checking `$?` must see the failure. Transient
+cell failures are retried and reported as `flaky_files`, not errors, so a
+clean local build still exits 0.
 
 | Condition | Exit code |
 |---|---|
 | Build completed cleanly | `0` |
 | `--verify-against` diff (existing behavior, unchanged) | `1` |
-| Cell/notebook errors under `--http-replay=replay` (new default) | `1` |
-| Cell/notebook errors under non-replay modes | `0` (opt in with `--fail-on-error`) |
-| Cell/notebook errors with `--no-fail-on-error` (any mode) | `0` |
-| Dropped companion voiceover (unmatched `for_slide`) — same policy as cell errors (since CLM {version}) | `1` under `--fail-on-error`, else `0` |
+| Cell/notebook errors (default, any replay mode) | `1` |
+| Cell/notebook errors with `--no-fail-on-error` or `CLM_FAIL_ON_ERROR=0` (any mode) | `0` |
+| Dropped companion voiceover (unmatched `for_slide`) — same policy as cell errors | `1` by default, `0` with `--no-fail-on-error` |
 | Image filename collisions | non-zero `SystemExit` (existing, unchanged) |
 | Second `SIGTERM` while shutting down | `1` (existing, unchanged) |
 
@@ -554,12 +556,10 @@ Precedence for the exit-on-error policy:
 
 1. Explicit `--fail-on-error` or `--no-fail-on-error` on the CLI.
 2. `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}` environment variable.
-3. Replay-mode default (on for `replay`, off for `once`,
+3. Default: **on** in every replay mode (`replay`, `once`,
    `new-episodes`, `refresh`, `disabled`).
 
-CI implications: because `_resolve_http_replay_mode` returns `replay`
-when `CI=true`, the default policy means CI builds will now exit
-non-zero on cell errors automatically. If a CI job needs the legacy
+If a CI job or local script needs the legacy exit-0-with-errors
 behavior, pass `--no-fail-on-error` or set `CLM_FAIL_ON_ERROR=0`.
 
 Watch mode does **not** exit on cell errors — `clm build --watch`
