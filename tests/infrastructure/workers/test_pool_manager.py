@@ -1,7 +1,10 @@
 """Tests for pool_manager module."""
 
 import logging
+import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -552,8 +555,9 @@ def test_pool_manager_removes_existing_container(db_path, workspace_path):
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
-        # Simulate existing container
+        # Simulate a leftover (exited) container from an earlier build
         existing_container = MagicMock()
+        existing_container.status = "exited"
         mock_client.containers.get.return_value = existing_container
 
         new_container = MagicMock()
@@ -566,9 +570,229 @@ def test_pool_manager_removes_existing_container(db_path, workspace_path):
 
         manager.start_pools()
 
-        # Verify existing container was stopped and removed
-        existing_container.stop.assert_called_once()
+        # Verify the leftover was removed and its name reused
         existing_container.remove.assert_called_once()
+        assert mock_client.containers.run.call_args.kwargs["name"] == "clm-test-worker-0"
+
+
+def test_pool_manager_never_kills_a_concurrent_builds_running_container(db_path, workspace_path):
+    """Regression test for #1143: names are shared across concurrent builds.
+
+    With diagrams rendering in Docker by default, two builds on one machine are
+    ordinary. Reusing the name by stopping the running holder killed the other
+    build's worker mid-job.
+    """
+    config = WorkerConfig(worker_type="test", image="test:latest", count=1)
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+
+        running = MagicMock()
+        running.status = "running"
+        mock_client.containers.get.return_value = running
+
+        new_container = MagicMock()
+        new_container.id = "new_container"
+        mock_client.containers.run.return_value = new_container
+
+        manager = WorkerPoolManager(
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
+        )
+        manager.start_pools()
+
+        running.stop.assert_not_called()
+        running.remove.assert_not_called()
+        name = mock_client.containers.run.call_args.kwargs["name"]
+        assert name.startswith("clm-test-worker-0-")
+
+
+def _labels(pid: int) -> dict[str, str]:
+    from clm.infrastructure.workers.worker_executor import _owner_labels
+
+    return {**_owner_labels(), "clm.owner-pid": str(pid)}
+
+
+def _start_one_docker_worker(mock_client, db_path, workspace_path):
+    new_container = MagicMock()
+    new_container.id = "new_container"
+    mock_client.containers.run.return_value = new_container
+    manager = WorkerPoolManager(
+        db_path=db_path,
+        workspace_path=workspace_path,
+        worker_configs=[WorkerConfig(worker_type="test", image="test:latest", count=1)],
+    )
+    manager.start_pools()
+    return manager
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen([sys.executable, "-c", ""])
+    proc.wait()
+    return proc.pid
+
+
+def test_running_holder_of_a_dead_build_is_replaced(db_path, workspace_path):
+    """Regression test for #1143: a hard-killed build's container must not live forever."""
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        orphan = MagicMock(status="running", labels=_labels(_dead_pid()))
+        mock_client.containers.get.return_value = orphan
+
+        _start_one_docker_worker(mock_client, db_path, workspace_path)
+
+        orphan.remove.assert_called_once_with(force=True)
+        assert mock_client.containers.run.call_args.kwargs["name"] == "clm-test-worker-0"
+
+
+def test_running_holder_of_a_live_build_is_kept(db_path, workspace_path):
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        holder = MagicMock(status="running", labels=_labels(os.getpid()))
+        mock_client.containers.get.return_value = holder
+
+        _start_one_docker_worker(mock_client, db_path, workspace_path)
+
+        holder.remove.assert_not_called()
+
+
+def test_orphans_with_other_names_are_reaped_once_per_build(db_path, workspace_path):
+    """Suffixed names never collide again, so collisions alone cannot reclaim them."""
+    import docker.errors
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        mock_client.containers.get.side_effect = docker.errors.NotFound("free")
+        orphan = MagicMock(labels=_labels(_dead_pid()))
+        live = MagicMock(labels=_labels(os.getpid()))
+        remote = MagicMock(labels={"clm.owner-pid": "1", "clm.owner-host": "other-machine"})
+        unlabelled = MagicMock(labels={})
+        mock_client.containers.list.return_value = [orphan, live, remote, unlabelled]
+
+        _start_one_docker_worker(mock_client, db_path, workspace_path)
+
+        orphan.remove.assert_called_once_with(force=True)
+        for keep in (live, remote, unlabelled):
+            keep.remove.assert_not_called()
+        run_kwargs = mock_client.containers.run.call_args.kwargs
+        assert run_kwargs["labels"]["clm.owner-pid"] == str(os.getpid())
+
+
+def test_persistent_pool_containers_carry_no_owner_label(db_path, workspace_path):
+    """Regression test for #1143: a pool meant to outlive its build is no orphan."""
+    import docker.errors
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        mock_client.containers.get.side_effect = docker.errors.NotFound("free")
+        new_container = MagicMock()
+        new_container.id = "new_container"
+        mock_client.containers.run.return_value = new_container
+
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=[WorkerConfig(worker_type="test", image="test:latest", count=1)],
+            workers_shareable=True,
+        )
+        manager.start_pools()
+
+        assert mock_client.containers.run.call_args.kwargs["labels"] == {}
+
+
+def test_failed_orphan_sweep_still_starts_the_worker(db_path, workspace_path):
+    import docker.errors
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        mock_client.containers.get.side_effect = docker.errors.NotFound("free")
+        mock_client.containers.list.side_effect = RuntimeError("daemon hiccup")
+
+        manager = _start_one_docker_worker(mock_client, db_path, workspace_path)
+
+        assert len(manager.workers["test"]) == 1
+
+
+def test_leftover_being_removed_by_another_build_does_not_lose_the_worker(db_path, workspace_path):
+    """Regression test for #1143: a 409 on removal must not fail the worker start."""
+    import docker.errors
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        leftover = MagicMock(status="exited")
+        leftover.remove.side_effect = docker.errors.APIError(
+            "removal in progress", response=MagicMock(status_code=409)
+        )
+        mock_client.containers.get.return_value = leftover
+
+        manager = _start_one_docker_worker(mock_client, db_path, workspace_path)
+
+        assert len(manager.workers["test"]) == 1
+        assert mock_client.containers.run.call_args.kwargs["name"].startswith("clm-test-worker-0-")
+
+
+def test_missing_workspace_is_created_on_the_host_before_the_mount(db_path, workspace_path):
+    """Regression test for #1143: the daemon would create it as root on native Linux."""
+    import docker.errors
+
+    missing = Path(workspace_path) / "not" / "yet"
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        mock_client.containers.get.side_effect = docker.errors.NotFound("free")
+        seen = []
+        new_container = MagicMock()
+        new_container.id = "new_container"
+
+        def run(**_kwargs):
+            seen.append(missing.is_dir())
+            return new_container
+
+        mock_client.containers.run.side_effect = run
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=missing,
+            worker_configs=[WorkerConfig(worker_type="test", image="test:latest", count=1)],
+        )
+        manager.start_pools()
+
+    assert seen == [True]
+
+
+def test_pool_manager_retries_a_name_lost_to_a_concurrent_build(db_path, workspace_path):
+    """Regression test for #1143: both builds saw the name free; one wins the run."""
+    import docker.errors
+
+    config = WorkerConfig(worker_type="test", image="test:latest", count=1)
+
+    with patch("docker.from_env") as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        mock_client.containers.get.side_effect = docker.errors.NotFound("free")
+
+        conflict_response = MagicMock(status_code=409)
+        new_container = MagicMock()
+        new_container.id = "new_container"
+        mock_client.containers.run.side_effect = [
+            docker.errors.APIError("Conflict", response=conflict_response),
+            new_container,
+        ]
+
+        manager = WorkerPoolManager(
+            db_path=db_path, workspace_path=workspace_path, worker_configs=[config]
+        )
+        manager.start_pools()
+
+        calls = mock_client.containers.run.call_args_list
+        assert [c.kwargs["name"] == "clm-test-worker-0" for c in calls] == [True, False]
+        assert calls[1].kwargs["name"].startswith("clm-test-worker-0-")
+        assert len(manager.workers["test"]) == 1
 
 
 def test_pool_manager_monitoring_not_started_by_default(db_path, workspace_path, worker_configs):

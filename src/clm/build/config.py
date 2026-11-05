@@ -222,6 +222,11 @@ class BuildConfig:
     # BuildConfig without breaking.
     max_workers: int | None = None
 
+    # ``--diagram-mode``: where diagrams render ("auto", "docker", "direct"),
+    # or ``None`` for the configured default (issue #1143). See
+    # ``clm.infrastructure.workers.diagram_mode`` for the precedence.
+    diagram_mode: str | None = None
+
     # Execution-telemetry database (issue #330). ``None`` resolves to
     # ``clm_telemetry.db`` next to ``cache_db_path``. Kept separate from the
     # cache db so clearing caches never erases the kernel crash/flake

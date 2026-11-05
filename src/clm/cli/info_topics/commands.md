@@ -79,7 +79,8 @@ Key options:
 | `--allow-unowned-output` | Let `--clean` and the post-build sweep delete inside an output root CLM cannot prove it owns (see "Output-root ownership" below). Without it, such a root is refused and nothing under it is deleted. |
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
 | `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. May be given multiple times; all occurrences accumulate. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
-| `--workers [direct\|docker]` | Worker execution mode |
+| `--workers [direct\|docker]` | Worker execution mode. Without `--diagram-mode`, this also decides where diagrams render: `--workers direct` renders them locally, with no Docker check and no warning. |
+| `--diagram-mode [auto\|docker\|direct]` | Where PlantUML/Draw.io diagrams render, independent of notebooks (CLM {version}, #1143). `auto` (the default) uses Docker when the daemon is reachable and the converter image is present locally, and otherwise the local tool with a warning naming the reason; `auto` never pulls an image. `docker` and `direct` are strict (a strict `docker` build lets Docker pull a missing image). Also settable via `CLM_WORKER_MANAGEMENT__DIAGRAM_MODE` or `[worker_management] diagram_mode`. See "Where diagrams render" below. |
 | `--notebook-workers N` | Number of notebook workers (default: `worker_management.default_worker_count`, which is 1). Notebook jobs — including the Recording/Speaker HTML renders that warm the executed-notebook cache — run serially per worker, so on a large course this is the single biggest wall-clock lever: the #711 investigation measured one rebuild of the AZAV ML course at 12.5 min with 8 workers against more than 29 min (unfinished) with 1. A build of more than 50 course files warns when only one notebook worker is configured. Each worker runs its own kernel; the count is clamped to the machine's CPU/RAM and `max_workers_cap`. |
 | `--plantuml-workers N` | Number of PlantUML workers |
 | `--drawio-workers N` | Number of Draw.io workers |
@@ -128,6 +129,35 @@ does not change the key — pin versioned tags/digests for exact
 invalidation; and worker *reuse* is image-blind — a still-running worker
 pool from an earlier build keeps its old image, so stop lingering workers
 first when switching images.
+
+**Where diagrams render (CLM {version}, #1143).** The Docker converter image
+and a local draw.io/PlantUML produce different PNGs for the same source
+(tool version, fonts, margins), and those PNGs are written into the source tree
+(`img-generated/`). So by default diagrams render in Docker when they can,
+while notebooks stay Direct:
+
+| Situation under `auto` | Diagrams render | Warning |
+|---|---|---|
+| Daemon reachable, image present | Docker | none |
+| Daemon reachable, image missing | local tool | yes, with the `docker pull` command |
+| Daemon unreachable, or `[docker]` extra missing | local tool | yes, naming the reason |
+| Course or output directory is a drive root | local tool | yes, naming the directory |
+| Course has no diagrams of that type (except under `--watch`, where one may appear), or `--no-diagrams` | no Docker contact at all | none |
+| Every diagram of that type replays from the cache | no container is started, and no local render | none |
+
+Effective mode per diagram type, highest precedence first: `--diagram-mode
+direct|docker`; `[worker_management.<type>] execution_mode`; `--diagram-mode
+auto`; `--workers`; `[worker_management] diagram_mode` or its env var;
+`default_execution_mode = "docker"` (strict); then `auto`. With
+`auto_start = false`, `auto` never selects Docker: externally started workers
+keep the mode they were started in. The mode is part of the diagram cache key,
+so the first build after a mode change re-renders. `auto` decides before the
+build starts: a container that then fails to start (a course on a path Docker
+cannot mount, a remote `DOCKER_HOST`) is a build error that names `--diagram-mode
+direct`, not a fallback. Reproducibility across machines also needs the same
+image: the default is the mutable `:latest` tag, and the cache key follows the
+tag rather than its content, so pin a versioned tag with `--drawio-image` /
+`--plantuml-image` when that matters.
 
 **Reading errors: replayed vs executed (CLM {version}, #860).** Stored
 errors/warnings are replayed on cache hits (deliberately — a cached-broken

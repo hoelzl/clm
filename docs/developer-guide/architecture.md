@@ -327,6 +327,13 @@ spec block; preview with `clm jupyterlite preview`.
 Both modes share one jobs database; claiming is mode-tagged and
 session-owned so direct and Docker builds cannot steal each other's jobs.
 
+The mode is per worker type, so one build can mix them. By default notebooks run
+Direct and diagrams run in Docker when it is usable, because the two environments
+render different PNGs (issue #1143): `clm.infrastructure.workers.diagram_mode`
+resolves `--diagram-mode` / `worker_management.diagram_mode` to a concrete
+per-type `execution_mode` on the build's config copy before cache identities are
+recorded, so nothing downstream ever sees `auto`.
+
 ### Layer 4: `clm.build` (Build Engine)
 
 **Purpose**: the programmatic equivalent of `clm build` (#802/A4) — the

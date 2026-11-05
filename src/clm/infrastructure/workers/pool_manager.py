@@ -235,6 +235,7 @@ class WorkerPoolManager:
                     data_dir=self.data_dir,
                     network_name=self.network_name,
                     log_level=self.log_level,
+                    owned_by_process=not self.workers_shareable,
                 )
             elif mode == "direct":
                 self.executors[mode] = DirectWorkerExecutor(
@@ -570,7 +571,9 @@ class WorkerPoolManager:
         logger.info(f"Starting worker pools with {len(self.worker_configs)} configurations")
 
         # Check if we need Docker and ensure network exists
-        needs_docker = any(c.execution_mode == "docker" for c in self.worker_configs)
+        needs_docker = any(
+            c.execution_mode == "docker" and c.count > 0 for c in self.worker_configs
+        )
         if needs_docker:
             ensure_docker_worker_deps()
             # Only create custom network if explicitly specified

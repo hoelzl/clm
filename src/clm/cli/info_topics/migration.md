@@ -2,6 +2,42 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Diagrams render in Docker by default when Docker is available (#1143, {version})
+
+**Behavior change, no spec change.** `clm build` without `--workers` used to
+render PlantUML and Draw.io diagrams with the local tools. The new default,
+`--diagram-mode auto`, renders them in the Docker converter images when the
+daemon is reachable and the image is present locally, and otherwise uses the
+local tool with a build warning naming the reason. Notebooks stay Direct. The
+reason: the two environments produce different PNGs (tool version, fonts,
+margins), and the PNGs are committed under `img-generated/`.
+
+The first build after upgrading on a machine with Docker and the images:
+
+- **Re-renders every diagram once**, because the worker environment is part of
+  the diagram cache key. Caches from an earlier `--workers docker` build, or from
+  a `clm.toml` that already set a per-type `execution_mode = "docker"`, stay valid.
+- **May rewrite committed PNGs.** A repository whose PNGs were rendered by Docker
+  gets byte-identical files and no diff. A repository whose PNGs were rendered
+  locally sees most of them change. Review that diff once, then commit it, or stay
+  on local rendering (below).
+
+What to do:
+
+- Render in Docker on a machine that lacks the images: run the `docker pull` a
+  warning names (`clm docker pull drawio-converter plantuml-converter` fetches
+  both; about 1.1 GB and 330 MB compressed). `auto` never pulls on its own. For
+  byte-identical PNGs across machines they also need the same image, so re-pull
+  `:latest` together or pin a versioned tag.
+- Keep rendering locally: set `diagram_mode = "direct"` under
+  `[worker_management]` in the repository's `clm.toml`, or
+  `CLM_WORKER_MANAGEMENT__DIAGRAM_MODE=direct`, or pass `--diagram-mode direct`
+  or `--workers direct`. No warning is shown then.
+- Do not rely on `default_execution_mode = "direct"` for this: it sets the
+  notebook default, and `clm config init` writes it into new config files.
+- Scripts that pass `--workers direct` or `--workers docker`, and configs with a
+  per-type `execution_mode`, behave exactly as before.
+
 ## `<block>` is a spec element; unknown elements are reported (#1163, {version})
 
 **Spec change.** `<block>` (an agenda time block with teaching units, see

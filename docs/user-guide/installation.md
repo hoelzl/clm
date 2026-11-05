@@ -430,7 +430,9 @@ left clm's env), see
 ## Docker Workers (Optional)
 
 CLM can use Docker containers for notebook processing, PlantUML, and Draw.io conversion.
-Docker workers are started automatically by `clm build` when needed.
+Docker workers are started automatically by `clm build` when needed. Diagrams
+render in Docker by default when the daemon is reachable and the images below are
+present (see `--diagram-mode` in `clm info commands`); that default never pulls them.
 
 Docker worker mode requires the `[docker]` extra on the host
 (`pip install "coding-academy-lecture-manager[docker]"`): the Docker SDK plus

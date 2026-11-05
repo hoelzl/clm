@@ -1804,6 +1804,8 @@ class SqliteBackend(LocalOpsBackend):
                 f"never activated or died is logged to clm.log when the pool stops "
                 f"(containers clm-{job_type}-worker-N)."
             )
+            if job_type in ("drawio", "plantuml"):
+                cause += " To render diagrams without Docker, use --diagram-mode direct."
         else:
             cause = (
                 f"Either the {job_type} worker pool never started or every worker has "

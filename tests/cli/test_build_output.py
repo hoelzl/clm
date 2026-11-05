@@ -184,6 +184,30 @@ class TestErrorCategorizer:
 class TestOutputFormatter:
     """Test output formatting."""
 
+    def test_warning_text_is_not_parsed_as_markup(self):
+        """Regression test for #1143: ``[docker]`` in an install hint vanished."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        message = 'requires the [docker] extra: pip install "pkg[docker]" [/x]'
+        warning = BuildWarning(category="c", message=message, severity="high")
+        summary = BuildSummary(
+            duration=1.0,
+            total_files=1,
+            errors=[],
+            warnings=[warning],
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        for formatter_class in (DefaultOutputFormatter, VerboseOutputFormatter):
+            formatter = formatter_class(show_progress=False, use_color=False)
+            out = StringIO()
+            formatter.console = Console(file=out, width=200, no_color=True)
+            formatter.show_warning(warning)
+            formatter.show_summary(summary)
+            assert 'requires the [docker] extra: pip install "pkg[docker]" [/x]' in out.getvalue()
+
     def test_default_formatter_creation(self):
         """Test creating default output formatter."""
         formatter = DefaultOutputFormatter(show_progress=True, use_color=True)

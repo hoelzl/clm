@@ -469,6 +469,17 @@ class WorkersManagementConfig(BaseModel):
         description="Default execution mode: 'direct' or 'docker'",
     )
 
+    diagram_mode: str = Field(
+        default="auto",
+        description=(
+            "Where PlantUML/Draw.io diagrams render: 'auto' uses Docker when the "
+            "daemon is reachable and the converter image is present, else the local "
+            "tool with a warning naming the reason; 'docker' and 'direct' are strict. "
+            "A per-type execution_mode and clm build's --workers take precedence "
+            "(issue #1143)."
+        ),
+    )
+
     default_worker_count: int = Field(
         default=1,
         ge=1,
@@ -589,6 +600,14 @@ class WorkersManagementConfig(BaseModel):
         """Validate execution mode."""
         if v not in ("direct", "docker"):
             raise ValueError(f"Execution mode must be 'direct' or 'docker', got '{v}'")
+        return v
+
+    @field_validator("diagram_mode")
+    @classmethod
+    def validate_diagram_mode(cls, v: str) -> str:
+        """Validate the diagram mode."""
+        if v not in ("auto", "direct", "docker"):
+            raise ValueError(f"diagram_mode must be 'auto', 'direct' or 'docker', got '{v}'")
         return v
 
     def get_worker_config(self, worker_type: str) -> "WorkerConfig":
@@ -1364,6 +1383,12 @@ worker_id = ""
 # Default execution mode: "direct" or "docker"
 # Environment variable: CLM_WORKER_MANAGEMENT__DEFAULT_EXECUTION_MODE
 default_execution_mode = "direct"
+
+# Where PlantUML/Draw.io diagrams render: "auto", "docker" or "direct".
+# "auto" uses Docker when the daemon is reachable and the converter image is
+# present, otherwise the local tool with a warning naming the reason.
+# Environment variable: CLM_WORKER_MANAGEMENT__DIAGRAM_MODE
+diagram_mode = "auto"
 
 # Default number of workers per type
 # Environment variable: CLM_WORKER_MANAGEMENT__DEFAULT_WORKER_COUNT
