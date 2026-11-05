@@ -81,6 +81,7 @@ from clm.slides.slug import (
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import TitleSuggestionCache
     from clm.infrastructure.llm.ollama_client import TitleSuggester
+    from clm.slides.bilingual_doc import BilingualDeck, Member, SideCell
 
 logger = logging.getLogger(__name__)
 
@@ -744,6 +745,11 @@ def assign_ids_for_cells(
     stamp_pairs: dict[int, tuple[int, int]] = _build_stamp_pairs(cells) if options.stamp_ids else {}
     stamp_slug: dict[int, str | None] = {}
     stamp_claims: dict[str, int] = {}
+    # #1135: twins one half promoted to a slide — refused as a pair, never
+    # given a one-sided id.
+    slide_hood_suspects: dict[int, int] = (
+        _slide_hood_suspects(cells, stamp_pairs) if options.stamp_ids else {}
+    )
     if options.stamp_ids:
         for rid in reserved_ids or ():
             stamp_claims[rid] = stamp_claims.get(rid, 0) + 1
@@ -766,6 +772,21 @@ def assign_ids_for_cells(
 
     for idx, cell in enumerate(cells):
         role = _classify_for_assignment(cell)
+
+        suspect_twin = slide_hood_suspects.get(idx)
+        if suspect_twin is not None:
+            if role == "slide":
+                slide_seen += 1
+            twin_lang = cells[suspect_twin].metadata.lang
+            _stamp_refuse(
+                result,
+                file_str,
+                cell.line_number,
+                _slide_hood_suspect_reason(
+                    f"the adjacent id-less {twin_lang} cell", is_slide=role == "slide"
+                ),
+            )
+            continue
 
         if role == "title-macro":
             current_slide_id = (
@@ -1485,6 +1506,303 @@ def _extract_from_side_cell(cell, comment_token: str, accept_code_derived: bool)
     return extraction
 
 
+@dataclass
+class _GapItem:
+    """One id-less, one-sided cell of a cross-group twin gap (#1135)."""
+
+    member: Member
+    is_anchor: bool
+    #: Would the lens stamp pass mint an id for it on its own? (An anchor or a
+    #: localized member always; a shared member only inside a two-sided group.)
+    stamps: bool
+    #: ``id()`` of the anchor of the one-sided id-less group the cell belongs
+    #: to (the anchor's own for an anchor); ``None`` for a member of the
+    #: sync-point group that opened the gap.
+    group: int | None
+
+    @property
+    def lang(self) -> str:
+        return "de" if self.member.de is not None else "en"
+
+    @property
+    def cell(self) -> SideCell:
+        cell = self.member.de or self.member.en
+        assert cell is not None
+        return cell
+
+
+def _cross_group_gaps(deck: BilingualDeck) -> list[list[_GapItem]]:
+    """The id-less one-sided cells of ``deck``, grouped by sync gap (#1135).
+
+    A gap opens at every group that is a sync point — an id'd or a two-sided
+    anchor (the same boundaries that break the lens stamp's cursor runs) —
+    and holds that group's one-sided members plus every following one-sided
+    id-less group (anchor and members) up to the next sync point. Twins the
+    lens could not pair because their *slide-hood* differs (a slide start on
+    one half, a plain cell on the other) land in different groups but always
+    in the same gap.
+    """
+    gaps: list[list[_GapItem]] = []
+    current: list[_GapItem] | None = None
+    for group in deck.groups:
+        anchor = group.anchor
+        one_sided_idless = (
+            anchor is not None and group.anchor_id.startswith("~idless@") and anchor.is_one_sided
+        )
+        if current is None or not one_sided_idless:
+            current = []
+            gaps.append(current)
+        group_token: int | None = None
+        if one_sided_idless:
+            assert anchor is not None
+            group_token = id(anchor)
+            current.append(_GapItem(anchor, is_anchor=True, stamps=True, group=group_token))
+        group_two_sided = anchor is not None and anchor.de is not None and anchor.en is not None
+        for member in group.members:
+            if (
+                not member.is_one_sided
+                or member.key.scheme == "id"
+                or member.kind == "j2"
+                or member.role in ("header", "voiceover", "notes")
+            ):
+                continue
+            stamps = member.langness == "localized" or group_two_sided
+            current.append(_GapItem(member, is_anchor=False, stamps=stamps, group=group_token))
+    return gaps
+
+
+def _pair_cross_group_twins(
+    deck: BilingualDeck,
+    slug_for,
+    stamp_member,
+    handled: set[int],
+    result: AssignResult,
+    paths: dict[str, Path],
+) -> None:
+    """Resolve the twins the lens split across groups before anything mints (#1135).
+
+    When one half promotes a cell to a slide/subslide start and the other
+    does not, the lens sees an id-less one-sided *anchor* on one half and an
+    id-less one-sided *member* on the other. Stamped independently, the two
+    twins got different ids — ``include`` vs ``include-2``, the suffix being
+    the uniqueness check treating the twin as a colliding different cell —
+    and sync then framed one cell as a removal plus an unrelated addition.
+
+    * **Byte-identical twins** (same kind, lang-ness and body, in the same
+      sync gap, not both anchors — anchor twins are the cursor marriage's
+      job) pair up in order and share ONE minted id. With one id on both
+      halves the lens demotes the divergent slide-hood to a tag row (#653).
+      Copies that do not pair one-to-one (different counts per half) are
+      refused rather than guessed.
+    * **Suspected twins** — an id-less anchor on one half the cursor marriage
+      cannot pair, and on the other half an id-less same-kind same-lang-ness
+      plain cell that would be stamped too (a localized translation: the
+      bodies cannot be compared). The gap is then ambiguous as a whole — the
+      cursor marriage may have paired the wrong anchors, and the cells around
+      the twin sit in different groups per half — so every anchor and every
+      stamping localized cell of the gap is refused: a separate id on each
+      twin would make sync re-translate from scratch and discard the existing
+      translation.
+
+    Every cell this pass decides is added to ``handled`` so the anchor runs
+    and member loop of :func:`_stamp_via_lens` leave it alone.
+    """
+    for gap in _cross_group_gaps(deck):
+        _pair_identical_twins(gap, slug_for, stamp_member, handled, result, paths)
+        _refuse_slide_hood_suspects(gap, handled, result, paths)
+
+
+def _twin_body_key(item: _GapItem) -> tuple[str, str, str] | None:
+    body = item.cell.body.rstrip()
+    if not body.strip():
+        return None  # nothing to compare (and nothing to mint a slug from)
+    return (item.cell.cell_type, item.member.langness, body)
+
+
+def _pair_identical_twins(
+    gap: list[_GapItem],
+    slug_for,
+    stamp_member,
+    handled: set[int],
+    result: AssignResult,
+    paths: dict[str, Path],
+) -> None:
+    by_body: dict[tuple[str, str, str], dict[str, list[_GapItem]]] = {}
+    for item in gap:
+        key = _twin_body_key(item)
+        if key is not None:
+            by_body.setdefault(key, {"de": [], "en": []})[item.lang].append(item)
+    for sides in by_body.values():
+        de_items, en_items = sides["de"], sides["en"]
+        if not de_items or not en_items:
+            continue
+        if not any(item.stamps for item in (*de_items, *en_items)):
+            continue  # neither half would mint — no id churn
+        if all(item.is_anchor for item in (*de_items, *en_items)):
+            continue  # same slide-hood: the cursor marriage pairs anchors
+        if len(de_items) != len(en_items):
+            for item in (*de_items, *en_items):
+                handled.add(id(item.member))
+                if not item.stamps:
+                    continue
+                other = "en" if item.lang == "de" else "de"
+                lines = ", ".join(str(o.cell.line_number) for o in sides[other])
+                _stamp_refuse(
+                    result,
+                    str(paths[item.lang]),
+                    item.cell.line_number,
+                    f"byte-identical to id-less cell(s) on the {other} half (line(s) "
+                    f"{lines}), but the copies do not pair one-to-one ({len(de_items)} "
+                    f"de vs {len(en_items)} en); give each twin pair one slide_id by "
+                    "hand, then re-run",
+                )
+            continue
+        for de_item, en_item in zip(de_items, en_items, strict=True):
+            if de_item.is_anchor and en_item.is_anchor:
+                continue  # an anchor pair: left to the cursor marriage
+            handled.add(id(de_item.member))
+            handled.add(id(en_item.member))
+            if not (de_item.stamps or en_item.stamps):
+                continue
+            minted = slug_for(en_item.member)
+            if minted is not None:
+                stamp_member(de_item.member, *minted)
+                stamp_member(en_item.member, *minted)
+
+
+def _refuse_slide_hood_suspects(
+    gap: list[_GapItem],
+    handled: set[int],
+    result: AssignResult,
+    paths: dict[str, Path],
+) -> None:
+    open_items = [i for i in gap if id(i.member) not in handled]
+    anchors = {
+        lang: [i for i in open_items if i.is_anchor and i.lang == lang] for lang in ("de", "en")
+    }
+    married = min(len(anchors["de"]), len(anchors["en"]))
+    # The cursor marriage in _stamp_via_lens pairs the first `married`
+    # anchors of each half; the surplus would be minted solo. A married
+    # group's members have a twin pool (its partner group) — not candidates.
+    married_groups = {id(a.member) for lang in ("de", "en") for a in anchors[lang][:married]}
+    solo = anchors["de"][married:] + anchors["en"][married:]
+    suspects: list[tuple[_GapItem, list[_GapItem]]] = []
+    for anchor in solo:
+        candidates = [
+            item
+            for item in open_items
+            if not item.is_anchor
+            and item.stamps
+            and item.lang != anchor.lang
+            and item.group not in married_groups
+            and item.member.langness == anchor.member.langness
+            and item.cell.cell_type == anchor.cell.cell_type
+        ]
+        if candidates:
+            suspects.append((anchor, candidates))
+    if not suspects:
+        return
+
+    # Gap-atomic: the suspected twins plus every anchor (the cursor marriage
+    # is no longer trustworthy) and every stamping localized cell of the gap.
+    named: dict[int, tuple[_GapItem, list[_GapItem]]] = {}
+    for anchor, candidates in suspects:
+        named.setdefault(id(anchor.member), (anchor, []))[1].extend(candidates)
+        for candidate in candidates:
+            named.setdefault(id(candidate.member), (candidate, []))[1].append(anchor)
+    first_anchor, first_candidates = suspects[0]
+    pair_text = (
+        f"{first_anchor.lang} line {first_anchor.cell.line_number} / "
+        f"{first_candidates[0].lang} line {first_candidates[0].cell.line_number}"
+    )
+    for item in open_items:
+        if id(item.member) in named:
+            continue
+        if item.is_anchor or (item.stamps and item.member.langness == "localized"):
+            named[id(item.member)] = (item, [])
+
+    for item, others in named.values():
+        handled.add(id(item.member))
+        if others:
+            other = "en" if item.lang == "de" else "de"
+            lines = ", ".join(str(o.cell.line_number) for o in others)
+            reason = _slide_hood_suspect_reason(
+                f"the id-less cell at {other} line(s) {lines}", is_slide=item.is_anchor
+            )
+        else:
+            reason = (
+                "shares a gap between id'd slides with a suspected slide-hood twin "
+                f"pair ({pair_text}); its own twin cannot be located until that pair "
+                "is resolved — fix the pair, then re-run"
+            )
+        _stamp_refuse(result, str(paths[item.lang]), item.cell.line_number, reason)
+
+
+def _slide_hood_suspect_reason(twin: str, *, is_slide: bool) -> str:
+    """The refusal text for a suspected slide-hood-divergent twin pair (#1135)."""
+    shape, twin_shape = "a slide start", "a plain cell"
+    if not is_slide:
+        shape, twin_shape = twin_shape, shape
+    return (
+        f"may be the twin of {twin}, but this cell is {shape} and that one "
+        f"{twin_shape}, so the pairing cannot be established — separate ids would "
+        "turn one cell into a removal plus an addition. If they are twins, give both "
+        "the same slide_id by hand (or make their slide tags agree); otherwise give "
+        "one of them a slide_id by hand. Then re-run"
+    )
+
+
+def _is_isolated_stamp_run(cells: list[_Cell], idx: int) -> bool:
+    """Is ``cells[idx]`` the only cell of its same-key stamp run?"""
+    key = _stamp_run_key(cells[idx])
+    return all(
+        not 0 <= near < len(cells) or _stamp_run_key(cells[near]) != key
+        for near in (idx - 1, idx + 1)
+    )
+
+
+def _slide_hood_suspects(
+    cells: list[_Cell], stamp_pairs: dict[int, tuple[int, int]]
+) -> dict[int, int]:
+    """Unify-path twins whose slide-hood differs (#1135), as ``{idx: twin_idx}``.
+
+    A solo id-less localized slide start directly adjacent to an unpaired
+    id-less localized plain cell of the other language and the same cell
+    type is, in the unified interleave, most likely ONE cell that one half
+    promoted to a slide. The slide branch would mint it a one-sided id and
+    the stamp branch would refuse the plain twin — leaving divergent id sets.
+    Both are refused instead, with a reason naming the twin.
+
+    The plain cell must be alone in its stamp run: the leftover of an
+    irregular run (``[de, de, en]``) is unpaired for a different reason, and
+    a new slide next to it is no more likely to be its twin than any other.
+    """
+    suspects: dict[int, int] = {}
+    for group in build_slide_groups(cells):
+        if len(group) != 1:
+            continue
+        slide = group[0]
+        meta = cells[slide].metadata
+        if meta.slide_id or meta.lang is None or meta.is_j2 or slide in suspects:
+            continue
+        for near in (slide - 1, slide + 1):
+            if not 0 <= near < len(cells) or near in suspects:
+                continue
+            near_meta = cells[near].metadata
+            if (
+                _stamp_class(cells[near]) == "localized"
+                and near not in stamp_pairs
+                and _is_isolated_stamp_run(cells, near)
+                and not near_meta.slide_id
+                and near_meta.lang != meta.lang
+                and near_meta.cell_type == meta.cell_type
+            ):
+                suspects[slide] = near
+                suspects[near] = slide
+                break
+    return suspects
+
+
 def _stamp_via_lens(
     de_path: Path,
     en_path: Path,
@@ -1522,10 +1840,14 @@ def _stamp_via_lens(
       numbers they DO merge into one two-sided group, which is then its own
       twin: stamped directly, once, its members lens-paired (review I3).
 
+    Twins whose *slide-hood* differs (one half promoted the cell to a slide
+    start) sit in different groups; :func:`_pair_cross_group_twins` resolves
+    them first — byte-identical twins share one id, a suspected localized
+    pair refuses its whole gap (#1135).
+
     The cursor marriage stamps what the lens can see: a twin the lens
-    cannot pair (an id-less copy of an already-id'd slide; a slide-hood
-    divergence on an id-less pair; genuinely different slides added into
-    one gap) mints a wrong-but-FRAMED identity — the stamp report shows
+    cannot pair (an id-less copy of an already-id'd slide; genuinely
+    different slides added into one gap) mints a wrong-but-FRAMED identity — the stamp report shows
     it, the next sync report frames it, and ``clm slides rename-id``
     repairs it. That residue is the price of dissolving the deadlock; the
     old behavior was refusing everything.
@@ -1536,7 +1858,7 @@ def _stamp_via_lens(
     refusal. A CLEAN parse returns a (possibly empty) result: sync accepts
     the deck, so there is nothing left for normalize to refuse over.
     """
-    from clm.slides.bilingual_doc import NORMALIZE_FIXABLE, BilingualDeck, Member, SideCell
+    from clm.slides.bilingual_doc import NORMALIZE_FIXABLE
     from clm.slides.doc_lenses import parse_bundle
 
     comment_token = comment_token_for_path(en_path)
@@ -1634,6 +1956,8 @@ def _stamp_via_lens(
             and member.langness == "localized"
         )
 
+    _pair_cross_group_twins(deck, slug_for, stamp_member, handled, result, paths)
+
     # -- anchors: id-less groups, adjacent one-sided twins paired ------------
     # The synthetic `~idless@<line>` group tokens are line-number-derived, so
     # an id-less anchor added to BOTH halves usually surfaces as two
@@ -1669,7 +1993,7 @@ def _stamp_via_lens(
     def loc_buckets(members: list[Member]) -> dict[tuple[str, bool], list[Member]]:
         buckets: dict[tuple[str, bool], list[Member]] = {}
         for m in members:
-            if not is_stampable_localized(m):
+            if not is_stampable_localized(m) or id(m) in handled:
                 continue
             cell = m.de or m.en
             assert cell is not None
@@ -1677,8 +2001,11 @@ def _stamp_via_lens(
         return buckets
 
     for groups in idless_anchor_runs:
-        de_side = [g for g in groups if g.anchor.de is not None]
-        en_side = [g for g in groups if g.anchor.en is not None]
+        # An anchor already resolved by the cross-group twin pass (#1135) —
+        # paired with its byte-identical twin, or refused as a suspected
+        # slide-hood divergence — must not also be cursor-married.
+        de_side = [g for g in groups if g.anchor.de is not None and id(g.anchor) not in handled]
+        en_side = [g for g in groups if g.anchor.en is not None and id(g.anchor) not in handled]
         for de_group, en_group in zip(de_side, en_side, strict=False):
             minted = slug_for(en_group.anchor)
             if minted is not None:

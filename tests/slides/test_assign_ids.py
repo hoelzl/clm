@@ -2269,3 +2269,331 @@ class TestStampViaLens:
         assert any("usable slug" in r.reason for r in result.refusals), [
             (r.severity, r.reason) for r in result.refusals
         ]
+
+
+_ID_RE = __import__("re").compile(r'slide_id="!?([^"]+)"')
+
+
+class TestStampTwinsAcrossSlideHood:
+    """Regression tests for #1135: `normalize --stamp-ids` must treat a split
+    deck's DE/EN twins as a pair even when one half promoted the cell to a
+    slide/subslide start. It used to stamp the anchor and its plain twin
+    independently — `include` vs `include-2` on a shared cell, two unrelated
+    slugs on a localized one — silently splitting one cell into a sync
+    removal plus an unrelated addition."""
+
+    HEADER_DE = TestStampViaLens.HEADER_DE
+    HEADER_EN = TestStampViaLens.HEADER_EN
+
+    @pytest.fixture(autouse=True)
+    def _lens_spy(self, monkeypatch):
+        from clm.slides import assign_ids as assign_ids_module
+
+        real = assign_ids_module._stamp_via_lens
+        self._lens_calls = 0
+
+        def counting(*args, **kwargs):
+            self._lens_calls += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(assign_ids_module, "_stamp_via_lens", counting)
+
+    def _pair(self, tmp_path, de: str, en: str, ext: str = "py"):
+        de_path = tmp_path / f"slides_t.de.{ext}"
+        en_path = tmp_path / f"slides_t.en.{ext}"
+        de_path.write_text(de, encoding="utf-8")
+        en_path.write_text(en, encoding="utf-8")
+        return de_path, en_path
+
+    def _stamp(self, de_path, en_path, *, expect_lens: bool):
+        from clm.slides.assign_ids import assign_ids_in_files
+
+        options = AssignOptions(
+            stamp_ids=True, accept_content_derived=True, accept_code_derived=True
+        )
+        before = self._lens_calls
+        result = assign_ids_in_files([de_path, en_path], options)
+        assert (self._lens_calls > before) == expect_lens, "the deck took the wrong stamp path"
+        return result
+
+    @staticmethod
+    def _ids(path) -> list[str]:
+        return sorted(_ID_RE.findall(path.read_text(encoding="utf-8")))
+
+    def _shared_promoted(self, *, extra_de: str = "", extra_en: str = ""):
+        """The issue's shape: an id-less shared cell both halves carry; the EN
+        half promotes it to a subslide and adds an id-less localized note."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + '# %% tags=["keep"]\nimport numpy as np\n\n'
+            + "# %%\nx = 1\n"
+            + extra_de
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% tags=["subslide", "keep"]\nimport numpy as np\n\n'
+            + '# %% [markdown] lang="en"\n# Some English note.\n\n'
+            + "# %%\nx = 1\n"
+            + extra_en
+        )
+        return de, en
+
+    def test_shared_twin_promoted_on_one_half_gets_one_id(self, tmp_path):
+        de_path, en_path = self._pair(tmp_path, *self._shared_promoted())
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert not result.refusals, [(r.severity, r.reason) for r in result.refusals]
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        assert '# %% tags=["keep"] slide_id="import-np"\n' in de_after
+        assert '# %% tags=["subslide", "keep"] slide_id="import-np"\n' in en_after
+        assert "import-np-2" not in de_after + en_after
+        # The shared cell displaced into the EN subslide's group is a twin too:
+        # it may not end up id'd on one half only.
+        assert de_after.count('slide_id="x"') == en_after.count('slide_id="x"') == 1
+        # The halves' id sets agree (validate's "split pair slide_id sets
+        # diverge" check) — apart from the EN-only localized note…
+        assert set(self._ids(en_path)) - set(self._ids(de_path)) == {"some-english-note"}
+        assert set(self._ids(de_path)) <= set(self._ids(en_path))
+        # …and the pair parses clean: the one id on both twins lets the lens
+        # treat the slide-hood difference as a tag difference (#653).
+        from clm.slides.doc_lenses import parse_bundle
+
+        outcome = parse_bundle(de_after, en_after)
+        assert outcome.deck is not None, outcome.refusal.render() if outcome.refusal else ""
+
+    def test_shared_twin_in_a_cpp_deck(self, tmp_path):
+        """The field report's exact cell, in a //-comment deck."""
+        de = (
+            '// %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n// # Alt\n\n'
+            + '// %% tags=["keep"]\n#include <clm/display.hpp>\n\n'
+            + "// %%\nint x = 1;\n"
+        )
+        en = (
+            '// %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n// # Old\n\n'
+            + '// %% tags=["subslide", "keep"]\n#include <clm/display.hpp>\n\n'
+            + '// %% [markdown] lang="en"\n// Some English note.\n\n'
+            + "// %%\nint x = 1;\n"
+        )
+        de_path, en_path = self._pair(tmp_path, de, en, ext="cpp")
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert not result.refusals, [(r.severity, r.reason) for r in result.refusals]
+        de_ids = self._ids(de_path)
+        en_ids = self._ids(en_path)
+        assert not [i for i in de_ids + en_ids if i.endswith("-2")], (de_ids, en_ids)
+        assert set(de_ids) <= set(en_ids)
+
+    def test_a_genuinely_different_cell_with_the_same_slug_stays_distinct(self, tmp_path):
+        """Pair-scoped uniqueness must not collapse a DIFFERENT cell whose
+        content slugs the same way onto the twins' id."""
+        extra_de = (
+            '\n# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\n#\n# # Weiter\n\n'
+            + "# %%\nimport numpy as np\nnp.zeros(3)\n"
+        )
+        extra_en = '\n# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\n#\n# # Next\n'
+        de, en = self._shared_promoted(extra_de=extra_de, extra_en=extra_en)
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert not result.refusals, [(r.severity, r.reason) for r in result.refusals]
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        assert 'tags=["keep"] slide_id="import-np"\n' in de_after
+        assert 'tags=["subslide", "keep"] slide_id="import-np"\n' in en_after
+        # the DE-only different cell (its own gap, after s1) keeps a distinct id
+        assert '# %% slide_id="import-np-2"\nimport numpy as np\nnp.zeros(3)' in de_after
+        assert "import-np-2" not in en_after
+
+    def test_unpairable_identical_copies_refuse_instead_of_suffixing(self, tmp_path):
+        """Two identical id-less copies on one half against one on the other
+        cannot be paired one-to-one: refuse, never mint `-2` silently."""
+        de, en = self._shared_promoted(extra_de="\n# %%\nimport numpy as np\n")
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        refused = [r for r in result.refusals if "one-to-one" in r.reason]
+        assert len(refused) == 3, [(r.file, r.line, r.reason) for r in result.refusals]
+        assert not any(a.slide_id.startswith("import-np") for a in result.assignments)
+
+    def _localized_promoted(self, *, de_tags: str = "", extra_de: str = "# %%\nnur_de = 1\n\n"):
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + extra_de
+            + f'# %% [markdown] lang="de"{de_tags}\n# ## Zufallszahlen erzeugen\n\n'
+            + "# %%\nx = 1\n"
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["subslide"]\n# ## Generating random numbers\n\n'
+            + '# %% [markdown] lang="en"\n# Some English note.\n\n'
+            + "# %%\nx = 1\n"
+        )
+        return de, en
+
+    def test_localized_twin_promoted_on_one_half_refuses_loudly(self, tmp_path):
+        """The dangerous variant: a localized pair cannot be matched by bytes.
+        Two separate ids would surface as `translate_new` plus a removal of
+        the existing, correct translation — so both cells are refused, each
+        naming its suspected twin, and neither gets an id."""
+        de_path, en_path = self._pair(tmp_path, *self._localized_promoted())
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        suspects = {(Path(r.file).name, r.line) for r in result.refusals if "twin of" in r.reason}
+        assert suspects == {("slides_t.de.py", 11), ("slides_t.en.py", 8)}, result.refusals
+        assert all(r.severity == "soft" for r in result.refusals)
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        assert '# %% [markdown] lang="de"\n# ## Zufallszahlen' in de_after
+        assert '# %% [markdown] lang="en" tags=["subslide"]\n# ## Generating' in en_after
+        assert "generating-random-numbers" not in de_after + en_after
+        assert "zufallszahlen-erzeugen" not in de_after + en_after
+
+    def test_localized_suspect_resolves_once_the_slide_tags_agree(self, tmp_path):
+        """The refusal's remedy works: with matching slide-hood the twins are
+        anchors on both halves and share ONE EN-authority id."""
+        de, en = self._localized_promoted(de_tags=' tags=["subslide"]')
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert not [r for r in result.refusals if "twin of" in r.reason]
+        assert 'tags=["subslide"] slide_id="generating-random-numbers"\n# ## Zufallszahlen' in (
+            de_path.read_text(encoding="utf-8")
+        )
+        assert 'tags=["subslide"] slide_id="generating-random-numbers"\n# ## Generating' in (
+            en_path.read_text(encoding="utf-8")
+        )
+
+    def test_localized_twin_on_the_unify_path_refuses_both(self, tmp_path):
+        """Same shape on a pair that still unifies: the slide branch used to
+        mint the EN subslide a one-sided id while the DE twin was refused for
+        a misleading 'interleaving' reason."""
+        de_path, en_path = self._pair(tmp_path, *self._localized_promoted(extra_de=""))
+        result = self._stamp(de_path, en_path, expect_lens=False)
+        suspects = {(Path(r.file).name, r.line) for r in result.refusals if "twin of" in r.reason}
+        assert suspects == {("slides_t.de.py", 8), ("slides_t.en.py", 8)}, result.refusals
+        assert "generating-random-numbers" not in en_path.read_text(encoding="utf-8")
+
+    # -- neighbours: what the cross-group pass must NOT change (review) -----
+
+    def test_identical_titled_anchor_twins_keep_their_member_pairing(self, tmp_path):
+        """Byte-identical anchors on BOTH halves are the cursor marriage's job;
+        claiming them in the identical-twin pass orphaned their localized
+        members, which then got two different solo slugs."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Pandas\n\n'
+            + '# %% [markdown] lang="de"\n# Deutscher Hinweis.\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # Pandas\n\n'
+            + '# %% [markdown] lang="en"\n# English note.\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert not result.refusals, [(r.line, r.reason) for r in result.refusals]
+        assert 'slide_id="english-note"\n# Deutscher Hinweis.' in de_path.read_text(
+            encoding="utf-8"
+        )
+        assert "deutscher-hinweis" not in de_path.read_text(encoding="utf-8")
+
+    def test_surplus_new_slide_does_not_steal_a_married_groups_member(self, tmp_path):
+        """DE is one new slide ahead of EN (translation lag): the surplus DE
+        slide has no plain twin — the EN note belongs to the married
+        `New Slide` group — so nothing is suspect and nothing is refused."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n\n'
+            + '# %% [markdown] lang="de"\n# Deutscher Hinweis.\n\n'
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Noch eine\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # New Slide\n\n'
+            + '# %% [markdown] lang="en"\n# English note.\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert not result.refusals, [(r.line, r.reason) for r in result.refusals]
+        de_after = de_path.read_text(encoding="utf-8")
+        assert 'slide_id="english-note"\n# Deutscher Hinweis.' in de_after
+        assert 'slide_id="noch-eine"' in de_after
+
+    def test_suspect_gap_refuses_the_promoted_slides_own_members_too(self, tmp_path):
+        """DE promotes `## Beispiel`; its following note is a member of the DE
+        slide's group but of `s0` on EN. Stamping that note solo while its
+        twin is refused would leave a one-sided id — the gap is refused as a
+        whole, and nothing in it is written."""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["subslide"]\n# ## Beispiel\n\n'
+            + '# %% [markdown] lang="de"\n# Deutscher Hinweis.\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en"\n# ## Example\n\n'
+            + '# %% [markdown] lang="en"\n# English note.\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        refused = {(Path(r.file).name, r.line) for r in result.refusals}
+        assert refused == {
+            ("slides_t.de.py", 11),
+            ("slides_t.de.py", 14),
+            ("slides_t.en.py", 8),
+            ("slides_t.en.py", 11),
+        }, [(r.file, r.line, r.reason) for r in result.refusals]
+        # only the genuinely one-sided shared cell is stamped
+        assert [a.slide_id for a in result.assignments] == ["nur-de"]
+
+    def test_suspect_gap_does_not_cursor_marry_the_promoted_slide(self, tmp_path):
+        """DE promotes `## Beispiel` AND both halves add a new slide later in
+        the gap. In-order marriage would hand the promoted slide the new EN
+        slide's id; the ambiguous gap refuses every anchor instead. (The EN
+        `Example` cell carries one extra line so the two id-less anchor
+        headers never share a line number — equal lines merge their synthetic
+        group tokens, review I3, which is a different shape.)"""
+        de = (
+            self.HEADER_DE
+            + '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n#\n# # Alt\n\n'
+            + "# %%\nnur_de = 1\n\n"
+            + '# %% [markdown] lang="de" tags=["subslide"]\n# ## Beispiel\n\n'
+            + '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n'
+        )
+        en = (
+            self.HEADER_EN
+            + '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n#\n# # Old\n\n'
+            + '# %% [markdown] lang="en"\n# ## Example\n#\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# # New Slide\n'
+        )
+        de_path, en_path = self._pair(tmp_path, de, en)
+        result = self._stamp(de_path, en_path, expect_lens=True)
+        assert "new-slide" not in de_path.read_text(encoding="utf-8")
+        assert {a.slide_id for a in result.assignments} == {"nur-de"}
+        assert len(result.refusals) == 4, [(r.line, r.reason) for r in result.refusals]
+
+    def test_unify_path_irregular_run_leftover_is_not_a_suspect(self):
+        """A bilingual deck whose last run is irregular (`de, de, en`) leaves
+        an unpaired cell for a different reason; a new DE-only slide next to
+        it must still be minted, as before #1135."""
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s0"\n# # Alt\n\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="s0"\n# # Old\n\n'
+            '# %% [markdown] lang="de"\n# Erster Absatz.\n\n'
+            '# %% [markdown] lang="de"\n# Zweiter Absatz.\n\n'
+            '# %% [markdown] lang="en"\n# First paragraph.\n\n'
+            '# %% [markdown] lang="de" tags=["slide"]\n# # Neue Folie\n'
+        )
+        _new, result = _run(
+            text, stamp_ids=True, accept_content_derived=True, accept_code_derived=True
+        )
+        assert [a.slide_id for a in result.assignments] == ["neue-folie"]
+        assert not [r for r in result.refusals if "twin of" in r.reason]
