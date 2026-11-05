@@ -83,6 +83,7 @@ from clm.slides.doc_ledger import (
     LedgerMember,
     TopicLedger,
     baseline_from_ledger,
+    baseline_state,
     preserve_unchanged_member,
     record_group_order,
     record_order_scope,
@@ -653,6 +654,60 @@ _GATE_DEFERRAL_DECK = (
 )
 
 
+@define(frozen=True)
+class HeldSlide:
+    """A slide group the structural verify held rows back on, in a pass that
+    made no progress (#1150)."""
+
+    slide: str
+    #: Rows whose changes the pre-write verify kept out of the files.
+    unwritten: list[str]
+    #: Rows written (or record-only) but kept out of the ledger.
+    unrecorded: list[str]
+
+    def payload(self) -> dict:
+        return {
+            "slide": self.slide,
+            "unwritten": list(self.unwritten),
+            "unrecorded": list(self.unrecorded),
+        }
+
+
+@define(frozen=True)
+class NoProgress:
+    """An apply pass that cannot be followed by a different one (#1150).
+
+    The structural verify held rows back, yet the pass changed no file and
+    no ledger baseline: the next report frames the same rows, and the same
+    answers repeat this pass.
+    """
+
+    #: Every slide with held rows, the ones to reconcile by hand first.
+    slides: list[HeldSlide]
+    #: The slides to reconcile by hand: those whose changes cannot be
+    #: written, or, when every change could be, those the pair already
+    #: fails the verify on. The other held slides wait on these.
+    reconcile: list[str]
+    #: The pre-write verify kept every change out (a violation naming no
+    #: slide): the whole deck must be reconciled.
+    deck_wide: bool
+    #: Held handles that carried an answer this pass. A different answer can
+    #: get a slide through (typically a side choice that discards one half's
+    #: content, which the conservation check exempts), so the agent is told
+    #: to change one only if it was not what the author wants.
+    answered: list[str]
+    advice: str
+
+    def payload(self) -> dict:
+        return {
+            "slides": [s.payload() for s in self.slides],
+            "reconcile": list(self.reconcile),
+            "deck_wide": self.deck_wide,
+            "answered": list(self.answered),
+            "advice": self.advice,
+        }
+
+
 @define
 class ApplyOutcome:
     """The whole apply pass over one deck."""
@@ -680,6 +735,9 @@ class ApplyOutcome:
     #: recorded (status ``applied``, #992). Each ledger entry keeps its old
     #: baseline.
     verify_withheld: list[str] = field(factory=list)
+    #: Set when the verify held rows back and the pass changed nothing: the
+    #: next pass would be this one again (#1150). Never set on a dry run.
+    no_progress: NoProgress | None = None
 
     def count(self, status: str) -> int:
         return sum(1 for r in self.results if r.status == status)
@@ -726,6 +784,7 @@ class ApplyOutcome:
             "items": [r.payload() for r in self.results],
             "verify_violations": [v.message for v in self.verify_violations],
             "verify_withheld": list(self.verify_withheld),
+            "no_progress": self.no_progress.payload() if self.no_progress else None,
         }
 
 
@@ -3139,6 +3198,11 @@ def apply_deck(
     # entry, immune to wherever the apply loop later records landed items
     # into ``ledger``.
     deck_ledger = ledger.decks.get(deck_key)
+    #: What the next report would read from the ledger, had this pass recorded
+    #: nothing: a pass that leaves it and every file unchanged repeats (#1150).
+    state_before = baseline_state(deck_ledger)
+    key_groups = {item.key: group for item, group in zip(diff.items, item_groups, strict=True)}
+    answered = {row.key for row in rows}
     #: Every fingerprint the ledger recorded: what is NOT among them is an
     #: author's edit, which a pass must never drop (#1130 step 2).
     baseline_fps: set[str] | None = (
@@ -3188,6 +3252,11 @@ def apply_deck(
             continue
         if not current.landed:
             outcome.verify_violations = _dedupe_violations(withholding)
+            if not dry_run:
+                # Nothing landed: no file and no ledger entry can have changed.
+                outcome.no_progress = _no_progress(
+                    outcome, key_groups, answered, deck_wide=holds.everything is not None
+                )
             return outcome
         finals = current.ex.emit_all()
         changed = {key for key in finals if finals[key] != originals[key]}
@@ -3469,7 +3538,77 @@ def apply_deck(
     # a clean pass reports the change as before (even when every row was
     # deferred by the sibling rule — the caller's save is then a no-op).
     outcome.ledger_changed = recorded_any or not outcome.verify_violations
+    if not changed and baseline_state(target) == state_before:
+        outcome.no_progress = _no_progress(
+            outcome, key_groups, answered, deck_wide=holds.everything is not None
+        )
     return outcome
+
+
+def _no_progress(
+    outcome: ApplyOutcome,
+    key_groups: dict[str, str | None],
+    answered_keys: set[str],
+    *,
+    deck_wide: bool,
+) -> NoProgress | None:
+    """The stall verdict for a pass that changed no file and no baseline (#1150).
+
+    Only a pass the structural verify held rows back in can stall: one that
+    changed nothing because questions stayed unanswered, answers were
+    rejected or rows are ``manual`` already tells the agent what to do. The
+    held rows re-derive identically on the next report (nothing on their
+    slides was written or recorded), so the same answers repeat this pass.
+    """
+    if not outcome.verify_withheld:
+        return None
+    unwritten_keys = {r.key for r in outcome.results if r.reason.startswith("withheld:")}
+    by_slide: dict[str, tuple[list[str], list[str]]] = {}
+    for key in outcome.verify_withheld:
+        unwritten, unrecorded = by_slide.setdefault(key_groups.get(key) or "?", ([], []))
+        (unwritten if key in unwritten_keys else unrecorded).append(key)
+    slides = [HeldSlide(slide, *rows) for slide, rows in by_slide.items()]
+    cause = [s.slide for s in slides if s.unwritten] or [s.slide for s in slides]
+    slides.sort(key=lambda s: (s.slide not in cause, s.slide))
+    names = ", ".join(f"'{name}'" for name in cause)
+    plural = "s" if len(cause) > 1 else ""
+    if deck_wide:
+        why = (
+            "The structural verify keeps every change out of the files (see "
+            "verify_violations): as framed, they cannot land"
+        )
+        target = "the deck"
+    elif any(s.unwritten for s in slides):
+        why = (
+            f"The structural verify keeps the changes on slide{plural} {names} out "
+            "of the files (see verify_violations): as framed, they cannot land"
+            + (", and the other listed slides wait on them" if len(slides) > len(cause) else "")
+        )
+        target = f"slide{plural} {names}"
+    else:
+        why = (
+            f"The pair already fails the structural verify on slide{plural} {names} "
+            "(see verify_violations) and no row in this pass fixes it, so nothing "
+            "there can be recorded"
+        )
+        target = f"slide{plural} {names}"
+    answered = [key for key in outcome.verify_withheld if key in answered_keys]
+    if answered:
+        change = (
+            f". Your answers to {', '.join(answered)} are part of this pass: change "
+            "one only if it was not what the author wants (a different answer may "
+            "get through by discarding one half's content). Otherwise reconcile "
+        )
+    else:
+        change = ". No answer can change this: reconcile "
+    advice = (
+        "this pass changed no file and recorded nothing, so the next report frames "
+        f"the same rows and the same answers repeat this pass. {why}{change}"
+        f"{target} by hand so both halves agree, then re-run report"
+    )
+    return NoProgress(
+        slides=slides, reconcile=cause, deck_wide=deck_wide, answered=answered, advice=advice
+    )
 
 
 def _require_texts_gate(verify_gate: VerifyGate | None) -> None:

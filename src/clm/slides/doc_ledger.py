@@ -55,6 +55,7 @@ __all__ = [
     "LedgerMember",
     "TopicLedger",
     "baseline_from_ledger",
+    "baseline_state",
     "deck_key_for",
     "deck_section_fingerprint",
     "ledger_path_for",
@@ -287,6 +288,22 @@ def _deck_to_json(deck: DeckLedger) -> dict[str, object]:
             f"{lang}:{part}": fp for (lang, part), fp in sorted(deck.preamble_fps.items())
         },
     }
+
+
+def baseline_state(deck: DeckLedger | None) -> str:
+    """What a report reads from a deck's section, as one comparable string.
+
+    Two equal states make the differ frame the same rows over the same
+    files (#1150). Provenance and the confirming commit are left out: they
+    are bookkeeping no report reads. A missing section equals an empty one.
+    """
+    data = _deck_to_json(deck if deck is not None else DeckLedger())
+    members = data["members"]
+    assert isinstance(members, dict)
+    for rec in members.values():
+        rec.pop("provenance", None)
+        rec.pop("confirmed_commit", None)
+    return json.dumps(data, sort_keys=True)
 
 
 def _deck_from_json(rec: dict) -> DeckLedger:
