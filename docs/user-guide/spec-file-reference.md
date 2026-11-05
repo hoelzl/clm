@@ -356,6 +356,44 @@ would silently end up with an empty topic ID. CLM rejects this case with a
 clear error. Specifying the ID via both the `id=` attribute *and* text
 content is also a hard error — pick one form per topic.
 
+#### Days, time blocks and the certification agenda
+
+For certification listings a `<section>` can be read as a **week**, a
+`<subsection weekday="…">` inside `<topics>` as a **day**, and a `<block>`
+inside a subsection as a **time block** with teaching units ("UE"):
+
+```xml
+<agenda-targets unit-minutes="45" units-per-day="8" days-per-week="5" units-total="480"/>
+…
+<section>
+    <name><de>Woche 05: LLM-APIs</de><en>Week 05: LLM APIs</en></name>
+    <agenda>
+        <subtitle><de>Von der Chat-Oberfläche zum Code</de><en>From chat to code</en></subtitle>
+        <outcome><de>Eigener Chatbot</de><en>A chatbot of your own</en></outcome>
+    </agenda>
+    <topics>
+        <subsection weekday="mon">
+            <block units="4" form="theory">
+                <name><de>API-Schlüssel und Modelle</de><en>API keys and models</en></name>
+                <contents><de>Anbieter, Modelle, Kosten</de><en>Providers, models, cost</en></contents>
+                <topic>llm_apis</topic>
+            </block>
+            <block units="4" form="practice" status="planned">
+                <name><de>Übungen</de><en>Exercises</en></name>
+            </block>
+        </subsection>
+    </topics>
+</section>
+```
+
+Subsections and blocks never change the build: their topics flatten into the
+section in document order. `<block>` is only allowed directly inside a
+`<subsection>` (anywhere else it is a parse error). `clm export schedule`
+lists the decks per day, `clm export agenda` renders the agenda with teaching
+units, and `clm validate` checks the units against `<agenda-targets>`. The
+full element and attribute reference (`units`, `form`, `status`,
+`standalone`, `pace`) is in `clm info spec-files`.
+
 ### `<dir-groups>` (Optional)
 
 Defines directory groups to copy additional files (like code examples) to output.
@@ -1112,6 +1150,12 @@ CLM validates course spec files and reports errors:
 - Invalid kind/format/language values
 
 Validation errors are reported before the build starts.
+
+`clm validate <spec.xml>` checks more (topic resolution, includes, images,
+the subsection and agenda rules) and warns about every element the parser
+does not know (`unknown_element`): such an element is ignored together with
+any `<topic>`s inside it, so a typo like `<subsecton>` would otherwise drop
+material from the build silently.
 
 ---
 

@@ -417,6 +417,98 @@ class ActivitySpec:
     id: str | None = None
 
 
+# Closed enums for ``<block>`` attributes (issue #1163). Like ``weekday``, the
+# tokens are language-neutral; ``form`` is localized only at render time
+# (``clm.core.agenda.FORM_LABELS``). An unknown token is a hard parse error.
+BLOCK_FORMS: tuple[str, ...] = ("theory", "practice", "theory-practice")
+BLOCK_STATUSES: tuple[str, ...] = ("ready", "planned", "adapt")
+BLOCK_PACES: tuple[str, ...] = ("full", "recap")
+
+
+@frozen
+class BlockSpec:
+    """A time block with teaching units inside a day ``<subsection>`` (issue #1163).
+
+    The agenda layer below the day: ``<section>`` = week, ``<subsection>`` =
+    day, ``<block>`` = a time block of the day with a number of teaching units,
+    a form (theory/practice) and a description. Authored as::
+
+        <subsection weekday="mon">
+            <block units="4" form="theory">
+                <name><de>API-Schlüssel und Modelle</de><en>API keys and models</en></name>
+                <contents><de>Anbieter, Modelle, Kosten</de><en>…</en></contents>
+                <topic>llm_apis</topic>
+            </block>
+            <block units="4" form="practice" status="planned">
+                <name><de>Übungen</de><en>Exercises</en></name>
+            </block>
+        </subsection>
+
+    Blocks are **presentation/planning only**: their topics flatten into the
+    subsection's :attr:`SubsectionSpec.topics` in document order (interleaved
+    with any bare ``<topic>`` siblings) and from there into the section's build
+    list, so a spec with ``<block>`` wrappers builds byte-identically to the
+    same spec without them. A block may carry no topic at all (exercises,
+    learning checks, material not yet written).
+
+    Attributes:
+        topics: The contained topics in document order — the very same
+            :class:`TopicSpec` objects that appear in the subsection's (and,
+            for an enabled subsection, the section's) flat topic list.
+        units: Teaching units (``units="4"``); ``None`` when absent (a
+            validation finding, not a parse error). The length of one unit is
+            ``<agenda-targets unit-minutes>`` (default 45).
+        form: ``"theory"`` | ``"practice"`` | ``"theory-practice"``, or
+            ``None`` when absent.
+        status: ``"ready"`` (default) | ``"planned"`` (no material yet) |
+            ``"adapt"`` (material exists but needs a variant for this course).
+        standalone: A learning check or project day — a block that stands on
+            its own rather than presenting material.
+        pace: ``"full"`` (default) or ``"recap"`` (a refresher block that
+            only skims its decks).
+        name: Optional bilingual block title (``<name>``).
+        contents: Optional bilingual description (``<contents>``).
+    """
+
+    topics: list[TopicSpec] = Factory(list)
+    units: int | None = None
+    form: str | None = None
+    status: str = "ready"
+    standalone: bool = False
+    pace: str = "full"
+    name: Text | None = None
+    contents: Text | None = None
+
+
+@frozen
+class AgendaSpec:
+    """A section's (week's) ``<agenda>``: ``<subtitle>`` and ``<outcome>`` (issue #1163).
+
+    Both are bilingual (or plain text, used for both languages); a missing
+    child parses as an empty :class:`Text`. Presentation only — rendered by
+    ``clm export agenda``.
+    """
+
+    subtitle: Text = Factory(lambda: Text(de="", en=""))
+    outcome: Text = Factory(lambda: Text(de="", en=""))
+
+
+@frozen
+class AgendaTargetsSpec:
+    """The course's ``<agenda-targets>`` (issue #1163).
+
+    ``unit_minutes`` is the length of one teaching unit (default 45). The
+    other targets are optional; ``clm validate`` checks the agenda against
+    each one that is set: units per day, per week
+    (``units_per_day × days_per_week``) and in total.
+    """
+
+    unit_minutes: int = 45
+    units_per_day: int | None = None
+    days_per_week: int | None = None
+    units_total: int | None = None
+
+
 @frozen
 class SubsectionSpec:
     """An optional ``<subsection>`` grouping inside a ``<section>``'s ``<topics>``.
@@ -463,6 +555,10 @@ class SubsectionSpec:
             children) — non-deck schedule rows (project work, exams, …) that
             appear in ``clm export`` output but are never resolved or built.
             Held only here; they never enter the flat build list.
+        blocks: Zero or more :class:`BlockSpec` time blocks (``<block>``
+            children, issue #1163) in document order. Their topics are
+            *also* in :attr:`topics` (flattened); use :meth:`block_for` to map
+            a topic back to its block.
     """
 
     topics: list[TopicSpec] = Factory(list)
@@ -471,11 +567,24 @@ class SubsectionSpec:
     enabled: bool = True
     optional: bool = False
     activities: list[ActivitySpec] = Factory(list)
+    blocks: list[BlockSpec] = Factory(list)
 
     @property
     def weekday(self) -> str | None:
         """The first weekday token, or ``None`` — convenience for single-day callers."""
         return self.weekdays[0] if self.weekdays else None
+
+    def block_for(self, topic: TopicSpec) -> BlockSpec | None:
+        """The block holding *topic* (by object identity), or ``None`` for a bare topic."""
+        for block in self.blocks:
+            if any(t is topic for t in block.topics):
+                return block
+        return None
+
+    @property
+    def unblocked_topics(self) -> list[TopicSpec]:
+        """The subsection's bare topics: those that belong to no ``<block>``."""
+        return [t for t in self.topics if self.block_for(t) is None]
 
 
 @frozen
@@ -509,6 +618,9 @@ class SectionSpec:
     # never gates the build. An ``optional`` *and* disabled section is still
     # dropped at parse time (``enabled`` wins) and is never listed.
     optional: bool = False
+    # The week's ``<agenda>`` (subtitle + outcome) for ``clm export agenda``
+    # (issue #1163); ``None`` when the section has none. Presentation only.
+    agenda: AgendaSpec | None = None
 
     def module_for(self, topic_spec: TopicSpec) -> str | None:
         """Effective module binding for *topic_spec* under this section.
@@ -752,6 +864,55 @@ def _parse_weekdays_attr(value: str | None, *, section_label: str) -> tuple[str,
         if token not in result:
             result.append(token)
     return tuple(result)
+
+
+def _parse_positive_int_attr(value: str | None, *, attr_name: str, label: str) -> int | None:
+    """Parse an optional positive-integer attribute (``units``, ``unit-minutes``, …).
+
+    Returns ``None`` when the attribute is absent. Any present value that is
+    not a positive integer (including an empty string) is a hard
+    :class:`CourseSpecError` naming *label*, the element it sits on.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if text.isascii() and text.isdigit() and int(text) > 0:
+        return int(text)
+    raise CourseSpecError(
+        f"Invalid value for {attr_name!r} attribute on {label}: {value!r}. "
+        f"Expected a positive integer."
+    )
+
+
+def _parse_enum_attr(
+    value: str | None,
+    *,
+    attr_name: str,
+    allowed: tuple[str, ...],
+    label: str,
+) -> str | None:
+    """Parse an optional closed-enum attribute (case-insensitive).
+
+    Returns ``None`` when the attribute is absent; an unknown token is a hard
+    :class:`CourseSpecError`, the same policy as ``weekday`` (issue #1163).
+    """
+    if value is None:
+        return None
+    token = value.strip().lower()
+    if token not in allowed:
+        raise CourseSpecError(
+            f"Invalid value for {attr_name!r} attribute on {label}: {value!r}. "
+            f"Expected one of {list(allowed)}."
+        )
+    return token
+
+
+def _optional_multilang(element: ETree.Element | None, *, context: str) -> Text | None:
+    """Parse an optional bilingual element; absent or all-empty reads as ``None``."""
+    if element is None:
+        return None
+    text = parse_multilang_element(element, context=context)
+    return text if (text.de or text.en) else None
 
 
 @frozen
@@ -1788,6 +1949,10 @@ class CourseSpec:
     # CLM_NOTEBOOK_KERNEL_PYTHON env var; overrides the project-level clm.toml
     # [jupyter].kernel_python. From ``<kernel-python>``.
     kernel_python: str = ""
+    # Course-level ``<agenda-targets>`` for the agenda layer (issue #1163):
+    # unit length plus the optional per-day / per-week / total unit targets
+    # ``clm validate`` checks the ``<block>`` units against. ``None`` = absent.
+    agenda_targets: AgendaTargetsSpec | None = None
     author: str = "Dr. Matthias Hölzl"
     organization: Text = field(
         factory=lambda: Text(de="Coding-Akademie München", en="Coding-Academy Munich")
@@ -1964,14 +2129,24 @@ class CourseSpec:
             # still fires; otherwise an empty override would blank the label.
             name = Text(de=de, en=en) if (de or en) else None
 
-        topics = [
-            CourseSpec._parse_topic_element(topic_elem, section_label=section_label)
-            for topic_elem in sub_elem.findall("topic")
-        ]
-        activities = [
-            CourseSpec._parse_activity_element(act_elem, section_label=section_label)
-            for act_elem in sub_elem.findall("activity")
-        ]
+        # Walk the children in document order so bare <topic>s and the topics
+        # of <block> wrappers (issue #1163) interleave exactly as written: the
+        # subsection's flat topic list — and hence the build — is the same
+        # with or without the <block> wrappers.
+        topics: list[TopicSpec] = []
+        blocks: list[BlockSpec] = []
+        activities: list[ActivitySpec] = []
+        for child in sub_elem:
+            if child.tag == "topic":
+                topics.append(CourseSpec._parse_topic_element(child, section_label=section_label))
+            elif child.tag == "block":
+                block = CourseSpec._parse_block_element(child, section_label=section_label)
+                blocks.append(block)
+                topics.extend(block.topics)
+            elif child.tag == "activity":
+                activities.append(
+                    CourseSpec._parse_activity_element(child, section_label=section_label)
+                )
         return SubsectionSpec(
             topics=topics,
             weekdays=weekdays,
@@ -1979,6 +2154,103 @@ class CourseSpec:
             enabled=enabled,
             optional=optional,
             activities=activities,
+            blocks=blocks,
+        )
+
+    @staticmethod
+    def _parse_block_element(block_elem: ETree.Element, *, section_label: str) -> BlockSpec:
+        """Parse a ``<block>`` child of a ``<subsection>`` (issue #1163).
+
+        ``units`` must be a positive integer when present; ``form``,
+        ``status`` and ``pace`` are closed enums and ``standalone`` a boolean —
+        an invalid value is a hard :class:`CourseSpecError`. The block's
+        ``<topic>`` children use the ordinary topic grammar.
+        """
+        label = f"a <block> in {section_label}"
+        attrib = block_elem.attrib
+        try:
+            standalone = _parse_bool_attr(attrib.get("standalone"), attr_name="standalone")
+        except CourseSpecError as e:
+            raise CourseSpecError(f"{e} (on {label})") from None
+        return BlockSpec(
+            topics=[
+                CourseSpec._parse_topic_element(topic_elem, section_label=section_label)
+                for topic_elem in block_elem.findall("topic")
+            ],
+            units=_parse_positive_int_attr(attrib.get("units"), attr_name="units", label=label),
+            form=_parse_enum_attr(
+                attrib.get("form"), attr_name="form", allowed=BLOCK_FORMS, label=label
+            ),
+            status=_parse_enum_attr(
+                attrib.get("status"), attr_name="status", allowed=BLOCK_STATUSES, label=label
+            )
+            or "ready",
+            standalone=standalone,
+            pace=_parse_enum_attr(
+                attrib.get("pace"), attr_name="pace", allowed=BLOCK_PACES, label=label
+            )
+            or "full",
+            name=_optional_multilang(
+                block_elem.find("name"), context=f"<block>/<name> in {section_label}"
+            ),
+            contents=_optional_multilang(
+                block_elem.find("contents"), context=f"<block>/<contents> in {section_label}"
+            ),
+        )
+
+    @staticmethod
+    def _check_block_placement(root: ETree.Element) -> None:
+        """Reject a ``<block>`` anywhere other than directly inside a ``<subsection>``.
+
+        A misplaced block would otherwise be skipped together with its
+        ``<topic>``s — silently dropping material from the build (issue
+        #1163). Checked over the whole document, disabled sections included.
+        """
+        for parent in root.iter():
+            if parent.tag == "subsection":
+                continue
+            for child in parent:
+                if child.tag == "block":
+                    raise CourseSpecError(
+                        f"<block> found inside <{parent.tag}>: a <block> may only "
+                        f"appear directly inside a <subsection> (the day). Move it "
+                        f'into a <subsection weekday="..."> so its topics are not '
+                        f"dropped from the build."
+                    )
+
+    @staticmethod
+    def _parse_agenda_element(
+        section_elem: ETree.Element, *, section_label: str
+    ) -> AgendaSpec | None:
+        """Parse a ``<section>``'s optional ``<agenda>`` (issue #1163)."""
+        agenda_elem = section_elem.find("agenda")
+        if agenda_elem is None:
+            return None
+        return AgendaSpec(
+            subtitle=parse_multilang_element(
+                agenda_elem.find("subtitle"), context=f"<agenda>/<subtitle> in {section_label}"
+            ),
+            outcome=parse_multilang_element(
+                agenda_elem.find("outcome"), context=f"<agenda>/<outcome> in {section_label}"
+            ),
+        )
+
+    @staticmethod
+    def parse_agenda_targets(root: ETree.Element) -> AgendaTargetsSpec | None:
+        """Parse the course-level ``<agenda-targets>`` element (issue #1163)."""
+        elem = root.find("agenda-targets")
+        if elem is None:
+            return None
+        label = "<agenda-targets>"
+
+        def _int(attr: str) -> int | None:
+            return _parse_positive_int_attr(elem.attrib.get(attr), attr_name=attr, label=label)
+
+        return AgendaTargetsSpec(
+            unit_minutes=_int("unit-minutes") or 45,
+            units_per_day=_int("units-per-day"),
+            days_per_week=_int("days-per-week"),
+            units_total=_int("units-total"),
         )
 
     @staticmethod
@@ -1987,7 +2259,8 @@ class CourseSpec:
     ) -> "list[ETree.Element]":
         """Yield every ``<topic>`` element of a section in document order.
 
-        Descends into ``<subsection>`` wrappers (issue #261), skipping
+        Descends into ``<subsection>`` wrappers (issue #261) and their
+        ``<block>``s (issue #1163), skipping
         disabled subsections unless ``keep_disabled`` is set — the same
         drop-entirely rule applied to disabled sections. Used by
         :meth:`parse_dir_groups` so topic-scoped ``<dir-group>`` elements
@@ -2009,7 +2282,12 @@ class CourseSpec:
                 disabled = (child.attrib.get("enabled") or "").strip().lower() == "false"
                 if disabled and not keep_disabled:
                     continue
-                result.extend(child.findall("topic"))
+                # Bare topics and <block> topics (issue #1163), in document order.
+                for grandchild in child:
+                    if grandchild.tag == "topic":
+                        result.append(grandchild)
+                    elif grandchild.tag == "block":
+                        result.extend(grandchild.findall("topic"))
         return result
 
     @staticmethod
@@ -2024,6 +2302,7 @@ class CourseSpec:
         elements and may reference non-existent topic directories — they are
         never built, so their contents are not validated here.
         """
+        CourseSpec._check_block_placement(root)
         sections = []
         for i, section_elem in enumerate(root.findall("sections/section"), start=1):
             name = parse_multilang(root, f"sections/section[{i}]/name")
@@ -2107,6 +2386,9 @@ class CourseSpec:
                     http_replay=section_http_replay,
                     subsections=subsections,
                     optional=section_optional,
+                    agenda=CourseSpec._parse_agenda_element(
+                        section_elem, section_label=section_label
+                    ),
                 )
             )
         return sections
@@ -2890,6 +3172,7 @@ class CourseSpec:
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             sidecar_layout=sidecar_layout,
             kernel_python=element_text(root, "kernel-python").strip(),
+            agenda_targets=cls.parse_agenda_targets(root),
             author=author,
             organization=organization,
         )
@@ -2897,3 +3180,135 @@ class CourseSpec:
 
 def parse_multilang(root: ETree.Element, tag: str) -> Text:
     return parse_multilang_element(root.find(tag), context=f"<{tag}>")
+
+
+# ---------------------------------------------------------------------------
+# Known spec elements (issue #1163)
+# ---------------------------------------------------------------------------
+# The element vocabulary the parser actually reads, as ``parent tag -> child
+# tags``. ``clm validate`` warns about every element outside it
+# (``unknown_element``): the parser skips an unknown element together with
+# everything inside it, so a typo such as ``<subsecton>`` would otherwise drop
+# its ``<topic>``s from the build without a word. Same-named elements share one
+# content model wherever they appear (every ``<name>`` holds ``<de>``/``<en>``),
+# so keying by the parent tag is enough. A tag missing from this map is a leaf:
+# any child element it has is unknown.
+#
+# KEEP IN SYNC with the parsers above: a new child element the parser reads
+# must be added here, or ``clm validate`` reports it as unknown.
+_MULTILANG_CHILDREN: frozenset[str] = frozenset({"de", "en"})
+SPEC_ELEMENT_CHILDREN: dict[str, frozenset[str]] = {
+    "course": frozenset(
+        {
+            "name",
+            "prog-lang",
+            "description",
+            "certificate",
+            "project-slug",
+            "github",
+            "sections",
+            "dir-groups",
+            "output-targets",
+            "release-channels",
+            "tasks",
+            "image-options",
+            "jupyterlite",
+            "sidecar-layout",
+            "kernel-python",
+            "author",
+            "organization",
+            "agenda-targets",
+        }
+    ),
+    "name": _MULTILANG_CHILDREN,
+    "description": _MULTILANG_CHILDREN,
+    "certificate": _MULTILANG_CHILDREN,
+    "organization": _MULTILANG_CHILDREN,
+    "subtitle": _MULTILANG_CHILDREN,
+    "outcome": _MULTILANG_CHILDREN,
+    "contents": _MULTILANG_CHILDREN,
+    "activity": _MULTILANG_CHILDREN,
+    "github": GitHubSpec._RECOGNIZED_CHILDREN,
+    "sections": frozenset({"section"}),
+    "section": frozenset({"name", "topics", "include", "agenda"}),
+    "agenda": frozenset({"subtitle", "outcome"}),
+    "topics": frozenset({"topic", "subsection"}),
+    "subsection": frozenset({"name", "topic", "block", "activity"}),
+    "block": frozenset({"name", "contents", "topic"}),
+    "topic": frozenset({"include", "dir-group"}),
+    "dir-groups": frozenset({"dir-group"}),
+    "dir-group": frozenset({"name", "path", "subdirs"}),
+    "subdirs": frozenset({"subdir"}),
+    "output-targets": frozenset({"output-target"}),
+    "output-target": frozenset(
+        {"path", "remote-path", "kinds", "formats", "languages", "jupyterlite"}
+    ),
+    "kinds": frozenset({"kind"}),
+    "formats": frozenset({"format"}),
+    "languages": frozenset({"language"}),
+    "image-options": frozenset({"format", "inline"}),
+    "jupyterlite": frozenset(
+        {"kernel", "wheels", "environment", "launcher", "app-archive", "branding"}
+    ),
+    "wheels": frozenset({"wheel"}),
+    "branding": frozenset({"theme", "logo", "site-name"}),
+    "release-channels": frozenset({"channel", "share-with", "evergreen", "remote-path"}),
+    "channel": frozenset({"share-with", "evergreen", "remote-path"}),
+    "tasks": frozenset({"task"}),
+    "task": frozenset({"step"}),
+}
+
+
+@frozen
+class UnknownElement:
+    """An element of a spec document that the parser does not read (issue #1163).
+
+    ``path`` is the slash-separated tag path from the root, with a 1-based
+    ``[n]`` index on a step whose tag repeats among its siblings (e.g.
+    ``course/sections/section[3]/topics/subsecton``). ``section`` is the
+    enclosing ``<section>``'s name (English, else German) when there is one.
+    """
+
+    tag: str
+    path: str
+    section: str | None = None
+
+
+def _element_section_name(section_elem: ETree.Element) -> str | None:
+    name_elem = section_elem.find("name")
+    if name_elem is None:
+        return None
+    en = (name_elem.findtext("en") or "").strip()
+    de = (name_elem.findtext("de") or "").strip()
+    plain = (name_elem.text or "").strip()
+    return en or de or plain or None
+
+
+def find_unknown_elements(root: ETree.Element) -> list[UnknownElement]:
+    """Return every element of *root* outside :data:`SPEC_ELEMENT_CHILDREN`.
+
+    Reports the outermost unknown element only — its descendants are skipped
+    by the parser along with it, so one finding covers them. Comments and
+    processing instructions are ignored.
+    """
+    found: list[UnknownElement] = []
+
+    def walk(elem: ETree.Element, path: str, section: str | None) -> None:
+        allowed = SPEC_ELEMENT_CHILDREN.get(str(elem.tag), frozenset())
+        children = [c for c in elem if isinstance(c.tag, str)]
+        counts: dict[str, int] = {}
+        for child in children:
+            counts[child.tag] = counts.get(child.tag, 0) + 1
+        seen: dict[str, int] = {}
+        for child in children:
+            seen[child.tag] = seen.get(child.tag, 0) + 1
+            step = child.tag if counts[child.tag] == 1 else f"{child.tag}[{seen[child.tag]}]"
+            child_path = f"{path}/{step}"
+            if child.tag not in allowed:
+                found.append(UnknownElement(tag=child.tag, path=child_path, section=section))
+                continue
+            child_section = _element_section_name(child) if child.tag == "section" else section
+            walk(child, child_path, child_section)
+
+    walk(root, str(root.tag), None)
+    return found

@@ -1,0 +1,69 @@
+<course>
+    <!-- Same course as subsection-spec.xml, with the topics wrapped in agenda
+         <block>s (issue #1163). Blocks are presentation/planning only, so this
+         spec must build, list and schedule exactly like subsection-spec.xml. -->
+    <name>
+        <de>Mein Kurs</de>
+        <en>My Course</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs über ein Thema</de>
+        <en>A course about a topic</en>
+    </description>
+    <certificate>
+        <de>...</de>
+        <en>...</en>
+    </certificate>
+    <agenda-targets unit-minutes="45" units-per-day="8" days-per-week="2" units-total="24"/>
+    <sections>
+        <section>
+            <name>
+                <de>Woche 1</de>
+                <en>Week 1</en>
+            </name>
+            <agenda>
+                <subtitle><de>Grundlagen</de><en>Foundations</en></subtitle>
+                <outcome><de>Erste Notebooks</de><en>First notebooks</en></outcome>
+            </agenda>
+            <topics>
+                <subsection weekday="mon">
+                    <block units="4" form="theory">
+                        <name><de>Einstieg</de><en>Getting started</en></name>
+                        <contents><de>Werkzeuge, Ablauf</de><en>Tools, workflow</en></contents>
+                        <topic>some_topic_from_test_1</topic>
+                    </block>
+                    <block units="4" form="practice" status="planned">
+                        <name><de>Übungen</de><en>Exercises</en></name>
+                        <topic>a_topic_from_test_2</topic>
+                    </block>
+                </subsection>
+                <subsection weekday="tue">
+                    <name><de>Dienstag — Recht</de><en>Tuesday — Law</en></name>
+                    <block units="6" form="theory-practice" status="adapt" pace="recap">
+                        <name><de>Recht</de><en>Law</en></name>
+                        <topic>punctuation_test</topic>
+                    </block>
+                    <block units="2" form="theory-practice" standalone="true">
+                        <name><de>Lernkontrolle</de><en>Learning check</en></name>
+                    </block>
+                </subsection>
+            </topics>
+        </section>
+        <section>
+            <name>
+                <de>Woche 2</de>
+                <en>Week 2</en>
+            </name>
+            <topics>
+                <topic>another_topic_from_test_1</topic>
+                <subsection weekday="wed">
+                    <block units="8" form="practice">
+                        <name>Projekt</name>
+                        <topic>simple_notebook</topic>
+                    </block>
+                </subsection>
+            </topics>
+        </section>
+    </sections>
+</course>
