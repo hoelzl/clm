@@ -44,6 +44,36 @@ a purely structural class:
 Exit codes: `0` nothing to harvest · `1` actionable items · `2` error
 (non-normalized bundle → run `clm slides normalize` first).
 
+### Suspect ASR segments
+
+The transcript is cleaned when it is read (fresh or cached, the cached raw
+ASR output is never rewritten): an exact repetition loop is collapsed to a
+single occurrence spanning the loop — three or more identical consecutive
+occurrences of a phrase of two or more words (one-word stutters such as
+"no, no, no" stay), or two of a phrase of eight or more words; comparison ignores
+case, whitespace and clause punctuation, never operators — and segments
+that look like hallucinations are **flagged, never removed**. Each item's
+`transcript.suspect_segments` lists its flagged segments (`start`, `end`,
+`text`, `flags`, plus `avg_logprob` / `no_speech_prob` /
+`compression_ratio` / `collapsed_repeats` when known); `unmatched_speech`
+entries carry the same fields; `summary.suspect_segments` counts them.
+
+| Flag | Meaning |
+|---|---|
+| `low_confidence` | `avg_logprob` below -1.0 |
+| `no_speech` | `no_speech_prob` above 0.6 — likely spoken over silence |
+| `high_compression` | `compression_ratio` above 2.4 — repetitive text |
+| `repeat_collapsed` | repeated copies were collapsed into this one |
+| `trailing_phrase` | a closing phrase at the very end of the recording ("Thank you.", "… link in the description", "Untertitel …") |
+
+Treat a flagged segment as unverified: keep it only if the slide or the
+surrounding speech corroborates it, else put it in `dropped`. A missing
+`suspect_segments` key means the flags are unknown (an alignment without
+the assignment trail). Transcripts cached by a CLM older than the one
+that introduced these flags carry no metrics, so only the
+`repeat_collapsed` / `trailing_phrase` flags appear for them;
+`--refresh-cache` re-runs ASR to record the metrics.
+
 ## task — the framed judgment
 
 A task document gives you: `instructions` (the curation rules), `inputs`

@@ -267,6 +267,7 @@ def sync(
     from clm.core.slide_text.slide_parser import parse_slides
     from clm.notebooks.slide_writer import write_narrative
     from clm.voiceover.aligner import align_transcript
+    from clm.voiceover.asr_cleanup import clean_transcript
     from clm.voiceover.autopilot import (
         MissingSlideIdError,
         display_notes_summary,
@@ -281,6 +282,7 @@ def sync(
         cached_timeline,
         cached_transcribe,
     )
+    from clm.voiceover.harvest import alignment_cache_config
     from clm.voiceover.keyframes import TransitionEvent, detect_transitions
     from clm.voiceover.matcher import match_events_to_slides
     from clm.voiceover.overrides import (
@@ -378,6 +380,9 @@ def sync(
                 )
                 if tx_hit:
                     console.print("  [dim]transcript: cache hit[/dim]")
+            # Same read-time ASR clean-up as `harvest report` (#1105); the
+            # two pipelines share alignment cache entries.
+            transcript = clean_transcript(transcript)
             console.print(
                 f"  {len(transcript.segments)} segments, "
                 f"{transcript.duration:.0f}s, language={transcript.language}"
@@ -447,7 +452,7 @@ def sync(
 
         # Align transcript to slides
         console.print("[bold]Aligning transcript to slides...[/bold]")
-        alignment_cfg = {"lang": lang, "multi_part": multi_part}
+        alignment_cfg = alignment_cache_config(lang, multi_part=multi_part)
 
         def _run_align():
             return align_transcript(merged_transcript, timeline)
@@ -583,7 +588,9 @@ def transcribe(ctx, video, lang, whisper_model, backend_name, device, output):
     data = {
         "language": transcript.language,
         "duration": transcript.duration,
-        "segments": [{"start": s.start, "end": s.end, "text": s.text} for s in transcript.segments],
+        # to_dict keeps the faster-whisper quality metrics (#1105), so the
+        # file can be fed back with --transcript without losing them.
+        "segments": [s.to_dict() for s in transcript.segments],
     }
 
     if output:

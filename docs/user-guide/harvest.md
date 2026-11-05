@@ -89,6 +89,15 @@ clm harvest accept slides_intro.de.py --answer answer.json --record
 clm harvest verify slides_intro.de.py --json
 ```
 
+The transcript is cleaned when it is read: Whisper repetition loops (the
+same sentence three or more times in a row) are collapsed to one
+occurrence, and segments that look like hallucinations — low confidence,
+likely spoken over silence, repetitive, or a closing phrase such as "Thank
+you." at the very end of the video — are flagged in each item's
+`transcript.suspect_segments` for the agent to judge. Nothing is removed on
+the strength of a flag alone. `clm info harvest-agents` lists the flags and
+thresholds.
+
 Bare `clm harvest DECK VIDEO...` runs the read-only default verb `report`,
 so a dry look at a recording is a single command. For the full agent-facing
 workflow reference (task/answer schemas, judgment rules, ledger semantics),
@@ -254,7 +263,11 @@ MCP's `harvest_backfill_dry` is also removed: its dry run still invoked models.
 ### faster-whisper (default, recommended)
 
 Uses CTranslate2-based Whisper models. Best quality with `large-v3`, fast on
-CUDA. Produces timestamped segments for accurate per-slide alignment.
+CUDA. Produces timestamped segments for accurate per-slide alignment, with
+voice-activity detection (`vad_filter`) enabled. Its per-segment quality
+metrics (`avg_logprob`, `no_speech_prob`, `compression_ratio`) feed the
+suspect-segment flags; the other backends report none, so only the
+repetition and trailing-phrase flags apply to them.
 
 ```bash
 pip install "coding-academy-lecture-manager[voiceover]"

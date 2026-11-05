@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from clm.voiceover.keyframes import TransitionEvent
@@ -131,11 +131,13 @@ def offset_transcript(transcript: Transcript, part: VideoPart) -> Transcript:
     Returns:
         New Transcript with offset timestamps.
     """
+    # replace(), not a fresh segment: the quality metrics and suspect flags
+    # (#1105) must survive the offset.
     offset_segments = [
-        TranscriptSegment(
+        replace(
+            seg,
             start=seg.start + part.offset,
             end=seg.end + part.offset,
-            text=seg.text,
             source_part_index=part.index,
         )
         for seg in transcript.segments

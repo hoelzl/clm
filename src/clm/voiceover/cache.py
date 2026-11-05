@@ -171,6 +171,11 @@ class TranscribeConfig:
     Device is collapsed to a coarse class ("cuda"/"cpu") rather than the
     exact device string because "auto" and "cuda:0" should share cache
     entries on the same machine.
+
+    The read-time ASR clean-up (:mod:`clm.voiceover.asr_cleanup`, #1105) is
+    deliberately *not* part of this key: the cache stores the raw ASR output
+    and every reader cleans it, so changing the clean-up never re-runs ASR.
+    Its version is part of the *alignment* cache config instead.
     """
 
     backend: str
@@ -629,11 +634,14 @@ def _decode_timeline(data: list[dict]):
 
 
 def _encode_segment(segment) -> dict:
+    # The quality fields (#1105) are appended only when set, so the encoding
+    # — and the alignment fingerprint over it — of a plain segment is unchanged.
     return {
         "start": segment.start,
         "end": segment.end,
         "text": segment.text,
         "source_part_index": segment.source_part_index,
+        **segment.quality_dict(),
     }
 
 
@@ -666,12 +674,7 @@ def encode_alignment(alignment) -> dict:
 def _decode_segment(s: dict):
     from clm.voiceover.transcribe import TranscriptSegment
 
-    return TranscriptSegment(
-        start=s["start"],
-        end=s["end"],
-        text=s["text"],
-        source_part_index=s.get("source_part_index", 0),
-    )
+    return TranscriptSegment.from_dict(s)
 
 
 def decode_alignment(data: dict) -> AlignmentResult:

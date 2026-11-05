@@ -115,7 +115,7 @@ def build_align_report(
     Read-only. Exit-code semantics (CLI-side): 0 no uncertain items,
     1 items framed, 2 error.
     """
-    from clm.voiceover.harvest import video_fingerprint
+    from clm.voiceover.harvest import segment_payload, video_fingerprint
 
     alignment: AlignmentResult = artifacts.alignment
     titles = _slide_titles(slide_groups)
@@ -129,12 +129,7 @@ def build_align_report(
                 {
                     "kind": "unassigned_segment",
                     "segment_index": i,
-                    "segment": {
-                        "start": a.segment.start,
-                        "end": a.segment.end,
-                        "text": a.segment.text,
-                        "source_part_index": a.segment.source_part_index,
-                    },
+                    "segment": segment_payload(a.segment),
                     "reason": a.reason,
                 }
             )
@@ -145,12 +140,7 @@ def build_align_report(
             {
                 "kind": "segment_assignment",
                 "segment_index": i,
-                "segment": {
-                    "start": a.segment.start,
-                    "end": a.segment.end,
-                    "text": a.segment.text,
-                    "source_part_index": a.segment.source_part_index,
-                },
+                "segment": segment_payload(a.segment),
                 "assigned_slide": a.slide_index,
                 "assigned_title": titles.get(a.slide_index),
                 "reason": a.reason,
@@ -172,12 +162,7 @@ def build_align_report(
                 {
                     "kind": "unassigned_segment",
                     "segment_index": None,
-                    "segment": {
-                        "start": seg.start,
-                        "end": seg.end,
-                        "text": seg.text,
-                        "source_part_index": seg.source_part_index,
-                    },
+                    "segment": segment_payload(seg),
                     "reason": None,
                 }
             )

@@ -1065,6 +1065,11 @@ def _print_human_report(report: dict) -> None:
             click.echo(f"  {cls}: {count}")
     if summary["unmatched_speech"]:
         click.echo(f"  unmatched_speech: {summary['unmatched_speech']} segment(s)")
+    if summary.get("suspect_segments"):
+        click.echo(
+            f"  suspect_segments: {summary['suspect_segments']} "
+            "(possible ASR hallucinations/loops — see the flags in --json)"
+        )
     for item in report["items"]:
         if item["class"] in ("covered", "unmatched_slide"):
             continue
