@@ -115,6 +115,90 @@ class TestSplitTopLevelSpans:
         assert items == ["void f() {}", "int g() { return 1; }"]
 
 
+class TestBraceMemberInitializers:
+    """Regression tests for #1145: a brace mem-initializer is not the ctor body.
+
+    The ``}`` closing ``a_{x}`` returns to depth 0, and the ``{`` after it is
+    the constructor's body, so the splitter must not end the item there. The
+    neighbours pin the other side: everything else followed by a block splits.
+    """
+
+    @pytest.mark.parametrize(
+        "ctor",
+        [
+            "T::T(int x) : a_{x} { }",
+            "T::T(int x) : a_{x} { a_ += 1; }",
+            "T::T(int x, int y) : a_{x}, b_{y} { }",
+            "T::T(int x, int y) : a_(x), b_{y} { }",
+            "T::T(int x, int y) : a_{x}, b_(y) { }",
+            "T::T(int x) noexcept : a_{x} { }",
+            "T::T(int x) noexcept(true) : a_{x} { }",
+            "T::T(int x) : T{x, 0} { }",
+            "T::T(int x)\n    : a_{x},\n      b_{x}\n{\n    a_ += b_;\n}",
+            "D::D(int x) : Base<int>{x} { }",
+            "D::D(int x) : ns::Base{x} { }",
+            "T::T(int x) : a_{f({1, 2})} { }",
+            "T::T(std::vector<int> v = {1}) : v_{v} { }",
+            "T::T(int x = c ? 1 : 2) : a_{x} { }",
+            "template <typename U> Box<U>::Box(U v) : v_{v} { }",
+            "template <typename U = ns::Default> Box<U>::Box(U v) : v_{v} { }",
+            "template <typename U> Box<U>::Box(U v) requires Small<U> : v_{v} { }",
+            "T::T(int x) try : a_{x} { } catch (...) { }",
+        ],
+    )
+    def test_constructor_stays_one_item(self, ctor):
+        assert split_top_level(ctor) == [ctor]
+
+    def test_constructor_classifies_as_member_function_definition(self):
+        [item] = classify_source("Team::Team(std::string n, std::string c) : n_{n}, c_{c} { }")
+        assert item.category == "member_fn_def"
+        assert item.name == "Team::Team"
+        assert item.signature == "Team::Team(std::string,std::string)"
+
+    @pytest.mark.parametrize(
+        "ctor",
+        [
+            "T::T(int x) : a_{x} /* then { the body */ { }",
+            "T::T(int x) : a_{x} // the body follows\n{ }",
+        ],
+    )
+    def test_comment_before_the_body_keeps_the_original_intact(self, ctor):
+        [item] = classify_source_spans(ctor)
+        assert item.category == "member_fn_def"
+        assert item.original == ctor
+
+    @pytest.mark.parametrize(
+        "first, second",
+        [
+            ("void f() { }", "{ int y; }"),
+            ("T::T() { }", "{ int y; }"),
+            ("T::T(int x) : a_{x} { }", "{ int y; }"),
+            ("T::T(int x) : a_(x) { }", "{ int y; }"),
+            ("T::T(int x) : a_{x}, b_{x} { }", "{ int y; }"),
+            ("T::T(int x) noexcept : a_{x} { a_ += 1; }", "{ int y; }"),
+            ("T::T(int x) : a_{x} { }", "void f() { }"),
+            ("T::T(int x) : a_{x} { }", "U::U(int x) : b_{x} { }"),
+            ("int a{1};", "{ int y; }"),
+            ("int a{1}", "{ int y; }"),
+            ("std::map<int, int>::iterator it{}", "{ int y; }"),
+            ("struct S { int a; };", "{ int y; }"),
+            ("struct D : B { };", "{ int y; }"),
+            ("enum class E : int { A };", "{ int y; }"),
+            ("if (c) { }", "{ int y; }"),
+            ("for (int v : vs) { }", "{ int y; }"),
+            ("switch (x) { case 1: { } }", "{ int y; }"),
+            ("c ? f() : T{1}", "{ int y; }"),
+            ("{ int x; }", "{ int y; }"),
+        ],
+    )
+    def test_item_followed_by_a_block_still_splits(self, first, second):
+        assert split_top_level(f"{first}\n{second}") == [first, second]
+
+    def test_aggregate_and_ternary_brace_initializers_stay_whole(self):
+        for src in ("int a{1};", "auto t = c ? T{1} : T{2};", "T t = T{1};"):
+            assert split_top_level(src) == [src]
+
+
 # ---------------------------------------------------------------------------
 # classify_source_spans
 # ---------------------------------------------------------------------------
@@ -1298,6 +1382,31 @@ class TestParenInitialization:
 
 
 class TestEmitClassifierRegressions:
+    def test_brace_initialized_constructor_stays_at_namespace_scope(self):
+        # #1145: the `{ }` used to land in the slide function, leaving the
+        # constructor without a body.
+        ctor = "Team::Team(std::string name) : name_{name} { }"
+        tu = emit(
+            code("#include <string>"),
+            code("class Team {\npublic:\n    Team(std::string name);\n    std::string name_;\n};"),
+            slide("Ctor", "ctor"),
+            code(ctor),
+            code('Team{"a"};'),
+        )
+        assert f"\n{ctor}\n" in tu
+        assert "{ }" not in _function_body(tu, "slide_ctor")
+
+    def test_nonempty_constructor_body_is_not_moved_into_the_slide(self):
+        # #1145: the same split moved real statements out of the constructor.
+        tu = emit(
+            code("struct C {\n    C(int x);\n    int a_;\n};"),
+            slide("Ctor", "ctor"),
+            code("C::C(int x) : a_{x} {\n    a_ += 1;\n}"),
+            code("C{1};"),
+        )
+        assert "a_ += 1" in tu
+        assert "a_ += 1" not in _function_body(tu, "slide_ctor")
+
     def test_mixed_declaration_and_statement_cell_stays_in_the_body(self):
         tu = emit(code("void h(int, long) {}"), code(_MIXED_DECL_STMT_CELL))
         assert "    long arg2{2'000'000'000};\n    h(1, arg2);" in _function_body(tu, "slide_01")
@@ -1835,5 +1944,41 @@ class TestEmittedCodeCompiles:
             code("std::integral auto answer = twice(21);"),
             code("twice(21)"),
             code("answer"),
+        )
+        self._check(tu, tmp_path)
+
+    def test_brace_initialized_constructors_compile(self, tmp_path):
+        # #1145: every form used to fail with "expected '{' before 'void'".
+        tu = emit(
+            code("#include <string>"),
+            code(
+                "class Team {\n"
+                "public:\n"
+                "    Team(std::string name, std::string coach);\n"
+                "    explicit Team(std::string name);\n"
+                "    explicit Team(int size) noexcept;\n"
+                "    Team(int size, int wins);\n"
+                "    std::string name_;\n"
+                "    std::string coach_;\n"
+                "    int size_{0};\n"
+                "    int wins_{0};\n"
+                "};"
+            ),
+            slide("Constructors", "constructors"),
+            code(
+                "Team::Team(std::string name, std::string coach) : name_{name}, coach_{coach} { }"
+            ),
+            code('Team::Team(std::string name) : Team{name, "-"} { }'),
+            code("Team::Team(int size) noexcept : size_{size} { }"),
+            code(
+                "Team::Team(int size, int wins)\n"
+                "    : size_(size),\n"
+                "      wins_{wins}\n"
+                "{\n"
+                "    wins_ += 1;\n"
+                "}"
+            ),
+            code('Team team{"a", "b"};'),
+            code("team.name_"),
         )
         self._check(tu, tmp_path)
