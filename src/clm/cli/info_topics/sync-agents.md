@@ -322,8 +322,8 @@ half's placement — the engine moves the *other* half's cell next to it,
 bytes untouched — or mint a `slide_id` on the cell and re-report. Like the
 cross-group placement answer, landing it banks nothing: the slot re-derives
 from the settled placement on the next report. While it is framed, the
-pool's ledger entries are frozen and any mechanical pool `mirror_order` in
-the same pass defers (one order authority per pass), #906),
+pool's ledger entries are frozen and any mechanical `mirror_order` in the
+same slide group defers (one order authority per group), #906),
 `fork_pending_twin` (a shared cell is becoming a localized pair: one side
 carries a `lang=` attribute and its twin does not — answer `mark_twin` and the
 engine writes the twin's attribute; see "Forking a shared cell" below), and
@@ -500,15 +500,19 @@ not order-blind:
   after your first fully-clean apply, later one-sided moves frame as
   directed mechanical mirrors instead of decisions. (A full `sync record`
   seeds order trust wholesale, as before.)
-- **One order authority per pass** (CLM {version}, #885): while an
-  `order_decision` is framed in a pass — answered or not — the pass's
-  mechanical `mirror_order` rows **defer** (status `deferred`, reason
-  naming the framed handle) instead of co-executing: the mirrors were
-  derived from the contested pre-answer bracketing, and running them
-  beside an order answer once rewrote the very side the answer said to
-  preserve. Deferred mirrors re-derive from the settled order on the next
-  report — answer the order question, re-report, and they execute or
-  vanish. The same rule turns a `translate_new` anchor mint that the
+- **One order authority per slide group** (CLM {version}, #885, #1137):
+  while an order question (`order_decision`, `pool_placement_divergence`) is
+  framed in a slide group — answered or not — that group's mechanical
+  `mirror_order` rows **defer** (status `deferred`, reason naming the framed
+  handle) instead of co-executing: the mirrors were derived from the contested
+  pre-answer bracketing, and running them beside an order answer once rewrote
+  the very side the answer said to preserve. Deferred mirrors re-derive from
+  the settled order on the next report — answer the order question,
+  re-report, and they execute or vanish. A question in another group does not
+  hold a mirror back. The rule stays **deck-wide** for any pass with an order
+  row that can reach another group (a `~groups` row, a companion scope, an `id:` cross-group
+  move, `mirror_pool_move`) or a group with a cell outside its own anchor's
+  bracket. The same rule turns a `translate_new` anchor mint that the
   order-parity write guard refuses into a **deferral naming the open
   order question** (its `body` answer is consumed; re-answer it after
   the order settles — the deferral's reason says so). Check the apply
@@ -632,7 +636,11 @@ structural verify failed on this member's slide — see verify_violations)`,
 and are listed in `verify_withheld`; every other landed member records in
 the same pass. One that names no slide (`unify` from a shared cell you have
 not reconciled yet, `order-parity` while an order question is open)
-withholds every recording, as before. A landed row on
+withholds every recording, as before, with one exception (CLM {version},
+#1137): when the only such finding is an `order-parity` divergence accounted
+for by the mirrors this pass deferred under the one-authority rule, a `body`
+you answered on an id'd cell still records, so it does not come back as
+`verify_cold`. Everything else stays withheld. A landed row on
 a member that still carries an unresolved sibling item (pending, rejected,
 failed — or an answered `conflict_tags`, which re-frames by design) keeps its
 file mutation, but its ledger recording is **deferred**: the entry stays at

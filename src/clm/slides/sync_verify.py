@@ -146,6 +146,10 @@ class VerifyViolation:
     # #992 recording gate; ``sync apply`` uses it to try withholding just
     # those slides' changes before it withholds the whole pass.
     slide_groups: tuple[str, ...] = ()
+    # The two id sequences an ``order-parity`` finding compared, DE then EN
+    # (#1137). ``sync apply`` reads them to ask whether a divergence is the
+    # order row it deferred this pass, rather than parsing the message.
+    order_ids: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
 
 @dataclass
@@ -306,6 +310,10 @@ def order_parity_violations(
                 f"has '{en_sid}' — reorder one half so the twins mirror "
                 f"(DE: {[sid for sid, _ in de_common]}, "
                 f"EN: {[sid for sid, _ in en_common]})"
+            ),
+            order_ids=(
+                tuple(sid for sid, _ in de_common),
+                tuple(sid for sid, _ in en_common),
             ),
         )
     ]

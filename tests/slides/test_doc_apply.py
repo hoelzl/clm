@@ -4481,6 +4481,7 @@ class TestOneOrderAuthorityPerPass:
             _slide("g1", "de", "Eins"),
             _localized("g1-a", "de", "A DE"),
             _localized("g1-b", "de", "B DE"),
+            _slide("g0", "de", "Null"),
             _slide("g2", "de", "Zwei"),
             _shared_code("x"),
             _shared_code("y", 2),
@@ -4492,6 +4493,7 @@ class TestOneOrderAuthorityPerPass:
             .replace("A DE", "A EN")
             .replace("B DE", "B EN")
             .replace("Eins", "One")
+            .replace("Null", "Nil")
             .replace("Zwei", "Two")
         )
         deck = _Deck(tmp_path, de, en)
@@ -4504,16 +4506,22 @@ class TestOneOrderAuthorityPerPass:
             for k, lm in dl.members.items()
             if k.startswith("pos:g2/")
         }
-        # Divergent g1-member order on both halves frames an (unrelated)
-        # order question; DE swaps y/z in g2's pool (a pool mirror_order
-        # that must defer) and edits x's tags (a mirror_tags that lands).
-        deck.edit_de(
-            _localized("g1-a", "de", "A DE") + _localized("g1-b", "de", "B DE"),
-            _localized("g1-b", "de", "B DE") + _localized("g1-a", "de", "A DE"),
+        # A divergent group order with no recorded trust frames an order
+        # question that spans the deck (#1137: one confined to another group
+        # would not hold this mirror back); DE swaps y/z in g2's pool (a pool
+        # mirror_order that must defer) and edits x's tags (a mirror_tags that
+        # lands).
+        g1_block = (
+            _slide("g1", "de", "Eins")
+            + _localized("g1-a", "de", "A DE")
+            + _localized("g1-b", "de", "B DE")
         )
-        dl.member_order = {
-            k: v for k, v in dl.member_order.items() if not (k[1] == "g1" and k[2] == "deck")
-        }
+        deck.edit_de(
+            g1_block + _slide("g0", "de", "Null"),
+            _slide("g0", "de", "Null") + g1_block,
+        )
+        dl.group_order = []
+        dl.group_order_by_side = {}
         doc_ledger.save(ledger, ledger_path)
         deck.edit_de(
             '# %% tags=["keep"]\ny = 2\n\n# %% tags=["keep"]\nz = 3',

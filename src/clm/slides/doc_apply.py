@@ -48,7 +48,7 @@ import json
 import logging
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -2714,6 +2714,123 @@ class _Pass:
     deferred_pool_scopes: set[tuple[str, str]]
     #: Each diff item's status this pass, by its index in ``diff.items``.
     status: dict[int, str]
+    #: The ``mirror_order`` rows the one-order-authority rule deferred (#1137).
+    authority_deferred: list[DiffItem]
+
+
+#: The rows that can change where a cell sits relative to its neighbours
+#: without changing what it says.
+_ORDER_ROWS = frozenset(
+    {"mirror_order", "mirror_pool_move", "order_decision", "pool_placement_divergence"}
+)
+#: The framed ones: a question whose answer is still an open order authority.
+_ORDER_QUESTIONS = frozenset({"order_decision", "pool_placement_divergence"})
+
+
+def _order_row_group(item: DiffItem) -> str | None:
+    """The one slide group an order row can touch, by what its handle names.
+
+    ``None`` for a row that can touch more: a group-order row (it moves whole
+    groups), an ``id:`` row (a member moving across groups), a
+    ``mirror_pool_move`` (#1142, which also runs after the rest of its phase),
+    or a companion scope (a companion stream has no group brackets to stay in).
+    """
+    if item.action == "mirror_pool_move":
+        return None
+    parts = _pos_key_parts(item.key)
+    if parts is None or parts[0] == "~groups":
+        return None
+    if parts[1] == "order." and parts[2] != "deck":
+        return None
+    return parts[0]
+
+
+def _groups_outside_their_bracket(ex: _Executor) -> set[str]:
+    """Groups whose deck cells do not all sit under their own anchor on both
+    halves, and the groups those cells sit in.
+
+    A row's handle names the group that OWNS its cells. Where a cell sits under
+    another anchor on a half (a member mid-move, a group whose anchor is on one
+    half only), permuting that group's cells reaches into the other bracket. A
+    positional cell in a companion file counts as outside: a pool row or a
+    placement may act on it, and a companion stream has no brackets, so
+    nothing keeps a placement inside its group there.
+    """
+    anchors = {id(g.anchor): g.anchor_id for g in ex.deck.groups if g.anchor is not None}
+    sits_in: dict[tuple[Lang, int], str | None] = {}
+    for lang in _SIDES:
+        current: str | None = None
+        for member in ex.streams.get((lang, "deck"), []):
+            current = anchors.get(id(member), current)
+            sits_in[(lang, id(member))] = current
+    outside: set[str] = set()
+    for group in ex.deck.groups:
+        if group.anchor is not None and any(
+            (cell := group.anchor.side(lang)) is None or cell.part != "deck" for lang in _SIDES
+        ):
+            outside.add(group.anchor_id)
+    for member, owner_group in iter_with_groups(ex.deck):
+        token = member_group_token(member, owner_group)
+        for lang in _SIDES:
+            cell = member.side(lang)
+            if cell is None:
+                continue
+            if cell.part != "deck":
+                if member.key.scheme == "pos":
+                    outside.add(token)
+                continue
+            where = sits_in.get((lang, id(member)))
+            if where != token:
+                outside.add(token)
+                if where is not None:
+                    outside.add(where)
+    return outside
+
+
+@define
+class _OrderAuthorities:
+    """Which open order questions a mechanical ``mirror_order`` must wait for.
+
+    #885: while an order question is framed (answered or not), a mirror on the
+    cells it concerns may not co-execute. The mirror was derived from the
+    contested pre-answer order, so one pass would write two contradictory
+    order authorities; it defers and re-derives on the next report. A framed
+    pool placement (#906) is the same kind of authority: its answer moves a
+    cell across a sibling.
+
+    Both effects are confined to one slide group when the rows are single-group
+    (#1137): a scope or pool mirror permutes that group's cells among their own
+    slots, and a placement lands inside its source cell's group (#1142). Rows
+    on two different groups then commute, so only a question in the mirror's
+    own group holds it back. Any order row of the pass that can reach another
+    group, and any group with a cell outside its own bracket, keeps the rule
+    deck-wide: that pass behaves exactly as it did under #885 / #906.
+    """
+
+    handles: list[str]
+    by_group: dict[str, list[str]]
+    deck_wide: bool
+
+    @classmethod
+    def of(cls, items: list[DiffItem], ex: _Executor) -> _OrderAuthorities:
+        handles = [i.key for i in items if i.action in _ORDER_QUESTIONS]
+        by_group: dict[str, list[str]] = {}
+        if not handles:
+            return cls(handles, by_group, False)
+        groups = [_order_row_group(i) for i in items if i.action in _ORDER_ROWS]
+        outside = _groups_outside_their_bracket(ex)
+        deck_wide = any(group is None or group in outside for group in groups)
+        for item in items:
+            group = _order_row_group(item)
+            if item.action in _ORDER_QUESTIONS and group is not None:
+                by_group.setdefault(group, []).append(item.key)
+        return cls(handles, by_group, deck_wide)
+
+    def blocking(self, item: DiffItem) -> list[str]:
+        """The open handles that hold ``item`` back this pass."""
+        if self.deck_wide:
+            return self.handles
+        return self.by_group.get(_order_row_group(item) or "", [])
 
 
 def _execute_pass(
@@ -2752,23 +2869,12 @@ def _execute_pass(
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
     unresolved_items: list[DiffItem] = []  # pending / rejected / failed / held
     status: dict[int, str] = {}
-    # #885 "one order authority per pass": while an `order_decision` is
-    # framed — answered or not — no mechanical `mirror_order` may co-execute.
-    # The field failure: an answered scope decision ("adopt DE's order")
-    # executed alongside member-keyed mirrors derived from the contested
-    # pre-answer bracketing, so one pass wrote two contradictory order
-    # authorities — the mirrors moved a slide-start cell across its own body
-    # cells on the side the answer designated as the one to PRESERVE. The
-    # mirrors defer per item (the #824 keep-defer shape, P7-clean) and
-    # re-derive from the post-answer state on the next report; a genuinely
-    # trust-backed mirror in an uncontested pass is untouched.
-    # A framed pool placement (#906) is an order authority of the same
-    # kind: its answer moves a cell across a sibling, and a co-executing
-    # pool `mirror_order` would permute the same pool's occupants from the
-    # pre-answer marriages.
-    open_order_handles = [
-        i.key for i in diff.items if i.action in ("order_decision", "pool_placement_divergence")
-    ]
+    # One order authority per slide group (#885, #906, #1137): see
+    # :class:`_OrderAuthorities`. Mirrors defer per item (the #824 keep-defer
+    # shape, P7-clean).
+    authorities = _OrderAuthorities.of(diff.items, ex)
+    open_order_handles = authorities.handles
+    authority_deferred: list[DiffItem] = []
     #: (group, kind) pools whose mirror_order deferred — they must join the
     #: recording freeze (the pool-handle key contributes nothing to
     #: _frozen_pools and the row carries no member, #885 review I1).
@@ -2848,14 +2954,17 @@ def _execute_pass(
                 status[index] = "recorded"
                 outcome.results.append(ItemResult(item.key, item.action, "recorded", item.detail))
             elif item.action in MECHANICAL_ACTIONS:
-                if item.action == "mirror_order" and open_order_handles:
-                    named_order_handles = ", ".join(open_order_handles[:3])
+                blockers = authorities.blocking(item) if item.action == "mirror_order" else []
+                if blockers:
+                    named_order_handles = ", ".join(blockers[:3])
+                    authority_deferred.append(item)
                     _defer(
                         index,
                         item,
                         f"an order question is framed this pass "
                         f"({named_order_handles}) — one order authority "
-                        f"per pass: answer it, re-report, and this mirror "
+                        f"per {'pass' if authorities.deck_wide else 'slide group'}: "
+                        f"answer it, re-report, and this mirror "
                         f"re-derives from the settled order",
                     )
                     continue
@@ -2948,6 +3057,7 @@ def _execute_pass(
         unresolved_items=unresolved_items,
         deferred_pool_scopes=deferred_pool_scopes,
         status=status,
+        authority_deferred=authority_deferred,
     )
 
 
@@ -3045,6 +3155,93 @@ def _unexplained(
 
 def _describe(violation: StructuralViolation) -> str:
     return f"[{violation.kind}] {violation.message}"
+
+
+def _deferred_order_explains(
+    violations: Sequence[StructuralViolation],
+    deferred: list[DiffItem],
+    items: list[DiffItem],
+    members_with_group: list[tuple[str, Member]],
+) -> bool:
+    """Whether the pair's only deck-wide findings are the order rows this pass
+    deferred under the one-authority rule (#1137).
+
+    Every deck-wide finding must be ``order-parity``, and the halves must agree
+    once the cells those rows would move are left out. A pool row moves no id'd
+    cell. A ``~groups`` row in the pass rules the verdict out: it moves whole
+    groups, which no set of cells describes, and leaving out one group's cells
+    would hide that divergence.
+    """
+    deck_wide = [v for v in violations if v.slide_id is None]
+    if not deck_wide or not deferred:
+        return False
+    if any(i.action in _ORDER_ROWS and i.key.startswith("pos:~groups/") for i in items):
+        return False
+    moved: set[str] = set()
+    for item in deferred:
+        parts = _pos_key_parts(item.key)
+        if parts is None:
+            moved.add(strip_preserve_marker(item.key.removeprefix("id:")))
+        elif parts[1] == "order." and parts[0] != "~groups":
+            moved |= {
+                strip_preserve_marker(member.key.value)
+                for token, member in members_with_group
+                if token == parts[0] and member.key.scheme == "id"
+            }
+    for violation in deck_wide:
+        evidence = getattr(violation, "order_ids", None)
+        if violation.kind != "order-parity" or evidence is None:
+            return False
+        de, en = (
+            [sid for sid in map(strip_preserve_marker, side) if sid not in moved]
+            for side in evidence
+        )
+        if de != en:
+            return False
+    return True
+
+
+def _exempt_bodies(
+    rows: list[Decision],
+    landed: list[tuple[DiffItem, str]],
+    unresolved_keys: set[str],
+    blocked: Callable[[DiffItem], bool],
+    target: DeckLedger,
+    fresh: DeckLedger,
+) -> set[str]:
+    """The ``id:`` handles a deferred order row must not keep out of the ledger.
+
+    A handle qualifies only if a ``body`` answer is the only thing that landed
+    on it: recording a member banks its whole snapshot, so a mechanical row or
+    a ``choice`` beside the body (``mirror_tags``, say) would be banked with it
+    while reporting itself withheld. And its owner must be recorded, or this
+    pass records beside it: the save would prune the reference and nothing
+    re-frames it (#718).
+    """
+    body = {r.key for r in rows if r.body is not None} - {
+        r.key for r in rows if r.choice is not None
+    }
+    eligible = {
+        item.key
+        for item, provenance in landed
+        if provenance == "agent"
+        and item.key in body
+        and item.key.startswith("id:")
+        and item.key not in unresolved_keys
+        and not blocked(item)
+    } - {item.key for item, provenance in landed if provenance != "agent"}
+    while True:
+        orphaned = {
+            key
+            for key in eligible
+            if (lm := fresh.members.get(key)) is not None
+            and lm.entry.owner is not None
+            and lm.entry.owner not in target.members
+            and lm.entry.owner not in eligible
+        }
+        if not orphaned:
+            return eligible
+        eligible -= orphaned
 
 
 def _withhold_verdict(
@@ -3388,7 +3585,6 @@ def apply_deck(
     # neither parse knows) withholds everything, exactly as the pre-#992
     # whole-deck refusal did — never a silent no-op gate.
     gate_blocks_all = bool(gate_unresolved) or any(v.slide_id is None for v in written_violations)
-
     # Ledger updates for landed items — renames/migrations first, then the rest.
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
     target = ledger.decks.setdefault(deck_key, DeckLedger())
@@ -3455,6 +3651,27 @@ def apply_deck(
                 )
                 break
 
+    # #1137: the divergence that blocks everything is the order row the engine
+    # itself held back, and the row re-derives next pass. A body the agent just
+    # answered on an id'd cell is not part of that question: its fingerprints
+    # say nothing about order (the recorded order stays the row's to change),
+    # and re-asking would have the agent confirm its own text. Only those
+    # rows: everything else stays out of the ledger as #992 keeps it.
+    exempt_bodies = (
+        _exempt_bodies(
+            rows,
+            landed,
+            unresolved_keys,
+            lambda item: _item_group(item, member_groups) in gate_blocked_groups,
+            target,
+            fresh,
+        )
+        if not gate_unresolved
+        and _deferred_order_explains(
+            written_violations, current.authority_deferred, diff.items, members_with_group
+        )
+        else set()
+    )
     withheld_keys: set[str] = set(outcome.verify_withheld)
     recorded_any = False
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
@@ -3465,7 +3682,9 @@ def apply_deck(
                 item, " (recording deferred: unresolved sibling item on this member)"
             )
             continue
-        if gate_blocks_all or _item_group(item, member_groups) in gate_blocked_groups:
+        if (gate_blocks_all and item.key not in exempt_bodies) or _item_group(
+            item, member_groups
+        ) in gate_blocked_groups:
             # The structural verify refused this member's slide (or the whole
             # pair): the file mutation stays for review, the ledger keeps the
             # old baseline, and the member re-frames on the next report.
@@ -3561,6 +3780,10 @@ def _no_progress(
     slides was written or recorded), so the same answers repeat this pass.
     """
     if not outcome.verify_withheld:
+        return None
+    # An unanswered order question is the likely cause of a deck-wide finding,
+    # and answering it changes the next pass: this is not a stall (#1137).
+    if any(r.status == "pending" and r.action in _ORDER_QUESTIONS for r in outcome.results):
         return None
     unwritten_keys = {r.key for r in outcome.results if r.reason.startswith("withheld:")}
     by_slide: dict[str, tuple[list[str], list[str]]] = {}
