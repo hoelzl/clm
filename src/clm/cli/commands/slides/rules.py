@@ -14,7 +14,10 @@ from clm.slides.authoring_rules import get_authoring_rules
 @click.option(
     "--course-spec",
     default=None,
-    help="Course spec path or slug (e.g. 'machine-learning-azav').",
+    help=(
+        "Course spec path or slug (e.g. 'machine-learning-azav'). A path to a spec "
+        "outside course-specs/ uses the .authoring.md next to it."
+    ),
 )
 @click.option(
     "--slide-path",
@@ -38,7 +41,10 @@ def authoring_rules_cmd(
     """Look up merged authoring rules for a course or slide file.
 
     Reads _common.authoring.md and per-course .authoring.md files from
-    the course-specs/ directory and returns the merged result.
+    the course-specs/ directory and returns the merged result. When
+    --course-spec is a path to a spec outside course-specs/ (e.g.
+    course-specs.planning/foo.xml), foo.authoring.md next to it is used
+    first. --slide-path only considers specs in course-specs/.
 
     At least one of --course-spec or --slide-path must be provided.
 
@@ -53,6 +59,13 @@ def authoring_rules_cmd(
 
     if data_dir is None:
         data_dir = Path.cwd()
+
+    # A spec path the user typed is relative to the cwd; pin it so the
+    # library can find a companion .authoring.md next to a spec that lives
+    # outside course-specs/ (e.g. course-specs.planning/) even when
+    # --data-dir points elsewhere.
+    if course_spec and course_spec.endswith(".xml") and Path(course_spec).is_file():
+        course_spec = str(Path(course_spec).resolve())
 
     result = get_authoring_rules(
         data_dir,

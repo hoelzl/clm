@@ -197,6 +197,84 @@ class TestGetAuthoringRulesBySlidePath:
         assert any("No matching course" in n for n in result.notes)
 
 
+@pytest.fixture()
+def planning_dir(data_dir):
+    """A sibling ``course-specs.planning/`` holding a draft spec + its rules (#1151).
+
+    The draft references ``variables`` (also used by python-basics) so the
+    slide-path tests can prove it never leaks into slide resolution.
+    """
+    planning = data_dir / "course-specs.planning"
+    planning.mkdir()
+    (planning / "draft-course.xml").write_text(
+        (data_dir / "course-specs" / "python-basics.xml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (planning / "draft-course.authoring.md").write_text(
+        "## Draft Course Rules\n\n- Experimental.\n", encoding="utf-8"
+    )
+    return planning
+
+
+class TestSpecOutsideCourseSpecs:
+    """Issue #1151: rules next to a spec that lives outside course-specs/."""
+
+    def test_relative_path_uses_rules_next_to_spec(self, data_dir, planning_dir):
+        result = get_authoring_rules(data_dir, course_spec="course-specs.planning/draft-course.xml")
+        assert [e.course_spec for e in result.course_rules] == ["draft-course"]
+        assert "Draft Course Rules" in result.merged
+        # Common rules still come from course-specs/.
+        assert "Universal Rules" in result.merged
+        assert not result.notes
+
+    def test_absolute_path_uses_rules_next_to_spec(self, data_dir, planning_dir):
+        spec = planning_dir / "draft-course.xml"
+        result = get_authoring_rules(data_dir, course_spec=str(spec))
+        assert "Draft Course Rules" in result.merged
+
+    def test_spec_dir_rules_win_over_course_specs(self, data_dir, planning_dir):
+        (data_dir / "course-specs" / "draft-course.authoring.md").write_text(
+            "## Stale Copy\n", encoding="utf-8"
+        )
+        result = get_authoring_rules(data_dir, course_spec=str(planning_dir / "draft-course.xml"))
+        assert "Draft Course Rules" in result.merged
+        assert "Stale Copy" not in result.merged
+
+    def test_falls_back_to_course_specs(self, data_dir, planning_dir):
+        (planning_dir / "draft-course.authoring.md").unlink()
+        (data_dir / "course-specs" / "draft-course.authoring.md").write_text(
+            "## Fallback Rules\n", encoding="utf-8"
+        )
+        result = get_authoring_rules(data_dir, course_spec=str(planning_dir / "draft-course.xml"))
+        assert "Fallback Rules" in result.merged
+
+    def test_missing_rules_note_names_file(self, data_dir, planning_dir):
+        (planning_dir / "draft-course.authoring.md").unlink()
+        result = get_authoring_rules(data_dir, course_spec=str(planning_dir / "draft-course.xml"))
+        assert result.course_rules == []
+        assert any("draft-course.authoring.md" in n for n in result.notes)
+
+    def test_bare_slug_does_not_search_other_dirs(self, data_dir, planning_dir):
+        result = get_authoring_rules(data_dir, course_spec="draft-course")
+        assert result.course_rules == []
+
+    def test_slide_path_ignores_specs_outside_course_specs(self, data_dir, planning_dir):
+        slide = (
+            data_dir
+            / "slides"
+            / "module_100_basics"
+            / "topic_020_variables"
+            / "slides_variables.py"
+        )
+        result = get_authoring_rules(data_dir, slide_path=str(slide))
+        assert [e.course_spec for e in result.course_rules] == ["python-basics"]
+
+    def test_course_specs_path_unchanged(self, data_dir, planning_dir):
+        result = get_authoring_rules(data_dir, course_spec="course-specs/python-basics.xml")
+        assert [e.course_spec for e in result.course_rules] == ["python-basics"]
+        assert "Python Basics Rules" in result.merged
+
+
 class TestEdgeCases:
     def test_no_arguments(self, data_dir):
         result = get_authoring_rules(data_dir)

@@ -135,3 +135,92 @@ def test_no_specs_errors(tmp_path):
     r = CliRunner().invoke(cli, ["course", "orphans", str(empty)])
     assert r.exit_code != 0
     assert "No *.xml specs" in r.output
+
+
+# --- Issue #1152: several spec sources (e.g. course-specs + course-specs.planning) ---
+
+_PLANNING_SPEC = dedent("""\
+    <course><name><de>P</de><en>P</en></name><prog-lang>python</prog-lang>
+    <description><de></de><en></en></description><certificate><de></de><en></en></certificate>
+    <sections><section><name><de>S</de><en>S</en></name>
+    <topics><topic>b</topic></topics></section></sections></course>
+    """)
+
+
+def _with_planning(tmp_path: Path) -> Path:
+    """Add a sibling ``course-specs.planning/`` whose draft spec uses topic ``b``."""
+    _course(tmp_path)
+    planning = tmp_path / "course-specs.planning"
+    planning.mkdir()
+    (planning / "draft.xml").write_text(_PLANNING_SPEC, encoding="utf-8")
+    return planning
+
+
+def _json(r) -> dict:
+    return json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
+
+
+def test_single_dir_still_reports_planning_only_topic(tmp_path):
+    _with_planning(tmp_path)
+    r = CliRunner().invoke(cli, ["course", "orphans", str(tmp_path / "course-specs"), "--json"])
+    assert r.exit_code == 0
+    assert _json(r)["orphan_count"] == 3
+
+
+def test_multiple_dirs_union_keeps_planning_topics_alive(tmp_path):
+    planning = _with_planning(tmp_path)
+    r = CliRunner().invoke(
+        cli, ["course", "orphans", str(tmp_path / "course-specs"), str(planning), "--json"]
+    )
+    assert r.exit_code == 0, r.output
+    data = _json(r)
+    assert data["orphan_count"] == 0
+    assert data["spec_sources"] == [str(tmp_path / "course-specs"), str(planning)]
+    assert len(data["spec_files"]) == 2
+
+
+def test_individual_spec_file_is_accepted(tmp_path):
+    planning = _with_planning(tmp_path)
+    r = CliRunner().invoke(
+        cli,
+        [
+            "course",
+            "orphans",
+            str(tmp_path / "course-specs"),
+            str(planning / "draft.xml"),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert _json(r)["orphan_count"] == 0
+
+
+def test_duplicate_sources_are_deduplicated(tmp_path):
+    _course(tmp_path)
+    specs = tmp_path / "course-specs"
+    r = CliRunner().invoke(cli, ["course", "orphans", str(specs), str(specs / "c.xml"), "--json"])
+    assert r.exit_code == 0, r.output
+    assert len(_json(r)["spec_files"]) == 1
+
+
+def test_human_output_names_spec_sources(tmp_path):
+    planning = _with_planning(tmp_path)
+    r = CliRunner().invoke(
+        cli, ["course", "orphans", str(tmp_path / "course-specs"), str(planning)]
+    )
+    assert r.exit_code == 0
+    assert "Specs considered: 2" in r.output
+
+
+def test_non_xml_file_source_errors(tmp_path):
+    _course(tmp_path)
+    stray = tmp_path / "notes.txt"
+    stray.write_text("x", encoding="utf-8")
+    r = CliRunner().invoke(cli, ["course", "orphans", str(tmp_path / "course-specs"), str(stray)])
+    assert r.exit_code != 0
+    assert "Not a specs directory or .xml spec file" in r.output
+
+
+def test_no_specs_argument_errors(tmp_path):
+    r = CliRunner().invoke(cli, ["course", "orphans"])
+    assert r.exit_code != 0

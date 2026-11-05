@@ -1241,23 +1241,26 @@ archive the dead ones without deleting intentional alternates. Also surfaces
 (and optionally removes) gitignored `.ipynb_checkpoints/` cache cruft.
 
 ```
-clm course orphans [OPTIONS] SPECS_DIR
+clm course orphans [OPTIONS] SPECS...
 ```
 
-`SPECS_DIR` is the directory of course spec `*.xml` files. Orphans are computed
-against the **union** of every spec (a deck unreferenced by one spec may be
-pulled in by another). The on-disk walk is extension-complete (`.py` / `.cpp` /
+`SPECS` is one or more directories of course spec `*.xml` files and/or
+individual `.xml` spec files. Orphans are computed against the **union** of
+every spec given (a deck unreferenced by one spec may be pulled in by another).
+If a course keeps live-but-not-shipping specs in a sibling folder (e.g. drafts
+in `course-specs.planning/`), pass it too: a topic used only by a draft is
+otherwise reported as an orphan. The on-disk walk is extension-complete (`.py` / `.cpp` /
 `.cs` / …), so a non-Python orphan is not silently missed. Decks parked under
 underscore-prefixed dirs (`slides/_archive/`, …) are excluded — they are
 deliberately retired (invisible to discovery, issue #318), not forgotten.
 
 | Option | Description |
 |--------|-------------|
-| `--slides-dir DIR` | The course's `slides/` directory. Default: `<specs-dir>/../slides`. |
+| `--slides-dir DIR` | The course's `slides/` directory. Default: `slides/` next to the first `SPECS` directory (or next to the first spec file's directory). |
 | `--data-dir DIR` | Course data directory (contains `slides/`); alternative to `--slides-dir`. |
 | `--kind superseded\|alternate\|unknown` | Show only orphans of this intent. |
 | `--clean-checkpoints` | Delete the `.ipynb_checkpoints/` directories found (regenerable cache cruft). |
-| `--json` | Emit a JSON report (`by_kind` counts + per-orphan `kind`/`reason`, plus `checkpoints`). |
+| `--json` | Emit a JSON report (`by_kind` counts + per-orphan `kind`/`reason`, plus `checkpoints`, and the `spec_sources` / `spec_files` considered). |
 
 Intent buckets (the distinction matters — blindly archiving a `_part1..5` series
 would delete real content):
@@ -1272,6 +1275,7 @@ The exit code is always `0` — this is a report. Examples:
 
 ```bash
 clm course orphans course-specs/                                 # full orphan report
+clm course orphans course-specs/ course-specs.planning/          # drafts keep their topics alive
 clm course orphans course-specs/ --kind superseded               # just the archivable ones
 clm course orphans course-specs/ --clean-checkpoints             # report + delete checkpoint cruft
 clm course orphans course-specs/ --slides-dir ../other/slides --json
@@ -3523,7 +3527,13 @@ clm voiceover inline-notes slides            # migrate a whole course
 *Removed in CLM 1.8: the flat alias `clm authoring-rules` no longer exists — use this group-qualified form.*
 
 Look up merged authoring rules (common + course-specific) for a course.
-Reads per-course `.authoring.md` files from the `course-specs/` directory.
+Reads `_common.authoring.md` and per-course `.authoring.md` files from the
+`course-specs/` directory. When `--course-spec` is a **path** to a spec outside
+`course-specs/` (e.g. `course-specs.planning/foo.xml` — a sibling folder still
+builds, since the course root is the spec's grandparent), `foo.authoring.md`
+**next to that spec** is used first, falling back to `course-specs/`. Bare
+slugs and `--slide-path` resolution consider only specs in `course-specs/`, so
+drafts or retired specs parked elsewhere never leak into slide edits.
 
 ```
 clm slides rules [OPTIONS]
@@ -3544,6 +3554,7 @@ Examples:
 clm slides rules --course-spec python-basics
 clm slides rules --slide-path slides/module_010/topic_100_intro/slides_intro.py
 clm slides rules --course-spec python-basics --json
+clm slides rules --course-spec course-specs.planning/new-course.xml
 ```
 
 ### `clm mcp`

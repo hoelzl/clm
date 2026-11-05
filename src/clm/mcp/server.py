@@ -418,10 +418,13 @@ def create_server(data_dir: Path) -> MCPServer:
 
         Args:
             course_spec: Course spec path or slug (e.g.,
-                ``"machine-learning-azav"``).
+                ``"machine-learning-azav"``).  A path to a spec outside
+                ``course-specs/`` (e.g. ``"course-specs.planning/x.xml"``)
+                uses the ``x.authoring.md`` next to it.
             slide_path: Path to a slide file (absolute, or relative to
-                the data directory).  Resolves to the course(s) that
-                reference the topic containing this file.
+                the data directory).  Resolves to the course(s) in
+                ``course-specs/`` that reference the topic containing
+                this file.
         """
         return await handle_course_authoring_rules(
             data_dir,
