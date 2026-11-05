@@ -244,6 +244,23 @@ nothing runs *nowhere*. The difference from `integration`: those tests are
 semantically integration tests; `load_sensitive` suites are unit tests that
 are merely expensive or load-fragile locally.
 
+**2c. `load_fragile` — the named tests the local release gate leaves out.**
+This marker is per test and needs evidence: the test has failed under full-suite
+load, and it passes alone and in CI (#1040). The release gate is
+`pytest -m "not docker and not load_fragile" -n 12` (`releasing.md` has the
+procedure for adding a test). The marker is separate from `load_sensitive` because that
+one tags whole directories: excluding it would take 2,187 tests out of the gate,
+including most of the worker and job-queue coverage, to remove 8 known failures.
+
+It changes no CI selector, so the marked tests stay in CI's `unit` and `slow`
+suites. It is also not in `addopts`, so a plain `pytest` still runs the marked
+fast-suite tests. Every `load_fragile` test also gets `load_sensitive`
+automatically, which keeps it out of the deterministic tier wherever it lives.
+`tests/test_load_sensitive_gate.py` evaluates `ci.yml`'s real selectors against
+each marked test and fails if no suite selects it. List the marked tests with
+`pytest --collect-only -q -m load_fragile`; run them with
+`pytest -m load_fragile -n0`.
+
 **3. Event-driven waits — never busy-poll an async state.** When a test waits
 for a background thread to drive a state transition, block on an event/callback,
 not a `while ...: time.sleep()` loop. A busy-poll burns CPU that competes with
