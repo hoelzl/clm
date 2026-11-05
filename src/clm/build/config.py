@@ -349,6 +349,13 @@ class BuildConfig:
     # so it must never enter a byte-reproducibility baseline.
     write_provenance_manifest: bool = True
 
+    # Write the C++ code export's generated ``CMakeLists.txt`` files after the
+    # build (issue #333). Off only for ``--snapshot`` / ``--verify-against``
+    # builds, whose trees must stay byte-comparable. Independent of
+    # ``--no-provenance-manifest`` and of ``--only-sections`` (issue #1138:
+    # that mode's cleanup deletes the selected modules' files).
+    write_cmake_projects: bool = True
+
     # Log why each deck missed the cache and is being rebuilt (issue: many
     # decks rebuilding whose sources should not change). Resolved from
     # ``--explain-rebuilds`` / ``CLM_EXPLAIN_REBUILDS`` by

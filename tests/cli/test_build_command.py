@@ -29,6 +29,7 @@ from clm.build.engine import (
     _report_duplicate_file_warnings,
     _report_image_collisions,
     _report_loading_issues,
+    _should_emit_cmake_projects,
     _should_emit_provenance_manifest,
     configure_workers,
     create_output_formatter,
@@ -1844,6 +1845,79 @@ class TestShouldEmitProvenanceManifest:
     def test_timed_out_build_does_not_emit(self) -> None:
         config = _make_config(write_provenance_manifest=True)
         assert _should_emit_provenance_manifest(self._summary(timed_out=True), config) is False
+
+
+class TestShouldEmitCmakeProjects:
+    """The post-build CMake-project write decision (issue #1138).
+
+    Unlike the provenance manifest, the CMake files are written for an
+    ``--only-sections`` build too: the section cleanup deletes the selected
+    modules' ``CMakeLists.txt``, and the kind-root project keeps calling
+    ``add_subdirectory`` for them, so skipping the write left a course
+    project that no longer configures."""
+
+    @staticmethod
+    def _summary(*, timed_out: bool = False):
+        return SimpleNamespace(errors=[], timed_out=timed_out)
+
+    def test_only_sections_emits(self) -> None:
+        config = _make_config(resolved_section_selection=MagicMock())
+        assert _should_emit_cmake_projects(self._summary(), config) is True
+
+    def test_only_sections_without_provenance_manifest_emits(self) -> None:
+        # --no-provenance-manifest must not leave the deleted files missing.
+        config = _make_config(
+            write_provenance_manifest=False, resolved_section_selection=MagicMock()
+        )
+        assert _should_emit_cmake_projects(self._summary(), config) is True
+
+    def test_timed_out_only_sections_build_emits(self) -> None:
+        # The section cleanup already ran; the files list what is on disk.
+        config = _make_config(resolved_section_selection=MagicMock())
+        assert _should_emit_cmake_projects(self._summary(timed_out=True), config) is True
+
+    def test_normal_complete_build_emits(self) -> None:
+        assert _should_emit_cmake_projects(self._summary(), _make_config()) is True
+
+    def test_snapshot_and_verify_builds_do_not_emit(self) -> None:
+        config = _make_config(write_cmake_projects=False)
+        assert _should_emit_cmake_projects(self._summary(), config) is False
+
+    def test_missing_summary_does_not_emit(self) -> None:
+        assert _should_emit_cmake_projects(None, _make_config()) is False
+
+
+class TestCliWriteCmakeProjectsResolution:
+    """`clm build` turns the CMake write off only for verification trees (#1138)."""
+
+    @staticmethod
+    def _captured(monkeypatch: pytest.MonkeyPatch, args, tmp_path: Path) -> bool:
+        captured: dict = {}
+
+        async def fake_main_build(*a, **k):
+            captured["cmake"] = k["write_cmake_projects"]
+            return SimpleNamespace(timed_out=False, errors=[])
+
+        monkeypatch.setattr(build_module, "main_build", fake_main_build)
+        result = _invoke_build(args, tmp_path=tmp_path)
+        assert result.exit_code == 0, result.output
+        return captured["cmake"]
+
+    def test_default_build_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        assert self._captured(monkeypatch, [str(spec)], tmp_path) is True
+
+    def test_no_provenance_manifest_still_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        args = [str(spec), "--no-provenance-manifest"]
+        assert self._captured(monkeypatch, args, tmp_path) is True
+
+    def test_snapshot_does_not_write(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        args = [str(spec), "--snapshot", str(tmp_path / "snap")]
+        assert self._captured(monkeypatch, args, tmp_path) is False
 
 
 class TestFailedTopicIds:

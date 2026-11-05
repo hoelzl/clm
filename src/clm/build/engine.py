@@ -363,6 +363,21 @@ def _should_emit_provenance_manifest(summary: BuildSummary | None, config: Build
     )
 
 
+def _should_emit_cmake_projects(summary: BuildSummary | None, config: BuildConfig) -> bool:
+    """Whether to write the C++ code export's CMake project files after a build.
+
+    Every finished build writes them unless ``config.write_cmake_projects``
+    is off (``--snapshot`` / ``--verify-against``). Unlike the provenance
+    manifest they are not skipped for ``--only-sections``, timed-out builds
+    or ``--no-provenance-manifest`` (#1138): the generator lists only
+    outputs present on disk, so the files are right for any finished tree,
+    and ``--only-sections`` has already deleted the selected
+    modules' ``CMakeLists.txt`` that the kind-root project still adds (see
+    :func:`clm.core.cmake_export.write_cmake_projects` for that mode).
+    """
+    return summary is not None and config.write_cmake_projects
+
+
 def _failed_topic_ids(summary: BuildSummary, course) -> set[str] | None:
     """Attribute the build's errors to topics, for the partial manifest (#295).
 
@@ -2259,9 +2274,9 @@ async def _run_build_impl(
     # CMakeLists.txt per built code-output directory, one executable target
     # per deck. Regenerable convenience files — like the provenance manifest,
     # this must never fail an otherwise successful build. Skipped for
-    # --snapshot / --verify-against builds via the same gate as the manifest
-    # so verification trees aren't polluted with extra files.
-    if summary is not None and _should_emit_provenance_manifest(summary, config):
+    # --snapshot / --verify-against builds so verification trees aren't
+    # polluted with extra files, but written for --only-sections (#1138).
+    if summary is not None and _should_emit_cmake_projects(summary, config):
         from clm.core.cmake_export import write_cmake_projects
 
         try:
