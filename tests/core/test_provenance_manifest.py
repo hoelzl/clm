@@ -853,15 +853,63 @@ def test_find_course_manifest_falls_back_to_private_targets_in_order(tmp_path):
     assert find_course_manifest_path(spec) == trainer.resolve()
 
 
-def test_find_course_manifest_ignores_output_when_targets_are_explicit(tmp_path):
-    """A spec with ``<output-targets>`` is not resolved through the ``output/`` convention.
-
-    This spec's manifest under ``output/`` is a leftover of an older layout the
-    build no longer writes, so its digest would be stale.
-    """
+def test_find_course_manifest_prefers_target_roots_over_the_output_convention(tmp_path):
+    """Targets first, convention second: a ``dist/`` target beats ``output/`` (#1107)."""
     spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", ["code-along"])])
     _write_manifest(tmp_path / "output" / "shared" / ".clm-manifest.course.json")
-    assert find_course_manifest_path(spec) is None
+    own = _write_manifest(tmp_path / "dist" / "shared" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own.resolve()
+
+
+def test_find_course_manifest_explicit_targets_built_with_output_dir_output(tmp_path):
+    """Explicit targets built with ``clm build --output-dir output`` are still found.
+
+    That build re-roots each target at ``output/<target.name>/``, not at its
+    ``<path>``; with no manifest in any target root the lookup falls back to
+    the ``output/`` convention, so it is never worse than before #1107. The
+    target-named subfolders are tried in target order (public first), ahead
+    of alphabetically earlier ones.
+    """
+    spec = _spec_with_targets(
+        tmp_path,
+        [("speaker", "dist/speaker", ["recording"]), ("students", "dist/students", ["code-along"])],
+    )
+    out = tmp_path / "output"
+    _write_manifest(out / "speaker" / ".clm-manifest.course.json")
+    students = _write_manifest(out / "students" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == students
+
+
+def test_find_course_manifest_spec_parse_does_not_repeat_spec_warnings(tmp_path, caplog):
+    """The lookup's spec parse demotes the spec's warnings to DEBUG (#1107).
+
+    A deprecated ``speaker`` kind warns when the build parses the spec; the
+    lookup must not repeat it on every report run and recording arm.
+    """
+    import logging
+
+    from clm.core.course_spec import CourseSpec
+
+    spec = _spec_with_targets(tmp_path, [("speaker", "dist/speaker", ["speaker"])])
+    own = _write_manifest(tmp_path / "dist" / "speaker" / ".clm-manifest.course.json")
+
+    with caplog.at_level(logging.DEBUG):
+        CourseSpec.from_file(spec)
+    assert any(
+        r.levelno == logging.WARNING and "deprecated" in r.getMessage() for r in caplog.records
+    ), "precondition: the spec itself warns"
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert find_course_manifest_path(spec) == own.resolve()
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert any("deprecated" in r.getMessage() for r in caplog.records)
+
+    # The demotion is scoped to the lookup: a later parse warns again.
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        CourseSpec.from_file(spec)
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
 
 
 def test_find_course_manifest_in_targets_skips_other_specs(tmp_path):

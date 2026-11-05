@@ -7,8 +7,11 @@
   the build's own path rules and reads that spec's
   `.clm-manifest.<spec>.json` from the first target that has one, trying
   targets that build a public kind (`code-along`/`completed`/`partial`) before
-  private ones, each group in spec order. Specs without `<output-targets>`
-  keep the `output/` lookup (#1107). A spec with explicit targets under
+  private ones, each group in spec order. When no target root holds it (or
+  the spec declares no targets), the `output/` lookup follows as before, so a
+  build run with `--output-dir output` is still found. The lookup's spec
+  parse no longer repeats the spec's warnings (they are logged at DEBUG) on
+  every report run and recording (#1107). A spec with explicit targets under
   `output/` whose alphabetically-first target is not its first public one now
   reads a different target's manifest, so parts stamped before this change
   may show `built output changed`; the flag remains a secondary hint.

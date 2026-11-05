@@ -416,10 +416,12 @@ Given only a spec, the manifest is looked up where `clm build SPEC` writes
 it: in the spec's `<output-targets>` roots — targets producing a public kind
 (`code-along`, `completed`, `partial`) first, then the others, each in spec
 order; the first root holding that spec's `.clm-manifest.<spec>.json` wins.
-A spec without `<output-targets>` is looked up in `output/` and its
-`shared`/`trainer`/`speaker` tiers. The recording-time digest stamp uses the
-same lookup. If the build output lives elsewhere (`clm build --output-dir`),
-pass `--source DIR` or `--manifest FILE`.
+When no target root holds it, or the spec declares no `<output-targets>`,
+`output/` and its subfolders (the `shared`/`trainer`/`speaker` tiers, or the
+target folders `clm build --output-dir output` writes) are searched next.
+The recording-time digest stamp uses the same lookup. If the build output
+lives elsewhere (`clm build --output-dir DIR`), pass `--source DIR` or
+`--manifest FILE`.
 
 The former `clm recordings drift` command is retired in favour of `report`
 (see `clm info migration`). Recordings made before the ledger existed are

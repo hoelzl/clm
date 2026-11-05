@@ -428,9 +428,9 @@ def _lecture_status(lecture) -> str:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
     help="Course spec XML; when --source/--manifest are not given, its manifest is "
-    "looked up in the spec's <output-targets> roots (public targets first), or "
-    "in output/ for a spec without targets (with --source, selects the spec's "
-    "manifest in that root).",
+    "looked up in the spec's <output-targets> roots (public targets first), then "
+    "in output/ and its subfolders (with --source, selects the spec's manifest "
+    "in that root).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 def report(
@@ -779,8 +779,8 @@ def _resolve_report_manifest(
 ) -> Path | None:
     """``--manifest`` > ``--source`` > ``--spec-file``'s output roots, else ``None``.
 
-    The spec's roots are its ``<output-targets>``, or the ``output/``
-    convention for a spec without targets (see ``find_course_manifest_path``).
+    The spec's roots are its ``<output-targets>``, then the ``output/``
+    convention (see ``find_course_manifest_path``).
     """
     from clm.core.provenance_manifest import find_course_manifest_path
 
