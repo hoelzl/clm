@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.37.0] - 2026-11-05
+
+### Added
+
+- **Agenda layer for certification: `<block>` time blocks with teaching units, and `clm export agenda`** (#1163). A `<subsection>` (day) may now hold `<block units="4" form="theory|practice|theory-practice" status="ready|planned|adapt" standalone="…" pace="full|recap">` elements with a bilingual `<name>`, `<contents>` and any number of `<topic>`s; a `<section>` may carry an `<agenda>` with `<subtitle>`/`<outcome>`, and the course an `<agenda-targets unit-minutes="45" units-per-day="…" days-per-week="…" units-total="…">`. Blocks are planning/presentation only: their topics flatten into the day in document order, so a spec builds byte-identically with or without the wrappers. A `<block>` outside a `<subsection>`, an invalid `units` value and an unknown `form`/`status`/`pace` are hard parse errors. `clm export agenda SPEC [-L de|en] [-f md|csv] [-o FILE|-d DIR] [--include-optional]` renders the overview of weeks and units plus a `Tag | Thema | Inhalte | Form | UE` table per week with subtitle and outcome (`Day | Block | Contents | Form | Units` in English); CSV carries every block attribute. When a spec uses blocks, `clm validate` warns about blocks without `units`, bare topics in a subsection with blocks, and day/week/total units that miss the `<agenda-targets>`. Word output and a material-vs-units check are not part of this release.
+- **`clm validate` warns about unknown spec elements** (#1163). The spec parser skips any element it does not read together with everything inside it — a typo like `<subsecton>` silently dropped its `<topic>`s from the build. Every such element is now an `unknown_element` warning naming its path (e.g. `course/sections/section[3]/topics/subsecton`).
+
 ## [1.36.0] - 2026-11-05
 
 ### Added
