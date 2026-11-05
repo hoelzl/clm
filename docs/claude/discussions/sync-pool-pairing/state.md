@@ -1,7 +1,7 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-04
+updated: 2026-11-05
 review-by: 2027-05-04
 ---
 
@@ -9,8 +9,8 @@ review-by: 2027-05-04
 
 The mechanisms, measurements and the residual live in the design doc
 (`docs/claude/design/sync-total-identity-document-model.md` §13: the rows
-for #1124 (reverted), #1130 step 2, #1130 steps 1 + 4, and #1130 step 3
-withdrawn). The probe and sweep procedure is in
+for #1124 (reverted), #1130 step 2, #1130 steps 1 + 4, #1130 step 3
+withdrawn, and #1142). The probe and sweep procedure is in
 `docs/developer-guide/testing.md` ("Sync-engine sweeps"). This file keeps
 only the conversational position.
 
@@ -51,21 +51,34 @@ only the conversational position.
   deck split). Stamping every shared cell was rejected as overhead out of
   proportion: "something that seems to have worked reasonably well with even
   the previous implementation".
+- **#1142 shipped with its residual accepted** (owner, 2026-11-05, same
+  call as #1144). The 20 newly silent probe cases are all `silent_pick`:
+  one half moves a shared cell into another group while the other half
+  swaps that same cell with an adjacent markdown cell. No cell or edit is
+  lost; the other half's within-group reorder is dropped without a
+  question, because order relative to un-id'd neighbours is never
+  recorded. The remedy is a `slide_id` on those cells.
 
-## Shipped (all merged 2026-11-03/04)
+## Shipped (all merged 2026-11-03/05)
 
-- #1131: #1129 reverted, with xfail pins; #1124 reopened (still open).
+- #1131: #1129 reverted, with xfail pins; #1124 reopened. #1124 and #1128
+  were closed on 2026-11-05 as fixed by #1144.
 - #1132 / #1133 / #1134: the sweep ratchet (`tests/slides/sync_sweep.py`,
   slow tier). #1133 answers every question; #1134 adds the final-order
   check that found the 71 misplacements.
 - #1141: step 2, content conservation, plus the probe in the repo.
-- #1142: issue for recognising moves across slide groups (still open).
 - #1144: steps 1 + 4, plus the second review round and the extended probe
   (45,552 cases). It supersedes the held #1136.
 - #1146: the step 3 decision and `scripts/scan_sync_history.py`. #1130 is
   closed.
 - S14 save PR: `clm info commands` now describes the `pool_pairing_shifted`
   ambiguity cause and the edit a placement answer carries.
+- #1148 (S14 continued, 2026-11-05): #1142, a shared cell moved into
+  another slide group is a mechanical `mirror_pool_move` when proven
+  without a pairing guess. The adversarial review's 22,319 cases joined the
+  probe (`tests/slides/sync_probe_cross.py`, about 68,000 cases in all).
+  Gate vs master: 20,208 better, 50 worse, 20 newly silent; `two_groups`
+  converged 299 → 1,890. #1142 is closed.
 
 ## Open / revisit conditions
 
@@ -80,8 +93,11 @@ only the conversational position.
   silent mis-pairing of that shape. Then re-run the scan and weigh stamping
   only pools with at least two shared cells, using the owner's opt-in
   `normalize` preference above.
-- **#1142** (cross-group move recognition) is the next sync-engine
-  candidate. The `two_groups` probe family is its measure.
+- **#1142's residual** (design doc §13 #1142 row): the 20 silent swap
+  cases above, plus 30 visible stops. 26 are a move into a destination
+  pool with its own edit, refused on purpose by the settled rule; 4 are
+  `two_groups` shapes where a move and a scope reorder collide. The same
+  re-open trigger applies.
 - **Known weak point:** `_moved_halves` ("did this half move a cell out of
   its recorded span") also fires when only voiceovers moved. It must not be
   used as a suspension trigger: the variant that did so measured 4,135
