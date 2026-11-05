@@ -34,7 +34,9 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -612,16 +614,25 @@ def find_course_manifest_path(
     Recording drift (issue #208 follow-up) needs the build manifest but is
     handed only a spec file — the recordings dashboard builds its ``Course``
     rooted at the course directory, so the course object cannot reveal where
-    a real ``clm build`` wrote its output. This resolves the manifest by
-    convention instead:
+    a real ``clm build`` wrote its output. This resolves the manifest from
+    the spec instead:
 
-    1. ``output_root`` if given (the ``clm recordings report --source`` /
-       ``--manifest`` override); otherwise the default build output root
-       ``course_root/output`` from :func:`resolve_course_paths`.
-    2. The spec's manifest directly in ``output_root`` (single default
-       target), else
-    3. the first ``<output_root>/<target>/`` holding one, in sorted order
-       (multi-target builds key each target by name).
+    1. ``output_root`` if given (the ``clm recordings report --source``
+       override) is searched as in step 3, instead of the spec's targets.
+    2. Otherwise, when the spec declares ``<output-targets>``, those target
+       roots are searched first (issue #1107), resolved exactly as the build
+       resolves them (:meth:`OutputTarget.from_spec`); see
+       :func:`_spec_targets` for the order. A target the build would refuse
+       (e.g. an absolute ``<path>``) is skipped: the build never wrote there.
+    3. When step 2 finds nothing (or the spec declares no targets, or does
+       not parse), the default build output root ``course_root/output`` from
+       :func:`resolve_course_paths`: the spec's manifest directly in it, else
+       the first ``<output_root>/<sub>/`` holding one (the default
+       ``shared``/``trainer``/``speaker`` tiers, the legacy
+       ``public``/``speaker`` layout, and the ``clm build --output-dir
+       output`` layout of an explicit-target spec). Subfolders are tried in
+       sorted order, except that with a spec declaring targets, those named
+       after a target come first, in the step-2 order.
 
     "The spec's manifest" is :func:`find_spec_manifest`: with *spec_file*,
     only its own ``.clm-manifest.<stem>.json`` (or a legacy manifest it
@@ -630,15 +641,25 @@ def find_course_manifest_path(
     Returns ``None`` when no manifest exists — callers treat that as
     "slide provenance unknown", never an error. The lookup is deterministic
     so the record-time stamp and a later drift check read the same target's
-    manifest as long as the on-disk layout is unchanged.
+    manifest as long as the spec and the on-disk layout are unchanged.
 
     Either ``spec_file`` or ``output_root`` must be given; with neither there
     is nothing to resolve and ``None`` is returned.
     """
     spec_name = spec_file.name if spec_file is not None else None
+    targets = _spec_targets(spec_file) if spec_file is not None else None
     if output_root is None:
         if spec_file is None:
             return None
+        if targets is not None:
+            for _name, root in targets:
+                found = find_spec_manifest(root, spec_name)
+                if found is not None:
+                    return found
+            # No target root holds it: fall through to the ``output/``
+            # convention, e.g. a build run with ``--output-dir output``
+            # (which writes ``output/<target.name>/``).
+
         from clm.core.course_paths import resolve_course_paths
 
         _course_root, output_root = resolve_course_paths(spec_file)
@@ -647,13 +668,117 @@ def find_course_manifest_path(
     if direct is not None:
         return direct
     if output_root.is_dir():
-        for sub in sorted(output_root.iterdir()):
-            if not sub.is_dir():
-                continue
+        subdirs = sorted(sub for sub in output_root.iterdir() if sub.is_dir())
+        if targets:
+            # ``clm build --output-dir DIR`` re-roots each target at
+            # ``DIR/<target.name>``: with the spec at hand, try those in the
+            # order of the spec's own roots, so ``--source`` reads the target
+            # the recording-time stamp read (#1107). Unknown names follow,
+            # alphabetically (the sort is stable).
+            rank = {name: i for i, (name, _root) in enumerate(targets)}
+            subdirs.sort(key=lambda sub: rank.get(sub.name, len(rank)))
+        for sub in subdirs:
             candidate = find_spec_manifest(sub, spec_name)
             if candidate is not None:
                 return candidate
     return None
+
+
+def _spec_targets(spec_file: Path) -> list[tuple[str, Path]] | None:
+    """``(name, output_root)`` of *spec_file*'s ``<output-targets>``, in lookup order.
+
+    ``None`` when the spec declares no targets (the build then uses the
+    default ``output/`` tiers) or cannot be parsed. The caller searches the
+    ``output/`` convention in that case, and also after none of the
+    returned roots holds the manifest.
+
+    The spec is parsed and each target resolved with the build's own code
+    (:meth:`CourseSpec.from_file`, :meth:`OutputTarget.from_spec` against the
+    course root from :func:`resolve_course_paths`), so a relative ``<path>``
+    lands where ``clm build SPEC`` writes. A target the build refuses
+    (absolute, ``..``, the course directory itself) is left out.
+
+    Order (issue #1107): targets producing a public kind (``code-along`` /
+    ``completed`` / ``partial``) first, then the private ones, each group in
+    spec order. The first root holding this spec's manifest wins. The
+    public-first rule is the explicit-target analogue of what the ``output/``
+    convention picks for the default layout (``shared``, the public tier), so
+    a recording's stamped digest and a later report keep reading the same
+    target; a target that builds only private kinds is used only when no
+    public target has a manifest.
+    """
+    from clm.core.course_paths import resolve_course_paths
+    from clm.core.course_spec import CourseSpec, OutputPathError
+    from clm.core.output_target import OutputTarget
+
+    try:
+        # Demote the parse's warnings (deprecated ``speaker`` kind, legacy
+        # ``<github>`` form, …): the build reports them; repeating them on
+        # every report run and recording arm is noise.
+        with _spec_warnings_demoted():
+            spec = CourseSpec.from_file(spec_file)
+    except Exception as exc:
+        # The manifest is only ever a hint: a spec that fails to parse for
+        # any reason degrades to the ``output/`` convention instead of
+        # crashing a report or a recording.
+        logger.debug("provenance: cannot read targets of %s: %s", spec_file, exc)
+        return None
+    if not spec.output_targets:
+        return None
+
+    course_root, _default_output = resolve_course_paths(spec_file)
+    public: list[tuple[str, Path]] = []
+    private: list[tuple[str, Path]] = []
+    for target_spec in spec.output_targets:
+        try:
+            with _spec_warnings_demoted():
+                target = OutputTarget.from_spec(target_spec, course_root)
+        except OutputPathError as exc:
+            logger.debug("provenance: skip target %s: %s", target_spec.name, exc)
+            continue
+        entry = (target.name, target.output_root)
+        (public if target.kinds & PUBLIC_KINDS else private).append(entry)
+    return public + private
+
+
+# Loggers whose records the manifest lookup's spec parse may produce.
+_SPEC_PARSE_LOGGERS = ("clm.core.course_spec", "clm.core.output_target")
+
+
+class _DemoteToDebug(logging.Filter):
+    """Rewrite this thread's WARNING-and-above records to DEBUG.
+
+    Scoped to the installing thread so a build running concurrently in the
+    same process keeps its own warnings at their real level.
+    """
+
+    def __init__(self, thread_id: int) -> None:
+        super().__init__()
+        self._thread_id = thread_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.thread == self._thread_id and record.levelno > logging.DEBUG:
+            record.levelno = logging.DEBUG
+            record.levelname = logging.getLevelName(logging.DEBUG)
+        return True
+
+
+@contextmanager
+def _spec_warnings_demoted() -> Iterator[None]:
+    """Demote the spec-parse loggers' records to DEBUG for this block (#1107).
+
+    The handlers' level check runs after logger filters, so a demoted
+    warning reaches only DEBUG-level handlers (the debug log), not the console.
+    """
+    demote = _DemoteToDebug(threading.get_ident())
+    loggers = [logging.getLogger(name) for name in _SPEC_PARSE_LOGGERS]
+    for lg in loggers:
+        lg.addFilter(demote)
+    try:
+        yield
+    finally:
+        for lg in loggers:
+            lg.removeFilter(demote)
 
 
 def restrict_manifest_to_language(

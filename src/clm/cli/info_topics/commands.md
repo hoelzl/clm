@@ -5412,8 +5412,8 @@ clm recordings report [PATH] [OPTIONS]
 | `PATH` | Course root, topic directory or deck file to scan (default: `.`) |
 | `--all` | Also list split decks on disk that have no recorded part (`unrecorded`) |
 | `--manifest PATH` | A specific `.clm-manifest.<spec>.json`, enabling the secondary `built_output_changed` flag (overrides `--source` and the spec) |
-| `--source PATH` | Built output root containing `.clm-manifest.<spec>.json` (overrides the spec's default `output/`) |
-| `--spec-file PATH` | Course spec XML; its default `output/` root is searched for the manifest |
+| `--source PATH` | Built output root containing `.clm-manifest.<spec>.json` (overrides the spec's output targets) |
+| `--spec-file PATH` | Course spec XML; its manifest is looked up in the spec's `<output-targets>` roots (since CLM {version}; public-kind targets first, then the rest, each in spec order — the first holding `.clm-manifest.<spec>.json` wins), then in `output/` and its subfolders (the only lookup for a spec without targets) |
 | `--json` | Emit the machine-readable envelope (`schema`, `tool`, `verb`, `is_clean`, `needs_attention`, `counts`, `ledger_errors`, `decks`) on stdout; diagnostics go to stderr |
 
 One row per recorded deck: `status` (`recorded` / `orphaned` — ledger entry

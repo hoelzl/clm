@@ -123,6 +123,32 @@ def test_resolver_exception_is_swallowed(tmp_path):
     assert prov.slide_digest is None
 
 
+def test_digest_comes_from_the_specs_output_target(tmp_path, monkeypatch):
+    """Regression test for #1107: the stamp reads the spec's ``<output-targets>`` root.
+
+    The target is ``dist/shared``, outside the ``output/`` convention; before
+    the fix the stamp found no manifest and recorded no digest.
+    """
+    from tests.core.test_provenance_manifest import _spec_with_targets
+
+    spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", ["code-along"])])
+    files = [
+        {"path": "a", "topic_id": "topic-x", "content_hash": "sha256:a"},
+        {"path": "b", "topic_id": "topic-x", "content_hash": "sha256:b"},
+    ]
+    manifest = tmp_path / "dist" / "shared" / ".clm-manifest.course.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"spec": "course.xml", "files": files}), encoding="utf-8")
+    course = _FakeCourse({("Week 1", "00 Intro", "en"): ("sec-1", "topic-x")})
+    monkeypatch.setattr(
+        "clm.recordings.git_info.get_git_info", lambda p: {"commit": "c", "dirty": False}
+    )
+
+    prov = build_record_provenance(course, spec, "Week 1", "00 Intro", "en")
+
+    assert prov.slide_digest == topic_digest_from_files(files)
+
+
 # ---------------------------------------------------------------------------
 # Source anchor for the recordings ledger (#1004)
 # ---------------------------------------------------------------------------

@@ -761,3 +761,230 @@ def test_find_course_manifest_with_spec_skips_other_specs_in_the_root(tmp_path):
     _write_manifest(out / "shared" / ".clm-manifest.other.json")
     own = _write_manifest(out / "trainer" / ".clm-manifest.course.json")
     assert find_course_manifest_path(spec) == own
+
+
+# ---------------------------------------------------------------------------
+# find_course_manifest_path honours the spec's <output-targets> (issue #1107)
+# ---------------------------------------------------------------------------
+
+_SPEC_HEAD = """<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de>B</de><en>D</en></description>
+    <certificate><de>Z</de><en>C</en></certificate>
+    <sections></sections>
+"""
+
+
+def _spec_with_targets(tmp_path, targets, *, stem="course"):
+    """A parseable spec under ``<tmp_path>/course-specs`` declaring *targets*.
+
+    *targets* is a list of ``(name, path, kinds)``; empty ``kinds`` means the
+    build's default (every default kind).
+    """
+    blocks = []
+    for name, path, kinds in targets:
+        kinds_xml = (
+            "<kinds>" + "".join(f"<kind>{k}</kind>" for k in kinds) + "</kinds>" if kinds else ""
+        )
+        blocks.append(
+            f'<output-target name="{name}"><path>{path}</path>{kinds_xml}</output-target>'
+        )
+    xml = _SPEC_HEAD + f"<output-targets>{''.join(blocks)}</output-targets>\n</course>\n"
+    specs_dir = tmp_path / "course-specs"
+    specs_dir.mkdir(exist_ok=True)
+    spec = specs_dir / f"{stem}.xml"
+    spec.write_text(xml, encoding="utf-8")
+    return spec
+
+
+def test_find_course_manifest_reads_a_target_outside_output(tmp_path):
+    """Regression test for #1107: a ``dist/shared`` target was never searched."""
+    spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", ["code-along"])])
+    own = _write_manifest(tmp_path / "dist" / "shared" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own.resolve()
+
+
+def test_find_course_manifest_reads_a_nested_per_spec_target(tmp_path):
+    """Regression test for #1107: the ``output/<spec-stem>/shared`` layout (#1095 workaround)."""
+    spec = _spec_with_targets(tmp_path, [("shared", "output/course/shared", ["completed"])])
+    own = _write_manifest(tmp_path / "output" / "course" / "shared" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own.resolve()
+
+
+def test_find_course_manifest_resolves_dot_relative_target_paths(tmp_path):
+    """Relative paths resolve against the course root, as the build resolves them."""
+    spec = _spec_with_targets(tmp_path, [("shared", "./dist/./shared", [])])
+    own = _write_manifest(tmp_path / "dist" / "shared" / ".clm-manifest.course.json")
+    found = find_course_manifest_path(spec)
+    assert found is not None
+    assert found.resolve() == own.resolve()
+
+
+def test_find_course_manifest_prefers_the_first_public_target(tmp_path):
+    """A private target declared first does not win over a public one (#1107)."""
+    spec = _spec_with_targets(
+        tmp_path,
+        [
+            ("speaker", "dist/speaker", ["recording"]),
+            ("trainer", "dist/trainer", ["trainer"]),
+            ("students", "dist/students", ["code-along"]),
+            ("solutions", "dist/solutions", ["completed"]),
+        ],
+    )
+    for name in ("speaker", "trainer", "students", "solutions"):
+        _write_manifest(tmp_path / "dist" / name / ".clm-manifest.course.json")
+    found = find_course_manifest_path(spec)
+    assert found == (tmp_path / "dist" / "students" / ".clm-manifest.course.json").resolve()
+
+
+def test_find_course_manifest_falls_back_to_private_targets_in_order(tmp_path):
+    """Without a public target holding the manifest, private ones are tried in spec order."""
+    spec = _spec_with_targets(
+        tmp_path,
+        [
+            ("students", "dist/students", ["code-along"]),
+            ("trainer", "dist/trainer", ["trainer"]),
+            ("speaker", "dist/speaker", ["recording"]),
+        ],
+    )
+    _write_manifest(tmp_path / "dist" / "speaker" / ".clm-manifest.course.json")
+    trainer = _write_manifest(tmp_path / "dist" / "trainer" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == trainer.resolve()
+
+
+def test_find_course_manifest_prefers_target_roots_over_the_output_convention(tmp_path):
+    """Targets first, convention second: a ``dist/`` target beats ``output/`` (#1107)."""
+    spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", ["code-along"])])
+    _write_manifest(tmp_path / "output" / "shared" / ".clm-manifest.course.json")
+    own = _write_manifest(tmp_path / "dist" / "shared" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own.resolve()
+
+
+def test_find_course_manifest_explicit_targets_built_with_output_dir_output(tmp_path):
+    """Explicit targets built with ``clm build --output-dir output`` are still found.
+
+    That build re-roots each target at ``output/<target.name>/``, not at its
+    ``<path>``; with no manifest in any target root the lookup falls back to
+    the ``output/`` convention, so it is never worse than before #1107. The
+    target-named subfolders are tried in target order (public first), ahead
+    of alphabetically earlier ones.
+    """
+    spec = _spec_with_targets(
+        tmp_path,
+        [("speaker", "dist/speaker", ["recording"]), ("students", "dist/students", ["code-along"])],
+    )
+    out = tmp_path / "output"
+    _write_manifest(out / "speaker" / ".clm-manifest.course.json")
+    students = _write_manifest(out / "students" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == students
+
+
+def test_find_course_manifest_spec_parse_does_not_repeat_spec_warnings(tmp_path, caplog):
+    """The lookup's spec parse demotes the spec's warnings to DEBUG (#1107).
+
+    A deprecated ``speaker`` kind warns when the build parses the spec; the
+    lookup must not repeat it on every report run and recording arm.
+    """
+    import logging
+
+    from clm.core.course_spec import CourseSpec
+
+    spec = _spec_with_targets(tmp_path, [("speaker", "dist/speaker", ["speaker"])])
+    own = _write_manifest(tmp_path / "dist" / "speaker" / ".clm-manifest.course.json")
+
+    with caplog.at_level(logging.DEBUG):
+        CourseSpec.from_file(spec)
+    assert any(
+        r.levelno == logging.WARNING and "deprecated" in r.getMessage() for r in caplog.records
+    ), "precondition: the spec itself warns"
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert find_course_manifest_path(spec) == own.resolve()
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert any("deprecated" in r.getMessage() for r in caplog.records)
+
+    # The demotion is scoped to the lookup: a later parse warns again.
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        CourseSpec.from_file(spec)
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_find_course_manifest_in_targets_skips_other_specs(tmp_path):
+    spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", ["code-along"])])
+    _write_manifest(tmp_path / "dist" / "shared" / ".clm-manifest.other.json")
+    _write_manifest(tmp_path / "dist" / "shared" / MANIFEST_FILENAME, spec="other.xml")
+    assert find_course_manifest_path(spec) is None
+
+
+def test_find_course_manifest_never_reads_an_absolute_target_path(tmp_path):
+    """The build refuses absolute target paths (#798 S11), so it never wrote there.
+
+    Reusing the build's resolution means such a target is skipped, never
+    read, and the lookup does not raise.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    _write_manifest(elsewhere / ".clm-manifest.course.json")
+    for absolute in (str(elsewhere), "C:\\courses\\out", "C:/courses/out", "/srv/out"):
+        spec = _spec_with_targets(tmp_path, [("shared", absolute, [])])
+        assert find_course_manifest_path(spec) is None, absolute
+
+
+def test_find_course_manifest_skips_an_invalid_target_but_reads_the_others(tmp_path):
+    spec = _spec_with_targets(
+        tmp_path,
+        [("bad", "C:\\abs\\out", ["code-along"]), ("trainer", "dist/trainer", ["trainer"])],
+    )
+    trainer = _write_manifest(tmp_path / "dist" / "trainer" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == trainer.resolve()
+
+
+def test_find_course_manifest_output_root_override_ignores_targets(tmp_path):
+    """``--source`` is an explicit root: the spec's targets do not redirect it."""
+    spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", ["code-along"])])
+    _write_manifest(tmp_path / "dist" / "shared" / ".clm-manifest.course.json")
+    source = tmp_path / "src-root"
+    own = _write_manifest(source / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec, output_root=source) == own
+
+
+def test_find_course_manifest_source_orders_target_subdirs_like_the_stamp(tmp_path):
+    """``--source DIR`` over a ``--output-dir DIR`` build reads the target the stamp reads.
+
+    Alphabetically ``speaker`` precedes ``students``; the spec-aware order
+    (public first) must win so record time and report time agree (#1107).
+    """
+    spec = _spec_with_targets(
+        tmp_path,
+        [("speaker", "dist/speaker", ["recording"]), ("students", "dist/students", ["code-along"])],
+    )
+    source = tmp_path / "out"
+    _write_manifest(source / "speaker" / ".clm-manifest.course.json")
+    students = _write_manifest(source / "students" / ".clm-manifest.course.json")
+    _write_manifest(source / "aaa-unrelated" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec, output_root=source) == students
+
+
+def test_find_course_manifest_survives_a_spec_that_fails_to_parse(tmp_path, monkeypatch):
+    """Any parse failure degrades to the convention; the lookup never raises."""
+    from clm.core.course_spec import CourseSpec
+
+    def boom(*_a, **_k):
+        raise AttributeError("odd element")
+
+    monkeypatch.setattr(CourseSpec, "from_file", boom)
+    spec = _spec_with_targets(tmp_path, [("shared", "dist/shared", [])])
+    own = _write_manifest(tmp_path / "output" / "shared" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own
+
+
+def test_find_course_manifest_without_targets_keeps_the_output_convention(tmp_path):
+    """A parseable spec without ``<output-targets>`` still uses ``output/<tier>`` (#1107)."""
+    specs_dir = tmp_path / "course-specs"
+    specs_dir.mkdir()
+    spec = specs_dir / "course.xml"
+    spec.write_text(_SPEC_HEAD + "</course>\n", encoding="utf-8")
+    own = _write_manifest(tmp_path / "output" / "shared" / ".clm-manifest.course.json")
+    assert find_course_manifest_path(spec) == own

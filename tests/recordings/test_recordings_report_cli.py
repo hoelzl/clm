@@ -194,6 +194,50 @@ def test_report_with_manifest_adds_the_secondary_flag(course, monkeypatch):
     assert "built output changed" in text.output
 
 
+def test_report_spec_file_finds_the_manifest_in_its_output_target(course, monkeypatch):
+    """Regression test for #1107: ``--spec-file`` alone reads the spec's ``<output-targets>``.
+
+    The target lives at ``dist/shared``, outside the ``output/`` convention,
+    so before the fix no manifest was found and the flag silently vanished.
+    """
+    from clm.recordings.state import CourseRecordingState, LectureState, RecordingPart
+
+    root, _ = course
+    from tests.core.test_provenance_manifest import _spec_with_targets
+
+    spec = _spec_with_targets(root, [("shared", "dist/shared", ["code-along"])])
+    files = [{"path": "a", "topic_id": "t", "content_hash": "sha256:a"}]
+    manifest = root / "dist" / "shared" / ".clm-manifest.course.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"spec": "course.xml", "files": files}), encoding="utf-8")
+    state = CourseRecordingState(
+        course_id="c-de",
+        lectures=[
+            LectureState(
+                lecture_id="S::D",
+                display_name="D",
+                parts=[
+                    RecordingPart(
+                        part=1,
+                        raw_file="r.mkv",
+                        recorded_at="2026-09-25T10:00:00",
+                        topic_id="t",
+                        slide_digest="stale",
+                    )
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr("clm.recordings.state.load_state", lambda course_id: state)
+
+    result = CliRunner().invoke(
+        recordings_group, ["report", str(root), "--spec-file", str(spec), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["decks"][0]["parts"][0]["built_output_changed"] is True
+
+
 def test_drift_verb_is_gone():
     result = CliRunner().invoke(recordings_group, ["drift", "c1"])
     assert result.exit_code == 2

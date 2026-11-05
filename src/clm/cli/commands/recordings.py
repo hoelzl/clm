@@ -413,7 +413,7 @@ def _lecture_status(lecture) -> str:
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     default=None,
     help="Built output root containing the provenance manifest, for the secondary "
-    "`built_output_changed` flag (overrides the spec's default output/ location).",
+    "`built_output_changed` flag (overrides the spec's output targets).",
 )
 @click.option(
     "--manifest",
@@ -427,9 +427,10 @@ def _lecture_status(lecture) -> str:
     "--spec-file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Course spec XML; its default output/ root is searched for its manifest "
-    "when --source/--manifest are not given (with --source, selects the spec's "
-    "manifest in that root).",
+    help="Course spec XML; when --source/--manifest are not given, its manifest is "
+    "looked up in the spec's <output-targets> roots (public targets first), then "
+    "in output/ and its subfolders (with --source, selects the spec's manifest "
+    "in that root).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
 def report(
@@ -776,7 +777,11 @@ def _resolve_report_manifest(
     manifest_path: Path | None,
     spec_file: Path | None,
 ) -> Path | None:
-    """``--manifest`` > ``--source`` > ``--spec-file``'s default ``output/`` root, else ``None``."""
+    """``--manifest`` > ``--source`` > ``--spec-file``'s output roots, else ``None``.
+
+    The spec's roots are its ``<output-targets>``, then the ``output/``
+    convention (see ``find_course_manifest_path``).
+    """
     from clm.core.provenance_manifest import find_course_manifest_path
 
     if manifest_path is not None:
