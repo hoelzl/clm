@@ -2815,7 +2815,8 @@ what the post-write verify still finds on disk), and `verify_withheld` (the
 handles the verify held back: rows whose reason starts `withheld:` were not
 written, the others were written but kept out of the ledger), and
 **`no_progress`** (CLM {version}, #1150): non-null when the verify held rows
-back and the pass changed no file and no ledger baseline. The next report
+back, the pass changed no file and no ledger baseline, and no answerable row
+is still pending. The next report
 then frames the same rows, so the same answers repeat the pass forever. It
 lists the held `slides` (each with its `unwritten` and `unrecorded`
 handles), the slides to `reconcile` by hand (those whose changes cannot be

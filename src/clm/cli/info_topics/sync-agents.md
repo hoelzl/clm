@@ -698,7 +698,9 @@ deck-wide fault and for a pass whose landed rows all sat on a faulted
 slide.
 
 **`no_progress`** (CLM {version}, #1150) is non-null when the verify held
-rows back and the pass changed **no file and no ledger baseline**. Nothing
+rows back, the pass changed **no file and no ledger baseline**, and no
+answerable row is still pending (answer those first: one may be what the
+slide waits for; `manual` rows don't count). Nothing
 on the held slides was written or recorded, so the next report frames the
 same rows, and the same answers repeat this pass exactly: answering again
 is a loop that never ends. Typical causes are the engine's own mechanical

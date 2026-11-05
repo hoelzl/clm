@@ -3203,6 +3203,9 @@ def apply_deck(
     state_before = baseline_state(deck_ledger)
     key_groups = {item.key: group for item, group in zip(diff.items, item_groups, strict=True)}
     answered = {row.key for row in rows}
+    #: Rows an answer could still resolve: while one is pending, the pass is
+    #: the loop's normal state, not a stall (#1150).
+    answerable = {(item.key, item.action) for item in diff.items if item_answers(item)}
     #: Every fingerprint the ledger recorded: what is NOT among them is an
     #: author's edit, which a pass must never drop (#1130 step 2).
     baseline_fps: set[str] | None = (
@@ -3255,7 +3258,11 @@ def apply_deck(
             if not dry_run:
                 # Nothing landed: no file and no ledger entry can have changed.
                 outcome.no_progress = _no_progress(
-                    outcome, key_groups, answered, deck_wide=holds.everything is not None
+                    outcome,
+                    key_groups,
+                    answered,
+                    answerable,
+                    deck_wide=holds.everything is not None,
                 )
             return outcome
         finals = current.ex.emit_all()
@@ -3540,7 +3547,7 @@ def apply_deck(
     outcome.ledger_changed = recorded_any or not outcome.verify_violations
     if not changed and baseline_state(target) == state_before:
         outcome.no_progress = _no_progress(
-            outcome, key_groups, answered, deck_wide=holds.everything is not None
+            outcome, key_groups, answered, answerable, deck_wide=holds.everything is not None
         )
     return outcome
 
@@ -3549,6 +3556,7 @@ def _no_progress(
     outcome: ApplyOutcome,
     key_groups: dict[str, str | None],
     answered_keys: set[str],
+    answerable: set[tuple[str, str]],
     *,
     deck_wide: bool,
 ) -> NoProgress | None:
@@ -3561,6 +3569,11 @@ def _no_progress(
     slides was written or recorded), so the same answers repeat this pass.
     """
     if not outcome.verify_withheld:
+        return None
+    # An unanswered question may be exactly what the held slide waits for, so
+    # "no answer can change this" would be false. ``manual`` rows have no
+    # answers and don't count: they can't move the pass on their own.
+    if any(r.status == "pending" and (r.key, r.action) in answerable for r in outcome.results):
         return None
     unwritten_keys = {r.key for r in outcome.results if r.reason.startswith("withheld:")}
     by_slide: dict[str, tuple[list[str], list[str]]] = {}

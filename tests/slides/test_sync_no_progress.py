@@ -174,3 +174,38 @@ def test_a_pass_that_writes_is_not_a_stall():
     assert outcome.wrote, rows
     assert outcome.verify_withheld, rows  # the gate did hold slides back
     assert outcome.no_progress is None
+
+
+def test_a_pending_answerable_row_is_not_a_stall():
+    """A held slide whose fix is a question the agent has not answered yet: an
+    id-less shared cell forked on EN frames ``translate_new``. Without an answer
+    the pass changes nothing, but the answer resolves it, so "no answer can
+    change this" would be wrong (#787 check)."""
+    fork_en = '# %% lang="en" slide_id="cc"\n# better\nx = 1\n\n'
+    head = {
+        lang: f'# %% [markdown] lang="{lang}" tags=["slide"] slide_id="s0"\n#\n# # s0 {lang}\n\n'
+        for lang in ("de", "en")
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        de, en = Path(tmp) / "slides_t.de.py", Path(tmp) / "slides_t.en.py"
+        de.write_text(sp.HEADER["de"] + head["de"] + "# %%\n# prose\nx = 1\n", encoding="utf-8")
+        en.write_text(sp.HEADER["en"] + head["en"] + "# %%\n# prose\nx = 1\n", encoding="utf-8")
+        sp._record(de, en)
+        en.write_text(sp.HEADER["en"] + head["en"] + fork_en, encoding="utf-8")
+
+        _, diff = sp._diff(de, en)
+        pos_key = next(i.key for i in diff.items if i.action == "stamp_vs_new")
+        sp._apply(de, en, {pos_key: doc_apply.Decision(key=pos_key, choice="treat_as_new")})
+
+        _, diff = sp._diff(de, en)
+        assert ("id:cc", "translate_new") in [(i.key, i.action) for i in diff.items]
+        outcome = sp._apply(de, en, {})
+        assert outcome.verify_withheld, outcome.to_payload()  # the gate holds rows back
+        assert not outcome.wrote
+        assert outcome.no_progress is None, outcome.no_progress
+
+        # And the pending answer does resolve it.
+        answer = doc_apply.Decision(key="id:cc", body="# besser\nx = 1")
+        sp._apply(de, en, {"id:cc": answer})
+        _, diff = sp._diff(de, en)
+        assert diff.is_clean, [(i.key, i.action) for i in diff.items]
