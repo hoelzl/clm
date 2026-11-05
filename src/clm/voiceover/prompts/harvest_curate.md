@@ -30,7 +30,17 @@ Rules (these replace the old embedded-model merge — apply them yourself):
    groups, in order of return). They often revisit or correct earlier
    statements — weigh them accordingly; a later revisit wins over an earlier
    statement it contradicts.
-7. **Multiple narrative cells.** A slide often carries several narrative
+7. **Suspect ASR segments.** `transcript.suspect_segments` lists passages
+   the speech recognizer may have invented or looped, each with `flags`:
+   `low_confidence`, `no_speech` (likely spoken over silence),
+   `high_compression` (repetitive text), `repeat_collapsed` (repeated
+   copies were already reduced to one; `collapsed_repeats` says how many),
+   `trailing_phrase` (a classic end-of-video hallucination such as "Thank
+   you."). Treat them as unverified: keep one only if the slide content or
+   the surrounding speech corroborates it, otherwise put it in `dropped`.
+   A missing `suspect_segments` key means the flags are unknown, not that
+   the transcript is clean.
+8. **Multiple narrative cells.** A slide often carries several narrative
    cells — typically one per code cell, each sitting next to what it
    narrates (`inputs.baseline` lists them in document order with their
    `member` handles). Distribute the narration accordingly: address each

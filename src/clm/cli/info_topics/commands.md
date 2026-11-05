@@ -4588,7 +4588,18 @@ companion, with per-cell member keys), and a purely **structural** novelty
 | `unmatched_slide` | No voiceover and no speech (shown silently, or never shown) |
 
 Transcript segments the aligner could not assign to any slide are listed
-separately under `unmatched_speech`. The envelope also records the video
+separately under `unmatched_speech`.
+
+The transcript is cleaned at read time (cached ASR output is never
+rewritten): exact repetition loops are collapsed to one occurrence (3+
+identical consecutive occurrences of a 2+ word phrase, or 2 of a phrase of
+8+ words), and
+possible hallucinations are flagged, never removed. Each item's
+`transcript.suspect_segments` and each `unmatched_speech` entry carry
+`flags` (`low_confidence`, `no_speech`, `high_compression`,
+`repeat_collapsed`, `trailing_phrase`) and the faster-whisper metrics
+(`avg_logprob`, `no_speech_prob`, `compression_ratio`) when known;
+`summary.suspect_segments` counts them. Details: `clm info harvest-agents`. The envelope also records the video
 `fingerprint` that keys the artifact cache (and, in later phases, the
 ledger provenance `harvest:<fingerprint>`).
 

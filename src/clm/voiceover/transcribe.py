@@ -32,12 +32,26 @@ WHISPER_SAMPLE_RATE = 16000
 
 @dataclass(frozen=True)
 class TranscriptSegment:
-    """A single segment of transcribed speech with timestamps."""
+    """A single segment of transcribed speech with timestamps.
+
+    The quality fields (#1105) are optional: ``avg_logprob``,
+    ``no_speech_prob`` and ``compression_ratio`` are faster-whisper's
+    per-segment metrics (``None`` for other backends and for transcripts
+    cached before they were recorded). ``collapsed_repeats`` and ``flags``
+    are set by the read-time clean-up in :mod:`clm.voiceover.asr_cleanup`.
+    """
 
     start: float  # seconds
     end: float  # seconds
     text: str
     source_part_index: int = 0  # which video part this segment came from
+    avg_logprob: float | None = None
+    no_speech_prob: float | None = None
+    compression_ratio: float | None = None
+    #: How many repeated copies of this text the clean-up removed.
+    collapsed_repeats: int = 0
+    #: Suspect-segment flags (see :data:`clm.voiceover.asr_cleanup.FLAGS`).
+    flags: tuple[str, ...] = ()
 
     @property
     def duration(self) -> float:
@@ -47,10 +61,25 @@ class TranscriptSegment:
     def midpoint(self) -> float:
         return (self.start + self.end) / 2.0
 
+    def quality_dict(self) -> dict:
+        """The quality fields that are set (empty for a plain segment), so
+        encodings of segments without them stay byte-identical."""
+        d: dict = {}
+        for name in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+            value = getattr(self, name)
+            if value is not None:
+                d[name] = value
+        if self.collapsed_repeats:
+            d["collapsed_repeats"] = self.collapsed_repeats
+        if self.flags:
+            d["flags"] = list(self.flags)
+        return d
+
     def to_dict(self) -> dict:
         d: dict = {"start": self.start, "end": self.end, "text": self.text}
         if self.source_part_index != 0:
             d["source_part_index"] = self.source_part_index
+        d.update(self.quality_dict())
         return d
 
     @classmethod
@@ -60,6 +89,11 @@ class TranscriptSegment:
             end=data["end"],
             text=data["text"],
             source_part_index=data.get("source_part_index", 0),
+            avg_logprob=data.get("avg_logprob"),
+            no_speech_prob=data.get("no_speech_prob"),
+            compression_ratio=data.get("compression_ratio"),
+            collapsed_repeats=data.get("collapsed_repeats", 0),
+            flags=tuple(data.get("flags", ())),
         )
 
 
@@ -201,6 +235,10 @@ class FasterWhisperBackend:
                         start=segment.start,
                         end=segment.end,
                         text=text,
+                        # Kept for the read-time suspect flags (#1105).
+                        avg_logprob=_metric(segment, "avg_logprob"),
+                        no_speech_prob=_metric(segment, "no_speech_prob"),
+                        compression_ratio=_metric(segment, "compression_ratio"),
                     )
                 )
 
@@ -221,6 +259,14 @@ class FasterWhisperBackend:
             language=detected_lang,
             duration=duration,
         )
+
+
+def _metric(segment: object, name: str) -> float | None:
+    """A numeric per-segment metric of a faster-whisper segment, or None."""
+    value = getattr(segment, name, None)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def _torch_device(device: str) -> str:

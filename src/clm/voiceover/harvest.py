@@ -137,6 +137,7 @@ def run_pipeline(
     and stays single-video only (it encodes one part's ASR output).
     """
     from clm.voiceover.aligner import align_transcript
+    from clm.voiceover.asr_cleanup import clean_transcript
     from clm.voiceover.cache import (
         cached_alignment,
         cached_detect,
@@ -196,6 +197,9 @@ def run_pipeline(
                 device=device,
             )
             logger.info("transcript for %s: cache %s", part.path.name, "hit" if tx_hit else "miss")
+        # Read-time clean-up (#1105): applies to fresh, cached, and injected
+        # transcripts alike; the transcript cache keeps the raw ASR output.
+        transcript = clean_transcript(transcript)
 
         def _do_detect(part=part):
             return detect_transitions(part.path)[0]
@@ -243,7 +247,7 @@ def run_pipeline(
         policy=policy,
         base_dir=slides_path.parent,
         alignment_fn=_run_align,
-        cfg={"lang": lang, "multi_part": multi_part},
+        cfg=alignment_cache_config(lang, multi_part=multi_part),
     )
 
     return PipelineArtifacts(
@@ -251,6 +255,30 @@ def run_pipeline(
         timeline=timeline,
         transcript_language=merged_transcript.language,
     )
+
+
+def alignment_cache_config(lang: str | None, *, multi_part: bool) -> dict[str, Any]:
+    """The alignment cache config shared by ``harvest`` and ``autopilot``.
+
+    It names the ASR clean-up version (#1105): an alignment computed from a
+    differently cleaned transcript misses once and is recomputed (cheap),
+    while the expensive transcript cache entry is reused unchanged.
+    """
+    from clm.voiceover.asr_cleanup import ASR_CLEANUP_VERSION
+
+    return {"lang": lang, "multi_part": multi_part, "asr_cleanup": ASR_CLEANUP_VERSION}
+
+
+def segment_payload(segment) -> dict[str, Any]:
+    """A transcript segment as harvest reports show it: span, text, part,
+    and the ASR suspect flags / quality metrics that are known (#1105)."""
+    return {
+        "start": segment.start,
+        "end": segment.end,
+        "text": segment.text,
+        "source_part_index": segment.source_part_index,
+        **segment.quality_dict(),
+    }
 
 
 def classify_slide(*, has_transcript: bool, vo_present: bool) -> str:
@@ -310,6 +338,14 @@ def build_report(
     alignment = artifacts.alignment
     timeline = artifacts.timeline
     narrative = _narrative_by_group(deck)
+    # Suspect ASR segments per slide (#1105). Only an alignment with the
+    # assignment trail carries segment objects; without it flags are unknown.
+    suspects: dict[int, list[dict[str, Any]]] | None = None
+    if alignment.assignments:
+        suspects = {}
+        for a in alignment.assignments:
+            if a.slide_index is not None and a.segment.flags:
+                suspects.setdefault(a.slide_index, []).append(segment_payload(a.segment))
 
     items: list[dict[str, Any]] = []
     counts: dict[str, int] = dict.fromkeys(NOVELTY_CLASSES, 0)
@@ -346,6 +382,8 @@ def build_report(
                 "segments": list(notes.segments),
                 "revisited_segments": [list(r) for r in notes.revisited_segments],
             }
+            if suspects is not None:
+                item["transcript"]["suspect_segments"] = suspects.get(sg.index, [])
         if slide_id is None:
             item["note"] = (
                 "slide has no slide_id — run `clm slides normalize --stamp-ids` "
@@ -354,13 +392,7 @@ def build_report(
         items.append(item)
 
     unmatched_speech: list[dict[str, Any]] = [
-        {
-            "start": seg.start,
-            "end": seg.end,
-            "text": seg.text,
-            "source_part_index": seg.source_part_index,
-        }
-        for seg in alignment.unassigned_segments
+        segment_payload(seg) for seg in alignment.unassigned_segments
     ]
     # Aligned notes pointing at indices outside the parsed deck (a stale
     # injected alignment, or slides removed since the recording) are speech
@@ -368,7 +400,17 @@ def build_report(
     for idx in sorted(set(alignment.slide_notes) - known_indices):
         text = alignment.get_notes_text(idx)
         if text is not None:
-            unmatched_speech.append({"slide_index": idx, "text": text})
+            entry: dict[str, Any] = {"slide_index": idx, "text": text}
+            if suspects and suspects.get(idx):
+                entry["suspect_segments"] = suspects[idx]
+            unmatched_speech.append(entry)
+
+    # Count only what the report surfaces, so every counted suspect is findable.
+    suspect_count = sum(len(i.get("transcript", {}).get("suspect_segments", [])) for i in items)
+    suspect_count += sum(
+        len(e["suspect_segments"]) if "suspect_segments" in e else int(bool(e.get("flags")))
+        for e in unmatched_speech
+    )
 
     actionable = bool(unmatched_speech) or any(counts[c] for c in ACTIONABLE_CLASSES)
     return {
@@ -389,6 +431,7 @@ def build_report(
             "slides": len(items),
             "classes": counts,
             "unmatched_speech": len(unmatched_speech),
+            "suspect_segments": suspect_count,
             "actionable": actionable,
         },
         "items": items,
