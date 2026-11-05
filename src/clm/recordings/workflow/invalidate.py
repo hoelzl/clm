@@ -28,6 +28,7 @@ is rolled back, and the ledger is only written after the moves succeeded.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
@@ -54,7 +55,12 @@ from .safe_move import safe_move
 from .session import _scan_active_take_files, _scan_takes_for
 
 if TYPE_CHECKING:
-    from clm.recordings.state import CourseRecordingState, LectureState, RecordingPart
+    from clm.recordings.state import (
+        CourseRecordingState,
+        LectureState,
+        RecordingPart,
+        TakeRecord,
+    )
 
     from .jobs import ProcessingJob
 
@@ -108,6 +114,7 @@ class InvalidateResult:
     ledger_path: Path | None = None
     restored_recorded_at: str | None = None
     single_part: bool = False
+    renamed_to_single_part: bool = False
     ack_dropped: bool = False
     state_updated: bool = False
     moves: list[Move] = field(factory=list)
@@ -213,22 +220,32 @@ def invalidate_take(req: InvalidateRequest) -> InvalidateResult:
             )
 
     # --- What stands afterwards.
+    # A take invalidated elsewhere (the audit trail is committed, this state
+    # file is not) is no candidate. What the active take replaced is the take
+    # demoted last, not the newest stamp: a dashboard Restore reorders them.
+    candidates = [
+        t for t in (state_part.takes if state_part else []) if not _invalidated_stamp(entry, key, t)
+    ]
+    last_replaced = (
+        max(candidates, key=lambda t: (t.superseded_at or "", t.take)) if candidates else None
+    )
     restored = None
     fallback = None
+    prefer = last_replaced.recorded_at if state_is_active and last_replaced else None
     if ledger_is_active and entry is not None:
-        restored = rl.previous_take(entry, *key)
+        restored = rl.previous_take(entry, *key, prefer=prefer)
         if restored is None and state_part is not None:
-            fallback = _fallback_from_state(req, state_part, stamp)
+            fallback = _fallback_from_state(req, state_part, stamp, entry)
             restored = fallback
     promote = None
-    if state_is_active and state_part is not None and state_part.takes:
+    if state_is_active:
         wanted = restored.recorded_at if restored is not None else None
-        promote = next((t for t in state_part.takes if t.recorded_at == wanted), None) or max(
-            state_part.takes, key=lambda t: t.take
-        )
+        promote = next((t for t in candidates if t.recorded_at == wanted), None) or last_replaced
 
+    loses_ledger_part = ledger_is_active and restored is None
+    loses_state_part = state_is_active and promote is None
     stands_in_ledger = restored is not None or (active_entry is not None and not ledger_is_active)
-    stands_in_state = state_part is not None and (not state_is_active or promote is not None)
+    stands_in_state = state_part is not None and not loses_state_part
     gone = not stands_in_ledger and not stands_in_state
 
     # --- The files' view, and the refusals.
@@ -242,7 +259,8 @@ def invalidate_take(req: InvalidateRequest) -> InvalidateResult:
         if (p.course_id, p.lang) == (req.course_id, req.lang)
     }
     state_parts = {p.part for p in lecture.parts} if lecture else set()
-    if gone:
+    if loses_ledger_part or loses_state_part:
+        # Either store losing the part is a hole, even if the other still holds a take.
         later = sorted(n for n in ledger_parts | state_parts | disk_parts if n > req.part)
         if later:
             listing = ", ".join(str(n) for n in later)
@@ -260,8 +278,10 @@ def invalidate_take(req: InvalidateRequest) -> InvalidateResult:
     renames_to_single: list[Move] = []
     if location:
         slot = _file_slot(req, location)
-        moves = _plan_moves(req, location, slot, state_is_active, state_take, promote)
-        if not moves and (state_is_active or state_take is not None):
+        # A lost state file: the ledger's active take is what the active slots hold.
+        files_active = state_is_active or (ledger_is_active and state_part is None)
+        moves = _plan_moves(req, location, slot, files_active, state_take, promote)
+        if not moves:
             warnings.append(f"no video files of this take found under {location.root}")
         if single_part:
             renames_to_single = _plan_back_to_single_part(req, location, warnings)
@@ -288,6 +308,7 @@ def invalidate_take(req: InvalidateRequest) -> InvalidateResult:
             else (promote.recorded_at if promote is not None else None)
         ),
         single_part=single_part,
+        renamed_to_single_part=bool(renames_to_single),
         moves=all_moves,
         warnings=warnings,
         note=req.note,
@@ -307,7 +328,7 @@ def invalidate_take(req: InvalidateRequest) -> InvalidateResult:
     # --- Do it: the moves first (rollback-able), then the ledger, then the state.
     if ledger_has_target and entry is not None:
         outcome = rl.invalidate_part(
-            entry, *key, recorded_at=stamp, note=req.note, fallback=fallback
+            entry, *key, recorded_at=stamp, note=req.note, prefer=prefer, fallback=fallback
         )
         result.ack_dropped = outcome.ack_dropped
     if req.dry_run:
@@ -318,32 +339,29 @@ def invalidate_take(req: InvalidateRequest) -> InvalidateResult:
         try:
             rl.save(ledger, req.ledger_path)
         except OSError as exc:
-            _rollback(completed)
             raise InvalidationRefused(
-                f"cannot write the ledger {req.ledger_path}: {exc}; nothing changed"
+                f"cannot write the ledger {req.ledger_path}: {exc}; {_rollback(completed)}"
             ) from None
 
     if req.state is not None and lecture is not None:
         try:
-            for old, new in completed:
-                req.state.rename_recording_paths(
-                    str(old), str(new), old_processed=str(old), new_processed=str(new)
+            _rename_in_state(lecture, completed)
+            if state_is_active or state_take is not None:
+                req.state.invalidate_take(
+                    lecture.lecture_id,
+                    req.part,
+                    take=state_take,
+                    promote=promote.take if promote is not None else None,
+                    note=req.note,
                 )
-            req.state.invalidate_take(
-                lecture.lecture_id,
-                req.part,
-                take=state_take,
-                promote=promote.take if promote is not None else None,
-                note=req.note,
-            )
-            result.state_updated = state_is_active or state_take is not None
+                result.state_updated = True
             if req.persist_state is not None:
                 req.persist_state(req.state)
         except (OSError, ValueError) as exc:
             result.state_updated = False
             warnings.append(f"the state file was not updated: {exc}")
             logger.warning("State update failed invalidating {}: {}", req.deck_key, exc)
-    logger.info(
+    logger.debug(
         "Invalidated take {} of {} part {} ({}): {}",
         stamp,
         req.deck_key or req.deck_name,
@@ -393,8 +411,42 @@ def _find_in_state(
     return hits[0] if hits else (None, None)
 
 
+def _invalidated_stamp(
+    entry: rl.DeckEntry | None, key: tuple[str, int, str], take: TakeRecord
+) -> bool:
+    if entry is None:
+        return False
+    return any(
+        (t.course_id, t.part, t.lang) == key and t.recorded_at == take.recorded_at
+        for t in entry.invalidated
+    )
+
+
+def _rename_in_state(lecture: LectureState, moves: list[Move]) -> None:
+    """Point the lecture's paths at the moved files.
+
+    Compared resolved: the state holds the paths as the dashboard's root was
+    typed, and ``--root`` may spell the same directory differently.
+    """
+    if not moves:
+        return
+
+    def norm(path: str | Path) -> str:
+        return os.path.normcase(str(Path(path).resolve()))
+
+    moved = {norm(old): str(new) for old, new in moves}
+    for part in lecture.parts:
+        records: list[RecordingPart | TakeRecord] = [part, *part.takes]
+        for record in records:
+            record.raw_file = moved.get(norm(record.raw_file), record.raw_file)
+            if record.processed_file:
+                record.processed_file = moved.get(
+                    norm(record.processed_file), record.processed_file
+                )
+
+
 def _fallback_from_state(
-    req: InvalidateRequest, state_part: RecordingPart, stamp: str
+    req: InvalidateRequest, state_part: RecordingPart, stamp: str, entry: rl.DeckEntry
 ) -> rl.LedgerPart | None:
     """Rebuild the take before *stamp* from the state file, for a ledger without history.
 
@@ -406,7 +458,9 @@ def _fallback_from_state(
     earlier = [
         (t.recorded_at, t.git_commit, t.git_dirty)
         for t in state_part.takes
-        if t.recorded_at and t.recorded_at < stamp
+        if t.recorded_at
+        and t.recorded_at < stamp
+        and not _invalidated_stamp(entry, (req.course_id, req.part, req.lang), t)
     ]
     if state_part.recorded_at and state_part.recorded_at < stamp:
         earlier.append((state_part.recorded_at, state_part.git_commit, state_part.git_dirty))
@@ -560,7 +614,7 @@ def _plan_moves(
     req: InvalidateRequest,
     location: _Location,
     slot: int,
-    state_is_active: bool,
+    files_active: bool,
     state_take: int | None,
     promote: Any,
 ) -> list[Move]:
@@ -570,7 +624,7 @@ def _plan_moves(
     taken: set[Path] = set()
     moves: list[Move] = []
 
-    if state_is_active:
+    if files_active:
         sources = _active_files(req, location, slot)
     elif state_take is not None:
         raws, finals = _scan_takes_for(
@@ -666,16 +720,24 @@ def _run_moves(moves: list[Move]) -> list[Move]:
             safe_move(src, dst)
             completed.append((src, dst))
     except OSError as exc:
-        _rollback(completed)
         raise InvalidationRefused(
-            f"cannot move the take's files ({exc}); everything was put back, nothing changed"
+            f"cannot move the take's files ({exc}); {_rollback(completed)}"
         ) from None
     return completed
 
 
-def _rollback(completed: list[Move]) -> None:
+def _rollback(completed: list[Move]) -> str:
+    """Undo *completed* moves; returns what to tell the user, honestly."""
+    stranded: list[Path] = []
     for src, dst in reversed(completed):
         try:
             safe_move(dst, src)
         except OSError as exc:
             logger.error("Rollback failed for {} → {}: {}", dst, src, exc)
+            stranded.append(dst)
+    if stranded:
+        names = ", ".join(str(p) for p in stranded)
+        return (
+            f"the ledger and state were not changed, but these files could not be put back: {names}"
+        )
+    return "everything was put back, nothing changed"

@@ -786,13 +786,13 @@ def _invalidate_request(
                 f"the state file of {resolved_course} cannot be read: {exc}"
             ) from None
 
-    root = cli_root
+    root = cli_root.resolve() if cli_root is not None else None
     if root is None:
         try:
             configured = _build_recordings_config().root_dir
         except Exception:  # pragma: no cover — defensive
             configured = ""
-        root = Path(configured) if configured else None
+        root = Path(configured).resolve() if configured else None
     jobs = []
     if root is not None and (root / DEFAULT_JOBS_FILE).is_file():
         jobs = JsonFileJobStore(root / DEFAULT_JOBS_FILE).load_all()

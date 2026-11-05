@@ -654,6 +654,153 @@ def mock_obs_session() -> MagicMock:
     return obs
 
 
+class TestReviewFindings:
+    """Adversarial-review regressions for #1093."""
+
+    def test_retake_after_a_dashboard_restore_brings_back_what_it_replaced(self, deck: Path):
+        """T1, T2, Restore T1, retake T3: T3 replaced T1, although T2 has the newer stamp."""
+        _record(deck, _ledger_part(TAKE1), _ledger_part(TAKE2), _ledger_part(TAKE3))
+        state = _state(
+            RecordingPart(
+                part=1,
+                raw_file="t3",
+                recorded_at=TAKE3,
+                active_take=3,
+                takes=[
+                    TakeRecord(
+                        take=1,
+                        raw_file="t1",
+                        recorded_at=TAKE1,
+                        superseded_at="2026-10-23T00:00:00",
+                    ),
+                    TakeRecord(
+                        take=2,
+                        raw_file="t2",
+                        recorded_at=TAKE2,
+                        superseded_at="2026-10-22T00:00:00",
+                    ),
+                ],
+            )
+        )
+        result = invalidate_take(_request(deck, state=state))
+        assert result.restored_recorded_at == TAKE1
+        assert _parts_in_ledger(deck) == [(1, TAKE1)]
+        assert state.lectures[0].parts[0].active_take == 1
+
+    def test_differently_spelled_root_still_updates_state_paths(
+        self, deck: Path, root: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _record(deck, _ledger_part(TAKE1), _ledger_part(TAKE2))
+        new_raw = _file(_dir(root, "to-process") / f"{DECK_NAME}--RAW.mkv")
+        old_raw = _file(_dir(root, "takes") / f"{DECK_NAME} (take 1)--RAW.mkv")
+        state = _state(
+            RecordingPart(
+                part=1,
+                raw_file=str(new_raw),
+                recorded_at=TAKE2,
+                active_take=2,
+                takes=[TakeRecord(take=1, raw_file=str(old_raw), recorded_at=TAKE1)],
+            )
+        )
+        monkeypatch.chdir(root.parent)
+        invalidate_take(_request(deck, state=state, recordings_root=Path(root.name)))
+        part = state.lectures[0].parts[0]
+        assert Path(part.raw_file).resolve() == new_raw.resolve()
+        assert new_raw.read_bytes() == old_raw.name.encode()
+        record = state.lectures[0].invalidated[0]
+        assert (
+            Path(record.raw_file).resolve() == (_dir(root, "superseded") / new_raw.name).resolve()
+        )
+
+    def test_one_store_losing_a_lower_part_is_a_hole_too(self, deck: Path):
+        _record(deck, _ledger_part(TAKE3, 1))
+        state = _state(
+            RecordingPart(part=1, raw_file="a", recorded_at=TAKE1),
+            RecordingPart(part=2, raw_file="b", recorded_at=TAKE2),
+        )
+        with pytest.raises(InvalidationRefused, match="never renumbered"):
+            invalidate_take(_request(deck, 1, state=state, lecture_id=LECTURE, deck_name=DECK_NAME))
+        assert len(state.lectures[0].parts) == 2
+
+    def test_take_invalidated_elsewhere_is_not_restored_from_this_state_file(self, deck: Path):
+        """Machine A committed the audit; machine B's state file still lists the take."""
+        _record(deck, _ledger_part(TAKE1), _ledger_part(TAKE2))
+        invalidate_take(_request(deck, recorded_at=TAKE1))
+        state = _state(
+            RecordingPart(
+                part=1,
+                raw_file="new",
+                recorded_at=TAKE2,
+                active_take=2,
+                takes=[TakeRecord(take=1, raw_file="old", recorded_at=TAKE1)],
+            )
+        )
+        result = invalidate_take(_request(deck, state=state))
+        assert result.effect == "removed"
+        assert _parts_in_ledger(deck) == []
+        assert state.lectures[0].parts == []
+
+    def test_ledger_stamp_unknown_to_the_state_leaves_its_active_take(self, deck: Path):
+        _record(deck, _ledger_part(TAKE1), _ledger_part(TAKE3))
+        state = _state(RecordingPart(part=1, raw_file="x", recorded_at=TAKE2))
+        result = invalidate_take(
+            _request(deck, state=state, lecture_id=LECTURE, recorded_at=TAKE1, deck_name=DECK_NAME)
+        )
+        assert result.effect == "history"
+        assert not result.state_updated
+        assert state.lectures[0].parts[0].raw_file == "x"
+        assert state.lectures[0].invalidated == []
+
+    def test_ledger_take_without_state_part_moves_the_active_files(self, deck: Path, root: Path):
+        """A lost state file: success must not leave the video in its active slot."""
+        _record(deck, _ledger_part(TAKE1))
+        raw = _file(_dir(root, "final") / f"{DECK_NAME}.mp4")
+        state = _state()
+        invalidate_take(
+            _request(
+                deck,
+                state=state,
+                lecture_id=LECTURE,
+                section_name=SECTION,
+                deck_name=DECK_NAME,
+                recordings_root=root,
+            )
+        )
+        assert not raw.exists()
+        assert (_dir(root, "superseded") / raw.name).exists()
+
+    def test_failed_rollback_does_not_claim_nothing_changed(self, deck: Path, root: Path):
+        path = _record(deck, _ledger_part(TAKE1))
+        before = path.read_bytes()
+        raw = _file(_dir(root, "to-process") / f"{DECK_NAME}--RAW.mkv")
+        _file(_dir(root, "to-process") / f"{DECK_NAME}--RAW.wav")
+        state = _state(RecordingPart(part=1, raw_file=str(raw), recorded_at=TAKE1))
+        calls: list[str] = []
+
+        def flaky(src, dst):
+            calls.append(str(src))
+            if len(calls) >= 2:
+                raise PermissionError("locked")
+            os.replace(src, dst)
+
+        with (
+            patch("clm.recordings.workflow.invalidate.safe_move", side_effect=flaky),
+            pytest.raises(InvalidationRefused, match="could not be put back") as exc,
+        ):
+            invalidate_take(_request(deck, state=state, recordings_root=root))
+        assert "nothing changed" not in str(exc.value)
+        assert path.read_bytes() == before
+
+    def test_marker_with_a_bad_start_time_is_discarded_not_a_crash(self, isolated_state_dir: Path):
+        from clm.recordings.dashboard_presence import live_dashboards
+
+        isolated_state_dir.mkdir(parents=True)
+        bad = isolated_state_dir / "dashboard-7.marker.json"
+        bad.write_text(json.dumps({"pid": os.getpid(), "started": "x"}), encoding="utf-8")
+        assert live_dashboards() == []
+        assert not bad.exists()
+
+
 class TestSeedDoesNotResurrect:
     def test_seed_skips_an_invalidated_take(self, deck: Path):
         """Another machine's state file still lists the take."""
@@ -1042,6 +1189,60 @@ class TestSession:
         assert (_dir(root, "superseded") / raw.name).read_bytes() == b"second.mkv"
         part = state.lectures[0].parts[0]
         assert (part.active_take, part.recorded_at, part.raw_file) == (1, TAKE1, str(raw))
+
+    def test_deck_armed_on_part_1_follows_it_back_to_single_part(
+        self, mock_obs_session, root: Path, deck: Path
+    ):
+        """Otherwise the next take cascades the files back and supersedes the good take."""
+        _record(deck, _ledger_part(TAKE1, 1), _ledger_part(TAKE2, 2))
+        p1 = _file(_dir(root, "to-process") / f"{DECK_NAME} (part 1)--RAW.mkv")
+        p2 = _file(_dir(root, "to-process") / f"{DECK_NAME} (part 2)--RAW.mkv")
+        state = _state(
+            RecordingPart(part=1, raw_file=str(p1), recorded_at=TAKE1),
+            RecordingPart(part=2, raw_file=str(p2), recorded_at=TAKE2),
+        )
+        session = self._session(mock_obs_session, root, state)
+        session.arm(COURSE, SECTION, DECK_NAME, part_number=1, lang="de", lecture_id=LECTURE)
+        result = session.invalidate_take(
+            COURSE,
+            SECTION,
+            DECK_NAME,
+            part_number=2,
+            lang="de",
+            lecture_id=LECTURE,
+            deck_path=deck,
+        )
+        assert result.renamed_to_single_part
+        assert session.armed_deck is not None
+        assert session.armed_deck.part_number == 0
+
+    def test_invalidating_another_part_keeps_the_retake_window(
+        self, mock_obs_session, root: Path, deck: Path
+    ):
+        _record(deck, _ledger_part(TAKE1, 1), _ledger_part(TAKE2, 1), _ledger_part(TAKE1, 2))
+        state = _state(
+            RecordingPart(
+                part=1,
+                raw_file="p1",
+                recorded_at=TAKE2,
+                active_take=2,
+                takes=[TakeRecord(take=1, raw_file="old", recorded_at=TAKE1)],
+            ),
+            RecordingPart(part=2, raw_file="p2", recorded_at=TAKE1),
+        )
+        session = self._session(mock_obs_session, root, state)
+        session.arm(COURSE, SECTION, DECK_NAME, part_number=2, lang="de", lecture_id=LECTURE)
+        session._state = SessionState.ARMED_AFTER_TAKE
+        session.invalidate_take(
+            COURSE,
+            SECTION,
+            DECK_NAME,
+            part_number=1,
+            lang="de",
+            lecture_id=LECTURE,
+            deck_path=deck,
+        )
+        assert session.state is SessionState.ARMED_AFTER_TAKE
 
     def test_pending_rename_for_the_deck_is_refused(self, mock_obs_session, root: Path, deck: Path):
         from clm.recordings.workflow.rename_queue import PendingRename

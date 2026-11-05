@@ -38,7 +38,7 @@ import enum
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1423,11 +1423,24 @@ class RecordingSession:
                 and self._armed.course_slug == course_slug
                 and self._armed.section_name == section_name
                 and self._armed.deck_name == deck_name
+                and max(self._armed.part_number, 1) == max(part_number, 1)
             ):
                 self._cancel_retake_timer_locked()
                 self._state = SessionState.ARMED
             if self._last_output in {old for old, _ in result.moves}:
                 self._last_output = None
+            # The files of part 1 just lost their suffix: a deck still armed on
+            # part 1 must demote them as the single part, or the next take would
+            # cascade them back and supersede the good take instead.
+            if (
+                result.renamed_to_single_part
+                and self._armed is not None
+                and self._armed.course_slug == course_slug
+                and self._armed.section_name == section_name
+                and self._armed.deck_name == deck_name
+                and self._armed.part_number == 1
+            ):
+                self._armed = replace(self._armed, part_number=0)
         self._notify()
         return result
 

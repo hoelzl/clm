@@ -563,7 +563,7 @@ class CourseRecordingState(BaseModel):
             part.topic_id = successor.topic_id
             part.slide_digest = successor.slide_digest
         lecture.invalidated.append(record)
-        logger.info("Invalidated take {} of {} part {}", record.take, lecture_id, part_number)
+        logger.debug("Invalidated take {} of {} part {}", record.take, lecture_id, part_number)
         return record
 
     def rename_recording_paths(

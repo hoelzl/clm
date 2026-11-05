@@ -718,11 +718,14 @@ class InvalidationOutcome:
     ack_dropped: bool = False
 
 
-def previous_take(entry: DeckEntry, course_id: str, part: int, lang: str) -> LedgerPart | None:
-    """The newest superseded take of the identity: what invalidating the active one restores."""
+def previous_take(
+    entry: DeckEntry, course_id: str, part: int, lang: str, *, prefer: str | None = None
+) -> LedgerPart | None:
+    """What invalidating the active take restores: the superseded take stamped *prefer*, else the newest."""
     key = (course_id, part, lang)
     mine = [p for p in entry.superseded if part_identity(p) == key]
-    return max(mine, key=lambda p: p.recorded_at) if mine else None
+    preferred = next((p for p in mine if p.recorded_at == prefer), None)
+    return preferred or (max(mine, key=lambda p: p.recorded_at) if mine else None)
 
 
 def is_invalidated(entry: DeckEntry, part: LedgerPart) -> bool:
@@ -743,6 +746,7 @@ def invalidate_part(
     recorded_at: str | None = None,
     note: str | None = None,
     at: str | None = None,
+    prefer: str | None = None,
     fallback: LedgerPart | None = None,
 ) -> InvalidationOutcome:
     """Take one take of ``(course_id, part, lang)`` back, in memory.
@@ -751,7 +755,9 @@ def invalidate_part(
     must name the active entry or a superseded one, and a stale or mistyped
     stamp raises :class:`InvalidationRefused` rather than hitting another take.
 
-    Invalidating the active entry restores :func:`previous_take`, else
+    Invalidating the active entry restores the superseded take stamped *prefer*
+    (the state file knows what a retake really replaced: after a dashboard
+    Restore that is not the newest stamp), else :func:`previous_take`, else
     *fallback* (a take only the local state file still knows: a ledger entry
     written before ``superseded`` existed), else the part is gone. Invalidating
     a superseded take only makes it unrestorable. **Numbering is the caller's
@@ -797,7 +803,7 @@ def invalidate_part(
         entry.superseded = [p for p in entry.superseded if p is not target]
         return InvalidationOutcome(invalidated=target, restored=None, was_active=False)
 
-    restored = previous_take(entry, course_id, part, lang) or fallback
+    restored = previous_take(entry, course_id, part, lang, prefer=prefer) or fallback
     entry.parts = [p for p in entry.parts if p is not target]
     if restored is not None:
         entry.superseded = [p for p in entry.superseded if p is not restored]
