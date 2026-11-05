@@ -558,6 +558,7 @@ def test_worker_only_processes_own_type(worker_id, db_path):
     queue.close()
 
 
+@pytest.mark.load_fragile
 def test_worker_deregisters_on_shutdown(worker_id, db_path):
     """Test worker deregisters (deletes itself from DB) on graceful shutdown."""
     worker = MockWorker(worker_id, db_path)

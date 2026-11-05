@@ -212,6 +212,7 @@ def _seed_worker(
 
 
 @pytest.mark.asyncio
+@pytest.mark.load_fragile
 async def test_instant_completion_is_counted_by_progress_tracker(temp_db, temp_workspace, caplog):
     """Regression test for #917 (symptom 1).
 

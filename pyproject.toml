@@ -318,6 +318,13 @@ markers = [
     # (``LOAD_SENSITIVE_TEST_DIRS``); tagging there is automatic, so a test
     # added under one of those directories needs no marker of its own.
     "load_sensitive: heavyweight-process or wall-clock-timing suite, excluded from the pre-push gate only",
+    # ``load_fragile`` is per-test, not per-directory: a test KNOWN to fail
+    # under full-suite load while passing alone and in CI. The local release
+    # gate excludes it (``-m "not docker and not load_fragile"``, see
+    # docs/developer-guide/releasing.md); no CI selector does, and
+    # ``tests/test_load_sensitive_gate.py`` pins that. Deliberately NOT in
+    # ``addopts``. Mark a test only with evidence that it passes alone.
+    "load_fragile: known to fail under full-suite load but pass alone, excluded from the local release gate only",
 ]
 # Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests.
 # Use -n auto for parallel execution via pytest-xdist (pass -n0 to disable).

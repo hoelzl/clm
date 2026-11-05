@@ -604,6 +604,7 @@ def test_pool_manager_start_monitoring(db_path, workspace_path, worker_configs):
         manager.monitor_thread.join(timeout=1)
 
 
+@pytest.mark.load_fragile
 def test_stop_pools_joins_monitor_promptly_despite_long_interval(
     db_path, workspace_path, worker_configs
 ):
@@ -909,6 +910,7 @@ def test_cleanup_still_reaps_a_stuck_pre_registration(db_path, workspace_path, w
     assert not _worker_row_exists(db_path, worker)
 
 
+@pytest.mark.load_fragile
 def test_monitor_health_marks_stale_zero_cpu_docker_worker_hung(
     db_path, workspace_path, worker_configs
 ):
@@ -942,6 +944,7 @@ def test_monitor_health_marks_stale_zero_cpu_docker_worker_hung(
 
 
 @pytest.mark.slow
+@pytest.mark.load_fragile
 def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
     """Test that parallel startup is significantly faster than sequential would be."""
     # Create configuration for 8 workers (enough to show speedup)

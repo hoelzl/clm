@@ -400,7 +400,9 @@ class TestDirectWorkerIntegration:
         assert all(s == "dead" for s in statuses)
 
     @pytest.mark.slow
-    @pytest.mark.parametrize("worker_count", [2, 8, 16, 32])
+    @pytest.mark.parametrize(
+        "worker_count", [2, 8, 16, pytest.param(32, marks=pytest.mark.load_fragile)]
+    )
     def test_high_concurrency_notebook_workers(self, db_path, workspace_path, worker_count):
         """Test high concurrency with multiple notebook workers.
 

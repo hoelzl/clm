@@ -66,7 +66,8 @@ mode needs `[docker]` and `clm build --watch` needs `[watch]`.
 
 ```bash
 pytest                    # Fast suite (~8 min). The pre-PUSH hook runs only a ~30s smoke tier — see "Push protocol" below
-pytest -m "not docker"    # Full suite minus Docker tests (~2 min, pre-release gate)
+pytest -m "not docker and not load_fragile" -n 12    # Pre-release gate: everything except Docker and known load-fragile tests (~15 min)
+pytest -m load_fragile -n0                           # The excluded load-fragile tests alone (~2 min)
 pytest -m ""              # Everything including docker/slow/integration/e2e
 ```
 
@@ -79,9 +80,11 @@ merge to master. `--full` runs the whole fast suite locally.
 
 Tests run in parallel by default via `pytest-xdist` (`-n auto`). The fast
 suite excludes `slow`, `integration`, `e2e`, `db_only`, and `docker` markers.
-Docker-marked tests require CI-built images and are validated in CI only —
-**use `pytest -m "not docker"` for pre-release local testing**. Full marker
-list and strategy in `docs/developer-guide/testing.md`.
+Docker-marked tests require CI-built images and are validated in CI only.
+`load_fragile` tests fail under full-suite load but pass alone and in CI, so
+CI validates them too (#1040). **For pre-release local testing use
+`pytest -m "not docker and not load_fragile" -n 12`**. Full marker list and
+strategy in `docs/developer-guide/testing.md`.
 
 **Claimed-wired rule**: a build record or design doc that claims a path is
 wired must cite the test that executes it, and a security claim in a docstring
@@ -144,8 +147,9 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
 - **Never publish a release without updating documentation first.**
 - **Never publish a release if any local test fails.**
 - **Never publish unless CI has passed for the tagged commit.**
-- Use `pytest -m "not docker"` for local pre-release testing (Docker tests
-  run in CI only).
+- Use `pytest -m "not docker and not load_fragile" -n 12` for local
+  pre-release testing (`docker` and `load_fragile` tests are validated in CI; run the
+  latter alone with `pytest -m load_fragile -n0`).
 - **Publishing is automated — do not run `uv publish` / `gh release create` by
   hand.** Landing a `Bump version …` commit on `master` (e.g. merging a bump PR
   with a **merge commit**, not squash/rebase) — or pushing a `vX.Y.Z` tag —

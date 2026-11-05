@@ -841,7 +841,16 @@ def pytest_collection_modifyitems(config, items):
     # stashed on ``config`` are complete wherever the meta-test runs.
     tests_root = Path(__file__).parent.resolve()
     load_sensitive_counts: dict[str, int] = {}
+    # ``load_fragile`` (#1040) is the per-test, evidence-backed subset: every
+    # such test is load-sensitive by definition, so the deterministic tier
+    # drops it too, wherever it lives. The marker names are stashed before
+    # ``-m`` deselects anything, so ``tests/test_load_sensitive_gate.py`` can
+    # check each one against CI's selectors even under the gate's own filter.
+    load_fragile_markers: dict[str, set[str]] = {}
     for item in items:
+        if item.get_closest_marker("load_fragile") is not None:
+            item.add_marker(pytest.mark.load_sensitive)
+            load_fragile_markers[item.nodeid] = {mark.name for mark in item.iter_markers()}
         try:
             rel_parts = Path(str(item.fspath)).resolve().relative_to(tests_root).parts
         except ValueError:
@@ -854,6 +863,7 @@ def pytest_collection_modifyitems(config, items):
                 )
                 break
     config._clm_load_sensitive_counts = load_sensitive_counts
+    config._clm_load_fragile_markers = load_fragile_markers
 
     # Tally serial-marked items per resulting load group so the meta-test
     # (``tests/test_serial_xdist_groups.py``) can confirm the heavy families

@@ -574,6 +574,7 @@ class TestDrawioWorkerMain:
 class TestDrawioWorkerIntegration:
     """Integration tests for DrawIO worker."""
 
+    @pytest.mark.load_fragile
     def test_worker_processes_drawio_job(self, worker_id, db_path, tmp_path):
         """Worker should process a DrawIO conversion job end-to-end."""
         from clm.workers.drawio.drawio_worker import DrawioWorker

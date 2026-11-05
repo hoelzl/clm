@@ -17,7 +17,7 @@ procedure; this skill is the ordered checklist + the hard guardrails.
 ## The hard rules (never violate)
 
 - **Never publish without updating documentation first.**
-- **Never publish if any local test fails** (`uv run pytest -m "not docker"`).
+- **Never publish if any local test fails** (`uv run pytest -m "not docker and not load_fragile" -n 12`).
 - **Never publish unless CI is green for the released commit.**
 - **Never `uv publish` / `gh release create` by hand** — the workflow owns
   publishing. (A manual fallback exists in releasing.md *only* if the workflow is
@@ -37,8 +37,14 @@ procedure; this skill is the ordered checklist + the hard guardrails.
      generated section; backfill any PR that merged without a fragment.
    - README, AGENTS.md (guardrails only), `clm info` topics (if spec/CLI/migration
      changed), `docs/user-guide` + `docs/developer-guide` as relevant.
-2. **Test**: `uv run pytest -m "not docker"` — all must pass (Docker tests are
-   CI-only). If a test fails, fix the root cause; do not loop-retry.
+2. **Test**: `uv run pytest -m "not docker and not load_fragile" -n 12` — all
+   must pass. `docker` and `load_fragile` tests are validated in CI; run the latter
+   alone with `uv run pytest -m load_fragile -n0`. If a test fails, run it alone
+   with `-n0`: if it fails there, fix the root cause. If it passes alone, follow
+   releasing.md (mark it `load_fragile` in a PR with that evidence). Do not
+   loop-retry, and do not publish past a red gate. A run with no final summary
+   line gave no verdict (a crashed xdist worker can abort or hang it); see
+   releasing.md.
 3. **Bump** (merge-driven, recommended):
    ```
    git switch -c claude/release-A.B.C

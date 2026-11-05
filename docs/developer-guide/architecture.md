@@ -620,7 +620,7 @@ strategy. Quick orientation:
 
 - `pytest` — fast suite (~72s, runs on the pre-push hook); excludes `slow`,
   `integration`, `e2e`, `db_only`, and `docker`
-- `pytest -m "not docker"` — pre-release local gate
+- `pytest -m "not docker and not load_fragile" -n 12` — pre-release local gate
 - `pytest -m ""` — everything (Docker tests are CI-validated only)
 
 Architecture-relevant suites:

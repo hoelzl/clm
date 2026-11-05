@@ -54,15 +54,50 @@ included in the release commit.
 
 ## Step 2: Run local tests (non-Docker)
 
-Docker-marked tests require CI-built images (`lite-test`, `test` tags) that
-are not available locally. Run the local test suite excluding Docker tests:
+The local gate leaves out two groups:
+
+- `docker` tests need CI-built images (`lite-test`, `test` tags) that are not
+  available locally.
+- `load_fragile` tests are known to fail under full-suite load while passing
+  alone and in CI (#1040). With them in, the gate failed on a normal
+  workstation for reasons unrelated to the release.
 
 ```bash
-uv run pytest -m "not docker"
+uv run pytest -m "not docker and not load_fragile" -n 12
 ```
 
-All non-Docker tests must pass before proceeding. This runs unit, integration,
-and e2e tests and takes about 2 minutes with `pytest-xdist` parallelism.
+Every selected test must pass before proceeding. This runs unit, integration,
+slow and e2e tests and took about 15 minutes on the 64-thread dev box. The
+worker count is fixed because 12 is the count this gate has passed at; a run at
+`-n auto` (32 workers there) aborted early. Keep the whole log, so that a
+failure can be named afterwards: add `-v -rfE > gate.log 2>&1`.
+
+CI still runs both groups: the `load_fragile` tests run in its `unit` and `slow`
+suites, and the Release workflow publishes only after CI is green for the
+commit. So nothing skips verification; these tests are verified where the load
+is controlled.
+
+To run the excluded tests on their own, or list them:
+
+```bash
+uv run pytest -m load_fragile -n0                 # 8 tests, about 2 minutes
+uv run pytest --collect-only -q -m load_fragile
+```
+
+**If a test fails the gate,** run it alone (`uv run pytest <node-id> -n0`):
+
+- If it fails alone, it is a real failure. Fix the root cause.
+- If it passes alone, do not publish past it, and do not re-run the gate until
+  it happens to pass. Add `@pytest.mark.load_fragile` in a PR that quotes the
+  failure and the solo pass, then re-run the gate. The marker takes a test out
+  of the local gate only, so it needs that evidence every time.
+
+**A run with no final summary line gave no verdict.** An xdist worker can die
+(`node down: Not properly terminated`), and xdist may then fail to recover: it
+either aborts with `INTERNALERROR> KeyError: <WorkerController ...>` or waits
+forever with every process idle. The cause of the crash is not known yet (#1040).
+Stop a run that has written nothing for 10 minutes, run the test named beside
+`node down` alone, and start the gate again. Do not count such a run as a pass.
 
 ## Step 3: Cut the release
 
@@ -185,8 +220,9 @@ because they are guardrails, not procedures:
 - **Never publish a release without updating documentation first.**
 - **Never publish a release if any local test fails.**
 - **Never publish unless CI has passed for the tagged commit.**
-- Use `pytest -m "not docker"` for local pre-release testing (Docker tests are
-  validated in CI, not locally).
+- Use `pytest -m "not docker and not load_fragile" -n 12` for local
+  pre-release testing (`docker` and `load_fragile` tests are validated in CI, not in this
+  gate).
 - If tests fail, fix the root cause and re-run — do not retry in a loop.
 - Create a new commit if a hook fails; never `--amend` the failed commit, as
   the commit did not happen and `--amend` would rewrite the previous one.
