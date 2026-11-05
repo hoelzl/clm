@@ -192,8 +192,9 @@ pass is answering a deck that has already moved.
 
 **Mechanical actions** (no decision needed — `apply` executes them):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
-`mirror_order`, `mirror_layout`, the `record_*` acknowledgements, and the
-fork/unify/id-stamp transitions. Trust them; review with `git diff`. One
+`mirror_order`, `mirror_pool_move` (a shared cell moved into another slide
+group on one half, #1142), `mirror_layout`, the `record_*`
+acknowledgements, and the fork/unify/id-stamp transitions. Trust them; review with `git diff`. One
 exception to "apply executes them" (CLM {version}, #1051): a mechanical row
 whose handle — or the twin it moves or removes — also carries a framed row
 that the same pass leaves unanswered or rejects is **deferred**, its reason

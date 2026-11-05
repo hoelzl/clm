@@ -2546,10 +2546,30 @@ confirm-seeded ledger), the divergence frames an `order_decision` — answer
 `de`/`en` to adopt that side's order. An `apply` pass that resolves every
 item seeds order trust for the scopes whose sides agree.
 
+A shared un-id'd cell (code, un-id'd markdown) that one half moved into
+another slide group or subslide is mirrored mechanically
+(`mirror_pool_move`, since CLM {version}, #1142) when the move is proven
+without a pairing guess: the moving half holds the cell's recorded content
+exactly once, in another group the ledger knows, and the other half still
+holds it where it was recorded (same group, same id'd neighbour, same
+order among its kind), unedited or edited in place (that edit travels with
+the move). A cell the moving half also edited is paired only by
+elimination: it must be that half's only lost slot of its kind and its only
+unrecorded cell, so that "moved and edited" and "deleted, plus a new cell
+added there" give the same result. The destination must have no other
+changes of that kind in the same pass. Everything else stays framed as
+before: byte-identical cells, a move into a slide new this pass or present
+on one half only (a group split: mirror the slide, `remove_vs_split`),
+cells both halves moved, a slot the other half deleted or edited too. A
+placement answer never carries a cell into another group. Blind spot: a
+code cell and a markdown cell swapped with no id'd cell between them leave
+no trace in the ledger, so if the other half did that to a cell this half
+moved away, the other half's swap is lost silently.
+
 **Mechanical actions** (`apply` executes them deterministically):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
-`mirror_order`, `mirror_layout`, the `record_*` acknowledgements (both sides
-already agree — ledger-only), the §7.3 transitions (`record_fork`,
+`mirror_order`, `mirror_pool_move`, `mirror_layout`, the `record_*`
+acknowledgements (both sides already agree — ledger-only), the §7.3 transitions (`record_fork`,
 `record_unify`, `stamp_twin_id`, `record_key_migration`), and preamble
 propagation. (`mirror_remove` fires only when the baseline's halves agreed; a
 removal against an already-diverged baseline frames `remove_vs_edit`

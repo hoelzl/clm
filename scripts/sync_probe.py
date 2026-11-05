@@ -1,7 +1,8 @@
 """Brute-force sync probe: run it, compare two runs, or gate a change (#1130).
 
 The probe (``tests/slides/sync_probe.py``) drives ``report -> apply`` through
-the real pre-write verify over about 47,000 deck shapes (``sync_probe.py`` plus ``sync_probe_ext.py``), wider than the
+the real pre-write verify over about 68,000 deck shapes (``sync_probe.py``,
+``sync_probe_ext.py`` and ``sync_probe_cross.py``), wider than the
 ratcheted sweep in ``tests/slides/sync_sweep.py``. Too slow for CI, so it is
 run by hand before merging a sync-engine change:
 
@@ -45,17 +46,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tests.slides import sync_probe, sync_probe_ext  # noqa: E402
+from tests.slides import sync_probe, sync_probe_cross, sync_probe_ext  # noqa: E402
 from tests.slides.sync_probe import SILENT, engine_file, rank  # noqa: E402
 
-#: Every family: the base probe's and the extended ones (#1144 review).
-FAMILIES = {**sync_probe.FAMILIES, **sync_probe_ext.FAMILIES}
+#: Every family: the base probe's and the extended ones (#1144 review), and
+#: the cross-group ones (#1142 review).
+FAMILIES = {**sync_probe.FAMILIES, **sync_probe_ext.FAMILIES, **sync_probe_cross.FAMILIES}
 
 
 def _work(case: object) -> tuple[str, str, str, str, list, dict, float]:
     t = time.time()
     try:
-        r = sync_probe_ext.run_any(case)
+        r = (
+            sync_probe_cross.run_case3(case)
+            if isinstance(case, sync_probe_cross.C3)
+            else sync_probe_ext.run_any(case)
+        )
         return case.id, case.family, r.status, r.detail, r.passes, r.questions, time.time() - t
     except Exception as exc:  # noqa: BLE001 - a crash is an outcome to report
         return case.id, case.family, "harness_exception", repr(exc)[:300], [], {}, time.time() - t
