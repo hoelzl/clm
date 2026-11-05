@@ -397,6 +397,10 @@ clm provision kernel-env --python /opt/course-venvs/ml/bin/python
 `clm.toml` `[jupyter] kernel_python`), and `clm info spec-files` for
 `<kernel-python>`.
 
+This covers Python kernels only. C++ decks need Docker mode (`--workers docker`):
+the xeus-cpp kernels and the `clm/display.hpp` header behind `SHOW` / `CLM_DISPLAY`
+ship in the notebook worker image.
+
 ### Course repo with one bundled venv (global clm)
 
 A course repo often keeps **one** venv (its own `.venv`) that holds both clm and

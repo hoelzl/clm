@@ -4123,6 +4123,11 @@ in a **separate** course venv from clm, while clm keeps driving nbconvert. It
 registers a venv you already have; it does not create it. The venv must have
 `ipykernel` installed (pass `--no-validate` to skip that check).
 
+**C++ decks need Docker mode:** `provision kernel-env` covers Python kernels
+only. The xeus-cpp kernels and the `clm/display.hpp` header behind `SHOW` /
+`CLM_DISPLAY` ship in the notebook worker image, so run C++ courses with
+`--workers docker`.
+
 `--python` accepts either the **venv directory** (clm picks the platform
 interpreter inside it — `Scripts/python.exe` on Windows, `bin/python` on POSIX)
 or a specific interpreter; a relative value resolves against the project root.
