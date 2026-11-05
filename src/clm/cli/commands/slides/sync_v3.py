@@ -373,6 +373,7 @@ def run_apply_v3(
         # used to print after, so a consumer merging the two streams got JSON
         # with prose appended — unparseable exactly when something went wrong.
         _echo_rejections(rejected)
+        _echo_no_progress(outcome)
         payload = outcome.to_payload()
         payload["exit_code"] = exit_code
         payload["deck_key"] = doc_ledger.deck_key_for(bundle.de_path)
@@ -405,7 +406,24 @@ def run_apply_v3(
             err=True,
         )
     _echo_rejections(rejected)
+    _echo_no_progress(outcome)
     return exit_code
+
+
+def _echo_no_progress(outcome: doc_apply.ApplyOutcome) -> None:
+    """The stall block (#1150) — stderr in both modes, like the rejections.
+
+    A pass that changed nothing while the verify held rows back repeats on
+    every re-run with the same answers; an agent loop must stop here.
+    """
+    stall = outcome.no_progress
+    if stall is None:
+        return
+    click.echo(f"NO PROGRESS: {stall.advice}.", err=True)
+    for slide in stall.slides:
+        mark = "reconcile" if slide.slide in stall.reconcile else "waits"
+        rows = [*(f"{k} (not written)" for k in slide.unwritten), *slide.unrecorded]
+        click.echo(f"  [{mark}] slide {slide.slide}: {', '.join(rows)}", err=True)
 
 
 def _withheld_scope(outcome: doc_apply.ApplyOutcome) -> str:

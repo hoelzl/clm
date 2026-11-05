@@ -40,6 +40,11 @@ git diff                                # 5. review what landed
 
 Exit codes are load-bearing: `report` 0 clean / 1 work pending / 2 error;
 `apply` 0 all-applied / 1 residue / 2 error; `verify` 0 sound / 2 corrupt.
+**Stop the loop when `apply` reports `no_progress`** (non-null in `--json`,
+`NO PROGRESS: …` on stderr, CLM {version}, #1150): that pass changed no file
+and recorded nothing, so re-reporting and re-answering repeats it exactly.
+Reconcile the slides it lists under `reconcile` by hand, then report again
+(see "Reading the apply result").
 A bare `clm slides sync DECK` (no verb) is `report` — it **reads, never
 writes**. The default is "tell me what is necessary", not "do it".
 
@@ -657,7 +662,8 @@ they do not exist):
   "deck_key": "slides_x", "ledger": "…/.clm/sync-ledger.json",
   "ledger_recorded": true,
   "verify_violations": [],
-  "verify_withheld": []
+  "verify_withheld": [],
+  "no_progress": null
 }
 ```
 
@@ -689,7 +695,47 @@ answer the framed rows on the faulted slide (or fix the deck-wide fault,
 then `record`) and re-report. `ledger_recorded` only says whether the ledger
 file was saved with at least one new record; it is `false` both for a
 deck-wide fault and for a pass whose landed rows all sat on a faulted
-slide. One violation
+slide.
+
+**`no_progress`** (CLM {version}, #1150) is non-null when the verify held
+rows back and the pass changed **no file and no ledger baseline**. Nothing
+on the held slides was written or recorded, so the next report frames the
+same rows, and the same answers repeat this pass exactly: answering again
+is a loop that never ends. Typical causes are the engine's own mechanical
+rows tripping the verify (an insertion read as an edit of the cells after
+it, a cell promoted to a subslide anchor read as a new cell), every
+available answer tripping it, or a violation the pair already carries
+that no row in the pass fixes. It carries:
+
+```json
+"no_progress": {
+  "slides": [{"slide": "string-streams",
+              "unwritten": ["pos:string-streams/code/4"],
+              "unrecorded": []},
+             {"slide": "streams-recap", "unwritten": [],
+              "unrecorded": ["id:vo-streams-everywhere"]}],
+  "reconcile": ["string-streams"],
+  "deck_wide": false,
+  "answered": [],
+  "advice": "this pass changed no file and recorded nothing, …"
+}
+```
+
+`reconcile` names the slides to fix **by hand**: those whose changes the
+verify keeps out of the files or, when every change could be written,
+those the pair already fails the verify on. The other listed slides wait
+on them and clear once they are fixed. `deck_wide: true` means nothing
+could be written at all. `answered` lists the held rows you answered: a
+different answer to one of them can get the slide through, typically a
+side choice that discards one half's content, so change it **only** if
+your answer was not what the author wants. When `answered` is empty, no
+answer can help. Read `verify_violations` for what is wrong, make
+the two halves of each named slide agree (shared cells byte-identical, the
+same id'd cells on both halves), then `report` again. Do not reach for a
+whole-deck `record` to get past it: that also banks every pending
+translation on the other slides without review.
+
+One violation
 kind worth knowing by name: `order-parity` (the halves order their common
 id'd cells differently — a group swap or a one-sided cell move). It is only
 a warning in `sync verify` output, but it **blocks** `record` and `apply`'s

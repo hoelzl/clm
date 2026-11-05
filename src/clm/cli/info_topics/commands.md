@@ -2689,8 +2689,9 @@ reads `this pass would remove content both halves agree on from DE: '…'`,
 `… would drop an unrecorded edit …` or `… would duplicate content …`. An
 explicit answer that discards content (a side choice on a conflict,
 `remove`, `body`) exempts exactly the cells it names. If the same rows stay
-withheld pass after pass, the cell's pairing is a guess. Give the moved cell
-a `slide_id` (on both halves), or move it back, and re-report. The mutated bundle is also re-parsed before anything
+withheld pass after pass, the cell's pairing is a guess, and `apply` says so
+(`no_progress`, below). Give the moved cell a `slide_id` (on both halves),
+or move it back, and re-report. The mutated bundle is also re-parsed before anything
 touches disk and written atomically (≤4 files); landed items are recorded
 into the ledger **on fully resolved members only**, **gated on the
 structural verify per slide** (issue #992) once more after the write: a
@@ -2728,7 +2729,19 @@ be `true` beside a non-empty `verify_violations` since #992),
 `verify_violations` (what the pre-write verify withheld changes over, then
 what the post-write verify still finds on disk), and `verify_withheld` (the
 handles the verify held back: rows whose reason starts `withheld:` were not
-written, the others were written but kept out of the ledger); rejected decisions are additionally echoed to stderr in
+written, the others were written but kept out of the ledger), and
+**`no_progress`** (CLM {version}, #1150): non-null when the verify held rows
+back and the pass changed no file and no ledger baseline. The next report
+then frames the same rows, so the same answers repeat the pass forever. It
+lists the held `slides` (each with its `unwritten` and `unrecorded`
+handles), the slides to `reconcile` by hand (those whose changes cannot be
+written; when every change could be, those the pair already fails the
+verify on), `deck_wide` (nothing could be written), `answered` (held rows
+you answered: change one only if it was not what the author wants, since
+a different answer may get through by discarding one half's content) and
+an `advice` sentence, which is also echoed to stderr as `NO PROGRESS: …`.
+Otherwise stop re-answering, reconcile the named slides by hand so both
+halves agree, and re-report. Rejected decisions are additionally echoed to stderr in
 both output modes. While an `order_decision` is framed in a pass, mechanical
 `mirror_order` rows defer instead of co-executing ("one order authority per
 pass", #885) and re-derive on the next report. Full envelope example:
