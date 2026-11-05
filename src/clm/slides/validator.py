@@ -37,6 +37,7 @@ from clm.core.utils.path_utils import split_lang_suffix
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.core.voiceover_companions import is_voiceover_companion
 from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
+from clm.slides.cpp_show import find_show_calls
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_valid_slug,
@@ -2233,6 +2234,49 @@ def _brief_cell_context(cell: Cell) -> str:
 _JINJA_IN_CODE_RE = re.compile(r"\{%|\{\{\s")
 
 
+def _check_show_calls(cell: Cell, file_path: str) -> list[Finding]:
+    """Flag display-macro calls that cannot work where they are written.
+
+    A ``del`` cell is in no output. A ``start`` cell is exported to the
+    Code-Along view but never executed, because no evaluated output keeps it.
+    """
+    tags = cell.metadata.tags
+    if "del" in tags:
+        return []
+    findings: list[Finding] = []
+    for call in find_show_calls(cell.content):
+        if "global" in tags and call.at_namespace_scope:
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="code_export",
+                    file=file_path,
+                    line=cell.line_number,
+                    message=f"`{call.text}` in a `global` cell will not compile in the export",
+                    suggestion=(
+                        "The export emits a `global` cell at namespace scope, where this "
+                        "statement is ill-formed; move the call into a non-global cell."
+                    ),
+                )
+            )
+        if call.kills_kernel and "start" not in tags:
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="code_export",
+                    file=file_path,
+                    line=cell.line_number,
+                    message=f"`{call.text}` holds an inline lambda, which kills the kernel",
+                    suggestion=(
+                        "The xeus-cpp kernel dies on this shape and the whole deck fails "
+                        "(#1044). Name the lambda first: `auto f = [](int a) { ... };` in "
+                        "a statement of its own, then `SHOW(f(1));`."
+                    ),
+                )
+            )
+    return findings
+
+
 def _check_code_export(
     cells: list[Cell], file_path: str, *, allow_main: bool = False
 ) -> list[Finding]:
@@ -2250,8 +2294,10 @@ def _check_code_export(
 
     Also flags ``main()`` definitions (the export generates its own ``main``
     unless the deck carries the ``clm: allow-main`` header marker), Jinja
-    directives inside code cells (untransformable), and — informationally —
-    cells mixing definitions with statements.
+    directives inside code cells (untransformable), a ``SHOW`` the export would
+    emit at namespace scope (#1119), a ``SHOW`` whose inline lambda kills the
+    kernel (#1044), and — informationally — cells mixing definitions with
+    statements.
     """
     findings: list[Finding] = []
     # (lang, kind, key) -> line of first definition, in the completed view.
@@ -2284,6 +2330,8 @@ def _check_code_export(
                 )
             )
             continue
+
+        findings.extend(_check_show_calls(cell, file_path))
 
         items = classify_source(source)
 
