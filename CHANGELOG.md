@@ -9,6 +9,126 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.36.0] - 2026-11-05
+
+### Added
+
+- `clm harvest accept` now wraps the bullets it writes to the deck style: 80
+  columns, continuation indented under the bullet text (`#   ` / `//   `),
+  never breaking inside a backtick code span or a URL and never starting a
+  continuation line with a markdown block marker. Only the cells the answer
+  edits are rendered; other cells are never re-wrapped, so no post-pass
+  rewrap script is needed. The `harvest-bullets` answer schema also accepts
+  one level of nesting, `{"text": "…", "children": ["…", …]}`, rendered as
+  `#   - …` / `//   - …` sub-bullets; deeper nesting and malformed entries
+  are rejected with a precise reason. (#1101)
+
+- `clm harvest report`/`task` now clean the ASR transcript at read time
+  (fresh and cached transcripts alike; the transcript cache is not
+  invalidated): exact Whisper repetition loops are collapsed to one
+  occurrence (3+ identical consecutive occurrences of a 2+ word phrase, or 2
+  of a phrase of 8+ words, within or across segments), and possible hallucinations are flagged
+  for the curating agent — `low_confidence`, `no_speech`,
+  `high_compression` (from faster-whisper's per-segment `avg_logprob`,
+  `no_speech_prob`, `compression_ratio`, now recorded in the transcript),
+  `repeat_collapsed`, and `trailing_phrase` ("Thank you." ×9 at the end of a
+  video). Flags appear in each item's `transcript.suspect_segments`, in
+  `unmatched_speech`, in `summary.suspect_segments`, and in `harvest align
+  report` segments; the curate instructions tell the agent how to treat
+  them. `harvest autopilot` applies the same collapsing (the two pipelines
+  share alignment cache entries). Cached alignments are recomputed once.
+  (#1105)
+
+- **`clm slides sync apply` says when a pass can make no progress** (#1150). When the structural verify held rows back and the pass changed no file and no ledger baseline, the next report frames the same rows and the same answers repeat the pass forever. The engine's own mechanical rows tripping the verify did exactly that on a CppCourses deck (#1092). Apply now reports such a pass in a new `no_progress` key (`--json`) and a `NO PROGRESS: …` block on stderr. It lists the held slides, the slides to reconcile by hand (`reconcile`), the rows that wait on them, and the held rows the agent answered (a different answer there may get through, but only by discarding one half's content). Agents should stop re-answering, reconcile those slides, and report again, instead of reaching for a whole-deck `record` that would also bank every pending translation unreviewed.
+
+- **`clm course orphans` accepts several spec sources.** Pass multiple spec folders and/or `.xml` files (e.g. `clm course orphans course-specs course-specs.planning`); orphans are computed against their union, so topics used only by a draft course are no longer reported as dead. The JSON report records `spec_sources` and `spec_files`; the human report names the specs considered (#1152).
+
+### Changed
+
+- **`clm build` exits non-zero on build errors by default** (#1139). `--fail-on-error` is now on in every `--http-replay` mode, not only under `replay` (CI). A local build whose summary listed errors — e.g. a missing Jupyter kernel failing every cell — used to exit 0, so a script or agent checking `$?` could commit and push the damaged output. Clean builds are unaffected (transient failures are retried and reported as `flaky_files`). Opt out with `--no-fail-on-error` or `CLM_FAIL_ON_ERROR=0`; watch mode is unchanged. See `clm info migration`.
+
+### Fixed
+
+- Docker worker images no longer serialize on each other's `apt-get` steps: every
+  apt BuildKit cache mount now has an explicit per-image `id=` (notebook lite and
+  full get separate ids, since their Debian/Ubuntu package state differs). Without
+  an id, all images shared one `sharing=locked` cache keyed on the target path, so
+  a concurrent build of another image could stall an apt step for the whole
+  duration of the other build's install (#1042).
+
+- **C++ export recognizes constrained placeholder types (#1062).** A function
+  whose return type is a C++20 constrained placeholder
+  (`SignedNumber auto twice(SignedNumber auto x) {...}`,
+  `std::integral auto f(int x) {...}`, `Concept<Args> decltype(auto) g()`)
+  was classified as a display expression and wrapped in `CLM_DISPLAY(...)`
+  inside its section function, so the export failed to compile. Such
+  functions are now hoisted to namespace scope like other function
+  templates, and `std::integral auto x = 1;` is a variable declaration.
+
+- **Multi-file slide writes survive transient Windows file locks, and `harvest accept` no longer leaves a one-sided pair** (#1099). `atomic_write_all` (used by `harvest accept`, `split`/`unify`, `voiceover extract`, `assign-ids` and `polish` accept) now retries each `os.replace` on the transient Windows errnos (a Defender/indexer/editor handle on the target), as `atomic_write_bytes` already did. If a replace still fails, it restores the files it had already replaced in that call before re-raising. `harvest accept` now reports a write failure as a rejection (the usual `--json` rejection envelope, exit 2) instead of a traceback. A failed ledger bank after a successful write now reports "applied, record withheld" (exit 1).
+
+- `clm harvest report` (and the other harvest/recordings commands that run
+  ffmpeg, ffprobe or the ASR worker) no longer consume the caller's stdin.
+  Driving them from a `while read …; done <<LIST` shell loop silently skipped
+  iterations because a child process inherited the pipe; ffmpeg reads stdin
+  for its interactive `q` command. Every media-tool child (voiceover
+  `extract_audio` / PCM decode / ASR worker / `probe_duration`, and the
+  recordings `run_subprocess` helper) now runs with `stdin=DEVNULL`, and
+  ffmpeg gets `-nostdin` (#1103).
+
+- Recording provenance now finds the build manifest of a spec whose
+  `<output-targets>` live outside `output/<tier>` (e.g. `dist/shared` or
+  `output/<spec>/shared`). Both the recording-time `slide_digest` stamp and
+  `clm recordings report --spec-file SPEC` (without `--source`/`--manifest`)
+  used to search only the `output/` convention, so slide provenance for such
+  specs was silently unknown. The lookup now resolves the spec's targets with
+  the build's own path rules and reads that spec's
+  `.clm-manifest.<spec>.json` from the first target that has one, trying
+  targets that build a public kind (`code-along`/`completed`/`partial`) before
+  private ones, each group in spec order. When no target root holds it (or
+  the spec declares no targets), the `output/` lookup follows as before, so a
+  build run with `--output-dir output` is still found. The lookup's spec
+  parse no longer repeats the spec's warnings (they are logged at DEBUG) on
+  every report run and recording (#1107). A spec with explicit targets under
+  `output/` whose alphabetically-first target is not its first public one now
+  reads a different target's manifest, so parts stamped before this change
+  may show `built output changed`; the flag remains a secondary hint.
+
+- **`clm slides sync apply` no longer silently loses or duplicates shared cells** (#1130). When a moved un-id'd cell (such as code) was paired with the wrong twin, a pass could overwrite an edit, drop a cell from one half, or copy a cell twice, and the next report came back clean. Apply now checks each pass on cell contents alone before writing. A pass that would remove content both halves agree on, drop an unrecorded edit, or duplicate a cell is withheld for the slides involved and reported in `verify_violations`. A few shapes that used to converge through such a lossy intermediate pass now stop visibly instead. Give the moved cell a `slide_id`, or move it back.
+
+- **`clm slides sync`: moving shared cells (code, un-id'd markdown) relative to voiceovers while editing them now converges far more often instead of livelocking or silently undoing the move** (#1130). When one half reordered a slide's cells and either half edited the un-id'd shared cells, sync could pair an edited cell with the wrong slot. It then either withheld the same rows on every pass, or reported success with the move undone. Sync now locates such cells by where each half's copy sat when last recorded. It moves un-id'd cells together with the reorder of the id'd cells around them. A placement answer now places the cell next to the right neighbour, and brings a one-sided edit along. When a half moved and edited cells and the same cell was also edited on the other half, sync now says that it cannot tell the cells apart instead of asking a conflict question whose answer could overwrite another cell's edit. **Known limit:** when both halves move *and* edit the same slide's un-id'd cells, sync can still pair them wrongly, occasionally without a warning. Give such cells a `slide_id`. The sync ledger gains optional per-cell position fields: the first `sync record` or `apply` after upgrading adds them, so expect a one-time ledger diff.
+
+- **`clm slides normalize --stamp-ids` no longer gives the DE and EN twins of one cell different ids when only one half made it a slide/subslide start** (#1135). The stamper treated the promoted cell and its plain twin as two unrelated cells. It reported success, but stamped `include` on one half and `include-2` on the other (for a shared cell), or two unrelated slugs (for a localized cell). Sync then framed the pair as a removal plus an unrelated addition: for a localized pair, that meant re-translating from scratch and discarding the existing translation. Byte-identical twins now share one id, and the slide-hood difference reaches sync as a tag difference. A localized pair cannot be matched by content, so both cells are now refused with a reason that names the twin. The other id-less cells between the same two id'd slides are refused with them, so no half of a pair gets an id on its own. The fix is to give both cells the same `slide_id` (or make their slide tags agree) if they are twins, or to give one of them an id by hand if they are not. Identical copies that do not pair one-to-one are refused too. A different cell whose slug happens to collide still gets its own suffixed id.
+
+- `clm build --only-sections` now regenerates the C++ code export's CMake
+  project files for the selected sections. The section cleanup deleted each
+  selected module's `CMakeLists.txt` and the post-build CMake pass was
+  skipped in that mode, so the kind-root project's `add_subdirectory` for
+  the rebuilt section failed and the whole course project no longer
+  configured, while the build reported success. The kind-root
+  `CMakeLists.txt` is rewritten too. It keeps every unselected section's
+  module that holds a `CMakeLists.txt` from an earlier build, leaves those
+  files untouched and never reuses their target names. It stops adding a
+  rebuilt section that produced no code. The CMake files are now written
+  whenever a build finishes, `--no-provenance-manifest` and timed-out
+  builds included, and are skipped only for `--snapshot` /
+  `--verify-against` (#1138).
+
+- **`clm slides sync`: a shared cell (code, un-id'd markdown) moved into another slide group or subslide on one half now syncs instead of stalling** (#1142). Sync paired un-id'd cells only within a slide group, so such a move read as a removal in one group and an unconfirmable new cell in the other: sync stopped on a `verify_cold` row with no answer, even for an unchanged cell. It now recognises the move when the cell's recorded content proves it and the other half still has the cell where it was recorded, and mirrors it to the other half in one pass (new mechanical row `mirror_pool_move`). An edit the other half made to the cell in place travels with the move. A cell the moving half also edited is recognised only when it is that half's single lost and single new cell of its kind. Two related placement fixes: a placement answer no longer carries a cell into another group when a neighbour it anchors on is still waiting for its own move, and an id'd cell moved to another group is placed next to neighbours whose counterparts are known, instead of a positional guess. Still a manual step (move the cell on the other half, or give it a `slide_id`): byte-identical cells, a move into a slide added in the same pass, cells both halves moved, and a cell the other half deleted or also edited. **Known limit:** if the other half swapped that cell with an adjacent markdown cell (no id'd cell in between), that swap is lost without a warning; give the cells a `slide_id`.
+
+- **`clm slides rules` finds `.authoring.md` next to specs outside `course-specs/`.** When `--course-spec` (or MCP `authoring_rules` `course_spec`) is a path such as `course-specs.planning/foo.xml`, `foo.authoring.md` next to it is used, falling back to `course-specs/`. Bare slugs and `--slide-path` resolution still consider only `course-specs/`, so draft or retired specs never leak into slide edits (#1151).
+
+### Security
+
+- HTTP replay: a request whose secret filter raises is no longer forwarded to
+  the live network. The mitmproxy addon used to treat a filter exception like
+  an `ignore_hosts` match and pass the request through in every mode — strict
+  `--http-replay=replay` included, so a crashing filter became a live,
+  possibly billed call. It now refuses the request in **every** mode with the
+  non-retryable `clm_replay_miss` 404, whose message names the filter error;
+  recording modes fail closed too rather than forward a request they could
+  not scrub. `ignore_hosts` hosts still pass through unrecorded. (#1067)
+
 ## [1.35.2] - 2026-10-28
 
 ### Changed
