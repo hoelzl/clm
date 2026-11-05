@@ -31,6 +31,12 @@ The ledger's anchor and fingerprints are taken at that moment (not at arm
 time), so a retake made after a quick edit fingerprints the edited deck. A
 ledger failure is logged and never blocks a recording.
 
+Every take that stops reaches both stores: that is by far the common case, and
+a confirm step would be forgotten more often than a take is aborted. The
+exception is explicit: `clm recordings invalidate` (`clm info commands`), or
+the Invalidate button in the dashboard's take panel, takes a take back and
+restores the one it replaced.
+
 ## The recordings ledger
 
 ### Location and gitignore
@@ -89,9 +95,16 @@ course at that commit; the members are the deck's fingerprints there.
   side was shown and therefore which side's members are stored.
 - **`parts`** hold one entry per `(course_id, part, lang)`: one cohort's
   recording of that part in that language. A retake replaces the entry with
-  the same identity; the take history stays in the local state file. A
-  second cohort recording the same deck adds its own entries and never
-  erases the first cohort's — those videos still ship to that cohort.
+  the same identity and moves the replaced one to `superseded`. A second
+  cohort recording the same deck adds its own entries and never erases the
+  first cohort's — those videos still ship to that cohort.
+- **`superseded`** (optional, since {version}) holds the takes retakes
+  replaced, as full part entries, the newest 5 per `(course_id, part, lang)`:
+  what `invalidate` restores. They are never read as recordings. Older takes
+  stay in git.
+- **`invalidated`** (optional, since {version}) is the audit trail of takes
+  taken back: `{"course_id", "part", "lang", "recorded_at", "at", "note"}`,
+  without fingerprints. `seed-ledger` will not write such a take back.
 - **`recorded_at`** matches the local state file's stamp (local time,
   seconds).
 - **`evidence`** says where `members` came from: `recorded` (the dashboard
@@ -105,6 +118,13 @@ course at that commit; the members are the deck's fingerprints there.
   id-member order) at which someone decided *not* to re-record, keyed
   `"<lang>:<member-key>"` so one ack covers every recorded language.
   Written by `clm recordings ack`; `null` until then.
+
+Both optional lists are left out of the file while empty, so a ledger that
+saw neither keeps its exact bytes, and the schema stays `1`: an older clm
+ignores them (and, if it rewrites the file, drops them; only the ability to
+restore is lost). The local state file keeps the complete take history; a
+ledger written before `superseded` existed falls back on it when a retake is
+invalidated.
 
 The file is canonical JSON (sorted keys, two-space indent, trailing newline),
 so a merge conflict is a genuine same-part conflict and stays line-local.

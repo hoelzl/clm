@@ -566,6 +566,13 @@ def _print_report(result, *, show_all: bool, manifest: Path | None) -> None:
                 )
     if manifest is not None:
         console.print(f"[dim]manifest: {escape(str(manifest))}[/dim]")
+    for deck in result.decks:
+        if deck.invalidated:
+            count = len(deck.invalidated)
+            console.print(
+                f"[dim]{escape(deck.topic_dir)}/{escape(deck.deck)}: "
+                f"{count} invalidated take{'s' if count != 1 else ''} (not counted)[/dim]"
+            )
     if not show_all:
         console.print("[dim]Recorded decks only; pass --all to list unrecorded decks too.[/dim]")
 
@@ -619,6 +626,222 @@ def ack(deck: Path, note: str | None, as_json: bool):
     )
     if note:
         console.print(f"[dim]note: {escape(note)}[/dim]")
+
+
+@recordings_group.command()
+@click.argument("deck", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--part",
+    type=click.IntRange(min=1),
+    default=None,
+    help="The part to invalidate (a single-part recording is part 1). "
+    "Required when the deck has more than one recorded part.",
+)
+@click.option("--course", "course_id", default=None, help="Course id, when several recorded it.")
+@click.option(
+    "--lang",
+    type=click.Choice(["de", "en"]),
+    default=None,
+    help="Recorded language, when the deck was recorded in both.",
+)
+@click.option(
+    "--recorded-at",
+    default=None,
+    help="The take's stamp. Refuses unless it names the current take or a replaced "
+    "one, so a repeated or stale call cannot hit another take.",
+)
+@click.option("--note", default=None, help="Why the take does not count; kept in the audit trail.")
+@click.option(
+    "--root",
+    "cli_root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Recordings root holding the video files (default: recordings.root_dir from the "
+    "config). Without one the files stay where they are and the output says so.",
+)
+@click.option("--dry-run", is_flag=True, help="Report what would change; change nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def invalidate(
+    deck: Path,
+    part: int | None,
+    course_id: str | None,
+    lang: str | None,
+    recorded_at: str | None,
+    note: str | None,
+    cli_root: Path | None,
+    dry_run: bool,
+    as_json: bool,
+):
+    """Take a recorded take back: it no longer counts as a recording of the deck.
+
+    A take reaches the ledger by default when it stops; this is the exception
+    for an aborted or bad one. Invalidating a retake restores the take it
+    replaced. Invalidating the only take of the highest part removes that part
+    (only part 1 left: single-part again; the only part: not recorded). The
+    only take of a lower part is refused, since parts are never renumbered.
+
+    Video files are never deleted: the take's files move to ``superseded/``,
+    the restored take's come back from ``takes/``. Commit the ledger with the
+    deck. Refuses while a dashboard is running (use its Invalidate button, or
+    stop it) and while a processing job runs for the deck. Exit ``2`` when
+    refused, with nothing changed.
+    """
+    from clm.recordings.dashboard_presence import live_dashboards
+    from clm.recordings.ledger import ignored_ledger_warning
+    from clm.recordings.workflow.invalidate import InvalidationRefused, invalidate_take
+
+    try:
+        if not dry_run:
+            running = live_dashboards()
+            if running:
+                raise InvalidationRefused(
+                    f"a recordings dashboard is running ({running[0].get('url', '?')}, pid "
+                    f"{running[0].get('pid', '?')}): it may be recording and it holds the state "
+                    f"file in memory. Use its Invalidate button, or stop it first."
+                )
+        request = _invalidate_request(
+            deck,
+            part=part,
+            course_id=course_id,
+            lang=lang,
+            recorded_at=recorded_at,
+            note=note,
+            cli_root=cli_root,
+            dry_run=dry_run,
+        )
+        result = invalidate_take(request)
+    except InvalidationRefused as exc:
+        _diagnostic(f"[red]{escape(str(exc))}[/red]", json_mode=as_json)
+        raise SystemExit(2) from None
+
+    warning = None if dry_run else ignored_ledger_warning(request.ledger_path)
+    if warning:
+        _diagnostic(f"[yellow]{escape(warning)}[/yellow]", json_mode=as_json)
+    for message in result.warnings:
+        _diagnostic(f"[yellow]{escape(message)}[/yellow]", json_mode=as_json)
+    if as_json:
+        _emit_json(result.to_dict())
+        return
+    _print_invalidate_result(result)
+
+
+def _invalidate_request(
+    deck: Path,
+    *,
+    part: int | None,
+    course_id: str | None,
+    lang: str | None,
+    recorded_at: str | None,
+    note: str | None,
+    cli_root: Path | None,
+    dry_run: bool,
+):
+    """Resolve the CLI's arguments to one ``(course, part, lang)``, or refuse."""
+    from clm.recordings import ledger as rl
+    from clm.recordings.state import load_state, save_state
+    from clm.recordings.workflow.invalidate import InvalidateRequest, InvalidationRefused
+    from clm.recordings.workflow.job_store import DEFAULT_JOBS_FILE, JsonFileJobStore
+
+    deck = deck.resolve()
+    ledger_path = rl.ledger_path_for(deck)
+    deck_key = rl.deck_key_for(deck)
+    try:
+        entry = rl.load(ledger_path).decks.get(deck_key)
+    except rl.LedgerError as exc:
+        raise InvalidationRefused(str(exc)) from None
+    # A superseded take outlives its part only as history; --recorded-at may name it.
+    pool = (entry.parts + (entry.superseded if recorded_at else [])) if entry else []
+    candidates = {
+        rl.part_identity(p)
+        for p in pool
+        if (course_id is None or p.course_id == course_id)
+        and (part is None or p.part == part)
+        and (lang is None or p.lang == lang)
+        and (recorded_at is None or p.recorded_at == recorded_at)
+    }
+    if not candidates:
+        known = sorted(
+            f"{p.course_id} part {p.part} {p.lang} ({p.recorded_at})"
+            for p in (entry.parts if entry else [])
+        )
+        raise InvalidationRefused(
+            f"no matching recorded take of deck {deck_key!r} in {ledger_path}"
+            + (f"; recorded: {'; '.join(known)}" if known else "")
+        )
+    if len(candidates) > 1:
+        listing = "; ".join(f"{c} part {n} {la}" for c, n, la in sorted(candidates))
+        raise InvalidationRefused(
+            f"deck {deck_key!r} has more than one recorded part matching: {listing}. "
+            f"Say which with --course, --part and --lang."
+        )
+    resolved_course, resolved_part, resolved_lang = next(iter(candidates))
+
+    state = None
+    # The id comes from a committed file and becomes a file name below.
+    if Path(resolved_course).name == resolved_course:
+        try:
+            state = load_state(resolved_course)
+        except (OSError, ValueError) as exc:
+            raise InvalidationRefused(
+                f"the state file of {resolved_course} cannot be read: {exc}"
+            ) from None
+
+    root = cli_root
+    if root is None:
+        try:
+            configured = _build_recordings_config().root_dir
+        except Exception:  # pragma: no cover — defensive
+            configured = ""
+        root = Path(configured) if configured else None
+    jobs = []
+    if root is not None and (root / DEFAULT_JOBS_FILE).is_file():
+        jobs = JsonFileJobStore(root / DEFAULT_JOBS_FILE).load_all()
+
+    return InvalidateRequest(
+        course_id=resolved_course,
+        part=resolved_part,
+        lang=resolved_lang,
+        recorded_at=recorded_at,
+        note=note,
+        ledger_path=ledger_path,
+        deck_key=deck_key,
+        deck_path=deck,
+        state=state,
+        recordings_root=root,
+        raw_suffix=_get_raw_suffix(),
+        active_jobs=jobs,
+        persist_state=save_state,
+        dry_run=dry_run,
+    )
+
+
+def _print_invalidate_result(result) -> None:
+    what = f"{escape(result.deck or '')} part {result.part} ({result.lang}, {escape(result.course_id)})"
+    verb = "Would invalidate" if result.dry_run else "Invalidated"
+    console.print(f"[green]{verb}[/green] the take of {escape(result.recorded_at)}: {what}")
+    if result.effect == "restored":
+        console.print(
+            f"Part {result.part} is now the previous take, "
+            f"{escape(result.restored_recorded_at or '?')}."
+        )
+    elif result.effect == "history":
+        console.print("It was a replaced take; the current take of the part is unchanged.")
+    elif result.single_part:
+        console.print(f"Part {result.part} is gone; the deck is a single-part recording again.")
+    else:
+        console.print(f"Part {result.part} is no longer recorded.")
+    if result.ack_dropped:
+        console.print(
+            "The deck's ack judged this take and was dropped; re-run `ack` if it applies."
+        )
+    if result.state_updated:
+        console.print("[dim]State file updated.[/dim]")
+    for old, new in result.moves:
+        console.print(f"[dim]{escape(str(old))} -> {escape(str(new))}[/dim]")
+    if result.ledger_path is not None and not result.dry_run:
+        console.print(f"[dim]Commit {escape(str(result.ledger_path))} with the deck.[/dim]")
+    if result.note:
+        console.print(f"[dim]note: {escape(result.note)}[/dim]")
 
 
 @recordings_group.command("seed-ledger")
@@ -1065,8 +1288,11 @@ def serve_recordings(
     console.print(f"[bold]Recordings root:[/bold]     {root_dir}")
     console.print("Press CTRL+C to stop")
 
+    from clm.recordings.dashboard_presence import dashboard_marker
+
     try:
-        uvicorn.run(app, host=host, port=port, log_level="info")
+        with dashboard_marker(url, root_dir):
+            uvicorn.run(app, host=host, port=port, log_level="info")
     except Exception as exc:
         console.print(f"[red]Server error: {exc}[/red]")
         raise SystemExit(1) from exc

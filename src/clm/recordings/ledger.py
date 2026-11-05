@@ -33,6 +33,12 @@ per recorded part:
 The optional deck-level ``ack`` block is reserved for the ``ack`` verb
 (#965): the current fingerprints plus a note, at member granularity.
 
+A take reaches the ledger by default when it stops, so a retake that replaces
+an entry keeps the replaced one in the deck-level ``superseded`` list, and
+``invalidate`` (#1093) can bring it back; ``invalidated`` is the audit trail of
+what was taken back. Both are optional and absent from the file while empty
+(design: ``docs/claude/design/recordings-rerecord-backlog.md`` §4.4).
+
 The ledger is written by the dashboard at record time
 (:meth:`clm.recordings.workflow.session.RecordingSession._record_ledger_entry`)
 and by the verbs that seed or acknowledge entries. Every course repo
@@ -64,8 +70,12 @@ __all__ = [
     "AnchorKind",
     "DeckAck",
     "DeckEntry",
+    "InvalidatedTake",
+    "InvalidationOutcome",
+    "InvalidationRefused",
     "LedgerError",
     "LedgerPart",
+    "MAX_SUPERSEDED_PER_PART",
     "RecordingAnchor",
     "RecordingsLedger",
     "anchor_for",
@@ -74,11 +84,14 @@ __all__ = [
     "deck_members_at_ref",
     "id_order",
     "ignored_ledger_warning",
+    "invalidate_part",
     "is_git_ignored",
+    "is_invalidated",
     "is_unsplit_deck",
     "ledger_path_for",
     "load",
     "part_identity",
+    "previous_take",
     "record_part",
     "rename_deck_key",
     "resolve_part_members",
@@ -99,6 +112,11 @@ SCHEMA_VERSION = 1
 HASH_VERSION = LEDGER_HASH_VERSION
 
 LEDGER_FILENAME = "recordings-ledger.json"
+
+#: How many replaced takes the ledger keeps per ``(course_id, part, lang)``.
+#: Each one carries a full member map in a committed file, so the history is
+#: bounded; older takes remain in git.
+MAX_SUPERSEDED_PER_PART = 5
 
 AnchorKind = Literal["commit", "commit-dirty", "time", "mtime", "identified", "unanchored"]
 
@@ -165,11 +183,32 @@ class DeckAck(BaseModel):
     hash_version: int = HASH_VERSION
 
 
+class InvalidatedTake(BaseModel):
+    """Audit record of a take that was taken back with ``invalidate`` (#1093).
+
+    Deliberately carries no fingerprints: an invalidated take is evidence of
+    nothing, and git keeps the entry itself. ``(course_id, part, lang,
+    recorded_at)`` is what stops ``seed-ledger`` from writing it back.
+    """
+
+    course_id: str
+    part: int
+    lang: str
+    recorded_at: str
+    at: str
+    note: str | None = None
+
+
 class DeckEntry(BaseModel):
     """Every recorded part of one deck plus its optional acknowledgement."""
 
     parts: list[LedgerPart] = Field(default_factory=list)
     ack: DeckAck | None = None
+    #: Takes a retake replaced, restorable by ``invalidate``. Never read as
+    #: recordings: the report looks at ``parts`` only. Oldest first per identity.
+    superseded: list[LedgerPart] = Field(default_factory=list)
+    #: The audit trail of invalidated takes.
+    invalidated: list[InvalidatedTake] = Field(default_factory=list)
 
 
 class RecordingsLedger(BaseModel):
@@ -556,24 +595,39 @@ def _backfill_hash_versions(data: dict) -> None:
     for raw_deck in decks.values():
         if not isinstance(raw_deck, dict):
             raise TypeError("each deck entry must be an object")
-        parts = raw_deck.get("parts") or []
-        if not isinstance(parts, list):
-            raise TypeError("parts must be a list")
-        for raw_part in parts:
-            if isinstance(raw_part, dict):
-                raw_part.setdefault("hash_version", raw_version)
+        for field_name in ("parts", "superseded"):
+            parts = raw_deck.get(field_name) or []
+            if not isinstance(parts, list):
+                raise TypeError(f"{field_name} must be a list")
+            for raw_part in parts:
+                if isinstance(raw_part, dict):
+                    raw_part.setdefault("hash_version", raw_version)
         ack = raw_deck.get("ack")
         if isinstance(ack, dict):
             ack.setdefault("hash_version", raw_version)
 
 
+def _part_sort_key(part: LedgerPart) -> tuple[int, str, str, str]:
+    return part.part, part.lang, part.course_id, part.recorded_at
+
+
 def _to_json(ledger: RecordingsLedger) -> bytes:
-    """Canonical serialization: sorted keys, two-space indent, trailing newline."""
+    """Canonical serialization: sorted keys, two-space indent, trailing newline.
+
+    The optional ``superseded`` / ``invalidated`` lists are left out while
+    empty, so a ledger that never saw a retake or an invalidation keeps its
+    exact bytes (no git churn from upgrading clm).
+    """
     for deck in ledger.decks.values():
-        deck.parts.sort(key=lambda p: (p.part, p.lang, p.course_id, p.recorded_at))
+        deck.parts.sort(key=_part_sort_key)
+        deck.superseded.sort(key=_part_sort_key)
     payload = ledger.model_dump(by_alias=True, mode="json")
     payload["schema"] = SCHEMA_VERSION
     payload["hash_version"] = HASH_VERSION
+    for raw_deck in payload["decks"].values():
+        for optional in ("superseded", "invalidated"):
+            if not raw_deck[optional]:
+                del raw_deck[optional]
     return (json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode(
         "utf-8"
     )
@@ -614,17 +668,161 @@ def part_identity(part: LedgerPart) -> tuple[str, int, str]:
 def record_part(ledger_path: Path, deck_key: str, part: LedgerPart) -> bool:
     """Load–upsert–save one part entry: the record-time write path.
 
-    An existing entry with the same :func:`part_identity` is replaced (a
-    retake supersedes the take it replaced — the state file keeps the take
-    history); entries for other parts, languages and course ids are
-    untouched.
+    An existing entry with the same :func:`part_identity` is replaced, and a
+    *different* take (another ``recorded_at``) moves to ``superseded`` so
+    :func:`invalidate_part` can bring it back: a take reaches the ledger by
+    default at stop, so the retake may well be the aborted one (#1093). The
+    same stamp is the same take with better evidence (a re-seed) and just
+    replaces. Entries for other parts, languages and course ids are untouched.
     """
     ledger = load(ledger_path)
     entry = ledger.deck(deck_key)
     key = part_identity(part)
+    entry.superseded.extend(
+        p for p in entry.parts if part_identity(p) == key and p.recorded_at != part.recorded_at
+    )
     entry.parts = [p for p in entry.parts if part_identity(p) != key]
     entry.parts.append(part)
+    _trim_superseded(entry, key)
     return save(ledger, ledger_path)
+
+
+def _trim_superseded(entry: DeckEntry, key: tuple[str, int, str]) -> None:
+    """Keep the newest :data:`MAX_SUPERSEDED_PER_PART` takes of identity *key*."""
+    mine = sorted(
+        (p for p in entry.superseded if part_identity(p) == key), key=lambda p: p.recorded_at
+    )
+    dropped = {id(p) for p in mine[:-MAX_SUPERSEDED_PER_PART]}
+    entry.superseded = [p for p in entry.superseded if id(p) not in dropped]
+
+
+# ---------------------------------------------------------------------------
+# Invalidation (#1093, #908)
+# ---------------------------------------------------------------------------
+
+
+class InvalidationRefused(ValueError):
+    """An invalidation that is ambiguous or names nothing; nothing was changed."""
+
+
+@frozen_dataclass
+class InvalidationOutcome:
+    """What :func:`invalidate_part` did to a deck entry."""
+
+    invalidated: LedgerPart
+    #: The take now standing for the part; ``None`` when the part is gone or
+    #: the invalidated take was not the active one.
+    restored: LedgerPart | None
+    #: Whether the invalidated take was the entry in ``parts`` (else ``superseded``).
+    was_active: bool
+    ack_dropped: bool = False
+
+
+def previous_take(entry: DeckEntry, course_id: str, part: int, lang: str) -> LedgerPart | None:
+    """The newest superseded take of the identity: what invalidating the active one restores."""
+    key = (course_id, part, lang)
+    mine = [p for p in entry.superseded if part_identity(p) == key]
+    return max(mine, key=lambda p: p.recorded_at) if mine else None
+
+
+def is_invalidated(entry: DeckEntry, part: LedgerPart) -> bool:
+    """Whether *part*'s take was invalidated: ``seed-ledger`` must not write it back."""
+    return any(
+        (t.course_id, t.part, t.lang, t.recorded_at)
+        == (part.course_id, part.part, part.lang, part.recorded_at)
+        for t in entry.invalidated
+    )
+
+
+def invalidate_part(
+    entry: DeckEntry,
+    course_id: str,
+    part: int,
+    lang: str,
+    *,
+    recorded_at: str | None = None,
+    note: str | None = None,
+    at: str | None = None,
+    fallback: LedgerPart | None = None,
+) -> InvalidationOutcome:
+    """Take one take of ``(course_id, part, lang)`` back, in memory.
+
+    Without *recorded_at* the active entry is the target; with it, the stamp
+    must name the active entry or a superseded one, and a stale or mistyped
+    stamp raises :class:`InvalidationRefused` rather than hitting another take.
+
+    Invalidating the active entry restores :func:`previous_take`, else
+    *fallback* (a take only the local state file still knows: a ledger entry
+    written before ``superseded`` existed), else the part is gone. Invalidating
+    a superseded take only makes it unrestorable. **Numbering is the caller's
+    concern**: this never renumbers, and whether a part may disappear depends
+    on stores this function cannot see.
+
+    The ack: an ack given after the invalidated take was recorded judged that
+    take, so it goes when an older take comes back (that take's drift was
+    never seen) and whenever no part is left to acknowledge. The keys of a
+    language with no part left go too, or a later recording in that language
+    would read as covered.
+    """
+    from datetime import datetime
+
+    key = (course_id, part, lang)
+    active = next((p for p in entry.parts if part_identity(p) == key), None)
+    history = [p for p in entry.superseded if part_identity(p) == key]
+    target = (
+        active if recorded_at is None or (active and active.recorded_at == recorded_at) else None
+    )
+    if target is None:
+        target = next((p for p in history if p.recorded_at == recorded_at), None)
+    if target is None:
+        known = sorted(p.recorded_at for p in ([active] if active else []) + history)
+        raise InvalidationRefused(
+            f"no take of part {part} ({lang}, course {course_id}) "
+            + (f"recorded at {recorded_at}" if recorded_at else "is recorded")
+            + (f"; known takes: {', '.join(known)}" if known else "")
+        )
+
+    stamp = at or datetime.now().isoformat(timespec="seconds")
+    entry.invalidated.append(
+        InvalidatedTake(
+            course_id=course_id,
+            part=part,
+            lang=lang,
+            recorded_at=target.recorded_at,
+            at=stamp,
+            note=note,
+        )
+    )
+    if target is not active:
+        entry.superseded = [p for p in entry.superseded if p is not target]
+        return InvalidationOutcome(invalidated=target, restored=None, was_active=False)
+
+    restored = previous_take(entry, course_id, part, lang) or fallback
+    entry.parts = [p for p in entry.parts if p is not target]
+    if restored is not None:
+        entry.superseded = [p for p in entry.superseded if p is not restored]
+        entry.parts.append(restored)
+    return InvalidationOutcome(
+        invalidated=target,
+        restored=restored,
+        was_active=True,
+        ack_dropped=_settle_ack(entry, target, restored),
+    )
+
+
+def _settle_ack(entry: DeckEntry, invalidated: LedgerPart, restored: LedgerPart | None) -> bool:
+    """Adjust the deck's ack after *invalidated* left ``parts``; ``True`` when it went."""
+    ack = entry.ack
+    if ack is None:
+        return False
+    if not entry.parts or (restored is not None and ack.at >= invalidated.recorded_at):
+        entry.ack = None
+        return True
+    if not any(p.lang == invalidated.lang for p in entry.parts):
+        prefix = f"{invalidated.lang}:"
+        ack.members = {k: v for k, v in ack.members.items() if not k.startswith(prefix)}
+        ack.order = [k for k in ack.order if not k.startswith(prefix)]
+    return False
 
 
 def rename_deck_key(path: Path, old_key: str, new_key: str) -> bool:

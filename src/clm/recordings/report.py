@@ -427,6 +427,9 @@ class DeckReport:
     ack_at: str | None = None
     ack_note: str | None = None
     severity_since_ack: str | None = None
+    #: The audit trail of takes taken back with ``invalidate`` (#1093). Never
+    #: counted as recordings; a deck with only these reads ``unrecorded``.
+    invalidated: list[dict[str, Any]] = field(factory=list)
 
     @property
     def needs_attention(self) -> bool:
@@ -520,6 +523,7 @@ def _report_deck(
             status="orphaned",
             severity="unverifiable",
             ack_state="unacknowledged",
+            invalidated=_audit(entry),
             parts=[
                 PartReport(
                     course_id=p.course_id,
@@ -628,7 +632,12 @@ def _report_deck(
         ack_at=ack.at if ack else None,
         ack_note=ack.note if ack else None,
         severity_since_ack=severity_since_ack,
+        invalidated=_audit(entry),
     )
+
+
+def _audit(entry: rl.DeckEntry) -> list[dict[str, Any]]:
+    return [t.model_dump() for t in entry.invalidated]
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -638,7 +647,11 @@ def _rel(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def _unrecorded_decks(root: Path, recorded: set[tuple[Path, str]]) -> list[DeckReport]:
+def _unrecorded_decks(
+    root: Path,
+    recorded: set[tuple[Path, str]],
+    audits: dict[tuple[Path, str], list[dict[str, Any]]],
+) -> list[DeckReport]:
     from clm.core.slide_text.pairing import find_split_slide_files_recursive, iter_split_pairs
 
     pairs, _solo = iter_split_pairs(find_split_slide_files_recursive(root))
@@ -655,6 +668,7 @@ def _unrecorded_decks(root: Path, recorded: set[tuple[Path, str]]) -> list[DeckR
                 severity="none",
                 ack_state="unacknowledged",
                 deck_files={"de": _rel(de_path, root), "en": _rel(en_path, root)},
+                invalidated=audits.get(key, []),
             )
         )
     return out
@@ -676,6 +690,7 @@ def build_report(
     root = root.resolve()
     report = Report(root=root.as_posix())
     recorded: set[tuple[Path, str]] = set()
+    audits: dict[tuple[Path, str], list[dict[str, Any]]] = {}
     state_cache: dict[str, CourseRecordingState | None] = {}
     only_deck: str | None = rl.deck_key_for(root) if root.is_file() else None
     scan_root = root.parent if root.is_file() else root
@@ -691,6 +706,8 @@ def build_report(
                 continue
             entry = ledger.decks[deck_key]
             if not entry.parts:
+                if entry.invalidated:
+                    audits[(ledger_path.parent.parent.resolve(), deck_key)] = _audit(entry)
                 continue
             recorded.add((ledger_path.parent.parent.resolve(), deck_key))
             report.decks.append(
@@ -706,7 +723,7 @@ def build_report(
             )
 
     if include_unrecorded and not root.is_file():
-        report.decks.extend(_unrecorded_decks(root, recorded))
+        report.decks.extend(_unrecorded_decks(root, recorded, audits))
     report.decks.sort(key=lambda d: (d.topic_dir, d.deck))
     return report
 

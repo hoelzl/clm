@@ -193,6 +193,18 @@ retire superseded verbs without shims):
 the loop: edit → `report --json` → `ack` or re-record → the ledger commit
 travels with the deck edit.
 
+`invalidate` (#1093, #908) is the explicit exception to "every stopped take
+counts": owner's decision 2026-11-05, a confirm step would be forgotten more
+often than a take is aborted. `record_part` keeps the replaced entry in the
+deck-level `superseded` list (full entries, newest 5 per identity, absent while
+empty; no schema bump because `load()` refuses any other schema, which would
+break every older clm over one optional field). Parts are never renumbered: the
+only take of a part with later parts is refused. Rules and rationale:
+`src/clm/recordings/workflow/invalidate.py`; pinned by
+`tests/recordings/test_invalidate.py` and `test_ledger_invalidate.py`, including
+a real stop-retake-invalidate run through `RecordingSession`
+(`TestSession.test_real_retake_then_invalidate_restores_ledger_state_and_files`).
+
 ### 4.5 The manifest digest, demoted
 
 The build-output digest stays available as the secondary

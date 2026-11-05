@@ -37,13 +37,16 @@ from __future__ import annotations
 import enum
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from clm.recordings.state import CourseRecordingState
+
+    from .invalidate import InvalidateResult
+    from .jobs import ProcessingJob
 
 from loguru import logger
 
@@ -1336,6 +1339,97 @@ class RecordingSession:
         self._persist_state(course_state)
         self._notify_path_renames(renames)
         return renames
+
+    def invalidate_take(
+        self,
+        course_slug: str,
+        section_name: str,
+        deck_name: str,
+        *,
+        part_number: int = 0,
+        lang: str = "en",
+        lecture_id: str,
+        deck_path: Path | None = None,
+        note: str | None = None,
+        active_jobs: Sequence[ProcessingJob] = (),
+    ) -> InvalidateResult:
+        """Take the active take of ``(deck, part)`` back: the dashboard's action (#1093).
+
+        Same quiescence rule as :meth:`restore_take`: a recording or rename in
+        flight refuses, because the rename pipeline demotes and re-registers
+        the very slot this clears. The moments right after a stop are the main
+        use of this action, so the retake window does not block it: for this
+        deck it is closed instead (as in :meth:`advance_take`), and the deck
+        stays armed. *deck_path* locates the ledger; without one only the state
+        and the files are updated, and the result says so.
+
+        Raises:
+            RuntimeError: If the session is recording, paused, or renaming.
+            InvalidationRefused: If the request is ambiguous or names nothing;
+                nothing was changed. See :mod:`.invalidate` for the part rules.
+        """
+        from clm.recordings import ledger as recordings_ledger
+
+        from .invalidate import InvalidateRequest, invalidate_take
+
+        logger.info("User action: invalidate_take deck={!r} part={}", deck_name, part_number)
+        with self._lock:
+            if self._state in (
+                SessionState.RECORDING,
+                SessionState.PAUSED,
+                SessionState.RENAMING,
+            ):
+                raise RuntimeError(
+                    f"Cannot invalidate a take while in state '{self._state.value}'."
+                )
+
+        deck = ArmedDeck(
+            course_slug=course_slug,
+            section_name=section_name,
+            deck_name=deck_name,
+            part_number=part_number,
+            lang=lang,
+            lecture_id=lecture_id,
+        )
+        course_state = self._resolve_course_state(deck)
+        pending = [
+            path for item in self._pending_renames.snapshot() for path in (item.src, item.dst)
+        ]
+        result = invalidate_take(
+            InvalidateRequest(
+                course_id=course_slug,
+                part=part_number if part_number > 0 else 1,
+                lang=lang,
+                note=note,
+                ledger_path=recordings_ledger.ledger_path_for(deck_path) if deck_path else None,
+                deck_key=recordings_ledger.deck_key_for(deck_path) if deck_path else None,
+                deck_path=deck_path,
+                state=course_state,
+                lecture_id=lecture_id,
+                section_name=section_name,
+                deck_name=deck_name,
+                recordings_root=self._root,
+                raw_suffix=self._raw_suffix,
+                active_jobs=active_jobs,
+                pending_paths=pending,
+                persist_state=self._persist_state,
+            )
+        )
+        self._notify_path_renames(result.moves)
+        with self._lock:
+            if (
+                self._state is SessionState.ARMED_AFTER_TAKE
+                and self._armed is not None
+                and self._armed.course_slug == course_slug
+                and self._armed.section_name == section_name
+                and self._armed.deck_name == deck_name
+            ):
+                self._cancel_retake_timer_locked()
+                self._state = SessionState.ARMED
+            if self._last_output in {old for old, _ in result.moves}:
+                self._last_output = None
+        self._notify()
+        return result
 
     def stop(self) -> None:
         """Ask OBS to stop the current recording.
