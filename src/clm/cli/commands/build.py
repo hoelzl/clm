@@ -662,10 +662,10 @@ async def main_build(
     default=None,
     help=(
         "Exit with non-zero status if any cell or notebook error is "
-        "reported during the build. Defaults to on under "
-        "--http-replay=replay (the CI-strict default) and off under all "
-        "other replay modes. Override via "
-        "CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}."
+        "reported during the build. On by default in every "
+        "--http-replay mode (since issue #1139); --no-fail-on-error opts "
+        "out. Override via CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}. "
+        "Watch mode never exits on errors."
     ),
 )
 @click.option(

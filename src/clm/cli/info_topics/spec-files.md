@@ -1405,7 +1405,8 @@ or excluded by `--only-sections` / `enabled="false"`) is reported as
 `--http-replay=replay` (the CI-strict default) and a **warning + dropped
 link** otherwise. Override with `clm build --fail-on-missing-xref /
 --no-fail-on-missing-xref` or the `CLM_FAIL_ON_MISSING_XREF` environment
-variable (mirrors `--fail-on-error`). `clm validate` also reports
+variable (same precedence as `--fail-on-error`, but this default stays
+replay-only). `clm validate` also reports
 missing and ambiguous cross-references without a full build.
 
 ## Validation

@@ -2,6 +2,25 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm build` fails on build errors by default (#1139, {version})
+
+**Behavior change, no spec change.** `--fail-on-error` is now **on by
+default in every `--http-replay` mode**. Older CLM turned it on by default
+only under `--http-replay=replay` (CI); a local build (`new-episodes`, the
+non-CI default) that reported cell or notebook errors — for example 96
+"kernel not installed" errors from a build run without `--workers docker` —
+still exited **0**, so a script or agent checking `$?` could commit and push
+the damaged output.
+
+A clean build is unaffected: transient cell failures are retried and
+reported as `flaky_files`, and intentional failure cells are not counted as
+errors. `clm build --watch` is unchanged (it never exits on errors).
+
+What to do: nothing, unless a script relied on `clm build` exiting 0 while
+its summary reported errors. Such a script should fix the errors, or opt out
+explicitly with `--no-fail-on-error` or `CLM_FAIL_ON_ERROR=0`. Precedence is
+unchanged: CLI flag > `CLM_FAIL_ON_ERROR` > default.
+
 ## HTTP replay refuses a request its secret filter cannot process (#1067, {version})
 
 **Behavior change, no spec change.** When the HTTP-replay proxy's secret
