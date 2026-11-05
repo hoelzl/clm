@@ -28,7 +28,7 @@ from clm.cli.commands._export_shared import (
     output_options,
     spec_argument,
 )
-from clm.cli.commands.export.schedule import _md_cell
+from clm.cli.commands.export.schedule import md_cell
 from clm.core.agenda import FORM_LABELS, AgendaWeek, build_agenda, strip_week_prefix
 from clm.core.course_spec import BlockSpec, CourseSpec, CourseSpecError
 from clm.core.utils.text_utils import sanitize_file_name
@@ -125,7 +125,7 @@ def render_agenda_markdown(spec: CourseSpec, weeks: list[AgendaWeek], language: 
     ]
     for week in weeks:
         title = strip_week_prefix(_oneline(week.section.name[language]))
-        lines.append(f"| {week.number} | {_md_cell(title)} | {week.units} |")
+        lines.append(f"| {week.number} | {md_cell(title)} | {week.units} |")
     lines += [f"| | **{labels['total']}** | **{total}** |", ""]
 
     for week in weeks:
@@ -147,12 +147,12 @@ def render_agenda_markdown(spec: CourseSpec, weeks: list[AgendaWeek], language: 
                     lines.append(f"| {day.label} | {_EMPTY} |  |  | 0 |")
                     continue
                 for block in day.blocks:
-                    name = _md_cell(_block_name(block, language)) or _EMPTY
+                    name = md_cell(_block_name(block, language)) or _EMPTY
                     if block.status in ("planned", "adapt"):
                         name += f" *({labels[block.status]})*"
                     form = FORM_LABELS[block.form][language] if block.form else ""
                     units = str(block.units) if block.units is not None else _EMPTY
-                    contents = _md_cell(_block_contents(block, language))
+                    contents = md_cell(_block_contents(block, language))
                     lines.append(f"| {day.label} | {name} | {contents} | {form} | {units} |")
             week_total = labels["week_total"].format(n=week.number)
             lines += [f"| **{week_total}** | | | | **{week.units}** |", ""]
