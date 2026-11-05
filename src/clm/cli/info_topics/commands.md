@@ -702,6 +702,14 @@ flat project listed every deck). A deck whose code legitimately cannot
 compile outside the kernel carries the header marker `// clm: no-compile`
 and becomes an `EXCLUDE_FROM_ALL` target, its workshop targets included.
 `clm build --no-html` builds the code export without any Jupyter kernel.
+An `--only-sections` build regenerates the selected sections' module
+projects and the kind-root project, which keeps adding every other
+section's module directory that holds a `CMakeLists.txt`; the other
+modules' files are left alone. Before CLM {version}, the section cleanup
+deleted the selected modules' `CMakeLists.txt` and nothing recreated them,
+so the course project no longer configured. The CMake files are written
+after every finished build, and skipped only for `--snapshot` /
+`--verify-against`.
 The header and workshop files are part of the build's output set: they
 are listed in the provenance manifest, kept by the stray-file sweep,
 cached and replayed together with `<deck>.cpp`.

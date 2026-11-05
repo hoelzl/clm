@@ -32,7 +32,7 @@ import importlib.resources
 import logging
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -42,6 +42,7 @@ from clm.core.cpp_export_files import companion_output_files, workshop_ordinal
 from clm.core.deck_markers import has_no_compile_marker
 from clm.core.utils.path_utils import ext_for, output_specs
 from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.core.utils.text_utils import sanitize_file_name
 
 if TYPE_CHECKING:
     from clm.core.course import Course
@@ -144,22 +145,27 @@ def _assign_targets(
     deck_rel_paths: Sequence[str],
     excluded: frozenset[str] | set[str],
     workshops: Mapping[str, Sequence[str]],
+    reserved: Collection[str] = (),
 ) -> list[_Target]:
     """One target per deck and per workshop file, unique names project-wide.
 
     CMake target names are global, so they are assigned over the whole
     kind root before the targets are split into module projects.
     Duplicate deck names get a numeric suffix; a workshop target is named
-    after its deck's (disambiguated) target plus ``_workshop_N``.
+    after its deck's (disambiguated) target plus ``_workshop_N``. Names in
+    *reserved* — targets of modules this call does not regenerate (#1138)
+    — are never reused.
     """
     targets: list[_Target] = []
     used: dict[str, int] = {}
     for rel in sorted(deck_rel_paths):
-        name = deck_target_name(rel)
-        count = used.get(name, 0)
-        used[name] = count + 1
-        if count:
-            name = f"{name}_{count + 1}"
+        base = deck_target_name(rel)
+        count = used.get(base, 0)
+        name = f"{base}_{count + 1}" if count else base
+        while name in reserved:
+            count += 1
+            name = f"{base}_{count + 1}"
+        used[base] = count + 1
         is_excluded = rel in excluded
         targets.append(_Target(name, rel, is_excluded))
         stem = PurePosixPath(rel).stem
@@ -180,6 +186,8 @@ def generate_cmake_files(
     *,
     workshops: Mapping[str, Sequence[str]] | None = None,
     with_include_dir: bool = False,
+    extra_modules: Collection[str] = (),
+    reserved_targets: Collection[str] = (),
 ) -> dict[str, str]:
     """Generate the CMake files of one code-output directory.
 
@@ -194,8 +202,13 @@ def generate_cmake_files(
     course source) become ``EXCLUDE_FROM_ALL`` targets, workshops included:
     still buildable explicitly, but skipped by "build all" — and thereby by
     the CI compile check.
+
+    *extra_modules* and *reserved_targets* serve a section-only build
+    (#1138): module directories whose decks are not passed in but which the
+    kind root must still ``add_subdirectory``, and the target names their
+    existing project files already use.
     """
-    targets = _assign_targets(deck_rel_paths, excluded, workshops or {})
+    targets = _assign_targets(deck_rel_paths, excluded, workshops or {}, reserved_targets)
     include_dir = SUPPORT_INCLUDE_DIRNAME if with_include_dir else None
 
     root_targets: list[_Target] = []
@@ -221,7 +234,7 @@ def generate_cmake_files(
         *_toolchain_lines(include_dir),
         "",
     ]
-    root_lines += [f'add_subdirectory("{module}")' for module in sorted(modules)]
+    root_lines += [f'add_subdirectory("{module}")' for module in sorted({*modules, *extra_modules})]
     root_lines += _target_lines(root_targets)
     files = {CMAKELISTS_FILENAME: "\n".join(root_lines).rstrip("\n") + "\n"}
 
@@ -268,6 +281,8 @@ class CodeProject:
     """The decks found in one code-output directory."""
 
     project_name: str
+    lang: str = ""
+    """Output language of the directory (``de`` / ``en``)."""
     decks: set[str] = field(default_factory=set)
     excluded: set[str] = field(default_factory=set)
     """Decks marked ``clm: no-compile`` in the course source."""
@@ -316,7 +331,7 @@ def collect_cpp_code_outputs(course: Course) -> dict[Path, CodeProject]:
                     continue
                 group = groups.setdefault(
                     output_dir,
-                    CodeProject(project_name=f"{course.output_dir_name[lang]} {kind}"),
+                    CodeProject(project_name=f"{course.output_dir_name[lang]} {kind}", lang=lang),
                 )
                 rel = out_path.relative_to(output_dir).as_posix()
                 group.decks.add(rel)
@@ -363,6 +378,77 @@ def _copy_support_headers(kind_root: Path, headers: set[str]) -> None:
         target.write_bytes(data_root.joinpath(header).read_bytes())
 
 
+_ADD_EXECUTABLE_RE = re.compile(r"^\s*add_executable\(\s*([^\s)]+)", re.MULTILINE)
+
+
+def _section_dir_names(course: Course, lang: str) -> set[str]:
+    """Output directory names of every section a full build would produce."""
+    names: set[str] = set()
+    for section in course.spec.sections:
+        if not section.enabled:
+            continue
+        try:
+            names.add(sanitize_file_name(section.name[lang]))
+        except (KeyError, ValueError):
+            continue
+    return names
+
+
+def _unselected_modules(
+    kind_root: Path, selected: set[str], section_dirs: set[str]
+) -> dict[str, set[str]]:
+    """Module directories under *kind_root* that a section-only build keeps.
+
+    Every directory of an unselected spec section (*section_dirs* minus
+    *selected*) holding a ``CMakeLists.txt`` from an earlier build, mapped
+    to the target names that file defines — so the kind-root project keeps
+    adding it and no regenerated target reuses one of its names (#1138).
+    Directories no spec section owns (renamed or removed sections) are
+    left out, as a full build's sweep would remove them.
+    """
+    modules: dict[str, set[str]] = {}
+    for name in sorted(section_dirs - selected):
+        module_dir = kind_root / name
+        cmakelists = module_dir / CMAKELISTS_FILENAME
+        if not cmakelists.is_file():
+            if module_dir.is_dir() and any(module_dir.glob("*.cpp")):
+                logger.warning(
+                    "%s has C++ code output but no %s, so the course CMake project "
+                    "does not include it; run a full build to regenerate it.",
+                    module_dir,
+                    CMAKELISTS_FILENAME,
+                )
+            continue
+        try:
+            text = cmakelists.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        modules[name] = set(_ADD_EXECUTABLE_RE.findall(text))
+    return modules
+
+
+def _existing_code_projects(course: Course) -> dict[Path, CodeProject]:
+    """Code-output kind roots that already hold a ``CMakeLists.txt``.
+
+    A section-only build must rewrite these even when none of the selected
+    sections left a deck there: the section cleanup has emptied the
+    selected module directories the old kind-root file still adds (#1138).
+    """
+    roots: dict[Path, CodeProject] = {}
+    for target in course.output_targets:
+        if not target.output_root.exists():
+            continue
+        for lang, fmt, kind, output_dir in output_specs(
+            course, target.output_root, False, target=target
+        ):
+            if fmt == "code" and (output_dir / CMAKELISTS_FILENAME).is_file():
+                roots.setdefault(
+                    output_dir,
+                    CodeProject(project_name=f"{course.output_dir_name[lang]} {kind}", lang=lang),
+                )
+    return roots
+
+
 def write_cmake_projects(course: Course) -> list[Path]:
     """Write the CMake project files of every built C++ code-output directory.
 
@@ -372,20 +458,39 @@ def write_cmake_projects(course: Course) -> list[Path]:
     headers (the display helper, nlohmann/json, the xcpp display shim) are
     copied into ``include/`` where the exported code references them.
     Returns the list of ``CMakeLists.txt`` paths written.
+
+    For a course built with a section selection (``--only-sections``,
+    #1138) only the selected sections' module files are regenerated. The
+    kind-root file is rewritten too — also where no selected section left a
+    deck — still adding every unselected section's module directory that
+    holds a ``CMakeLists.txt`` from an earlier build; those module files
+    are left as they are.
     """
     if course.prog_lang != "cpp":
         return []
+    partial = course.section_selection is not None
+    projects = collect_cpp_code_outputs(course)
+    if partial:
+        projects = {**_existing_code_projects(course), **projects}
     written: list[Path] = []
-    for kind_root, project in sorted(collect_cpp_code_outputs(course).items()):
+    for kind_root, project in sorted(projects.items()):
         support = needed_support_headers(kind_root)
         if support:
             _copy_support_headers(kind_root, support)
+        kept: dict[str, set[str]] = {}
+        if partial:
+            selected = {PurePosixPath(deck).parts[0] for deck in project.decks}
+            kept = _unselected_modules(
+                kind_root, selected, _section_dir_names(course, project.lang)
+            )
         files = generate_cmake_files(
             project.project_name,
             sorted(project.decks),
             project.excluded,
             workshops=project.workshops,
             with_include_dir=bool(support),
+            extra_modules=kept,
+            reserved_targets=set().union(*kept.values()),
         )
         for rel, content in files.items():
             path = kind_root / PurePosixPath(rel)

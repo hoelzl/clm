@@ -241,6 +241,7 @@ async def main_build(
     explain_rebuilds: bool = False,
     allow_unowned_output: bool = False,
     report_path: Path | None = None,
+    write_cmake_projects: bool = True,
 ) -> BuildSummary | None:
     """Adapt the ``clm build`` invocation onto the engine's ``run_build``.
 
@@ -327,6 +328,7 @@ async def main_build(
         selected_sections=selected_sections,
         fail_on_missing_xref=fail_on_missing_xref,
         write_provenance_manifest=provenance_manifest,
+        write_cmake_projects=write_cmake_projects,
         telemetry_db_path=telemetry_db_path,
         explain_rebuilds=explain_rebuilds,
         report_path=report_path,
@@ -943,6 +945,8 @@ def build(
             explain_rebuilds=resolved_explain_rebuilds,
             allow_unowned_output=allow_unowned_output,
             report_path=report_path,
+            # Verification trees must not gain the generated CMake files.
+            write_cmake_projects=not is_snapshot and verify_against_dir is None,
         )
     )
 

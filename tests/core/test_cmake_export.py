@@ -7,7 +7,9 @@ subset to disk, and assert the generator picks up exactly those.
 """
 
 import io
+import shutil
 
+from clm.build.engine import _compute_section_dirs_for_cleanup
 from clm.core.cmake_export import (
     CMAKELISTS_FILENAME,
     SUPPORT_INCLUDE_DIRNAME,
@@ -443,3 +445,209 @@ class TestWriteCmakeProjects:
         assert f'add_executable({deck_target}_workshop_2 "{deck.stem}_workshop_2.cpp")' in module
         assert ".hpp" not in module
         assert "Other_workshop_1" not in module
+
+
+# ---------------------------------------------------------------------------
+# `--only-sections` builds (issue #1138)
+# ---------------------------------------------------------------------------
+
+COURSE_CPP_TWO_SECTIONS_XML = """
+<course>
+    <github>
+        <de>https://github.com/hoelzl/cpp-course-de</de>
+        <en>https://github.com/hoelzl/cpp-course-en</en>
+    </github>
+    <name>
+        <de>C++ Kurs</de>
+        <en>C++ Course</en>
+    </name>
+    <prog-lang>cpp</prog-lang>
+    <description>
+        <de>Ein C++ Kurs</de>
+        <en>A C++ course</en>
+    </description>
+    <certificate>
+        <de>...</de>
+        <en>...</en>
+    </certificate>
+    <sections>
+        <section id="w01">
+            <name>
+                <de>01 Woche 1</de>
+                <en>01 Week 1</en>
+            </name>
+            <topics>
+                <topic>intro</topic>
+            </topics>
+        </section>
+        <section id="w02">
+            <name>
+                <de>02 Woche 2</de>
+                <en>02 Week 2</en>
+            </name>
+            <topics>
+                <topic>more</topic>
+            </topics>
+        </section>
+    </sections>
+</course>
+"""
+
+
+def _make_two_section_cpp_course(tmp_path, selected: list[str] | None = None) -> Course:
+    data_dir = tmp_path / "course"
+    for topic, slug in (("topic_100_intro", "intro"), ("topic_110_more", "more")):
+        topic_dir = data_dir / "slides" / "module_100_test" / topic
+        if not topic_dir.exists():
+            topic_dir.mkdir(parents=True)
+            (topic_dir / f"slides_{slug}.cpp").write_text(
+                CPP_DECK_TEMPLATE.format(de=slug.title(), en=slug.title()), encoding="utf-8"
+            )
+    spec = CourseSpec.from_file(io.StringIO(COURSE_CPP_TWO_SECTIONS_XML))
+    selection = spec.resolve_section_selectors(selected) if selected else None
+    return Course.from_spec(spec, data_dir, tmp_path / "out", section_selection=selection)
+
+
+def _cmake_tree(kind_roots) -> dict:
+    return {
+        path: path.read_text(encoding="utf-8")
+        for kind_root in kind_roots
+        for path in sorted(kind_root.rglob(CMAKELISTS_FILENAME))
+    }
+
+
+class TestWriteCmakeProjectsOnlySections:
+    """Regression tests for #1138: ``clm build --only-sections`` empties the
+    selected sections' output directories — the module ``CMakeLists.txt``
+    with them — so the CMake files must be regenerated for a section
+    selection too, without dropping the unselected modules from the
+    kind-root project."""
+
+    def _full_build(self, tmp_path):
+        course = _make_two_section_cpp_course(tmp_path)
+        outputs = _materialize_code_outputs(course, course.output_targets[0])
+        write_cmake_projects(course)
+        kind_roots = {p.parent.parent for p in outputs}
+        return outputs, kind_roots, _cmake_tree(kind_roots)
+
+    def _rebuild_section(self, tmp_path, section_id: str):
+        """What `--only-sections` does on disk: wipe the selected sections'
+        output dirs (the engine's own cleanup helper), re-materialize their
+        outputs, then write the CMake files."""
+        partial = _make_two_section_cpp_course(tmp_path, [section_id])
+        for section_dir in _compute_section_dirs_for_cleanup(partial):
+            shutil.rmtree(section_dir, ignore_errors=True)
+        _materialize_code_outputs(partial, partial.output_targets[0])
+        return partial, write_cmake_projects(partial)
+
+    def test_section_rebuild_restores_the_full_build_cmake_files(self, tmp_path):
+        _, kind_roots, full_tree = self._full_build(tmp_path)
+        assert any(p.parent.name.startswith("02 ") for p in full_tree)
+
+        _, written = self._rebuild_section(tmp_path, "w02")
+
+        assert written, "a section rebuild must regenerate its module CMakeLists.txt"
+        assert _cmake_tree(kind_roots) == full_tree
+
+    def test_kind_root_keeps_unselected_modules(self, tmp_path):
+        _, kind_roots, _ = self._full_build(tmp_path)
+
+        self._rebuild_section(tmp_path, "w02")
+
+        for kind_root in kind_roots:
+            root = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+            assert root.count("add_subdirectory(") == 2
+
+    def test_unselected_module_files_are_left_alone(self, tmp_path):
+        _, _, full_tree = self._full_build(tmp_path)
+        week1 = [p for p in full_tree if p.parent.name.startswith("01 ")]
+        assert week1
+        for path in week1:
+            path.write_text(path.read_text(encoding="utf-8") + "# kept\n", encoding="utf-8")
+
+        _, written = self._rebuild_section(tmp_path, "w02")
+
+        assert not set(written) & set(week1)
+        for path in week1:
+            assert path.read_text(encoding="utf-8").endswith("# kept\n")
+
+    def test_first_build_of_a_new_section_is_added_to_the_root(self, tmp_path):
+        # Only week 1 was ever built; selecting week 2 must add its module.
+        course = _make_two_section_cpp_course(tmp_path, ["w01"])
+        outputs = _materialize_code_outputs(course, course.output_targets[0])
+        write_cmake_projects(course)
+        kind_roots = {p.parent.parent for p in outputs}
+
+        self._rebuild_section(tmp_path, "w02")
+
+        for kind_root in kind_roots:
+            root = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+            assert root.count("add_subdirectory(") == 2
+
+    def test_root_drops_a_selected_module_that_produced_no_decks(self, tmp_path):
+        # Every deck of the rebuilt section failed: the cleanup emptied its
+        # directory, so the kind root must stop adding it — even though no
+        # selected deck exists under that kind root any more.
+        _, kind_roots, _ = self._full_build(tmp_path)
+        partial = _make_two_section_cpp_course(tmp_path, ["w02"])
+        for section_dir in _compute_section_dirs_for_cleanup(partial):
+            shutil.rmtree(section_dir, ignore_errors=True)
+
+        write_cmake_projects(partial)
+
+        for kind_root in kind_roots:
+            root = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+            assert root.count("add_subdirectory(") == 1
+            assert "02 " not in root
+
+    def test_module_dirs_no_section_owns_are_dropped(self, tmp_path):
+        # A renamed section leaves its old directory behind (the sweep does
+        # not run with --only-sections); the root must not keep adding it
+        # nor reserve its target names.
+        _, kind_roots, full_tree = self._full_build(tmp_path)
+        for kind_root in kind_roots:
+            week2 = next(p for p in kind_root.iterdir() if p.name.startswith("02 "))
+            shutil.copytree(week2, kind_root / "02 Old Name")
+
+        self._rebuild_section(tmp_path, "w02")
+
+        assert _cmake_tree(kind_roots) == {
+            **full_tree,
+            **{
+                p: p.read_text(encoding="utf-8")
+                for kind_root in kind_roots
+                for p in (kind_root / "02 Old Name").rglob(CMAKELISTS_FILENAME)
+            },
+        }
+        for kind_root in kind_roots:
+            root = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+            assert "Old Name" not in root
+
+    def test_unselected_module_without_cmakelists_is_reported(self, tmp_path, caplog):
+        _, kind_roots, _ = self._full_build(tmp_path)
+        for kind_root in kind_roots:
+            week1 = next(p for p in kind_root.iterdir() if p.name.startswith("01 "))
+            (week1 / CMAKELISTS_FILENAME).unlink()
+
+        with caplog.at_level("WARNING", logger="clm.core.cmake_export"):
+            self._rebuild_section(tmp_path, "w02")
+
+        assert "run a full build" in caplog.text
+        for kind_root in kind_roots:
+            root = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+            assert "01 " not in root
+
+    def test_target_names_of_unselected_modules_are_reserved(self):
+        # CMake target names are global: a section-only regeneration cannot
+        # see the other modules' decks, so it must not reuse their names.
+        files = generate_cmake_files(
+            "Course",
+            ["Basics/01 Intro.cpp"],
+            extra_modules=["basics"],
+            reserved_targets={"basics_01_intro"},
+        )
+        module = files["Basics/CMakeLists.txt"]
+        assert "add_executable(basics_01_intro_2 " in module
+        root = files[CMAKELISTS_FILENAME]
+        assert 'add_subdirectory("basics")' in root
+        assert 'add_subdirectory("Basics")' in root
