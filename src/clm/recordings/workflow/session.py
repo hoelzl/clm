@@ -192,7 +192,7 @@ def _next_take_number(
     return highest + 1
 
 
-def _scan_active_take_files(
+def scan_active_take_files(
     *,
     recordings_root: Path,
     rel_dir: str,
@@ -297,7 +297,7 @@ def _preserve_active_take(
     without state access (CLI flows) fall back to the FS heuristic
     ``max(existing_takes_for_part) + 1``.
     """
-    files = _scan_active_take_files(
+    files = scan_active_take_files(
         recordings_root=recordings_root,
         rel_dir=rel_dir,
         deck_name=deck_name,
@@ -374,7 +374,7 @@ def _preserve_active_take(
     return renames
 
 
-def _scan_takes_for(
+def scan_takes_for(
     takes_subtree: Path,
     deck_name: str,
     part: int,
@@ -446,7 +446,7 @@ def _swap_active_with_take(
         FileExistsError: If a destination already exists at plan time.
     """
     takes_subtree = takes_dir(recordings_root) / rel_dir
-    target_raws, target_finals = _scan_takes_for(
+    target_raws, target_finals = scan_takes_for(
         takes_subtree, deck_name, part, target_take, raw_suffix
     )
     if not target_raws and not target_finals:
@@ -457,7 +457,7 @@ def _swap_active_with_take(
     # been processed and its raw belongs back in archive/, not to-process/.
     target_processed = bool(target_finals)
 
-    active_files = _scan_active_take_files(
+    active_files = scan_active_take_files(
         recordings_root=recordings_root,
         rel_dir=rel_dir,
         deck_name=deck_name,

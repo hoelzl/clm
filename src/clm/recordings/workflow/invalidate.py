@@ -52,7 +52,7 @@ from .naming import (
     take_filename,
 )
 from .safe_move import safe_move
-from .session import _scan_active_take_files, _scan_takes_for
+from .session import scan_active_take_files, scan_takes_for
 
 if TYPE_CHECKING:
     from clm.recordings.state import (
@@ -588,7 +588,7 @@ def _take_file_part(child: Path, req: InvalidateRequest, location: _Location) ->
 
 
 def _active_files(req: InvalidateRequest, location: _Location, slot: int) -> list[Path]:
-    return _scan_active_take_files(
+    return scan_active_take_files(
         recordings_root=location.root,
         rel_dir=location.rel_dir,
         deck_name=location.deck_name,
@@ -627,7 +627,7 @@ def _plan_moves(
     if files_active:
         sources = _active_files(req, location, slot)
     elif state_take is not None:
-        raws, finals = _scan_takes_for(
+        raws, finals = scan_takes_for(
             takes_subtree, location.deck_name, slot, state_take, req.raw_suffix
         )
         sources = raws + finals
@@ -637,7 +637,7 @@ def _plan_moves(
         moves.append((src, _free_destination(dest_dir, src.name, taken)))
 
     if promote is not None:
-        raws, finals = _scan_takes_for(
+        raws, finals = scan_takes_for(
             takes_subtree, location.deck_name, slot, promote.take, req.raw_suffix
         )
         if not raws and not finals:
