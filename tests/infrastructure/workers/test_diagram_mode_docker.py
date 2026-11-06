@@ -95,7 +95,7 @@ def test_probe_against_a_real_daemon(tmp_path):
     if image is None:
         pytest.skip("No Draw.io converter image available")
 
-    absent = "clm-drawio-converter:no-such-tag-1143"
+    absent = "no-such-registry.invalid/no-such-image:1143"
     result = probe_docker_images({"drawio": image, "plantuml": absent})
 
     assert result["drawio"] is None
