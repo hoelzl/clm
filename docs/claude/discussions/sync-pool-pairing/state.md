@@ -1,7 +1,7 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-05
+updated: 2026-11-06
 review-by: 2027-05-04
 ---
 
@@ -59,7 +59,35 @@ only the conversational position.
   question, because order relative to un-id'd neighbours is never
   recorded. The remedy is a `slide_id` on those cells.
 
-## Shipped (all merged 2026-11-03/05)
+## Settled in S15 (2026-11-05/06)
+
+- **No-progress: detect and hand over, as well as fix** (agent proposal,
+  owner agreed). Probe shapes stay visible, so sync says when a pass cannot
+  progress (#1150), #1137's bookkeeping gets fixed, and #1092's detection
+  rules wait for a repeat, because insertion detection is the positional
+  rule the owner rejected.
+- **#1102: wait, and migrate once if it ever ships** (owner asked whether
+  dual fingerprints would future-proof ledgers; the agent argued no). A cell
+  whose bytes still match the ledger can be re-fingerprinted from the file,
+  so no dual entries are needed. Reasoning is on #1102.
+- **`invalidate`, not a confirm step** (owner): a take reaches the ledger by
+  default, because forgetting to confirm would be more frequent than aborting.
+  Invalidating the later parts returns a recording to single-part. Middle parts
+  are refused, files move to `superseded/`, and the CLI refuses while a
+  dashboard runs. Stop & discard and undo are follow-ups (#1197).
+- **Diagrams prefer Docker when available** (owner's idea, #1143): `auto`
+  renders in Docker if the daemon and image are there, otherwise locally with a
+  warning, and never pulls. PythonCourses stays unpinned (owner): its next
+  build re-renders about 222 of 227 tracked PNGs because the cache key
+  includes the render identity, and the diff gets reviewed then.
+- **`units`, not `ue`** (owner): English keywords in the spec. "UE" appears only
+  in the German agenda's column header (#1163).
+- **A `body` with `side` on an unchanged twin should just work** (owner, #1182):
+  it's the German-only fix, and answering it states the twin is faithful.
+- **Local release gate** excludes the 8 `load_fragile` tests, which CI still
+  runs (#1040).
+
+## Shipped (all merged 2026-11-03/06)
 
 - #1131: #1129 reverted, with xfail pins; #1124 reopened. #1124 and #1128
   were closed on 2026-11-05 as fixed by #1144.
@@ -80,7 +108,27 @@ only the conversational position.
   Gate vs master: 20,208 better, 50 worse, 20 newly silent; `two_groups`
   converged 299 → 1,890. #1142 is closed.
 
+- S15: #1142 in #1148; `no_progress` in #1153 and #1174 (agent-corrected,
+  see below); #1137 in #1178 (gate: 25 better, 0 worse). Releases 1.36.0
+  and 1.37.0 with #1101, #1105 (post-processing only), #1107, #1135, #1138,
+  #1139, #1163 (spec, validate, Markdown/CSV export). After 1.37.0: #1167,
+  #1120 (docs), #1119 and the #1044 guard, #1145 (bumps the notebook epoch, so
+  every course re-executes once), #1040.
+- Armed when S15 was saved, CI running: #1172 (#1093, #908) and #1176 (#1143).
+  Check with `gh pr view` rather than trusting this line.
+
 ## Open / revisit conditions
+
+- **Silent sync bugs found by the #787 check, not yet fixed:** #1180
+  (`vo_anchor` never reaches the twin), #1181 (`mark_twin` banks a fork clean),
+  #1182 (false `already_applied`), #1179 (a new slide beside an id'd reorder
+  re-homes a cell). These come next on the sync side. Visible ones: #1183-#1193.
+  #787 is cut down to `--keep-twin`/`--confirm` and slide-scoped answers.
+- **Unexplained:** an xdist worker dies without a trace and the run then hangs
+  (#1194). Seen on a machine shared with several agents; cause not established.
+- **#799 re-baselined:** C4, C7, C8 done; C3 is the only live route to a double
+  run. The damage is latent in the field sample. Owner hasn't decided on C12's
+  won't-fix or on starting C3 + C5.
 
 - **Accepted residual** (in the design doc and the changelog): 30
   probe cases newly silent versus master. Almost all have both halves
@@ -104,6 +152,23 @@ only the conversational position.
   cases worse.
 
 ## Agent corrections recorded in the transcript
+
+- S15: the #1150 advice said "No answer can change this" while a pending
+  `translate_new` would fix the slide, found by the #787 check and fixed in
+  #1174. The agent's own docstring already said unanswered questions aren't a
+  stall.
+- S15: the agent claimed #1092's third shape was an unanswerable question.
+  Those rows are `manual`, with clear instructions; its test driver had answered
+  them anyway. Corrected on the issue.
+- S15: the agent said a test failed in "all three" full runs; only two were
+  confirmed by name, because one run kept only a summary line.
+- S15: a too-broad branch-delete pattern removed older local branches, one of
+  them unmerged and unpushed. It was restored, and three candidates were kept
+  under `recovered/`.
+- S15: two subagents ran `env | grep CLM_` and printed the Auphonic key and OBS
+  password into their tool output. None reached Git or GitHub. AGENTS.md now
+  forbids dumping the environment, `clean_transcript.py` redacts secrets, and
+  S15's transcript was scanned against the live values.
 
 - The first livelock count (1,196) answered only placement and order
   questions. Answering `conflict_shared` too gave 1,190; the correction is
