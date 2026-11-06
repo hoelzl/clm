@@ -17,8 +17,12 @@
                         recording. Restore buttons render disabled and
                         the column header is replaced by an info note.
      restore_url_for  — callable(take) → URL for the restore POST.
+     session_busy     — True while recording, paused or renaming: Invalidate
+                        renders disabled. Unlike Restore it stays enabled while
+                        the deck is merely armed.
+     invalidate_url   — URL for the invalidate POST on the active take.
 #}
-{% macro take_row(take, is_active, panel_locked, restore_url_for) -%}
+{% macro take_row(take, is_active, panel_locked, restore_url_for, session_busy, invalidate_url) -%}
 {% set explorer_path = take.final_path or take.raw_path %}
 <tr {% if is_active %}class="take-row-active" title="Active take — currently in to-process/archive/final"{% else %}title="Superseded take — preserved in takes/"{% endif %}>
     <td>
@@ -55,6 +59,18 @@
               title="This is the active take — restore from a history row to swap.">
             current
         </span>
+        {# Reuses the two-step confirm of .btn-restore (base.html). #}
+        <button type="button"
+                class="btn btn-sm btn-restore btn-invalidate"
+                data-restore-url="{{ invalidate_url }}"
+                {% if session_busy %}disabled aria-disabled="true"
+                title="Stop recording first."
+                {% else %}
+                title="This take does not count: the previous take (if any) comes back. The files move to superseded/; nothing is deleted."
+                {% endif %}>
+            <span data-restore-label-idle>Invalidate</span>
+            <span data-restore-label-confirm hidden>Confirm invalidate</span>
+        </button>
         {% else %}
         {% set restore_url = restore_url_for(take) if restore_url_for else None %}
         {% if restore_url %}
@@ -122,10 +138,10 @@
                 </thead>
                 <tbody>
                     {% if active %}
-                    {{ take_row(active, True, panel_locked, restore_url_for) }}
+                    {{ take_row(active, True, panel_locked, restore_url_for, session_busy, invalidate_url) }}
                     {% endif %}
                     {% for take in takes %}
-                    {{ take_row(take, False, panel_locked, restore_url_for) }}
+                    {{ take_row(take, False, panel_locked, restore_url_for, session_busy, invalidate_url) }}
                     {% endfor %}
                 </tbody>
             </table>

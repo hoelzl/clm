@@ -5558,6 +5558,53 @@ clm recordings ack DECK [OPTIONS]
 Exit `2` (nothing written) when the deck has no recorded part or cannot be
 fingerprinted. Warns when git would ignore the ledger.
 
+#### `clm recordings invalidate`
+
+Since {version}. Take a recorded take back: it no longer counts as a recording
+of the deck. A take reaches the ledger by default when it stops; this is the
+explicit exception for an aborted or bad one, and it restores what a retake
+replaced. Commit the ledger with the deck.
+
+```
+clm recordings invalidate DECK [OPTIONS]
+```
+
+| Take being invalidated | Effect |
+|------------------------|--------|
+| A retake (the part has an earlier take), any part | The earlier take is the part's take again; numbers stand |
+| The only take of the only part | The part is gone: the deck reads `unrecorded` |
+| The only take of the highest part | That part is gone; the numbers below stand |
+| ...and only part 1 is left | Single-part again: the files lose their `(part 1)` suffix |
+| The only take of part 1 or a middle part, with later parts | **Refused**: parts are never renumbered, and a hole has no agreed meaning. Re-record the part (the new take replaces this one), or invalidate the later parts first, highest first |
+| A replaced take, named with `--recorded-at` | It can no longer come back; the current take is unchanged |
+
+| Option | Description |
+|--------|-------------|
+| `DECK` | The deck file (either `.de`/`.en` half) |
+| `--part N` | The part (a single-part recording is part 1). Required when several parts match |
+| `--course ID` | Course id, when several courses recorded the deck |
+| `--lang de\|en` | Recorded language, when the deck was recorded in both |
+| `--recorded-at TS` | The take's stamp. Refused unless it names the current take or a replaced one, so a repeated or stale call cannot hit another take |
+| `--note TEXT` | Why the take does not count; kept in the audit trail |
+| `--root DIR` | Recordings root holding the video files (default: `recordings.root_dir`). Without one the files stay put and the output says so |
+| `--dry-run` | Report what would change; change nothing |
+| `--json` | Emit `{schema, tool, verb, deck, ledger, course_id, part, lang, recorded_at, effect, restored_recorded_at, single_part, ack_dropped, state_updated, files, warnings, note, dry_run}`; `effect` is `restored`, `removed` or `history` |
+
+Video files are never deleted: the invalidated take's files move to
+`superseded/`, the restored take's come back from `takes/`. The take leaves the
+state file's history for the lecture's `invalidated` list. An ack given after
+the invalidated take was recorded judged that take, so it is dropped when an
+older take comes back or no part is left. `report` lists the audit trail per
+deck as `invalidated`, and `seed-ledger` does not write an invalidated take
+back. To undo: restore the ledger from git and move the files back.
+
+Exit `2` with nothing changed when the request is refused: nothing matches,
+several parts match, a part as in the table, a processing job is still running
+for the deck, the files cannot be moved, or a dashboard is running on this
+machine (it holds the state file in memory and may be recording: use its
+Invalidate button in the take panel, or stop it). `--dry-run` works while a
+dashboard runs.
+
 #### `clm recordings seed-ledger`
 
 Seed the committed recordings ledger from a machine-local state file — the

@@ -9,6 +9,7 @@ Provides:
 - ``POST /stop`` — Tell OBS to stop the current recording
 - ``POST /pause`` — Tell OBS to pause the current recording
 - ``POST /resume`` — Tell OBS to resume a paused recording
+- ``POST /decks/{course}/{section}/{deck}/invalidate`` — Take the active take back
 - ``GET /status`` — JSON session status snapshot
 - ``GET /events`` — SSE stream for real-time updates
 - ``GET /pairs`` — Pending pairs list (HTMX partial)
@@ -37,7 +38,7 @@ from clm.recordings.state import CourseRecordingState
 from clm.recordings.workflow.backends.base import ProcessingBackend
 from clm.recordings.workflow.job_manager import JobManager
 from clm.recordings.workflow.jobs import BackendCapabilities, ProcessingJob
-from clm.recordings.workflow.session import RecordingSession, SessionSnapshot
+from clm.recordings.workflow.session import RecordingSession, SessionSnapshot, SessionState
 from clm.recordings.workflow.watcher import RecordingsWatcher
 
 router = APIRouter()
@@ -861,6 +862,13 @@ async def deck_takes(
         and armed.section_name == section_name
         and armed.deck_name == deck_name
     )
+    # Unlike Restore, Invalidate stays available while the deck is armed: right
+    # after a stop, inside the retake window, is when it is wanted most.
+    session_busy = session.state in (
+        SessionState.RECORDING,
+        SessionState.PAUSED,
+        SessionState.RENAMING,
+    )
 
     active = _scan_active_take_for_panel(
         root=root,
@@ -903,6 +911,8 @@ async def deck_takes(
             "takes": takes,
             "active": active,
             "panel_locked": panel_locked,
+            "session_busy": session_busy,
+            "invalidate_url": f"/decks/{course_slug}/{section_name}/{deck_name}/invalidate?part={part}",
             "restore_url_for": lambda t: (
                 f"/decks/{course_slug}/{section_name}/{deck_name}/takes/{t.take}/restore?part={part}"
             ),
@@ -964,6 +974,67 @@ async def restore_take(
         "success",
         f"Restored take {take} for {deck_name}",
     )
+
+    if _from_lectures(request):
+        return _lectures_refresh_response()
+    return await status_partial(request)
+
+
+@router.post(
+    "/decks/{course_slug}/{section_name}/{deck_name}/invalidate",
+    response_class=HTMLResponse,
+)
+async def invalidate_take(
+    request: Request,
+    course_slug: str,
+    section_name: str,
+    deck_name: str,
+    part: int = 0,
+):
+    """Take the active take of ``(deck, part)`` back (#1093, #908).
+
+    Runs :meth:`RecordingSession.invalidate_take`: the take no longer counts
+    in the ledger or the state, the previous take (if any) comes back, and
+    no file is deleted.
+
+    Status codes:
+    - 200: Done.
+    - 409: The session is busy, or the request is refused (a part with later
+      parts and no previous take, a running job, nothing to invalidate);
+      nothing was changed.
+    """
+    from clm.recordings.workflow.invalidate import InvalidationRefused
+
+    _validate_deck_identity(course_slug, section_name, deck_name)
+    session = _get_session(request)
+    lang = _get_lang(request)
+    lecture_id = _resolve_lecture_id(section_name, deck_name)
+    _get_or_load_course_state(request, course_slug)
+    provenance = _build_deck_provenance(request, section_name, deck_name, lang)
+    try:
+        result = session.invalidate_take(
+            course_slug,
+            section_name,
+            deck_name,
+            part_number=part,
+            lang=lang,
+            lecture_id=lecture_id,
+            deck_path=provenance.deck_path if provenance is not None else None,
+            active_jobs=_get_job_manager(request).list_jobs(),
+        )
+    except (RuntimeError, InvalidationRefused) as exc:
+        _push_notice(request, "error", f"Not invalidated: {exc}")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if result.effect == "restored":
+        message = f"Invalidated the take; {deck_name} is back to the take of {result.restored_recorded_at}"
+    elif result.single_part:
+        message = f"Invalidated the take; {deck_name} is a single-part recording again"
+    else:
+        message = f"Invalidated the take; part {part or 1} of {deck_name} is no longer recorded"
+    _push_notice(request, "success", message)
+    for warning in result.warnings:
+        _push_notice(request, "info", warning)
 
     if _from_lectures(request):
         return _lectures_refresh_response()

@@ -423,6 +423,45 @@ The recording-time digest stamp uses the same lookup. If the build output
 lives elsewhere (`clm build --output-dir DIR`), pass `--source DIR` or
 `--manifest FILE`.
 
+### Taking a Take Back (`invalidate`)
+
+Every take that stops counts as a recording: that is by far the common case. If
+you stopped early because of a slide error, or a take is bad, take it back in
+the dashboard (right-click the part's chip, then **Invalidate** on the active
+take, available as soon as the recording has stopped) or on the command line:
+
+```bash
+clm recordings invalidate slides/…/slides_x.de.py --note "aborted, wrong slide"
+clm recordings invalidate slides/…/slides_x.de.py --part 2 --dry-run
+```
+
+| Take being invalidated | Effect |
+|------------------------|--------|
+| A retake (the part has an earlier take), any part | The earlier take is the part's take again; numbers stand |
+| The only take of the only part | The part is gone: the deck reads `unrecorded` |
+| The only take of the highest part | That part is gone; the numbers below stand |
+| ...and only part 1 is left | Single-part again: the files lose their `(part 1)` suffix |
+| The only take of part 1 or a middle part, with later parts | **Refused**: parts are never renumbered, and a hole has no agreed meaning. Re-record the part (the new take replaces this one), or invalidate the later parts first, highest first |
+| A replaced take, named with `--recorded-at` | It can no longer come back; the current take is unchanged |
+
+Use this also to turn a multi-part recording back into a single-part one:
+invalidate the later parts, highest first. Afterwards the deck's files have
+their plain names again, and the next recording starts over as usual.
+
+Your video files are never deleted. The invalidated take's files move to
+`superseded/`, and a restored take's files come back from `takes/`, so a mistake
+can be repaired by hand: restore the ledger from git and move the files back.
+The command needs `--root` (or `recordings.root_dir` in the config) to find the
+files, and refuses while the dashboard is running on this machine or a
+processing job is running for the deck. Commit the ledger with the deck.
+
+The ledger keeps the last five replaced takes per part. A ledger written before
+this feature has none, so the previous take is rebuilt from the local state file
+if this machine has it; otherwise the part reads as not recorded, and the
+replaced entry is in the ledger's git history.
+
+### Older Recordings
+
 The former `clm recordings drift` command is retired in favour of `report`
 (see `clm info migration`). Recordings made before the ledger existed are
 seeded once from the local state file:

@@ -44,6 +44,20 @@ class TakeRecord(BaseModel):
     slide_digest: str | None = None
 
 
+class InvalidatedTake(TakeRecord):
+    """A take that was taken back with ``invalidate`` (#1093).
+
+    Kept on :attr:`LectureState.invalidated`, out of :attr:`RecordingPart.takes`
+    so nothing can restore it and the lecture's audit trail survives even when
+    the part itself is gone. ``raw_file``/``processed_file`` follow the files
+    to wherever they were moved.
+    """
+
+    part: int
+    invalidated_at: str
+    note: str | None = None
+
+
 class RecordingPart(BaseModel):
     """A single recording part for a lecture.
 
@@ -75,6 +89,7 @@ class LectureState(BaseModel):
     lecture_id: str
     display_name: str
     parts: list[RecordingPart] = Field(default_factory=list)
+    invalidated: list[InvalidatedTake] = Field(default_factory=list)
 
     @property
     def is_recorded(self) -> bool:
@@ -472,6 +487,84 @@ class CourseRecordingState(BaseModel):
             lecture_id,
             part_number,
         )
+
+    def invalidate_take(
+        self,
+        lecture_id: str,
+        part_number: int,
+        *,
+        take: int | None = None,
+        promote: int | None = None,
+        note: str | None = None,
+    ) -> InvalidatedTake | None:
+        """Move a take out of the part's history into the lecture's audit list (#1093).
+
+        ``take=None`` means the active take: the historical take *promote*
+        becomes active, or, with ``promote=None``, the part is gone. A *take*
+        number names a superseded take, which just leaves the history. The
+        take numbers of the others stand; the caller moves the files. Returns
+        ``None`` when the lecture has no such part or take: the take is then
+        only in the ledger, which is no error here.
+
+        Raises:
+            ValueError: If *promote* does not name a superseded take.
+        """
+        lecture = self.get_lecture(lecture_id)
+        part = (
+            next((p for p in lecture.parts if p.part == part_number), None)
+            if lecture is not None
+            else None
+        )
+        if lecture is None or part is None:
+            return None
+        now = datetime.now().isoformat(timespec="seconds")
+
+        if take is not None:
+            target = next((t for t in part.takes if t.take == take), None)
+            if target is None:
+                return None
+            part.takes.remove(target)
+            record = InvalidatedTake(
+                **target.model_dump(), part=part_number, invalidated_at=now, note=note
+            )
+            lecture.invalidated.append(record)
+            return record
+
+        record = InvalidatedTake(
+            take=part.active_take,
+            raw_file=part.raw_file,
+            processed_file=part.processed_file,
+            git_commit=part.git_commit,
+            git_dirty=part.git_dirty,
+            recorded_at=part.recorded_at,
+            status=part.status,
+            section_id=part.section_id,
+            topic_id=part.topic_id,
+            slide_digest=part.slide_digest,
+            part=part_number,
+            invalidated_at=now,
+            note=note,
+        )
+        if promote is None:
+            lecture.parts.remove(part)
+        else:
+            successor = next((t for t in part.takes if t.take == promote), None)
+            if successor is None:
+                raise ValueError(f"Take {promote} not found in part {part_number} of {lecture_id}")
+            part.takes.remove(successor)
+            part.active_take = successor.take
+            part.raw_file = successor.raw_file
+            part.processed_file = successor.processed_file
+            part.git_commit = successor.git_commit
+            part.git_dirty = successor.git_dirty
+            part.recorded_at = successor.recorded_at
+            part.status = successor.status
+            part.section_id = successor.section_id
+            part.topic_id = successor.topic_id
+            part.slide_digest = successor.slide_digest
+        lecture.invalidated.append(record)
+        logger.debug("Invalidated take {} of {} part {}", record.take, lecture_id, part_number)
+        return record
 
     def rename_recording_paths(
         self,

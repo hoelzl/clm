@@ -526,6 +526,17 @@ def _seed_one(
     except rl.LedgerError as exc:
         seed.reason = str(exc)
         return True
+    try:
+        deck_entry = rl.load(ledger_path).decks.get(deck_key)
+    except rl.LedgerError as exc:  # pragma: no cover — _existing just read the same file
+        seed.reason = str(exc)
+        return True
+    if deck_entry is not None and rl.is_invalidated(deck_entry, entry):
+        # Taken back with `clm recordings invalidate` (#1093): a state file on
+        # another machine still lists it, and must not resurrect it.
+        seed.status = "unchanged"
+        seed.reason = "take was invalidated"
+        return True
     if existing is not None:
         if existing == entry:
             seed.status = "unchanged"

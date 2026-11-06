@@ -51,6 +51,14 @@ git add -A && git commit                 # 5. ledger + deck edit travel together
 `PATH` is a course root, a topic directory, or one deck file (an existing
 `.de`/`.en` half). `DECK` is a deck file.
 
+A row that is `visible` because the take was **aborted** needs neither a new
+video nor an `ack` (there is no video to keep): `clm recordings invalidate DECK
+[--part N] --note "..." --json` takes it back, and a retake's predecessor comes
+back with it (`clm info commands` has the per-part rules). Pass the row's
+`recorded_at` as `--recorded-at` so a repeated call cannot hit the restored
+take. Exit **0** done, **2** refused with nothing changed (the reason is on
+stderr): never retry a refusal blindly.
+
 Exit codes are load-bearing: `report` **0** nothing needs attention, **1**
 at least one row does (a recorded deck with severity other than `none` that
 is not acknowledged, an `orphaned` entry, an `unverifiable` part, or a
@@ -86,6 +94,7 @@ Each deck row:
 | `ack_state` | `unacknowledged` · `acknowledged` · `drifted-since-ack` · `stale-ack` (ack written under an older fingerprint version — re-`ack` after checking) |
 | `ack_at`, `ack_note`, `severity_since_ack` | the ack's timestamp and note; for `drifted-since-ack`, the class of the drift since the ack |
 | `needs_attention` | the row-level boolean behind the top-level list |
+| `invalidated` | the audit trail of takes taken back with `invalidate`: `{course_id, part, lang, recorded_at, at, note}`; never counted as recordings |
 | `parts[]` | one entry per `(course_id, part, lang)` — see below |
 
 Each part:

@@ -2528,7 +2528,7 @@ class TestSwapActiveWithTake:
     def test_final_edl_sidecar_moves_with_swap(self, recording_root: Path):
         """An ``.edl`` (or any sidecar sharing the final video stem) is preserved.
 
-        Before ``_scan_active_take_files`` was widened to a stem sweep,
+        Before ``scan_active_take_files`` was widened to a stem sweep,
         non-video sidecars (Auphonic's ``.edl`` cut list, future
         ``.vtt``/``.srt``/``.json``/``.html`` outputs) got left behind
         on every retake and never came back on restore. The fix anchors
