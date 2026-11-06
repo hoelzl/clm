@@ -399,3 +399,52 @@ class TestCheckDocCurrency:
             assert problems == []
         else:
             assert any(expect in p.msg for p in problems)
+
+
+clean_transcript = load("clean_transcript")
+
+
+class TestSecretRedaction:
+    """A cleaned transcript is committed; a key printed in a session must not be."""
+
+    def test_the_value_of_a_secret_named_env_var_is_redacted(self, monkeypatch):
+        monkeypatch.setenv("CLM_RECORDINGS__OBS_PASSWORD", "hunter2-not-real-value")
+        monkeypatch.setenv("SOME_API_KEY", "abc123def456ghi789")
+        clean_transcript._secret_env_values.cache_clear()
+        out = clean_transcript.redact("pw hunter2-not-real-value and key abc123def456ghi789 end")
+        clean_transcript._secret_env_values.cache_clear()
+        assert "hunter2" not in out
+        assert "abc123" not in out
+        assert out.count("[REDACTED SECRET]") == 2
+
+    def test_a_short_or_unrelated_env_value_is_left_alone(self, monkeypatch):
+        monkeypatch.setenv("SHORT_TOKEN", "1")
+        monkeypatch.setenv("CLM_LOG_LEVEL", "verbose-everything")
+        clean_transcript._secret_env_values.cache_clear()
+        out = clean_transcript.redact("worker 1 logs verbose-everything")
+        clean_transcript._secret_env_values.cache_clear()
+        assert out == "worker 1 logs verbose-everything"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "CLM_RECORDINGS__AUPHONIC_API_KEY=rotated-long-ago-value",
+            'OBS_PASSWORD="rotated-long-ago-value"',
+            "export GROQ_API_KEY=rotated-long-ago-value",
+        ],
+    )
+    def test_an_assignment_is_redacted_even_when_the_value_is_not_in_the_env(self, text):
+        out = clean_transcript.redact(text)
+        assert "rotated-long-ago-value" not in out
+        assert "[REDACTED SECRET]" in out
+
+    @pytest.mark.parametrize(
+        "token",
+        ["sk-" + "a1B2" * 8, "ghp_" + "a1B2" * 8, "hf_" + "a1B2" * 8, "gsk_" + "a1B2" * 8],
+    )
+    def test_common_token_shapes_are_redacted(self, token):
+        assert token not in clean_transcript.redact(f"token {token} here")
+
+    def test_naming_a_variable_without_a_value_stays(self):
+        text = "rotate CLM_RECORDINGS__OBS_PASSWORD and the fail_on_error=0 default"
+        assert clean_transcript.redact(text) == text

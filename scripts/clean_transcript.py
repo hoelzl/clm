@@ -36,8 +36,9 @@ one case where dropping it would lose something is cleaning a session that was
 resumed after compaction into a *new* session file: there the summary is the
 only trace of what came before. Clean the original file instead.
 
-It also redacts the user profile path and Hermes profile paths, since a
-cleaned transcript is meant to be committable and the raw one is not.
+It also redacts the user profile path, Hermes profile paths and secrets (see
+``redact_secrets``), since a cleaned transcript is meant to be committable and
+the raw one is not.
 
 The output carries the discussions' doc-currency frontmatter
 (docs/claude/discussions/README.md) with
@@ -68,7 +69,9 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import json
+import os
 import pathlib
 import re
 import sys
@@ -133,7 +136,42 @@ HERMES_OUT_OF_BAND = re.compile(
 )
 
 
+# A session can print a key (an agent's ``env | grep`` did): the transcript is
+# committed, so secrets are redacted three ways. The live values of secret-named
+# environment variables catch any spelling; assignments catch a value that has
+# since been rotated or came from another machine; token shapes catch the rest.
+SECRET_NAME = (
+    r"[A-Za-z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|CREDENTIALS?|PRIVATE_KEY)[A-Za-z0-9_]*"
+)
+SECRET_ENV_NAME = re.compile(rf"^{SECRET_NAME}$", re.IGNORECASE)
+SECRET_ASSIGNMENT = re.compile(rf"""\b({SECRET_NAME})=("[^"\n]*"|'[^'\n]*'|\S+)""")
+TOKEN_SHAPE = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,})"
+)
+MIN_SECRET_LENGTH = 8
+SECRET_MARK = "[REDACTED SECRET]"
+
+
+@functools.lru_cache(maxsize=1)
+def _secret_env_values() -> tuple[str, ...]:
+    """Secret-named variables' values, longest first so none is left half-replaced."""
+    values = {
+        value
+        for name, value in os.environ.items()
+        if SECRET_ENV_NAME.match(name) and len(value) >= MIN_SECRET_LENGTH
+    }
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def redact_secrets(text: str) -> str:
+    for value in _secret_env_values():
+        text = text.replace(value, SECRET_MARK)
+    text = SECRET_ASSIGNMENT.sub(rf"\1={SECRET_MARK}", text)
+    return TOKEN_SHAPE.sub(SECRET_MARK, text)
+
+
 def redact(text: str) -> str:
+    text = redact_secrets(text)
     for pattern in HOME_PATTERNS:
         text = pattern.sub("~", text)
     text = HERMES_PROFILE_PATH.sub("[REDACTED PROFILE PATH]", text)

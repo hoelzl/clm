@@ -264,6 +264,10 @@ natural boundary and again at the end; re-running extends the transcript.
 CLM is developed primarily on Windows (Git Bash + `cmd.exe` available). A few
 practical consequences:
 
+- **Never print the environment** (`env`, `env | grep CLM_`, `printenv`,
+  `Get-ChildItem Env:`): on the developer machine it holds real API keys and
+  passwords, and tool output lands in session transcripts. Test for a specific
+  variable's presence instead, without printing its value.
 - Use forward-slash or relative paths in shell commands; watch out for MSYS
   path conversion when invoking Docker from Git Bash (a leading `/db` becomes
   `C:/Program Files/Git/db`). Container paths in test/exec code use the
