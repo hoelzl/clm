@@ -2842,9 +2842,15 @@ a different answer may get through by discarding one half's content) and
 an `advice` sentence, which is also echoed to stderr as `NO PROGRESS: …`.
 Otherwise stop re-answering, reconcile the named slides by hand so both
 halves agree, and re-report. Rejected decisions are additionally echoed to stderr in
-both output modes. While an `order_decision` is framed in a pass, mechanical
-`mirror_order` rows defer instead of co-executing ("one order authority per
-pass", #885) and re-derive on the next report. Full envelope example:
+both output modes. While an order question (`order_decision`,
+`pool_placement_divergence`) is framed in a slide group, that group's
+mechanical `mirror_order` rows defer instead of co-executing and re-derive on
+the next report ("one order authority", #885, per slide group since CLM
+{version}, #1137). The rule stays deck-wide in a pass with an order row that
+can reach another group (`~groups`, an `id:` cross-group move, a companion scope,
+`mirror_pool_move`) or a group with a cell outside its own bracket. When the
+only deck-wide finding is the `order-parity` divergence those deferred mirrors
+leave, answered `body` rows on id'd cells still record. Full envelope example:
 `clm info sync-agents`.
 
 #### `clm slides sync verify`
