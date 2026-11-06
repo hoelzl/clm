@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -459,7 +460,7 @@ class DefaultOutputFormatter(OutputFormatter):
 
     def show_warning(self, warning: BuildWarning) -> None:
         """Display a warning."""
-        self.console.print(f"\n[yellow]⚠ {warning}[/yellow]")
+        self.console.print(f"\n[yellow]⚠ {escape(str(warning))}[/yellow]")
 
     def show_summary(self, summary: BuildSummary) -> None:
         """Display final build summary."""
@@ -593,11 +594,11 @@ class DefaultOutputFormatter(OutputFormatter):
                     note += r" \[cached]"
                 if severity_label:
                     self.console.print(
-                        f"  [{color}]{i}. {severity_label} {warning.message}{location}{note}[/{color}]"
+                        f"  [{color}]{i}. {severity_label} {escape(warning.message)}{location}{note}[/{color}]"
                     )
                 else:
                     self.console.print(
-                        f"  [{color}]{i}. {warning.message}{location}{note}[/{color}]"
+                        f"  [{color}]{i}. {escape(warning.message)}{location}{note}[/{color}]"
                     )
 
             if len(summary.warnings) > max_warnings_to_show:
@@ -828,7 +829,7 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
                     # vanishes from the output.
                     note += r" \[cached]"
                 self.console.print(
-                    f"  [yellow]{i}. [{warning.severity}] {warning.message}{location}{note}[/yellow]"
+                    f"  [yellow]{i}. [{warning.severity}] {escape(warning.message)}{location}{note}[/yellow]"
                 )
 
         self._show_flaky_files(summary)

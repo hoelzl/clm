@@ -236,6 +236,7 @@ async def main_build(
     fail_on_missing_xref=False,
     provenance_manifest=True,
     telemetry_db_path: Path | None = None,
+    diagram_mode: str | None = None,
     no_html: bool = False,
     no_diagrams: bool = False,
     explain_rebuilds: bool = False,
@@ -304,6 +305,7 @@ async def main_build(
         plantuml_workers=plantuml_workers,
         drawio_workers=drawio_workers,
         max_workers=max_workers,
+        diagram_mode=diagram_mode,
         notebook_image=notebook_image,
         plantuml_image=plantuml_image,
         drawio_image=drawio_image,
@@ -526,6 +528,17 @@ async def main_build(
     "--workers",
     type=click.Choice(["direct", "docker"], case_sensitive=False),
     help="Worker execution mode (overrides config)",
+)
+@click.option(
+    "--diagram-mode",
+    type=click.Choice(["auto", "docker", "direct"], case_sensitive=False),
+    help=(
+        "Where PlantUML/Draw.io diagrams render. 'auto' (the default) uses Docker "
+        "when the daemon is reachable and the converter image is present, else the "
+        "local tool with a warning naming the reason. 'docker' and 'direct' are "
+        "strict. Also settable via CLM_WORKER_MANAGEMENT__DIAGRAM_MODE. Without "
+        "this flag, --workers also decides where diagrams render."
+    ),
 )
 @click.option(
     "--notebook-workers",
@@ -772,6 +785,7 @@ def build(
     no_sweep,
     only_sections,
     workers,
+    diagram_mode,
     notebook_workers,
     plantuml_workers,
     drawio_workers,
@@ -940,6 +954,7 @@ def build(
             resolved_fail_on_missing_xref,
             effective_provenance_manifest,
             telemetry_db_path=ctx.obj.get("TELEMETRY_DB_PATH") if ctx.obj else None,
+            diagram_mode=diagram_mode,
             no_html=no_html,
             no_diagrams=no_diagrams,
             explain_rebuilds=resolved_explain_rebuilds,

@@ -99,6 +99,13 @@ import pytest
 # here, in the test environment only.
 os.environ.setdefault("CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS", "30")
 
+# Diagrams render in Docker by default when it is available (issue #1143), so a
+# test build's mode would otherwise depend on whether the machine happens to have
+# a daemon and the converter images. Pinned before any config singleton exists;
+# subprocess builds inherit it. An explicit ``--workers docker`` still wins, which
+# is what the docker-marked tests use.
+os.environ["CLM_WORKER_MANAGEMENT__DIAGRAM_MODE"] = "direct"
+
 # Strip ambient color-forcing before any Click/Rich console is created. Agent
 # harnesses and some terminal setups export ``FORCE_COLOR`` (observed:
 # ``FORCE_COLOR=3`` in the Claude Code shell), which makes Rich/Click emit ANSI

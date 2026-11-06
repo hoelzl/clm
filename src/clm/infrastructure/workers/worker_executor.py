@@ -8,6 +8,7 @@ import importlib.util
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -365,7 +366,7 @@ class WholeVolumeMountError(ValueError):
     """
 
 
-def _refuse_whole_volume_mount(path: Path, *, label: str) -> None:
+def refuse_whole_volume_mount(path: Path, *, label: str) -> None:
     """Refuse to bind-mount a whole drive or filesystem root.
 
     ``Course.workspace_root`` refuses this for the *output* side when
@@ -384,6 +385,40 @@ def _refuse_whole_volume_mount(path: Path, *, label: str) -> None:
         )
 
 
+#: Labels naming the clm process that owns a worker container. They tell a dead
+#: build's orphan, which would otherwise run forever, from a concurrent build's
+#: live worker (#1143).
+_OWNER_PID_LABEL = "clm.owner-pid"
+_OWNER_HOST_LABEL = "clm.owner-host"
+
+#: States in which a same-named container may belong to a build still running.
+_LIVE_CONTAINER_STATES = ("created", "running", "restarting", "paused", "removing")
+
+
+def _owner_labels() -> dict[str, str]:
+    return {_OWNER_PID_LABEL: str(os.getpid()), _OWNER_HOST_LABEL: socket.gethostname()}
+
+
+def _owner_is_gone(labels: Any) -> bool:
+    """True only for labels naming a dead clm process on this machine.
+
+    Unlabelled containers and other hosts' containers (a shared remote daemon) are
+    not provably orphaned, so they count as live. A recycled PID errs the same way:
+    the orphan stays until the PID is free, and nothing is killed by mistake.
+    """
+    try:
+        if labels[_OWNER_HOST_LABEL] != socket.gethostname():
+            return False
+        return not psutil.pid_exists(int(labels[_OWNER_PID_LABEL]))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _unique_container_name(base: str) -> str:
+    """A container name no concurrent build holds, derived from ``base``."""
+    return f"{base}-{uuid.uuid4().hex[:8]}"
+
+
 class DockerWorkerExecutor(WorkerExecutor):
     """Executor for running workers in Docker containers."""
 
@@ -395,6 +430,7 @@ class DockerWorkerExecutor(WorkerExecutor):
         data_dir: Path | None = None,
         network_name: str | None = None,
         log_level: str = "INFO",
+        owned_by_process: bool = True,
     ):
         """Initialize Docker executor.
 
@@ -403,6 +439,9 @@ class DockerWorkerExecutor(WorkerExecutor):
             db_path: Path to SQLite database
             workspace_path: Path to workspace directory (output, mounted at /workspace)
             data_dir: Path to source data directory (mounted at /source, read-only)
+            owned_by_process: Whether containers end with this process. False
+                leaves them unlabelled, so a pool meant to outlive its build is
+                not mistaken for an orphan once the build has exited.
             network_name: Docker network name (None = use default bridge for better
                 host.docker.internal support on Windows/WSL2)
             log_level: Logging level for workers
@@ -414,6 +453,29 @@ class DockerWorkerExecutor(WorkerExecutor):
         self.network_name = network_name
         self.log_level = log_level
         self.containers: dict[str, Any] = {}  # Container objects when docker is installed
+        self.owned_by_process = owned_by_process
+        self._orphans_reaped = False
+
+    def _reap_orphaned_containers(self) -> None:
+        """Remove worker containers whose owning clm process has died.
+
+        A hard-killed build leaves them running with a read-write mount of the
+        source tree, and their workers retry the dead API forever. Best effort:
+        a failure here must not stop this build's own workers from starting.
+        """
+        if self._orphans_reaped:
+            return
+        self._orphans_reaped = True
+        try:
+            containers = self.docker_client.containers.list(
+                all=True, filters={"label": _OWNER_PID_LABEL}
+            )
+            for container in containers:
+                if _owner_is_gone(container.labels):
+                    logger.info(f"Removing orphaned worker container {container.name}")
+                    container.remove(force=True)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            logger.debug(f"Could not reap orphaned worker containers: {exc}")
 
     def start_worker(
         self,
@@ -434,19 +496,37 @@ class DockerWorkerExecutor(WorkerExecutor):
         # that never start a container — on Docker-equipped machines only,
         # which is the worst kind of difference. This is the last moment
         # before a mount actually exists.
-        _refuse_whole_volume_mount(self.workspace_path, label="workspace (output) directory")
+        refuse_whole_volume_mount(self.workspace_path, label="workspace (output) directory")
         if self.data_dir:
-            _refuse_whole_volume_mount(self.data_dir, label="data directory (course sources)")
+            refuse_whole_volume_mount(self.data_dir, label="data directory (course sources)")
 
         try:
-            # Check if container already exists
+            self._reap_orphaned_containers()
+
+            # The name is shared by every build on this machine. A live holder
+            # may be a concurrent build's worker, which stopping would kill
+            # mid-job (#1143); anything else is a leftover to clear.
             try:
                 existing = self.docker_client.containers.get(container_name)
-                logger.warning(f"Container {container_name} already exists, removing...")
-                existing.stop(timeout=5)
-                existing.remove()
+                if existing.status in _LIVE_CONTAINER_STATES and not _owner_is_gone(
+                    existing.labels
+                ):
+                    logger.info(f"Container {container_name} is in use; using another name")
+                    container_name = _unique_container_name(container_name)
+                else:
+                    logger.info(f"Removing leftover container {container_name}")
+                    try:
+                        existing.remove(force=True)
+                    except docker.errors.APIError as exc:
+                        # Another build is removing the same leftover.
+                        logger.info(f"Could not remove {container_name}: {exc}")
+                        container_name = _unique_container_name(container_name)
             except docker.errors.NotFound:
                 pass
+
+            # Created here because the daemon would create a missing bind source
+            # as root on native Linux, and Direct workers then write beneath it.
+            self.workspace_path.mkdir(parents=True, exist_ok=True)
 
             # Workers communicate via REST API instead of direct SQLite access
             # This solves the SQLite WAL mode issues on Windows Docker
@@ -579,6 +659,7 @@ class DockerWorkerExecutor(WorkerExecutor):
             run_kwargs: dict[str, Any] = {
                 "image": config.image,
                 "name": container_name,
+                "labels": _owner_labels() if self.owned_by_process else {},
                 "detach": True,
                 "remove": False,
                 "mem_limit": config.memory_limit,
@@ -599,7 +680,15 @@ class DockerWorkerExecutor(WorkerExecutor):
             else:
                 logger.debug("Using default Docker bridge network for better host connectivity")
 
-            container = self.docker_client.containers.run(**run_kwargs)
+            try:
+                container = self.docker_client.containers.run(**run_kwargs)
+            except docker.errors.APIError as exc:
+                # Another build took the name between the check above and here.
+                if exc.status_code != 409:
+                    raise
+                container_name = _unique_container_name(container_name)
+                run_kwargs["name"] = container_name
+                container = self.docker_client.containers.run(**run_kwargs)
 
             container_id = cast(str, container.id)
             logger.info(f"Started container: {container_name} ({container_id[:12]})")

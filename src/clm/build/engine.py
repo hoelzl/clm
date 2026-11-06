@@ -29,7 +29,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from time import time
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from attrs import evolve
 from rich.console import Console
@@ -67,6 +67,9 @@ from clm.infrastructure.backends.sqlite_backend import SqliteBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from clm.infrastructure.workers.diagram_mode import DiagramModeDecision
 
 #: Engine-level console for user-facing diagnostics, matching the CLI's
 #: stderr console (``clm.cli.commands.shared.cli_console``) so output is
@@ -814,6 +817,119 @@ def configure_workers(config: BuildConfig):
 
     set_effective_worker_identities(worker_config)
     return worker_config
+
+
+async def resolve_diagram_worker_modes(
+    config: BuildConfig, course: Course, data_dir: Path, worker_config
+) -> "DiagramModeDecision":
+    """Decide where this build's diagrams render (issue #1143).
+
+    Writes the effective mode into ``worker_config``, re-records the cache
+    identities that depend on it, queues a build warning for every ``auto``
+    fallback, and keeps an ``auto`` Docker worker from starting when nothing
+    needs rendering.
+    """
+    from clm.infrastructure.workers.diagram_mode import (
+        DIAGRAM_WORKER_TYPES,
+        fallback_warning_message,
+        resolve_diagram_execution_modes,
+    )
+    from clm.infrastructure.workers.image_identity import set_effective_worker_identities
+
+    if config.no_diagrams:
+        types_present: set[str] = set()
+    elif config.watch:
+        # A diagram added or edited during --watch must not render elsewhere.
+        types_present = set(DIAGRAM_WORKER_TYPES)
+    else:
+        types_present = {t for t in map(_diagram_worker_type, course.files) if t}
+
+    mount_roots = [(data_dir, "data directory (course sources)")]
+    try:
+        mount_roots.append(
+            (_resolve_worker_workspace_path(course, worker_config), "workspace (output) directory")
+        )
+    except ValueError:
+        # Raised again, with its own message, where the workspace is really needed.
+        logger.debug("Workspace unresolved while checking diagram mounts", exc_info=True)
+
+    decision = resolve_diagram_execution_modes(
+        worker_config,
+        types_present=types_present,
+        cli_diagram_mode=config.diagram_mode,
+        cli_workers=config.workers,
+        mount_roots=mount_roots,
+    )
+    set_effective_worker_identities(worker_config)
+
+    with_work = await _diagram_types_with_work(
+        config, course, decision.auto_docker | set(decision.fallbacks)
+    )
+    for worker_type, reason in decision.fallbacks.items():
+        # Only when a diagram will really render locally: a warning repeated on
+        # builds that render nothing teaches people to ignore it. Reported through
+        # the build's warnings, so it reaches the live output, the summary and
+        # --report instead of scrolling past during startup.
+        if worker_type in with_work:
+            course.loading_warnings.append(
+                {
+                    "category": "diagram_worker_fallback",
+                    "message": fallback_warning_message(worker_type, reason),
+                    "details": {},
+                }
+            )
+    for worker_type in decision.auto_docker - with_work:
+        logger.info(f"All {worker_type} diagrams are cached; not starting a Docker worker.")
+        getattr(worker_config, worker_type).count = 0
+    return decision
+
+
+def _diagram_worker_type(course_file: object) -> str | None:
+    """The diagram worker type that renders ``course_file``, if any."""
+    from clm.core.course_files.drawio_file import DrawIoFile
+    from clm.core.course_files.plantuml_file import PlantUmlFile
+
+    if isinstance(course_file, DrawIoFile):
+        return "drawio"
+    if isinstance(course_file, PlantUmlFile):
+        return "plantuml"
+    return None
+
+
+async def _diagram_types_with_work(
+    config: BuildConfig, course: Course, worker_types: set[str]
+) -> set[str]:
+    """The ``worker_types`` with at least one diagram the result cache cannot replay.
+
+    Mirrors the ``processed_files`` probe of the backend's submission path with
+    the same payloads. Misses the jobs-DB cache layer on purpose: a hit there
+    only costs a container start. Errs towards "has work": a type wrongly kept
+    costs seconds, one wrongly dropped fails its job for want of a worker.
+    """
+    if not worker_types or config.ignore_cache or config.clear_cache or config.watch:
+        return set(worker_types)
+
+    from clm.core.messaging.correlation_ids import remove_correlation_id
+
+    with_work: set[str] = set()
+    try:
+        with DatabaseManager(config.cache_db_path) as db_manager:
+            for course_file in course.files:
+                worker_type = _diagram_worker_type(course_file)
+                if worker_type not in worker_types or worker_type in with_work:
+                    continue
+                operation: Any = await course_file.get_processing_operation(course.output_root)
+                payload = await operation.payload()
+                await remove_correlation_id(payload.correlation_id)
+                all_correlation_ids.pop(payload.correlation_id, None)
+                if not db_manager.get_result(
+                    payload.input_file, payload.content_hash(), payload.output_metadata()
+                ):
+                    with_work.add(worker_type)
+    except Exception as exc:  # noqa: BLE001 - an optimization must never fail a build
+        logger.warning(f"Could not check the diagram cache ({exc}); starting Docker workers.")
+        return set(worker_types)
+    return with_work
 
 
 def enable_jupyterlite_workers_if_needed(course, worker_config) -> None:
@@ -2024,6 +2140,12 @@ async def _run_build_impl(
     worker_config = configure_workers(config)
     enable_jupyterlite_workers_if_needed(course, worker_config)
     disable_diagram_workers_if_requested(config, worker_config)
+    diagram_decision = await resolve_diagram_worker_modes(config, course, data_dir, worker_config)
+    if diagram_decision.auto_docker:
+        output_formatter.show_startup_message(
+            f"Diagrams ({', '.join(sorted(diagram_decision.auto_docker))}) render in Docker "
+            f"(--diagram-mode direct opts out)"
+        )
 
     from clm.infrastructure.database.schema import init_database
     from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
