@@ -21,6 +21,10 @@ from clm.infrastructure.database.timestamps import (
     parse_optional_db_timestamp,
     utc_now,
 )
+from clm.infrastructure.database.worker_liveness import (
+    WORKER_HEARTBEAT_GRACE_SECONDS,
+    job_worker_alive_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -399,8 +403,14 @@ class JobQueue:
             raise
 
     def update_job_status(
-        self, job_id: int, status: str, error: str | None = None, result: str | None = None
-    ):
+        self,
+        job_id: int,
+        status: str,
+        error: str | None = None,
+        result: str | None = None,
+        *,
+        worker_id: int | None = None,
+    ) -> bool:
         """Update job status.
 
         Args:
@@ -408,24 +418,39 @@ class JobQueue:
             status: New status ('pending', 'processing', 'completed', 'failed')
             error: Optional error message (JSON string for structured error info)
             result: Optional result data (JSON string with warnings and other metadata)
+            worker_id: The worker making the update. When given, the update
+                applies only while this worker holds the job and it is still
+                ``processing`` (#799 C5), so a worker that lost its job can't
+                overwrite the new holder's run or undo a cancellation. Workers
+                always pass it; ``None`` is for maintenance callers.
+
+        Returns:
+            True if the update applied; False if the fence rejected it or the
+            job doesn't exist.
         """
         conn = self._get_conn()
 
         # Get job info for logging
         job = self.get_job(job_id)
 
+        fence = ""
+        fence_params: tuple[int, ...] = ()
+        if worker_id is not None:
+            fence = " AND worker_id = ? AND status = 'processing'"
+            fence_params = (worker_id,)
+
         if status == "completed":
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE jobs
                 SET status = ?, completed_at = CURRENT_TIMESTAMP, error = NULL, result = ?
-                WHERE id = ?
-                """,
-                (status, result, job_id),
+                WHERE id = ?{fence}
+                """,  # noqa: S608 — literal predicate, bound params
+                (status, result, job_id, *fence_params),
             )
             # No commit() needed - connection is in autocommit mode
 
-            if job:
+            if job and cursor.rowcount > 0:
                 # Calculate duration
                 duration = None
                 if job.started_at:
@@ -436,31 +461,39 @@ class JobQueue:
                     f"[worker: {job.worker_id}, file: {job.input_file}]"
                 )
         elif status == "failed":
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE jobs
                 SET status = ?, error = ?, result = ?
-                WHERE id = ?
-                """,
-                (status, error, result, job_id),
+                WHERE id = ?{fence}
+                """,  # noqa: S608 — literal predicate, bound params
+                (status, error, result, job_id, *fence_params),
             )
             # No commit() needed - connection is in autocommit mode
 
-            if job:
+            if job and cursor.rowcount > 0:
                 logger.error(
                     f"Job #{job_id} FAILED: {error} "
                     f"[worker: {job.worker_id}, file: {job.input_file}]"
                 )
         else:
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE jobs
                 SET status = ?, error = ?
-                WHERE id = ?
-                """,
-                (status, error, job_id),
+                WHERE id = ?{fence}
+                """,  # noqa: S608 — literal predicate, bound params
+                (status, error, job_id, *fence_params),
             )
             # No commit() needed - connection is in autocommit mode
+
+        accepted = cursor.rowcount > 0
+        if not accepted:
+            current = f"is {job.status}, held by worker {job.worker_id}" if job else "doesn't exist"
+            logger.warning(
+                f"Job #{job_id}: rejected '{status}' from worker {worker_id}; the job {current}"
+            )
+        return accepted
 
     # Fixed error string stamped on rows found by :meth:`mark_orphaned_jobs_failed`.
     # Kept as a module-visible constant so tests can assert on it and downstream
@@ -731,24 +764,64 @@ class JobQueue:
 
         return jobs
 
-    def reset_hung_jobs(self, timeout_seconds: int = 600) -> int:
-        """Reset jobs that have been processing for too long.
+    # Fixed error string for a hung job with no attempts left; see reset_hung_jobs.
+    HUNG_EXHAUSTED_ERROR_MESSAGE = (
+        "job hung with no attempts left (its worker shows no signs of life)"
+    )
+
+    def reset_hung_jobs(self, timeout_seconds: int = 600, session_id: str | None = None) -> int:
+        """Requeue jobs that have been processing too long on a worker with no signs of life.
+
+        A long runtime alone proves nothing, so a job whose worker is alive is
+        left alone: requeueing it was the route to a double run (#799 C3). A
+        job with no attempts left is failed, because ``get_next_job`` would
+        never claim it again.
 
         Args:
-            timeout_seconds: Time in seconds before considering a job hung
+            timeout_seconds: Time in seconds before considering a job hung. A
+                worker's heartbeat counts within the same window, but never
+                less than ``WORKER_HEARTBEAT_GRACE_SECONDS``.
+            session_id: The calling build's session. When given, only this
+                session's jobs and unstamped jobs are considered: another
+                build's jobs belong to its own monitor, and a silent cell can't
+                be told from a dead worker from outside. ``None`` is for
+                maintenance callers and considers every session.
 
         Returns:
-            Number of jobs reset
+            Number of jobs reset to ``pending``
         """
         conn = self._get_conn()
+        alive_sql, alive_params = job_worker_alive_clause(
+            session_id, grace_seconds=max(timeout_seconds, WORKER_HEARTBEAT_GRACE_SECONDS)
+        )
+        where = f"""
+            status = 'processing'
+            AND started_at < datetime('now', '-' || ? || ' seconds')
+            AND NOT {alive_sql}
+        """
+        params: tuple[Any, ...] = (timeout_seconds, *alive_params)
+        if session_id is not None:
+            where += " AND (session_id IS NULL OR session_id = ?)"
+            params = (*params, session_id)
+
+        failed = conn.execute(
+            f"""
+            UPDATE jobs
+            SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+            WHERE {where} AND attempts >= max_attempts
+            """,  # noqa: S608 — literal predicates, bound params
+            (self.HUNG_EXHAUSTED_ERROR_MESSAGE, *params),
+        )
+        if failed.rowcount > 0:
+            logger.error(f"Failed {failed.rowcount} hung job(s) with no attempts left")
+
         cursor = conn.execute(
-            """
+            f"""
             UPDATE jobs
             SET status = 'pending', worker_id = NULL, started_at = NULL
-            WHERE status = 'processing'
-            AND started_at < datetime('now', '-' || ? || ' seconds')
-            """,
-            (timeout_seconds,),
+            WHERE {where}
+            """,  # noqa: S608 — literal predicates, bound params
+            params,
         )
         # No commit() needed - connection is in autocommit mode
         # started_at is cleared (like _cleanup_dead_worker_jobs) so a
@@ -1096,6 +1169,7 @@ class JobQueue:
         cancelled_days: int | None = 1,
         events_days: int = 30,
         cache_versions: int | None = None,
+        session_id: str | None = None,
     ) -> dict[str, int]:
         """Perform comprehensive cleanup of old entries.
 
@@ -1107,6 +1181,8 @@ class JobQueue:
             cache_versions: Number of ``results_cache`` versions to keep per
                 output file (None = skip the results-cache sweep, keeping the
                 pre-#580 behaviour for callers that do not opt in)
+            session_id: The calling build's session, passed to
+                :meth:`reset_hung_jobs` (None = maintenance, every session)
 
         Returns:
             Dictionary with counts of deleted entries by type
@@ -1116,7 +1192,7 @@ class JobQueue:
             "failed_jobs": self.clear_old_jobs_by_status("failed", failed_days),
             "cancelled_jobs": self.clear_old_jobs_by_status("cancelled", cancelled_days),
             "worker_events": self.clear_old_worker_events(events_days),
-            "hung_jobs_reset": self.reset_hung_jobs(),
+            "hung_jobs_reset": self.reset_hung_jobs(session_id=session_id),
         }
         if cache_versions is not None:
             result["cache_versions"] = self.prune_old_cache_versions(cache_versions)

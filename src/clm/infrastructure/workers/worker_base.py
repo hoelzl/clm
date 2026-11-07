@@ -481,7 +481,7 @@ class Worker(ABC):
         *,
         error: str | None = None,
         result: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Write a job's terminal status, riding out transient lock contention.
 
         A job's ``completed``/``failed`` UPDATE is the single write the build
@@ -493,9 +493,16 @@ class Worker(ABC):
         enough — SQLite's busy handler is not fair — so the write is retried
         with backoff before it is allowed to fail. Other errors propagate
         unchanged.
+
+        Returns:
+            False if the queue rejected the write because this worker no longer
+            holds the job (#799 C5). The job has moved on, so that isn't an
+            error for this worker, which goes on to its next job.
         """
-        retry_on_busy(
-            lambda: self.job_queue.update_job_status(job_id, status, error=error, result=result),
+        accepted = retry_on_busy(
+            lambda: self.job_queue.update_job_status(
+                job_id, status, error=error, result=result, worker_id=self.worker_id
+            ),
             label=f"worker {self.worker_id}: job {job_id} -> {status}",
             # Refresh the liveness heartbeat between attempts so a worker
             # stuck in this retry never looks dead to another build's
@@ -504,6 +511,12 @@ class Worker(ABC):
             # this write lands).
             on_retry=self._update_heartbeat,
         )
+        if not accepted:
+            logger.warning(
+                f"Worker {self.worker_id}: job {job_id} is no longer ours; "
+                f"its '{status}' result was discarded"
+            )
+        return accepted
 
     def _update_status(self, status: str):
         """Update worker status in database.

@@ -169,20 +169,24 @@ async def update_job_status(request: Request, job_id: int, body: JobStatusUpdate
         # thread: on the event loop it would stall every other worker's
         # heartbeat/claim/status request for that long (#945 review).
         # JobQueue connections are thread-local, so this is safe.
-        await asyncio.to_thread(
+        accepted = await asyncio.to_thread(
             retry_on_busy,
             lambda: job_queue.update_job_status(
                 job_id=job_id,
                 status=body.status,
                 error=error_json,
                 result=result_json,
+                worker_id=body.worker_id,
             ),
             label=f"API: job {job_id} -> {body.status}",
         )
 
-        logger.debug(f"REST API: Worker {body.worker_id} updated job {job_id} to {body.status}")
+        if accepted:
+            logger.debug(f"REST API: Worker {body.worker_id} updated job {job_id} to {body.status}")
 
-        return JobStatusUpdateResponse(acknowledged=True)
+        # A rejected update is an answer, not a failure: the worker lost the
+        # job (#799 C5), and an error status would only make its client retry.
+        return JobStatusUpdateResponse(acknowledged=accepted)
 
     except Exception as e:
         logger.error(f"Failed to update job status: {e}", exc_info=True)

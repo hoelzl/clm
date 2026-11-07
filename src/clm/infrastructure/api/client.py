@@ -293,15 +293,19 @@ class WorkerApiClient:
         job_id: int,
         worker_id: int,
         result: dict[str, Any] | None = None,
-    ):
+    ) -> bool:
         """Mark job as completed.
 
         Args:
             job_id: ID of the job
             worker_id: ID of the worker
             result: Optional result data (warnings, metadata, etc.)
+
+        Returns:
+            False if the server rejected the update because this worker no
+            longer holds the job
         """
-        self._request_with_retry(
+        response = self._request_with_retry(
             "POST",
             f"/api/worker/jobs/{job_id}/status",
             json_data={
@@ -312,21 +316,26 @@ class WorkerApiClient:
         )
 
         logger.debug(f"Job {job_id} marked as completed via REST API")
+        return bool(response.json().get("acknowledged", True))
 
     def fail_job(
         self,
         job_id: int,
         worker_id: int,
         error: dict[str, Any],
-    ):
+    ) -> bool:
         """Mark job as failed.
 
         Args:
             job_id: ID of the job
             worker_id: ID of the worker
             error: Error information dictionary
+
+        Returns:
+            False if the server rejected the update because this worker no
+            longer holds the job
         """
-        self._request_with_retry(
+        response = self._request_with_retry(
             "POST",
             f"/api/worker/jobs/{job_id}/status",
             json_data={
@@ -337,6 +346,7 @@ class WorkerApiClient:
         )
 
         logger.debug(f"Job {job_id} marked as failed via REST API")
+        return bool(response.json().get("acknowledged", True))
 
     def heartbeat(self, worker_id: int):
         """Send heartbeat to indicate worker is alive.
