@@ -216,7 +216,9 @@ class TestUpdateStatusEndpoint:
         # Put job into 'processing' so the completion transition is valid.
         queue = JobQueue(db_path)
         try:
-            queue._get_conn().execute("UPDATE jobs SET status='processing' WHERE id=?", (job_id,))
+            queue._get_conn().execute(
+                "UPDATE jobs SET status='processing', worker_id=1 WHERE id=?", (job_id,)
+            )
         finally:
             queue.close()
 
@@ -236,7 +238,9 @@ class TestUpdateStatusEndpoint:
         job_id = _seed_pending_job(db_path)
         queue = JobQueue(db_path)
         try:
-            queue._get_conn().execute("UPDATE jobs SET status='processing' WHERE id=?", (job_id,))
+            queue._get_conn().execute(
+                "UPDATE jobs SET status='processing', worker_id=1 WHERE id=?", (job_id,)
+            )
         finally:
             queue.close()
 

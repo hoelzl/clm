@@ -1470,10 +1470,10 @@ class SqliteBackend(LocalOpsBackend):
             return
 
         try:
-            # Reset any hung jobs from previous sessions
-            hung_reset = self.job_queue.reset_hung_jobs()
+            # Reset hung jobs that this session may recover: its own and unstamped ones
+            hung_reset = self.job_queue.reset_hung_jobs(session_id=self.worker_session_id)
             if hung_reset > 0:
-                logger.info(f"Session start: Reset {hung_reset} hung job(s) from previous session")
+                logger.info(f"Session start: Reset {hung_reset} hung job(s)")
 
         except Exception as e:
             logger.warning(f"Session start cleanup failed: {e}")
@@ -1514,6 +1514,7 @@ class SqliteBackend(LocalOpsBackend):
                     cancelled_days=retention_config.cancelled_jobs_retention_days,
                     events_days=retention_config.worker_events_retention_days,
                     cache_versions=retention_config.cache_versions_to_keep,
+                    session_id=self.worker_session_id,
                 )
 
                 total_jobs_cleaned = sum(jobs_cleanup.values())

@@ -30,6 +30,10 @@ externally started) workers; an unstamped job is claimable by anyone.
   ``worker_heartbeats`` beacon a busy notebook worker writes.
 - A worker owned by **another** session never counts: it will never claim
   our jobs, so counting it would let a build submit into a void.
+
+:func:`job_worker_alive_clause` asks the neighbouring question, "is the worker
+holding this job still alive?", for the hung-job reset (#799 C3). It uses the
+same channels and the same trust in the owning session's monitor.
 """
 
 from __future__ import annotations
@@ -94,6 +98,46 @@ def _claimable_for_session_clause(
     return (
         f"(w.session_id = ? OR (w.session_id IS NULL AND {fresh_sql}))",
         (session_id, *fresh_params),
+    )
+
+
+def job_worker_alive_clause(
+    session_id: str | None, *, grace_seconds: int
+) -> tuple[str, tuple[Any, ...]]:
+    """SQL predicate: the worker holding a row of ``jobs`` shows signs of life.
+
+    For an ``UPDATE jobs`` or ``SELECT ... FROM jobs`` without an alias. The
+    worker is alive if either holds:
+
+    - its row is ``idle``/``busy`` and it either heartbeat within
+      *grace_seconds* or is owned by *session_id*, whose pool monitor runs in
+      the calling process;
+    - its per-cell beacon for this job is fresh. This is checked without
+      needing a ``workers`` row, because another build's stale-row cleanup can
+      delete a live worker's row (#799 C2).
+
+    A job with no worker id, a missing row and no beacon counts as abandoned.
+    """
+    window = f"-{int(grace_seconds)} seconds"
+    status_placeholders = ",".join("?" * len(CLAIMING_STATUSES))
+    own_sql = " OR w.session_id = ?" if session_id is not None else ""
+    own_params: tuple[Any, ...] = (session_id,) if session_id is not None else ()
+    return (
+        f"""(
+            EXISTS (
+                SELECT 1 FROM workers w
+                WHERE w.id = jobs.worker_id
+                  AND w.status IN ({status_placeholders})
+                  AND (w.last_heartbeat > datetime('now', ?){own_sql})
+            )
+            OR EXISTS (
+                SELECT 1 FROM worker_heartbeats h
+                WHERE h.worker_id = jobs.worker_id
+                  AND h.job_id = jobs.id
+                  AND h.heartbeat_at > datetime('now', ?)
+            )
+        )""",
+        (*CLAIMING_STATUSES, window, *own_params, window),
     )
 
 

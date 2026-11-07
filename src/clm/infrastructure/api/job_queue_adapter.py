@@ -90,8 +90,14 @@ class ApiJobQueue:
             raise
 
     def update_job_status(
-        self, job_id: int, status: str, error: str | None = None, result: str | None = None
-    ):
+        self,
+        job_id: int,
+        status: str,
+        error: str | None = None,
+        result: str | None = None,
+        *,
+        worker_id: int | None = None,
+    ) -> bool:
         """Update job status.
 
         Args:
@@ -99,6 +105,12 @@ class ApiJobQueue:
             status: New status ('completed' or 'failed')
             error: Optional error message (JSON string)
             result: Optional result data (JSON string)
+            worker_id: Accepted to match ``JobQueue``; the request always
+                carries this adapter's own ``worker_id``
+
+        Returns:
+            False if the server rejected the update because this worker no
+            longer holds the job
         """
         if self.worker_id is None:
             raise ValueError("worker_id must be set")
@@ -107,11 +119,11 @@ class ApiJobQueue:
             if status == "completed":
                 # Parse result JSON if provided
                 result_dict = json.loads(result) if result else None
-                self._client.complete_job(job_id, self.worker_id, result_dict)
+                return self._client.complete_job(job_id, self.worker_id, result_dict)
             elif status == "failed":
                 # Parse error JSON if provided
                 error_dict = json.loads(error) if error else {"error_message": "Unknown error"}
-                self._client.fail_job(job_id, self.worker_id, error_dict)
+                return self._client.fail_job(job_id, self.worker_id, error_dict)
             else:
                 raise ValueError(f"Invalid status: {status}")
 
