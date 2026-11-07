@@ -26,7 +26,7 @@ class ConvertPlantUmlFileOperation(ConvertSourceOutputFileOperation):
             data=data,
             correlation_id=correlation_id,
             worker_image_identity=effective_worker_image_identity("plantuml"),
-            input_file=str(self.input_file.path),
+            input_file=str(self.input_file.source_path),
             input_file_name=self.input_file.path.name,
             output_file=str(self.output_file),
             output_file_name=self.output_file.name,
