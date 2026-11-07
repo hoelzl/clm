@@ -155,6 +155,30 @@ class TestCheckFormat:
         assert malformed[0].line == 5
         assert "did you mean '// %%'" in malformed[0].message
 
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            ("# %%[markdown]", "did you mean '# %% ['"),
+            ("#%%", "did you mean '# %%'"),
+            ("#  %% [markdown]", "did you mean '# %%'"),
+            ("  # %%", "did you mean '# %%'"),
+        ],
+    )
+    def test_malformed_marker_forms_the_readers_disagree_on(self, tmp_path, line, expected):
+        p = tmp_path / "slides_marker.py"
+        p.write_text(f"# %%\nx = 1\n\n{line}\ny = 2\n", encoding="utf-8")
+        result = validate_file(p, checks=["format"])
+        malformed = [f for f in result.findings if "malformed cell marker" in f.message]
+        assert [(f.severity, f.line) for f in malformed] == [("error", 4)]
+        assert expected in malformed[0].message
+
+    @pytest.mark.parametrize("line", ["# %%time", "# %%cython -a", "# %%", "# %% [markdown]"])
+    def test_commented_magic_and_markers_are_not_malformed(self, tmp_path, line):
+        p = tmp_path / "slides_magic.py"
+        p.write_text(f"# %%\nx = 1\n\n{line}\n# y\n", encoding="utf-8")
+        result = validate_file(p, checks=["format"])
+        assert [f for f in result.findings if "malformed cell marker" in f.message] == []
+
     def test_j2_cells_skipped(self, tmp_path):
         p = _write_slide(
             tmp_path,

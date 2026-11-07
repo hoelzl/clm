@@ -11,9 +11,15 @@ comment token + `%%`. The comment token is `#` for Python/Rust/Markdown and
 # %%                       # code cell (Python)
 # %% [markdown]            # markdown cell (Python)
 # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
-//  %%                     # code cell (C#/C++/Java/TypeScript)
+// %%                      # code cell (C#/C++/Java/TypeScript)
 // %% [markdown]           # markdown cell
 ```
+
+A marker is the comment token at column 0, one space, `%%`, then whitespace or
+the end of the line. `# %%time` is therefore **not** a marker: it is a commented
+magic that stays in the current cell (see *Magics, shell escapes, and install
+hints*). `clm validate` reports `# %%[markdown]`, `#%%`, and an indented `# %%` as
+malformed cell markers (since CLM {version}).
 
 All metadata is **optional and order-independent** on the marker line:
 

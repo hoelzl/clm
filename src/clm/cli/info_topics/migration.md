@@ -2,6 +2,23 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Slide-text tools read `# %%magic` as part of the current cell (#1168, {version})
+
+**Behavior change, build output unchanged.** The build always kept a commented
+magic such as `# %%time` or `# %%cython -a` inside the current cell. The slide-text
+tools (sync, voiceover, recordings ledger, `clm validate`, and others) wrongly
+started a new cell there. They now match the build.
+
+What to do:
+
+- A deck with such a line has a different cell structure for those tools, so a
+  split deck may report sync changes once. Review them and record them with the
+  normal `clm slides sync` workflow. A recorded deck may also show up in
+  `clm recordings report`.
+- `clm validate` now reports `# %%[markdown]`, `#%%`, and an indented `# %%` as
+  errors. Rewrite them as `# %% [markdown]` or `# %%` at column 0. A `# %%[markdown]`
+  was never a cell in the build, so fixing it changes that deck's output.
+
 ## Diagrams render in Docker by default when Docker is available (#1143, {version})
 
 **Behavior change, no spec change.** `clm build` without `--workers` used to

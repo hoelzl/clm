@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from clm.core.slide_text.raw_cells import is_cell_boundary, reconstruct, split_cells
-from clm.core.slide_text.slide_parser import parse_cell_header, parse_cells, parse_slides
+from clm.core.slide_text.slide_parser import (
+    is_percent_marker,
+    parse_cell_header,
+    parse_cells,
+    parse_slides,
+)
 from clm.core.utils.prog_lang_utils import comment_token_for_path, line_comment_for
 
 
@@ -162,3 +167,50 @@ def test_strip_preserves_content_leading_slashes() -> None:
     # the Python analogue is likewise lossless for a path body
     py = parse_cells('# %% [markdown] lang="de" tags=["slide"]\n# /usr/local/bin', "#")
     assert "/usr/local/bin" in py[0].text_content()
+
+
+# Every expectation below was checked against jupytext's own reader (#1168): the
+# build reads decks with jupytext, so the two must agree on what opens a cell.
+@pytest.mark.parametrize("tok", ["#", "//"])
+@pytest.mark.parametrize(
+    ("rest", "expected"),
+    [
+        ("%%", True),
+        ("%% ", True),
+        ("%%\r", True),
+        ("%%\n", True),
+        ("%%\t", True),
+        ('%% [markdown] lang="de"', True),
+        ("%%% subcell", True),
+        ("%%%", False),
+        ("%%cython -a", False),
+        ("%%time", False),
+        ("%%[markdown]", False),
+    ],
+)
+def test_percent_marker_rule(tok: str, rest: str, expected: bool) -> None:
+    assert is_percent_marker(f"{tok} {rest}", tok) is expected
+    assert is_cell_boundary(f"{tok} {rest}", tok) is expected
+
+
+@pytest.mark.parametrize("line", ["#%%", "#  %%", "  # %%", "## %%", "//%%", "% %%"])
+def test_percent_marker_requires_canonical_prefix(line: str) -> None:
+    assert not is_percent_marker(line, "#")
+
+
+def test_commented_magic_stays_in_its_cell() -> None:
+    text = '# %% tags=["alt"]\n\n# %%cython -a\nfrom math import sqrt\n\n# %%\nx = 1\n'
+    cells = parse_cells(text)
+    assert [cell.metadata.tags for cell in cells] == [["alt"], []]
+    assert "# %%cython -a" in cells[0].content
+    assert "from math import sqrt" in cells[0].content
+    preamble, raw_cells = split_cells(text)
+    assert len(raw_cells) == 2
+    assert reconstruct(preamble, raw_cells) == text
+
+
+def test_percent_marker_rule_matches_jupytext() -> None:
+    jupytext = pytest.importorskip("jupytext")
+    for rest in ["%%", "%% x", "%%% x", "%%%", "%%cython -a", "%%time", "%%[markdown]"]:
+        nb = jupytext.reads(f"# %%\nprint(1)\n\n# {rest}\n\nprint(2)\n", "py:percent")
+        assert (len(nb.cells) == 2) is is_percent_marker(f"# {rest}"), rest
