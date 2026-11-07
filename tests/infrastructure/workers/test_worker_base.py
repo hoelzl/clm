@@ -1066,11 +1066,13 @@ class TestTerminalStatusWriteRetry:
         real_update = JobQueue.update_job_status
         failures_left = [2]
 
-        def flaky_update(self, job_id_, status, error=None, result=None):
+        def flaky_update(self, job_id_, status, error=None, result=None, *, worker_id=None):
             if status == "completed" and failures_left[0] > 0:
                 failures_left[0] -= 1
                 raise sqlite3.OperationalError("database is locked")
-            return real_update(self, job_id_, status, error=error, result=result)
+            return real_update(
+                self, job_id_, status, error=error, result=result, worker_id=worker_id
+            )
 
         worker = MockWorker(worker_id, db_path)
         thread = threading.Thread(target=worker.run)
@@ -1117,13 +1119,15 @@ class TestTerminalStatusWriteRetry:
         completed_attempts = [0]
         failed_attempts = [0]
 
-        def locked_update(self, job_id_, status, error=None, result=None):
+        def locked_update(self, job_id_, status, error=None, result=None, *, worker_id=None):
             if status == "completed":
                 completed_attempts[0] += 1
                 raise sqlite3.OperationalError("database is locked")
             if status == "failed":
                 failed_attempts[0] += 1
-            return real_update(self, job_id_, status, error=error, result=result)
+            return real_update(
+                self, job_id_, status, error=error, result=result, worker_id=worker_id
+            )
 
         worker = MockWorker(worker_id, db_path)
         thread = threading.Thread(target=worker.run)
