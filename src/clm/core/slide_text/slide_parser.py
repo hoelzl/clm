@@ -345,6 +345,23 @@ def group_slides(
     return groups
 
 
+#: What must follow ``<token> `` for a line to be a percent-format cell marker:
+#: ``%%`` (or more ``%``) then whitespace, or ``%%`` at end of line. This is
+#: jupytext's rule, which the build reads decks with: anything else, such as
+#: ``# %%time``, is a commented cell magic that stays inside the current cell (#1168).
+_PERCENT_MARKER = re.compile(r"%%(?:%*\s|$)")
+
+
+def is_percent_marker(line: str, comment_token: str = "#") -> bool:
+    """Return True iff ``line`` is a percent-format cell marker (``# %%``, ``# %% [markdown]``).
+
+    ``# %%cython -a`` and ``# %%time`` are not markers. They are commented magics
+    that the build reactivates inside the current cell.
+    """
+    prefix = comment_token + " "
+    return line.startswith(prefix) and _PERCENT_MARKER.match(line, len(prefix)) is not None
+
+
 def is_cell_boundary(line: str, comment_token: str = "#") -> bool:
     """Return True iff ``line`` opens a new percent-format cell.
 
@@ -355,7 +372,7 @@ def is_cell_boundary(line: str, comment_token: str = "#") -> bool:
     cpp/csharp/java/typescript).
     """
     return (
-        line.startswith(comment_token + " %%")
+        is_percent_marker(line, comment_token)
         or line.startswith(comment_token + " j2 ")
         or line.startswith(comment_token + " {{ ")
     )

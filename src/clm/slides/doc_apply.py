@@ -55,6 +55,7 @@ from typing import Any, Protocol
 from attrs import define, evolve, field, frozen
 
 from clm.core.slide_text.raw_cells import is_cell_boundary
+from clm.core.slide_text.slide_parser import is_percent_marker
 from clm.slides.agent_task import VALIDATORS, AnswerRejected
 from clm.slides.bilingual_doc import (
     HEADER_GROUP,
@@ -515,7 +516,7 @@ def _macro_header_from_body(cell: SideCell, body: str, comment_token: str, *, ba
             f"replacement line ('{comment_token} {{{{ ... }}}}') or the bare "
             "replacement text for its quoted argument"
         )
-    if line.startswith(comment_token + " %%"):
+    if is_percent_marker(line, comment_token):
         raise _ItemError(
             f"a '{comment_token} %%' delimiter cannot replace a j2 macro line — "
             "supply the full j2 line or the bare replacement text"

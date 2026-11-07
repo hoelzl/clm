@@ -24,7 +24,7 @@ from clm.core.slide_text.pairing import (
 )
 from clm.core.slide_text.raw_cells import RawCell
 from clm.core.slide_text.raw_cells import split_cells as split_raw_cells
-from clm.core.slide_text.slide_parser import Cell, parse_cells
+from clm.core.slide_text.slide_parser import Cell, is_percent_marker, parse_cells
 from clm.core.tags import ALL_VALID_TAGS, EXPECTED_CODE_TAGS, EXPECTED_MARKDOWN_TAGS
 from clm.core.topic_resolver import (
     build_topic_map,
@@ -165,16 +165,22 @@ def has_allow_main_marker(text: str, comment_token: str = "#") -> bool:
 
 
 def _check_malformed_markers(text: str, file_path: str, comment_token: str) -> list[Finding]:
-    """Flag a near-miss cell marker — an extra leading comment char before ``%%``.
+    """Flag a near-miss cell marker that does not open the cell its author meant.
 
     The percent-format parser recognises a cell boundary via
-    ``line.startswith(token + " %%")``. A typo with one extra leading comment
-    char — ``## %% [markdown] …`` for the ``#`` token, ``/// %%`` for ``//`` — is
-    NOT a boundary, so the line is swallowed into the previous cell's body, two
-    cells merge, and the only downstream symptom is a misleading "unresolved
-    duplicate slide_id …". ``_check_format`` only inspects parsed cells, so it
-    never sees the swallowed line. Scan the RAW source for the typo signature at
-    column 0 and report it directly with the line number.
+    :func:`is_percent_marker`. A typo with one extra leading comment char —
+    ``## %% [markdown] …`` for the ``#`` token, ``/// %%`` for ``//`` — is NOT a
+    boundary, so the line is swallowed into the previous cell's body, two cells
+    merge, and the only downstream symptom is a misleading "unresolved duplicate
+    slide_id …". ``_check_format`` only inspects parsed cells, so it never sees
+    the swallowed line. Scan the RAW source for the typo signature and report it
+    directly with the line number.
+
+    Two more forms are flagged (#1168). ``# %%[markdown]`` is a boundary for
+    neither reader, so its text ends up in the previous cell. ``#%%``, ``#  %%``
+    and an indented ``  # %%`` are boundaries for jupytext (the build) but not for
+    the slide-text tools, so the two would see different cells. A commented magic
+    (``# %%time``) is documented, valid syntax and is not flagged.
     """
     findings: list[Finding] = []
     if comment_token == "#":
@@ -187,8 +193,50 @@ def _check_malformed_markers(text: str, file_path: str, comment_token: str) -> l
     else:
         return findings
 
+    token = re.escape(comment_token)
+    missing_space = re.compile(rf"^{token} %%\[")
+    build_only_marker = re.compile(rf"^\s*{token}\s*%%(?:%*\s|$)")
+    canonical = comment_token + " %%"
+
     for idx, line in enumerate(text.splitlines(), start=1):
-        if near_miss.match(line):
+        if is_percent_marker(line, comment_token):
+            continue
+        if missing_space.match(line):
+            findings.append(
+                Finding(
+                    severity="error",
+                    category="format",
+                    file=file_path,
+                    line=idx,
+                    message=(
+                        f"malformed cell marker {canonical + '['!r} at line {idx} — "
+                        f"did you mean {canonical + ' ['!r}?"
+                    ),
+                    suggestion=(
+                        "Without the space this opens no cell: the text stays in the "
+                        "previous cell for both the build and the slide-text tools."
+                    ),
+                )
+            )
+        elif build_only_marker.match(line):
+            marker = line.split("%%", 1)[0] + "%%"
+            findings.append(
+                Finding(
+                    severity="error",
+                    category="format",
+                    file=file_path,
+                    line=idx,
+                    message=(
+                        f"malformed cell marker {marker!r} at line {idx} — "
+                        f"did you mean {canonical!r}?"
+                    ),
+                    suggestion=(
+                        "The build starts a new cell here but the slide-text tools do "
+                        f"not, so they see different cells. Write {canonical!r} at column 0."
+                    ),
+                )
+            )
+        elif near_miss.match(line):
             marker = line.split("%%", 1)[0].rstrip() + " %%"
             findings.append(
                 Finding(
