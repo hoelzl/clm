@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 4, 7, 8 DONE — **Phase 4 COMPLETE 2026-08-18** (S4, S8, S12, S11, S9, S10+D7; #798 closed). Remaining work is **Phase 5** (#799, job-queue correctness) and **Phase 6** (#800, cross-machine coordination), neither started | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 4, 7, 8 DONE — **Phase 4 COMPLETE 2026-08-18** (S4, S8, S12, S11, S9, S10+D7; #798 closed). Remaining work is **Phase 5** (#799, job-queue correctness; re-baselined 2026-11-05, the issue's table is current) and **Phase 6** (#800, cross-machine coordination, not started) | **Owner**: unassigned
 
 **2026-08-18 update (2)**: the S9 audit was **run** against PythonCourses, and
 it found a bug in the auditor rather than in the corpus. Three cassette
@@ -25,7 +25,8 @@ three: a refusal must not leave behind the evidence that would authorize it on
 the next run (S11's manifest, two review rounds), and a security filter that
 *raises* is worse than one that does nothing when the caller treats
 "unfilterable" as "pass through" (S9's live-network bypass). What remains of
-the whole plan is **Phase 5** (#799) and **Phase 6** (#800), neither started.
+the whole plan is **Phase 5** (#799) and **Phase 6** (#800), neither started
+(as of 2026-08-18; for Phase 5 now, see #799's status table).
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1681,7 +1682,7 @@ recorded cassette contains no Azure/Gemini key and no `Set-Cookie`;
 
 ---
 
-### Phase 5 — Job-queue correctness  ▸ STATUS: not started ▸ TRACKED: #799
+### Phase 5 — Job-queue correctness  ▸ STATUS: partly done, C12 won't-fix; #799's status table supersedes the text below ▸ TRACKED: #799
 **Depends on**: Phase 1 (T1's resurrected tests cover exactly this code).
 
 **Goal**: no job runs twice, no build interferes with another, no corrupted

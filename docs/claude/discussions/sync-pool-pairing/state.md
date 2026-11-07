@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-06
-review-by: 2027-05-04
+updated: 2026-11-07
+review-by: 2027-05-07
 ---
 
 # State: sync pool pairing (moved + edited un-id'd shared cells, #1130)
@@ -86,6 +86,9 @@ only the conversational position.
   it's the German-only fix, and answering it states the twin is faithful.
 - **Local release gate** excludes the 8 `load_fragile` tests, which CI still
   runs (#1040).
+- **#799: C12 is won't-fix, start C3 + C5** (owner, 2026-11-07, "Yes to all").
+  No damage was found for C12. C3 + C5 go in one small PR with the
+  forced-interleaving test; the rest of #799 stays piecemeal, in the issue's order.
 
 ## Shipped (all merged 2026-11-03/06)
 
@@ -114,8 +117,9 @@ only the conversational position.
   #1139, #1163 (spec, validate, Markdown/CSV export). After 1.37.0: #1167,
   #1120 (docs), #1119 and the #1044 guard, #1145 (bumps the notebook epoch, so
   every course re-executes once), #1040.
-- Armed when S15 was saved, CI running: #1172 (#1093, #908) and #1176 (#1143).
-  Check with `gh pr view` rather than trusting this line.
+- #1172 (#1093, #908) and #1176 (#1143), merged 2026-11-06, unreleased when
+  this was written (latest release 1.37.0). The next release carries them and
+  #1145's notebook re-execution.
 
 ## Open / revisit conditions
 
@@ -126,9 +130,16 @@ only the conversational position.
   #787 is cut down to `--keep-twin`/`--confirm` and slide-scoped answers.
 - **Unexplained:** an xdist worker dies without a trace and the run then hangs
   (#1194). Seen on a machine shared with several agents; cause not established.
-- **#799 re-baselined:** C4, C7, C8 done; C3 is the only live route to a double
-  run. The damage is latent in the field sample. Owner hasn't decided on C12's
-  won't-fix or on starting C3 + C5.
+- **#799 re-baselined:** C4, C7, C8 done, C12 won't-fix; C3 is the only live
+  route to a double run, and the damage is latent in the field sample. C3 + C5
+  started after this save; check #799 and its PR for where they stand.
+- **`recovered/` branches, owner to keep or delete:** nothing uncommitted, one
+  commit each, all superseded on master. `wip-2026-11-03-a` and `-b` are the
+  same patch (identical patch-id) on different bases: the sweep tooling #1132
+  landed, with the three code files identical to `cde262ec` and only an earlier
+  baseline JSON differing. `1130-step4-held` is the commit marked "NOT FOR
+  MERGE", replaced by #1144, which has its helpers except
+  `_require_recorded_target`, deliberately removed there.
 
 - **Accepted residual** (in the design doc and the changelog): 30
   probe cases newly silent versus master. Almost all have both halves
@@ -169,6 +180,8 @@ only the conversational position.
   password into their tool output. None reached Git or GitHub. AGENTS.md now
   forbids dumping the environment, `clean_transcript.py` redacts secrets, and
   S15's transcript was scanned against the live values.
+- S15: the first S15 save left a compaction summary inside an owner block; the
+  agent's filter and block check both missed it, and the extended save removed it.
 
 - The first livelock count (1,196) answered only placement and order
   questions. Answering `conflict_shared` too gave 1,190; the correction is
