@@ -212,6 +212,34 @@ class ExecutedNotebookCache:
         logger.debug(f"Cache hit for executed notebook: {input_file} ({language}, {prog_lang})")
         return notebook
 
+    def has(
+        self,
+        input_file: str,
+        content_hash: str,
+        language: str,
+        prog_lang: str,
+    ) -> bool:
+        """Whether an executed notebook is cached for this key, without loading it.
+
+        Unlike :meth:`get`, the payload is neither read nor parsed: executed
+        notebooks can be many MB (#799 C10). An entry whose payload no longer
+        parses still counts here, and is a miss for :meth:`get`.
+        """
+        if not self.conn:
+            logger.warning("ExecutedNotebookCache not initialized (use with statement)")
+            return False
+
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM executed_notebooks
+            WHERE input_file = ? AND content_hash = ? AND language = ? AND prog_lang = ?
+              AND payload_format = ?
+            LIMIT 1
+            """,
+            (str(input_file), content_hash, language, prog_lang, PAYLOAD_FORMAT),
+        ).fetchone()
+        return row is not None
+
     def get_raw(
         self,
         input_file: str,

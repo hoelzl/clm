@@ -59,13 +59,21 @@ router = APIRouter(
 )
 
 
+# Routes that only touch SQLite are plain ``def``: FastAPI runs them in its
+# threadpool, so a held jobs-DB lock (up to the 30 s busy timeout) blocks one
+# request, not the event loop and with it every other worker's heartbeat,
+# claim and status call (#799 C10). ``JobQueue`` connections are per-thread,
+# so this is safe. Keep new SQLite-touching routes sync, or offload them with
+# ``asyncio.to_thread`` as the two ``async`` routes do.
+
+
 def get_job_queue(request: Request) -> JobQueue:
     """Get JobQueue from app state."""
     return cast(JobQueue, request.app.state.job_queue)
 
 
 @router.post("/register", response_model=WorkerRegistrationResponse)
-async def register_worker(request: Request, body: WorkerRegistrationRequest):
+def register_worker(request: Request, body: WorkerRegistrationRequest):
     """Register a new worker.
 
     This endpoint is called by Docker workers on startup to register
@@ -103,7 +111,7 @@ async def register_worker(request: Request, body: WorkerRegistrationRequest):
 
 
 @router.post("/jobs/claim", response_model=JobClaimResponse)
-async def claim_job(request: Request, body: JobClaimRequest):
+def claim_job(request: Request, body: JobClaimRequest):
     """Claim the next available job.
 
     This endpoint atomically retrieves and marks a job as processing.
@@ -195,7 +203,7 @@ async def update_job_status(request: Request, job_id: int, body: JobStatusUpdate
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
-async def heartbeat(request: Request, body: HeartbeatRequest):
+def heartbeat(request: Request, body: HeartbeatRequest):
     """Update worker heartbeat.
 
     Workers should call this periodically to indicate they are still alive.
@@ -230,7 +238,7 @@ async def heartbeat(request: Request, body: HeartbeatRequest):
 
 
 @router.get("/jobs/{job_id}/cancelled", response_model=JobCancellationResponse)
-async def check_job_cancelled(request: Request, job_id: int):
+def check_job_cancelled(request: Request, job_id: int):
     """Check if a job has been cancelled.
 
     Workers can call this during long-running jobs to check if they
@@ -260,7 +268,7 @@ async def check_job_cancelled(request: Request, job_id: int):
 
 
 @router.post("/unregister", response_model=WorkerUnregisterResponse)
-async def unregister_worker(request: Request, body: WorkerUnregisterRequest):
+def unregister_worker(request: Request, body: WorkerUnregisterRequest):
     """Unregister a worker (graceful shutdown).
 
     This endpoint is called by workers when they are shutting down.
@@ -288,7 +296,7 @@ async def unregister_worker(request: Request, body: WorkerUnregisterRequest):
 
 
 @router.post("/activate", response_model=WorkerActivationResponse)
-async def activate_worker(request: Request, body: WorkerActivationRequest):
+def activate_worker(request: Request, body: WorkerActivationRequest):
     """Activate a pre-registered worker.
 
     This endpoint is called by workers that were pre-registered by the parent
@@ -353,7 +361,7 @@ def _get_cache_db_path(request: Request) -> Path:
 
 
 @router.get("/cache/executed_notebook")
-async def get_executed_notebook(
+def get_executed_notebook(
     request: Request,
     input_file: str,
     content_hash: str,
@@ -459,7 +467,7 @@ async def store_executed_notebook(
 
 
 @router.post("/cache/add", response_model=CacheAddResponse)
-async def add_to_cache(request: Request, body: CacheAddRequest):
+def add_to_cache(request: Request, body: CacheAddRequest):
     """Add result to cache.
 
     This endpoint allows Docker workers to cache their results in the host's

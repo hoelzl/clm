@@ -852,15 +852,17 @@ class SqliteBackend(LocalOpsBackend):
             ExecutedNotebookCache,
         )
 
+        # An existence probe: loading and parsing the notebook here cost about
+        # 42 ms per 10 MB, once per cached deck and build (#799 C10).
         with ExecutedNotebookCache(self.db_manager.db_path) as nb_cache:
-            cached_nb = nb_cache.get(
+            cached = nb_cache.has(
                 input_file=payload.input_file,
                 content_hash=payload.execution_cache_hash(),
                 language=payload.language,
                 prog_lang=payload.prog_lang,
             )
 
-        if cached_nb is None:
+        if not cached:
             logger.info(
                 f"Recording HTML execution cache is cold for "
                 f"'{payload.input_file}' (executed_notebooks has no entry for "
