@@ -44,9 +44,16 @@ probe) **must** be given the *same* `--cache-db-path` / `--jobs-db-path` /
   worker HTTP API in Docker mode)
 - **Purpose:** the *scheduling* short-circuit. If a stored result for this
   `(output_file, content_hash)` exists **and the output file is already on
-  disk**, no worker job is enqueued at all. Consulted in `_submit_job_blocking`
+  disk with the content the worker recorded**, no worker job is enqueued at
+  all. Consulted in `_submit_job_blocking`
   (`infrastructure/backends/sqlite_backend.py`); a hit yields
   `("jobcache_hit", None)`.
+- **Content check (#799 C6):** workers write each output atomically and store
+  its SHA-256 in the entry's metadata (`sha256`, plus `companion_sha256` for
+  companion files; `infrastructure/utils/output_files.py`). A file that is
+  missing, torn, or no longer matches (a stale worker's overwrite, a hand edit)
+  makes the probe a miss and the job runs again. Entries that predate digests
+  only need the file to exist.
 - **Trim policy:** newest `cache_versions_to_keep` rows per `output_file`,
   indefinitely (`JobQueue.prune_old_cache_versions`, wired into
   `cleanup_all` + build-end cleanup + `clm db cleanup`). Also
@@ -211,7 +218,7 @@ execute_operation(operation, payload)
 └─ _submit_job_blocking(payload, job_type, force_execution)   [offloaded to a submit thread]
       │
       ├─ results_cache: check_cache(output_file, content_hash)   (skipped when force_execution)
-      │     └─ HIT and output on disk ──▶ ("jobcache_hit", None): register the output,
+      │     └─ HIT and output on disk, digests match ──▶ ("jobcache_hit", None): register the output,
       │           replay stored issues, report hit; RETURN. No worker.
       │
       └─ MISS ──▶ enqueue a worker job ("submitted", job_id). Worker runs, writes output,

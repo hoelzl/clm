@@ -8,6 +8,7 @@ This module tests the PlantUML worker implementation including:
 """
 
 import gc
+import hashlib
 import os
 import sqlite3
 import sys
@@ -532,6 +533,11 @@ class TestPlantUmlWorkerProcessJob:
                         call_args = mock_cache.call_args
                         assert call_args[0][0] == str(output_file)
                         assert call_args[0][1] == "test-hash"
+                        # The host checks this digest before reusing the entry (#799 C6)
+                        assert call_args[0][2]["sha256"] == hashlib.sha256(b"PNG data").hexdigest()
+                        # Written atomically: no temp file left behind (#799 C11)
+                        assert output_file.read_bytes() == b"PNG data"
+                        assert not list(tmp_path.glob("output.png.*.tmp"))
 
     def test_process_job_uses_event_loop(self, worker_id, db_path, tmp_path):
         """process_job should use persistent event loop."""

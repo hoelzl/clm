@@ -1,8 +1,8 @@
 {
   "epoch": 3,
   "decision": {
-    "action": "bump",
-    "reason": ""
+    "action": "keep",
+    "reason": "#799 C11: notebook_worker writes the same UTF-8/LF bytes via atomic_write_bytes instead of a text-mode open(newline='\\n'); output content is unchanged, only the write is atomic and a digest is recorded"
   },
   "sources": {
     "clm/core/cpp_export_files.py": "32d55d727cc7b300dd1d966f5898c481c28f7af12402818b27f4744849866f6c",
@@ -28,7 +28,7 @@
     "clm/workers/notebook/cpp_code_analysis.py": "555387facc24fe1fbba0d9f81d12bc4cc624b6c79314f742c88780add6fa68f2",
     "clm/workers/notebook/cpp_code_emitter.py": "3a6fa932a274ac771448e2c88e756f8ca189ad3ca9d0ff9829cf9d937b3ea507",
     "clm/workers/notebook/notebook_processor.py": "c3ab212ba288b73432047d7b50c74020c4c16bba2540bc5318ae00481d09d07c",
-    "clm/workers/notebook/notebook_worker.py": "82383af421265fc675811387842f72c992cd423c6dea4bf9e05f2e762ec2ad60",
+    "clm/workers/notebook/notebook_worker.py": "2172eef7ff46264cc7c912906c7439c40895e5f82e970aaff3eea8c0b5505ae5",
     "clm/workers/notebook/output_spec.py": "92a341dade00736476a2c1ac42920569725f31f4609fd60a1575dd9e229c2698",
     "clm/workers/notebook/utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "clm/workers/notebook/utils/jupyter_utils.py": "c4153457f2e41bf7a47cf1bf78c51abe85b1bfff0177a44531ecf0fe61294b4a"

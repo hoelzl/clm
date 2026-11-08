@@ -16,6 +16,10 @@ from pathlib import Path
 
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.utils.output_files import (
+    OUTPUT_DIGEST_KEY,
+    write_output_file,
+)
 from clm.infrastructure.workers.worker_base import (
     Worker,
     missing_jobs_db_error,
@@ -200,10 +204,8 @@ class PlantUmlWorker(Worker):
             if len(result_bytes) == 0:
                 raise ValueError("Conversion produced empty result")
 
-            # Write output file
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "wb") as f:
-                f.write(result_bytes)
+            # Atomic, so a reader never sees a half-written image (#799 C11)
+            digest = write_output_file(output_path, result_bytes)
 
             logger.info(f"PlantUML image written to {output_path} ({len(result_bytes)} bytes)")
 
@@ -211,7 +213,11 @@ class PlantUmlWorker(Worker):
             self.job_queue.add_to_cache(
                 job.output_file,
                 job.content_hash,
-                {"format": output_format, "size": len(result_bytes)},
+                {
+                    "format": output_format,
+                    "size": len(result_bytes),
+                    OUTPUT_DIGEST_KEY: digest,
+                },
             )
             logger.debug(f"Added result to cache for {job.output_file}")
 

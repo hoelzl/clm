@@ -21,6 +21,11 @@ from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebook
 from clm.infrastructure.database.job_queue import Job
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
+from clm.infrastructure.utils.output_files import (
+    COMPANION_DIGESTS_KEY,
+    OUTPUT_DIGEST_KEY,
+    write_output_text,
+)
 from clm.infrastructure.workers.worker_base import (
     Worker,
     missing_jobs_db_error,
@@ -278,17 +283,11 @@ class NotebookWorker(Worker):
                 self.set_job_warnings(warnings)
 
             # Write output file (``output_path`` is the container path in
-            # Docker mode, converted above)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # newline="\n" is required: without it, Python's text-mode
-            # universal-newline translation rewrites every "\n" to os.linesep
-            # (CRLF) on Windows Direct workers, while Docker/Linux workers emit
-            # LF. That platform split produces spurious CRLF in built output
-            # (noisy diffs, "CRLF will be replaced by LF" warnings). Pinning
-            # LF keeps output byte-identical across platforms.
-            with open(output_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(result)
+            # Docker mode, converted above). Atomic, so a reader never sees a
+            # half-written file (#799 C11). The bytes are written as produced,
+            # with no newline translation: Windows Direct workers and
+            # Linux/Docker workers must emit byte-identical output.
+            digest = write_output_text(output_path, result)
 
             logger.info(f"Notebook written to {output_path}")
 
@@ -297,9 +296,10 @@ class NotebookWorker(Worker):
             # ride along in the job result and the job-cache metadata so the
             # host can register, cache and replay them with the main file.
             companions = processor.get_companion_outputs()
-            for name, text in companions.items():
-                with open(output_path.parent / name, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(text)
+            companion_digests = {
+                name: write_output_text(output_path.parent / name, text)
+                for name, text in companions.items()
+            }
             if companions:
                 logger.info(f"Wrote {len(companions)} companion file(s) next to {output_path}")
                 self.set_job_companion_files(list(companions))
@@ -310,9 +310,12 @@ class NotebookWorker(Worker):
                 "kind": payload.kind,
                 "prog_lang": payload.prog_lang,
                 "language": payload.language,
+                # Checked before the host reuses this entry (#799 C6)
+                OUTPUT_DIGEST_KEY: digest,
             }
             if companions:
                 cache_metadata["companion_files"] = list(companions)
+                cache_metadata[COMPANION_DIGESTS_KEY] = companion_digests
             self.job_queue.add_to_cache(job.output_file, job.content_hash, cache_metadata)
             logger.debug(f"Added result to cache for {job.output_file}")
 

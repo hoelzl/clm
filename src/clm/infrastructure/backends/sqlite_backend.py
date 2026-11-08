@@ -39,6 +39,7 @@ from clm.infrastructure.database.worker_liveness import (
     count_other_session_workers,
     count_workers_awaiting_activation,
 )
+from clm.infrastructure.utils.output_files import recorded_digests, unusable_outputs
 from clm.infrastructure.utils.path_utils import atomic_write_bytes
 from clm.infrastructure.workers.progress_tracker import ProgressTracker, get_progress_tracker_config
 
@@ -748,16 +749,17 @@ class SqliteBackend(LocalOpsBackend):
                     output_path = self.workspace_path / output_path
                 # A stored result is only usable when its whole file set is
                 # on disk — the main output and every companion file the
-                # worker wrote next to it (#928).
-                missing = [
-                    path
-                    for path in (output_path, *_companion_paths(output_path, cached))
-                    if not path.exists()
-                ]
-                if not missing:
+                # worker wrote next to it (#928) — with the content the worker
+                # recorded: a torn file or a stale worker's overwrite is
+                # rebuilt, not reused (#799 C6).
+                problems = unusable_outputs(
+                    recorded_digests(output_path, _companion_paths(output_path, cached), cached)
+                )
+                if not problems:
                     return ("jobcache_hit", None)
                 logger.warning(
-                    f"Cache indicated file exists but not found: {', '.join(map(str, missing))}"
+                    "Cached result not reused, rebuilding: "
+                    + "; ".join(f"{path} is {reason}" for path, reason in problems)
                 )
 
         # Worker availability (may briefly block waiting for workers to activate).
