@@ -158,15 +158,13 @@ only the conversational position.
   test also matches a notebook waiting on a slow HTTP/LLM call). Not verified: a
   real two-build race, Docker end to end. Phase 6 (#800) is the next phase of
   the remediation plan; nothing started.
-- **Unregistered sessions:** the 2026-11-08 audit lists seven older sessions no
-  register mentions (2026-10-09 to 2026-11-02). Not triaged in this save.
-- **`recovered/` branches, owner to keep or delete:** nothing uncommitted, one
-  commit each, all superseded on master. `wip-2026-11-03-a` and `-b` are the
-  same patch (identical patch-id) on different bases: the sweep tooling #1132
-  landed, with the three code files identical to `cde262ec` and only an earlier
-  baseline JSON differing. `1130-step4-held` is the commit marked "NOT FOR
-  MERGE", replaced by #1144, which has its helpers except
-  `_require_recorded_target`, deliberately removed there.
+- **Unregistered sessions:** resolved on 2026-11-08 (owner chose save 4, skip 3).
+  S16-S19 saved in PR #1212 (threads `sync-prewrite-verify`, `docker-workers-ops`,
+  and this thread's opening S19); three recorded as skipped. The cleaner's
+  file-mtime boundary for Claude sessions is filed as #1213.
+- **`recovered/` branches:** deleted on 2026-11-08 (owner). All three were
+  local-only, one commit each, and superseded on master (#1132, #1144).
+
 
 - **Accepted residual** (in the design doc and the changelog): 30
   probe cases newly silent versus master. Almost all have both halves
