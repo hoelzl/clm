@@ -14,6 +14,16 @@ withdrawn, and #1142). The probe and sweep procedure is in
 `docs/developer-guide/testing.md` ("Sync-engine sweeps"). This file keeps
 only the conversational position.
 
+## Opening (S19, 2026-11-01/02, saved retroactively)
+
+- The thread starts in a triage of 39 open issues: 8 closed with evidence, 4
+  follow-ups split out (#1117-#1120), six parallel fix agents. The #1071 agent
+  found a separate livelock while testing and the agent filed it as #1124
+  (a shared code cell also edited in the same pass: the same rows are offered
+  every pass and the verify gate withholds them without a question). The owner
+  said "fix the livelock in #1124 next"; that fix became #1129, whose
+  adversarial review opens S14.
+
 ## Settled (S14, 2026-11-03 → 2026-11-04)
 
 - **Revert #1129, fix the root cause** (owner, after the adversarial
