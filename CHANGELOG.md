@@ -9,6 +9,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.38.0] - 2026-11-08
+
+### Added
+
+- **`clm recordings invalidate` takes a take back (#1093, #908).** A take keeps reaching the ledger by default when it stops; an aborted or bad one can now be invalidated explicitly, from the CLI or with the Invalidate button in the dashboard's take panel, so it no longer counts as a recording. Invalidating a retake restores the take it replaced (the recordings ledger now keeps replaced takes in an optional `superseded` list, plus an `invalidated` audit trail; the schema stays 1 and existing ledgers keep their bytes). Invalidating the only take of the highest part removes that part, and a deck left with only part 1 is a single-part recording again, files renamed back. Parts are never renumbered, so the only take of a lower part is refused. Video files are moved to `superseded/`, never deleted.
+
+- **`clm validate` warns on two C++ `SHOW` mistakes (`code_export` check, #1119, #1044).** A `SHOW(...)` / `CLM_DISPLAY(...)` in a `global` cell at namespace scope no longer waits for the downstream compile gate to fail. A `SHOW(...)` holding an inline lambda, which kills the xeus-cpp kernel and fails the whole deck, now gets a warning saying to name the lambda first. `clm slides cpp-show` no longer generates that lambda shape: it leaves such a display alone and reports it (`skipped_lambda` with `--json`, exit code 1).
+
+### Changed
+
+- **Diagrams render in Docker by default when Docker is available (#1143).** The Docker converter images and a local draw.io/PlantUML render different PNGs for the same source, so a build in the "other" mode rewrote committed `img-generated/` files. New `clm build --diagram-mode auto|docker|direct` (`CLM_WORKER_MANAGEMENT__DIAGRAM_MODE`, `[worker_management] diagram_mode`), default `auto`: Docker when the daemon is reachable and the image is present locally, otherwise the local tool with a build warning naming the reason. Notebooks stay Direct, `auto` never pulls an image, and no container starts when a course has no diagrams or all of them replay from the cache. The first build after upgrading re-renders diagrams once and can change PNGs that were committed from local renders; `--workers direct`, `--diagram-mode direct` or `diagram_mode = "direct"` keep the old behavior. See `clm info migration`.
+
+### Fixed
+
+- `clm slides sync apply`: a placement or order question in one slide group no
+  longer defers a mechanical `mirror_order` in another. The "one order
+  authority" rule (#885, #906) is now per slide group, and stays deck-wide when
+  a pass has an order row that can reach another group (`~groups`, a companion scope, an `id:`
+  cross-group move, `mirror_pool_move`) or a group with a cell outside its own
+  bracket. When the only deck-wide verify finding is the `order-parity`
+  divergence left by a mirror deferred under that rule, answered `body` rows on
+  id'd cells still record, so an agent does not re-confirm text it just wrote
+  as `verify_cold` (#1137).
+
+- **Concurrent Docker builds no longer kill each other's workers (#1143).** Starting a worker stopped and removed any container with the same `clm-<type>-worker-N` name, including a running one that belonged to another build. A live holder now keeps its container and the new worker takes a suffixed name; containers are labelled with their owning process, so those of a dead build are reclaimed. Rich markup in build warnings, such as `[docker]` in an install hint, no longer vanishes from the output.
+
+- **C++ code export: constructors with brace member initializers stay whole.** `T::T(int x) : a_{x} { }` (also `noexcept`, delegating `: T{x, 0}`, mixed and multi-line lists, function-try blocks) was split after the last brace initializer: the constructor lost its body and the body moved into the `slide_…()` function, so the exported project failed to compile. The notebook output epoch is bumped, so the notebook cache is invalidated once on upgrade. (#1145)
+
+- **`clm slides sync apply`: `no_progress` no longer fires while an answerable row is pending** (#1150). Its advice said "No answer can change this" even when an unanswered question, such as a `translate_new`, was what the held slide waited for. `manual` rows have no answers and don't suppress it.
+
+- **Slide-text tools now agree with the build on cell markers.** A commented magic
+  such as `# %%time` or `# %%cython -a` no longer starts a new cell in the slide-text
+  parser, which the build never did. `clm validate` also reports `# %%[markdown]`, `#%%`,
+  and an indented `# %%` as malformed cell markers (#1168).
+
+- **Diagrams shared between topics with `<include>` render in Docker again (#1203).** Since diagrams render in Docker by default (#1143), an included `.drawio`/`.pu` source failed with "Input file not found in Docker container": the job named the include's virtual path inside the consuming topic, which does not exist under the `/source` mount. The job now names the real source file; the render still lands in the consumer's `img-generated/`. The failed render had also left the consumer's committed PNG stale, so sections holding both topics reported "multiple writers produced different content".
+
+- **One build no longer deletes another running build's worker rows** (#799 C2). A build's stale-worker cleanup now leaves alone every worker of a session in which any worker still heartbeats; that build's own monitor and shutdown look after them. Before, a busy worker in a long silent cell could lose its row, which stranded its job and made the worker exit when it finished. A failed Docker check (no daemon, an API error) no longer deletes the row "to be safe"; it is removed only if it shows no heartbeat. And the in-build dead-worker sweep now also recovers this build's jobs whose worker row was deleted, instead of waiting for the stall detector.
+
+- **A long silent cell no longer looks like a dead worker to `clm db prune` or another build** (#799 C3, review of #1201). Every worker now refreshes a beacon for the job it holds every 30 seconds, and the hung-job reset counts a worker as alive only through that beacon or its own build's pool monitor. Before, `clm db prune` requeued such a job after 10 minutes and ran it a second time, and a worker that had given up on a job kept it `processing` forever because its idle heartbeat still looked fresh. The beacon also keeps another build's stale-worker cleanup from deleting a busy worker's row.
+- **Job status writes are quieter and count correctly** (#799 C5, review of #1201). A worker's retried write that had already landed is acknowledged instead of reported as discarded; finishing a job that was cancelled under it (routine in watch mode) no longer logs a warning; a discarded result no longer counts toward the worker's success statistics. `clm db prune` now reports hung jobs it requeued or failed instead of listing them as deleted.
+
+- **A job can no longer run twice because it looked hung, and a worker that lost its job can no longer overwrite its status** (#799 C3 + C5). `reset_hung_jobs` now leaves a job alone while its worker shows signs of life, and a build no longer touches another build's jobs, so a long-running cell in one build can't be re-run by the next. A hung job with no attempts left now fails with a clear error instead of waiting in `pending`, where no worker would ever claim it. Worker status updates now apply only while that worker holds the job and it's still `processing`; a stale result is discarded with a warning, and finishing a job no longer undoes its cancellation. This protects the job's status only: a stale worker still writes its output file and cache entry. Other builds' stale jobs stay `processing` until `clm db prune`, which still considers every session.
+
+- **Worker output files are written atomically, and a cached result is reused only if its files are intact** (#799 C11 + C6). The notebook, Draw.io and PlantUML workers now write each output (and the C++ export's companion files) to a temp file and rename it into place, so a crash or a concurrent reader never sees a half-written file. Workers also record each file's SHA-256 in the job cache, and the build checks it before skipping a job: a torn file, a stale worker's overwrite or a hand-edited output is rebuilt instead of being taken as up to date. Cache entries written by earlier versions carry no digest and are still accepted when the file exists.
+
+- **A held jobs-database lock no longer freezes the Docker worker API** (#799 C10). The register, claim, heartbeat, cancellation-check, unregister, activate and cache routes now run in the server's threadpool instead of on its event loop, so one request waiting on the lock no longer stalls every other worker's heartbeat and claim. The Recording-HTML replay check now asks whether an executed notebook is cached instead of loading and parsing it (about 42 ms per 10 MB, once per cached deck per build).
+
+- **A cancelled or attempts-exhausted job no longer hangs the build** (#799 C9). A job cancelled from outside the build (`clm jobs cancel` in another terminal) is now reported as a failed file with a clear error, instead of the build waiting until the stall detector aborts it after 20 minutes. A job whose worker died after its last attempt now fails with "worker died with no attempts left for its job", instead of being requeued where no worker would ever claim it. Watch mode's cancel on a changed file now touches only its own build's jobs, not those of another build watching the same file.
+
 ## [1.37.0] - 2026-11-05
 
 ### Added
