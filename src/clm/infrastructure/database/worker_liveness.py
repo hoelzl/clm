@@ -192,6 +192,38 @@ def count_available_workers(
     return int(row[0]) if row else 0
 
 
+def fresh_job_beacon_clause(
+    worker_ref: str, job_ref: str, *, grace_seconds: int = WORKER_HEARTBEAT_GRACE_SECONDS
+) -> tuple[str, tuple[Any, ...]]:
+    """``EXISTS`` a beacon fresher than *grace_seconds* from *worker_ref* naming *job_ref*.
+
+    *worker_ref* and *job_ref* are SQL column references of the enclosing query.
+    Needs no ``workers`` row, so it also answers for a worker whose row is gone.
+    """
+    return _fresh_beacon_clause(worker_ref, grace_seconds, job_ref=job_ref)
+
+
+def live_sessions(
+    conn: sqlite3.Connection, *, grace_seconds: int = WORKER_HEARTBEAT_GRACE_SECONDS
+) -> set[str]:
+    """Sessions with at least one worker showing life on either heartbeat channel.
+
+    Such a session's build is running, and its own pool monitor looks after its
+    rows. Another build must not delete them: a row whose heartbeat looks stale
+    may be a busy worker in a long silent cell (#799 C2). A session in which
+    no worker shows life within *grace_seconds* belongs to a build that is gone.
+    """
+    fresh_sql, fresh_params = _fresh_heartbeat_clause(grace_seconds)
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT w.session_id FROM workers w
+        WHERE w.session_id IS NOT NULL AND {fresh_sql}
+        """,  # noqa: S608 — literal predicates, bound params
+        fresh_params,
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def count_other_session_workers(
     conn: sqlite3.Connection,
     job_type: str,

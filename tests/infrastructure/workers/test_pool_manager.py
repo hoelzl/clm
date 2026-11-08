@@ -1084,6 +1084,63 @@ def test_cleanup_removes_worker_when_all_heartbeats_stale(db_path, workspace_pat
     assert not _worker_row_exists(db_path, worker)
 
 
+def test_cleanup_leaves_a_running_builds_silent_worker_alone(
+    db_path, workspace_path, worker_configs
+):
+    """#799 C2: a busy worker in a long silent cell shows no heartbeat (an older
+    clm, or a beacon write that failed), but its build is running — a sibling
+    worker heartbeats. That build's monitor owns the row; deleting it stranded
+    the job and made the worker exit when it finished."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    _seed_busy_worker(db_path, "session-other", "direct-sibling", heartbeat_age_seconds=0)
+    silent = _seed_busy_worker(db_path, "session-other", "direct-silent", heartbeat_age_seconds=900)
+
+    manager.cleanup_stale_workers()
+
+    assert _worker_row_exists(db_path, silent)
+
+
+def test_cleanup_reaps_every_row_of_a_build_that_is_gone(db_path, workspace_path, worker_configs):
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    rows = [
+        _seed_busy_worker(db_path, "session-gone", f"direct-gone-{n}", heartbeat_age_seconds=900)
+        for n in range(2)
+    ]
+
+    manager.cleanup_stale_workers()
+
+    assert not any(_worker_row_exists(db_path, row) for row in rows)
+
+
+@pytest.mark.parametrize("failure", ["client", "check"])
+def test_cleanup_goes_by_heartbeat_when_docker_cannot_answer(
+    db_path, workspace_path, worker_configs, failure
+):
+    """#799 C2: an error checking a container proves nothing about the worker.
+    Before, cleanup deleted the row "to be safe", even for a live worker."""
+    manager = _cleanup_manager(db_path, workspace_path, worker_configs)
+    # Unowned rows, so only the heartbeat decides.
+    live = _seed_busy_worker(
+        db_path, None, "c0ffee-live", heartbeat_age_seconds=0, execution_mode="docker"
+    )
+    silent = _seed_busy_worker(
+        db_path, None, "c0ffee-silent", heartbeat_age_seconds=900, execution_mode="docker"
+    )
+    client = MagicMock()
+    client.containers.get.side_effect = RuntimeError("daemon hiccup")
+    from_env = (
+        patch("docker.from_env", side_effect=RuntimeError("no daemon"))
+        if failure == "client"
+        else patch("docker.from_env", return_value=client)
+    )
+
+    with from_env:
+        manager.cleanup_stale_workers()
+
+    assert _worker_row_exists(db_path, live)
+    assert not _worker_row_exists(db_path, silent)
+
+
 def _seed_created_worker(db_path, container_id, *, age_seconds=0):
     """Insert a pre-registration row ('created') aged by the given amount.
 

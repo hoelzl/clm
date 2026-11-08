@@ -22,7 +22,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.timestamps import parse_db_timestamp, utc_now
-from clm.infrastructure.database.worker_liveness import WORKER_HEARTBEAT_GRACE_SECONDS
+from clm.infrastructure.database.worker_liveness import (
+    WORKER_HEARTBEAT_GRACE_SECONDS,
+    live_sessions,
+)
 from clm.infrastructure.workers.discovery import (
     MANAGED_BY_BUILD,
     MANAGED_BY_PERSISTENT,
@@ -266,8 +269,12 @@ class WorkerPoolManager:
         # These are workers that were pre-registered but never activated
         removed_count = self._cleanup_stuck_created_workers(conn)
 
-        cursor = conn.execute("SELECT id, container_id, last_heartbeat, status FROM workers")
+        cursor = conn.execute(
+            "SELECT id, container_id, last_heartbeat, status, session_id FROM workers"
+        )
         workers = cursor.fetchall()
+        # Builds that are still running look after their own rows (#799 C2).
+        running_sessions = live_sessions(conn) - {self.session_id}
 
         if not workers:
             if removed_count > 0:
@@ -290,10 +297,11 @@ class WorkerPoolManager:
         healthy_ids = {w.db_id for w in healthy_workers if w.is_healthy}
 
         # Initialize Docker client if we need to check containers
-        docker_client = None
+        docker_client: Any = None
+        docker_unavailable = False  # tried once per run, failed
 
         removed_count = 0
-        for worker_id, container_id, last_heartbeat, status in workers:
+        for worker_id, container_id, last_heartbeat, status, session_id in workers:
             # A 'created' row is a pre-registration another build wrote
             # moments ago: its worker subprocess is still booting, it has no
             # heartbeat yet, and no executor anywhere tracks it — so the
@@ -305,6 +313,18 @@ class WorkerPoolManager:
             # reaped by _cleanup_stuck_created_workers above, which has the
             # 30-second age guard this loop lacks.
             if status == "created":
+                continue
+
+            # Another build is running: one of its workers heartbeats. Its
+            # other rows may look stale only because they are busy in a long
+            # silent cell; deleting one strands its job and makes the worker
+            # exit when it finishes. That build's monitor marks its dead
+            # workers, and its shutdown removes its rows.
+            if session_id in running_sessions:
+                logger.info(
+                    f"Worker {worker_id} belongs to running build session {session_id}; "
+                    f"leaving it to that build"
+                )
                 continue
 
             # Check if this is a direct worker or docker worker
@@ -342,17 +362,22 @@ class WorkerPoolManager:
                     removed_count += 1
             else:
                 # Docker worker - check if container exists
-                if docker_client is None:
+                if docker_client is None and not docker_unavailable:
                     try:
                         import docker
 
                         docker_client = docker.from_env()  # type: ignore[attr-defined]
                     except Exception as e:
                         logger.warning(f"Could not initialize Docker client: {e}")
-                        # Remove record if we can't check
-                        conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
-                        removed_count += 1
-                        continue
+                        docker_unavailable = True
+
+                if docker_unavailable:
+                    # Can't check the container, so go by its heartbeats alone
+                    # rather than deleting a possibly live worker (#799 C2).
+                    removed_count += self._remove_if_silent(
+                        conn, worker_id, last_heartbeat, "its container can't be checked"
+                    )
+                    continue
 
                 try:
                     import docker
@@ -403,9 +428,11 @@ class WorkerPoolManager:
                     logger.warning(
                         f"Error checking worker {worker_id} container {container_id[:12]}: {e}"
                     )
-                    # On error, remove the worker record to be safe
-                    conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
-                    removed_count += 1
+                    # An error proves nothing about the worker: go by its
+                    # heartbeats rather than deleting it "to be safe" (#799 C2).
+                    removed_count += self._remove_if_silent(
+                        conn, worker_id, last_heartbeat, "its container check failed"
+                    )
 
         conn.commit()
 
@@ -413,6 +440,19 @@ class WorkerPoolManager:
             logger.info(f"Removed {removed_count} stale worker record(s)")
         else:
             logger.info("No stale workers to remove")
+
+    def _remove_if_silent(self, conn, worker_id: int, last_heartbeat, why: str) -> int:
+        """Delete a worker row only if it shows no heartbeat on either channel.
+
+        Returns:
+            1 if the row was deleted, else 0
+        """
+        if self._worker_recently_heartbeat(conn, worker_id, last_heartbeat):
+            logger.info(f"Worker {worker_id}: {why}, but its heartbeat is fresh; keeping it")
+            return 0
+        logger.info(f"Worker {worker_id}: {why} and it shows no heartbeat; removing its record")
+        conn.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+        return 1
 
     def _cleanup_stuck_created_workers(self, conn) -> int:
         """Clean up workers stuck in 'created' status.
