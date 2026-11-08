@@ -348,17 +348,18 @@ class WorkerApiClient:
         logger.debug(f"Job {job_id} marked as failed via REST API")
         return bool(response.json().get("acknowledged", True))
 
-    def heartbeat(self, worker_id: int):
+    def heartbeat(self, worker_id: int, job_id: int | None = None):
         """Send heartbeat to indicate worker is alive.
 
         Args:
             worker_id: ID of the worker
+            job_id: The job the worker is still working on, to refresh that
+                job's beacon instead of the idle heartbeat
         """
-        self._request_with_retry(
-            "POST",
-            "/api/worker/heartbeat",
-            json_data={"worker_id": worker_id},
-        )
+        json_data: dict[str, int] = {"worker_id": worker_id}
+        if job_id is not None:
+            json_data["job_id"] = job_id
+        self._request_with_retry("POST", "/api/worker/heartbeat", json_data=json_data)
 
     def is_job_cancelled(self, job_id: int) -> bool:
         """Check if a job has been cancelled.

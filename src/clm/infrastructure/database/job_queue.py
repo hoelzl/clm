@@ -425,8 +425,9 @@ class JobQueue:
                 always pass it; ``None`` is for maintenance callers.
 
         Returns:
-            True if the update applied; False if the fence rejected it or the
-            job doesn't exist.
+            True if the update applied, or if this worker's identical write
+            already had (a client retrying after a lost response); False if
+            the fence rejected it or the job doesn't exist.
         """
         conn = self._get_conn()
 
@@ -487,13 +488,22 @@ class JobQueue:
             )
             # No commit() needed - connection is in autocommit mode
 
-        accepted = cursor.rowcount > 0
-        if not accepted:
-            current = f"is {job.status}, held by worker {job.worker_id}" if job else "doesn't exist"
-            logger.warning(
-                f"Job #{job_id}: rejected '{status}' from worker {worker_id}; the job {current}"
-            )
-        return accepted
+        if cursor.rowcount > 0:
+            return True
+        if worker_id is None:
+            return False
+
+        # Re-read: the row may have moved since the read at the top.
+        now = self.get_job(job_id)
+        if now is not None and now.worker_id == worker_id and now.status == status:
+            logger.debug(f"Job #{job_id}: '{status}' from worker {worker_id} was already applied")
+            return True
+        current = f"is {now.status}, held by worker {now.worker_id}" if now else "doesn't exist"
+        # A worker finishing a job that was cancelled under it is routine in
+        # watch mode; anything else means two workers held the same job.
+        log = logger.debug if now is not None and now.status == "cancelled" else logger.warning
+        log(f"Job #{job_id}: rejected '{status}' from worker {worker_id}; the job {current}")
+        return False
 
     # Fixed error string stamped on rows found by :meth:`mark_orphaned_jobs_failed`.
     # Kept as a module-visible constant so tests can assert on it and downstream
@@ -770,6 +780,17 @@ class JobQueue:
     )
 
     def reset_hung_jobs(self, timeout_seconds: int = 600, session_id: str | None = None) -> int:
+        """Requeue hung jobs; see :meth:`recover_hung_jobs`.
+
+        Returns:
+            Number of jobs reset to ``pending``. Exhausted jobs are failed but
+            not counted; use :meth:`recover_hung_jobs` to see them.
+        """
+        return self.recover_hung_jobs(timeout_seconds, session_id)[0]
+
+    def recover_hung_jobs(
+        self, timeout_seconds: int = 600, session_id: str | None = None
+    ) -> tuple[int, int]:
         """Requeue jobs that have been processing too long on a worker with no signs of life.
 
         A long runtime alone proves nothing, so a job whose worker is alive is
@@ -788,7 +809,8 @@ class JobQueue:
                 maintenance callers and considers every session.
 
         Returns:
-            Number of jobs reset to ``pending``
+            ``(requeued, failed)``: jobs reset to ``pending``, and jobs failed
+            because they had no attempts left.
         """
         conn = self._get_conn()
         alive_sql, alive_params = job_worker_alive_clause(
@@ -829,7 +851,7 @@ class JobQueue:
         # started_at set made mark_orphaned_jobs_failed (which reaps
         # started_at-set, non-terminal rows) later mis-stamp it as an orphan
         # (issue #617).
-        return cursor.rowcount
+        return cursor.rowcount, failed.rowcount
 
     def clear_old_completed_jobs(self, days: int = 7) -> int:
         """Delete old completed jobs.
@@ -1192,8 +1214,10 @@ class JobQueue:
             "failed_jobs": self.clear_old_jobs_by_status("failed", failed_days),
             "cancelled_jobs": self.clear_old_jobs_by_status("cancelled", cancelled_days),
             "worker_events": self.clear_old_worker_events(events_days),
-            "hung_jobs_reset": self.reset_hung_jobs(session_id=session_id),
         }
+        result["hung_jobs_reset"], result["hung_jobs_failed"] = self.recover_hung_jobs(
+            session_id=session_id
+        )
         if cache_versions is not None:
             result["cache_versions"] = self.prune_old_cache_versions(cache_versions)
 

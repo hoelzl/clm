@@ -445,7 +445,7 @@ async def test_session_start_cleanup_resets_hung(temp_db, temp_workspace, caplog
 async def test_session_start_cleanup_handles_exception(temp_db, temp_workspace):
     backend = _backend(temp_db, temp_workspace)
     try:
-        with patch.object(backend.job_queue, "reset_hung_jobs", side_effect=RuntimeError("boom")):
+        with patch.object(backend.job_queue, "recover_hung_jobs", side_effect=RuntimeError("boom")):
             # Should not raise.
             backend._perform_session_start_cleanup()
     finally:

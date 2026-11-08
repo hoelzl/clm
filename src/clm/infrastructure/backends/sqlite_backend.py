@@ -1471,9 +1471,15 @@ class SqliteBackend(LocalOpsBackend):
 
         try:
             # Reset hung jobs that this session may recover: its own and unstamped ones
-            hung_reset = self.job_queue.reset_hung_jobs(session_id=self.worker_session_id)
+            hung_reset, hung_failed = self.job_queue.recover_hung_jobs(
+                session_id=self.worker_session_id
+            )
             if hung_reset > 0:
                 logger.info(f"Session start: Reset {hung_reset} hung job(s)")
+            if hung_failed > 0:
+                logger.info(
+                    f"Session start: Failed {hung_failed} hung job(s) with no attempts left"
+                )
 
         except Exception as e:
             logger.warning(f"Session start cleanup failed: {e}")

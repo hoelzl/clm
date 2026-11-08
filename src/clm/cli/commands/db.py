@@ -172,10 +172,17 @@ def db_prune(
                     events_days=events_days,
                     cache_versions=cache_versions,
                 )
+                # Hung jobs are recovered, not deleted (#799 C3).
+                requeued = result.pop("hung_jobs_reset", 0)
+                failed = result.pop("hung_jobs_failed", 0)
                 for key, count in result.items():
                     if count > 0:
                         click.echo(f"  Deleted {count} {key.replace('_', ' ')}")
                         total_deleted += count
+                if requeued > 0:
+                    click.echo(f"  Requeued {requeued} hung job(s) whose worker had stopped")
+                if failed > 0:
+                    click.echo(f"  Failed {failed} hung job(s) with no attempts left")
     else:
         click.echo(f"Jobs database not found: {jobs_db_path}")
 

@@ -156,13 +156,13 @@ class TestIsJobCancelled:
 class TestUpdateHeartbeat:
     def test_uses_explicit_worker_id(self, adapter: ApiJobQueue, fake_client: MagicMock) -> None:
         adapter.update_heartbeat(worker_id=99)
-        fake_client.heartbeat.assert_called_once_with(99)
+        fake_client.heartbeat.assert_called_once_with(99, job_id=None)
 
     def test_falls_back_to_instance_worker_id(
         self, adapter: ApiJobQueue, fake_client: MagicMock
     ) -> None:
         adapter.update_heartbeat()
-        fake_client.heartbeat.assert_called_once_with(42)
+        fake_client.heartbeat.assert_called_once_with(42, job_id=None)
 
     def test_requires_worker_id(self, fake_client: MagicMock) -> None:
         q = ApiJobQueue("http://host", worker_id=None)
