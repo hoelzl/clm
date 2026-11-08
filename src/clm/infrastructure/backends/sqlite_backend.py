@@ -38,6 +38,7 @@ from clm.infrastructure.database.worker_liveness import (
     count_available_workers,
     count_other_session_workers,
     count_workers_awaiting_activation,
+    fresh_job_beacon_clause,
 )
 from clm.infrastructure.utils.output_files import recorded_digests, unusable_outputs
 from clm.infrastructure.utils.path_utils import atomic_write_bytes
@@ -918,6 +919,11 @@ class SqliteBackend(LocalOpsBackend):
     def _cleanup_dead_worker_jobs(self) -> int:
         """Check for jobs stuck in 'processing' with dead workers and reset them.
 
+        Also recovers this build's jobs whose worker row is gone with no fresh
+        beacon for the job: another process (an older clm, or ``clm workers
+        cleanup``) deleted the row, so no monitor will ever mark it dead
+        (#799 C2/C7).
+
         Returns:
             Number of jobs reset
         """
@@ -930,14 +936,28 @@ class SqliteBackend(LocalOpsBackend):
             # Use explicit transaction for read-then-write operation
             conn.execute("BEGIN IMMEDIATE")
             try:
-                # Find jobs in 'processing' state where the worker is dead
+                # Find jobs in 'processing' state where the worker is dead,
+                # or (for this build's jobs) where its row is gone and it
+                # sends no beacon for the job.
+                gone_sql = "0"
+                gone_params: tuple[Any, ...] = ()
+                if self.worker_session_id is not None:
+                    beacon_sql, beacon_params = fresh_job_beacon_clause("j.worker_id", "j.id")
+                    gone_sql = (
+                        f"(w.id IS NULL AND j.worker_id IS NOT NULL "
+                        f"AND j.session_id = ? AND NOT {beacon_sql})"
+                    )
+                    gone_params = (self.worker_session_id, *beacon_params)
                 cursor = conn.execute(
-                    """
-                    SELECT j.id, j.job_type, j.input_file, w.id as worker_id, w.status
+                    f"""
+                    SELECT j.id, j.job_type, j.input_file, j.worker_id,
+                           COALESCE(w.status, 'gone') AS status
                     FROM jobs j
-                    INNER JOIN workers w ON j.worker_id = w.id
-                    WHERE j.status = 'processing' AND w.status = 'dead'
-                    """
+                    LEFT JOIN workers w ON j.worker_id = w.id
+                    WHERE j.status = 'processing'
+                      AND (w.status = 'dead' OR {gone_sql})
+                    """,  # noqa: S608 — literal predicates, bound params
+                    gone_params,
                 )
                 stuck_jobs = cursor.fetchall()
 
