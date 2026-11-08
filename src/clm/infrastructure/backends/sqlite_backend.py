@@ -950,7 +950,6 @@ class SqliteBackend(LocalOpsBackend):
                     f"resetting to 'pending'"
                 )
 
-                # Reset these jobs to 'pending' so another worker can pick them up
                 for job_row in stuck_jobs:
                     job_id, job_type, input_file, worker_id, worker_status = job_row
                     logger.info(
@@ -958,17 +957,18 @@ class SqliteBackend(LocalOpsBackend):
                         f"worker {worker_id} is {worker_status}"
                     )
 
-                    conn.execute(
-                        """
-                        UPDATE jobs
-                        SET status = 'pending', worker_id = NULL, started_at = NULL
-                        WHERE id = ?
-                        """,
-                        (job_id,),
-                    )
+                # Requeue them so another worker can pick them up, except
+                # those with no attempts left: no worker would ever claim
+                # those, so they fail now (#799 C9).
+                requeued, failed = self.job_queue.requeue_jobs(
+                    [row[0] for row in stuck_jobs],
+                    exhausted_error=JobQueue.DEAD_WORKER_EXHAUSTED_ERROR_MESSAGE,
+                )
+                if failed:
+                    logger.error(f"Failed {failed} job(s) whose worker died with no attempts left")
 
                 conn.commit()
-                return len(stuck_jobs)
+                return requeued
 
             except Exception:
                 conn.rollback()
@@ -1248,6 +1248,17 @@ class SqliteBackend(LocalOpsBackend):
                     # Notify progress tracker
                     if self.progress_tracker:
                         self.progress_tracker.job_failed(job_id, error or "Unknown error")
+
+                elif status == "cancelled":
+                    # Watch mode drops the jobs it cancels from active_jobs, so
+                    # this one was cancelled from outside (``clm jobs cancel``,
+                    # another process). Its output was not written; waiting on
+                    # it would only end in the stall detector (#799 C9).
+                    message = self._report_cancelled_job(job_id, job_info)
+                    completed_jobs.append(job_id)
+                    failed_jobs.append({"job_id": job_id, "job_info": job_info, "error": message})
+                    if self.progress_tracker:
+                        self.progress_tracker.job_failed(job_id, message)
 
             # Remove completed jobs
             for job_id in completed_jobs:
@@ -1579,6 +1590,36 @@ class SqliteBackend(LocalOpsBackend):
         except Exception as e:
             logger.warning(f"Build end cleanup failed: {e}")
 
+    def _report_cancelled_job(self, job_id: int, job_info: dict[str, Any]) -> str:
+        """Report a job cancelled outside this build as a failed file; return the message."""
+        from clm.core.build_data_classes import BuildError
+
+        assert self.job_queue is not None
+        job = self.job_queue.get_job(job_id)
+        by = f" by {job.cancelled_by}" if job is not None and job.cancelled_by else ""
+        message = f"Job {job_id} was cancelled{by} before it finished; its output was not written"
+        if self.build_reporter:
+            self.build_reporter.report_file_completed(
+                job_info["input_file"], job_info["job_type"], job_id, success=False
+            )
+            self.build_reporter.report_error(
+                BuildError(
+                    error_type="infrastructure",
+                    category="job_cancelled",
+                    severity="error",
+                    file_path=job_info["input_file"],
+                    message=message,
+                    actionable_guidance="Rebuild to produce this output.",
+                    job_id=job_id,
+                    correlation_id=job_info.get("correlation_id"),
+                    # Lets the stray-file sweep protect the previous output (#923)
+                    details={"output_file": str(job_info["output_file"])},
+                )
+            )
+        else:
+            logger.error(f"{message}: {job_info['input_file']}")
+        return message
+
     async def cancel_jobs_for_file(self, file_path: Path) -> int:
         """Cancel all pending jobs for a given input file.
 
@@ -1595,7 +1636,7 @@ class SqliteBackend(LocalOpsBackend):
             return 0
 
         cancelled_ids = self.job_queue.cancel_jobs_for_file(
-            str(file_path), cancelled_by="watch_mode"
+            str(file_path), cancelled_by="watch_mode", session_id=self.worker_session_id
         )
 
         if cancelled_ids:

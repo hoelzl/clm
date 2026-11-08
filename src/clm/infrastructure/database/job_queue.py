@@ -774,6 +774,46 @@ class JobQueue:
 
         return jobs
 
+    # Fixed error string for a dead worker's job with no attempts left; see
+    # requeue_jobs.
+    DEAD_WORKER_EXHAUSTED_ERROR_MESSAGE = "worker died with no attempts left for its job"
+
+    def requeue_jobs(self, job_ids: list[int], *, exhausted_error: str) -> tuple[int, int]:
+        """Give jobs back to the queue, or fail those with no attempts left.
+
+        ``get_next_job`` only claims jobs with ``attempts < max_attempts``, so
+        requeueing an exhausted job would leave it ``pending`` forever and the
+        build waiting on it until the stall detector fires (#799 C9). Runs on
+        the calling thread's connection, so a caller's open transaction covers
+        it.
+
+        Returns:
+            ``(requeued, failed)``
+        """
+        if not job_ids:
+            return 0, 0
+        conn = self._get_conn()
+        placeholders = ",".join("?" * len(job_ids))
+        failed = conn.execute(
+            f"""
+            UPDATE jobs
+            SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+            WHERE id IN ({placeholders}) AND attempts >= max_attempts
+            """,  # noqa: S608 — literal predicate, bound params
+            (exhausted_error, *job_ids),
+        ).rowcount
+        # started_at is cleared so a requeued job is a clean 'pending' row
+        # (issue #617).
+        requeued = conn.execute(
+            f"""
+            UPDATE jobs
+            SET status = 'pending', worker_id = NULL, started_at = NULL
+            WHERE id IN ({placeholders}) AND attempts < max_attempts
+            """,  # noqa: S608 — literal predicate, bound params
+            tuple(job_ids),
+        ).rowcount
+        return requeued, failed
+
     # Fixed error string for a hung job with no attempts left; see reset_hung_jobs.
     HUNG_EXHAUSTED_ERROR_MESSAGE = (
         "job hung with no attempts left (its worker shows no signs of life)"
@@ -874,7 +914,13 @@ class JobQueue:
         # No commit() needed - connection is in autocommit mode
         return cursor.rowcount
 
-    def cancel_jobs_for_file(self, input_file: str, cancelled_by: str | None = None) -> list[int]:
+    def cancel_jobs_for_file(
+        self,
+        input_file: str,
+        cancelled_by: str | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> list[int]:
         """Cancel all pending/processing jobs for an input file.
 
         This is used in watch mode to cancel obsolete jobs when a file changes again
@@ -883,39 +929,38 @@ class JobQueue:
         Args:
             input_file: Path to input file
             cancelled_by: Correlation ID of superseding job
+            session_id: The calling build's session. When given, only its own
+                and unstamped jobs are cancelled: another build watching the
+                same file owns its jobs (#799 C9).
 
         Returns:
             List of cancelled job IDs
         """
         conn = self._get_conn()
 
-        # Find jobs to cancel (pending or processing)
+        session_sql = ""
+        params: tuple[Any, ...] = (cancelled_by, input_file)
+        if session_id is not None:
+            session_sql = " AND (session_id IS NULL OR session_id = ?)"
+            params = (*params, session_id)
+        # One statement, so a job that finishes meanwhile is never marked
+        # cancelled after the fact.
         cursor = conn.execute(
-            """
-            SELECT id FROM jobs
-            WHERE input_file = ?
-            AND status IN ('pending', 'processing')
-            ORDER BY id
-            """,
-            (input_file,),
-        )
-        job_ids = [row[0] for row in cursor.fetchall()]
-
-        if not job_ids:
-            return []
-
-        # Mark as cancelled
-        placeholders = ",".join("?" * len(job_ids))
-        conn.execute(
             f"""
             UPDATE jobs
             SET status = 'cancelled',
                 cancelled_at = CURRENT_TIMESTAMP,
                 cancelled_by = ?
-            WHERE id IN ({placeholders})
-            """,
-            (cancelled_by, *job_ids),
+            WHERE input_file = ?
+            AND status IN ('pending', 'processing'){session_sql}
+            RETURNING id
+            """,  # noqa: S608 — literal predicate, bound params
+            params,
         )
+        job_ids = sorted(row[0] for row in cursor.fetchall())
+
+        if not job_ids:
+            return []
 
         logger.info(
             f"Cancelled {len(job_ids)} jobs for {input_file}"
