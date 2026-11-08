@@ -54,6 +54,14 @@ probe) **must** be given the *same* `--cache-db-path` / `--jobs-db-path` /
   missing, torn, or no longer matches (a stale worker's overwrite, a hand edit)
   makes the probe a miss and the job runs again. Entries that predate digests
   only need the file to exist.
+- **Cost of the content check (measured 2026-11-08):** nothing in a normal
+  no-change build. `processed_files` answers first, so the job cache is never
+  consulted: `machine-learning-azav.xml` made 4,582 `processed_files` hits, 0
+  job-cache lookups, 0 files hashed (214 s wall). The check runs only when
+  `processed_files` misses but `results_cache` hits, e.g. after `clm_cache.db`
+  was deleted. Worst-case bound: hashing all PythonCourses outputs (95,454
+  files, 12.6 GB) took 118 s on drive C:. There is deliberately no opt-out
+  (owner decision, #799).
 - **Trim policy:** newest `cache_versions_to_keep` rows per `output_file`,
   indefinitely (`JobQueue.prune_old_cache_versions`, wired into
   `cleanup_all` + build-end cleanup + `clm db cleanup`). Also

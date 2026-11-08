@@ -233,7 +233,9 @@ worker management, backend implementations, external-process machinery.
   (the queue), `results_cache` (job-level skip cache), `workers`
   (registration + health), `worker_events` (lifecycle log), 
   `worker_heartbeats` (per-cell activity beacons surfaced by `clm monitor` /
-  `clm status`), and `schema_version`
+  `clm status`, and the per-job beacon every worker refreshes while it holds
+  a job: the only outside evidence the hung-job reset accepts that a job is
+  still running, see `worker_liveness.py`), and `schema_version`
 - `job_queue.py` — claiming (mode-tagged, session-owned), status updates
   with worker fencing, retry accounting
 - `executed_notebook_cache.py` and friends — see
