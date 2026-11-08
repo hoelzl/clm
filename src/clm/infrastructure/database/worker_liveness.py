@@ -26,14 +26,17 @@ externally started) workers; an unstamped job is claimable by anyone.
   a dead process into a ``dead`` row.
 - An **unowned** worker has no monitor vouching for it, so it counts only
   with a heartbeat inside :data:`WORKER_HEARTBEAT_GRACE_SECONDS` on either
-  channel — ``workers.last_heartbeat`` or the per-cell
-  ``worker_heartbeats`` beacon a busy notebook worker writes.
+  channel — ``workers.last_heartbeat`` or the ``worker_heartbeats`` beacon
+  a busy worker refreshes for the job it holds.
 - A worker owned by **another** session never counts: it will never claim
   our jobs, so counting it would let a build submit into a void.
 
 :func:`job_worker_alive_clause` asks the neighbouring question, "is the worker
-holding this job still alive?", for the hung-job reset (#799 C3). It uses the
-same channels and the same trust in the owning session's monitor.
+holding this job still working on it?", for the hung-job reset (#799 C3). It
+trusts the owning session's monitor the same way, but of the two heartbeat
+channels it accepts only the beacon, because only the beacon names the job: a
+worker that gave up on a job goes back to idle-polling, and its fresh
+``last_heartbeat`` would otherwise vouch for that job forever.
 """
 
 from __future__ import annotations
@@ -71,15 +74,33 @@ def execution_mode_clause(execution_mode: str | None) -> tuple[str, tuple[Any, .
     )
 
 
-def _fresh_heartbeat_clause(grace_seconds: int) -> tuple[str, tuple[Any, ...]]:
-    window = f"-{int(grace_seconds)} seconds"
+def _window(grace_seconds: int) -> str:
+    """SQLite ``datetime('now', ?)`` modifier for "within *grace_seconds*"."""
+    return f"-{int(grace_seconds)} seconds"
+
+
+def _fresh_beacon_clause(
+    worker_ref: str, grace_seconds: int, *, job_ref: str | None = None
+) -> tuple[str, tuple[Any, ...]]:
+    """``EXISTS`` a fresh ``worker_heartbeats`` beacon of *worker_ref*.
+
+    *worker_ref* and *job_ref* are SQL column references from the enclosing
+    query; with *job_ref*, the beacon must name that job.
+    """
+    job_sql = f" AND h.job_id = {job_ref}" if job_ref is not None else ""
     return (
-        "("
-        "w.last_heartbeat > datetime('now', ?) "
-        "OR EXISTS (SELECT 1 FROM worker_heartbeats h "
-        "           WHERE h.worker_id = w.id AND h.heartbeat_at > datetime('now', ?))"
-        ")",
-        (window, window),
+        "EXISTS (SELECT 1 FROM worker_heartbeats h "
+        f"WHERE h.worker_id = {worker_ref}{job_sql} "
+        "AND h.heartbeat_at > datetime('now', ?))",
+        (_window(grace_seconds),),
+    )
+
+
+def _fresh_heartbeat_clause(grace_seconds: int) -> tuple[str, tuple[Any, ...]]:
+    beacon_sql, beacon_params = _fresh_beacon_clause("w.id", grace_seconds)
+    return (
+        f"(w.last_heartbeat > datetime('now', ?) OR {beacon_sql})",
+        (_window(grace_seconds), *beacon_params),
     )
 
 
@@ -104,40 +125,41 @@ def _claimable_for_session_clause(
 def job_worker_alive_clause(
     session_id: str | None, *, grace_seconds: int
 ) -> tuple[str, tuple[Any, ...]]:
-    """SQL predicate: the worker holding a row of ``jobs`` shows signs of life.
+    """SQL predicate: the worker holding a row of ``jobs`` is still working on it.
 
     For an ``UPDATE jobs`` or ``SELECT ... FROM jobs`` without an alias. The
     worker is alive if either holds:
 
-    - its row is ``idle``/``busy`` and it either heartbeat within
-      *grace_seconds* or is owned by *session_id*, whose pool monitor runs in
-      the calling process;
-    - its per-cell beacon for this job is fresh. This is checked without
-      needing a ``workers`` row, because another build's stale-row cleanup can
-      delete a live worker's row (#799 C2).
+    - its beacon for this job is fresher than *grace_seconds*. Every worker
+      refreshes it every :data:`~clm.infrastructure.database.worker_heartbeats.JOB_BEACON_INTERVAL_SECONDS`
+      while it holds the job, however long a cell stays silent. This is checked
+      without needing a ``workers`` row, because another build's stale-row
+      cleanup can delete a live worker's row (#799 C2);
+    - its row is ``idle``/``busy`` and owned by *session_id*, whose pool
+      monitor runs in the calling process and marks a vanished process
+      ``dead``. This also covers workers that predate the beacon.
 
-    A job with no worker id, a missing row and no beacon counts as abandoned.
+    ``workers.last_heartbeat`` doesn't count: it says the process is alive, not
+    that it is still on this job. A job with no worker id, no fresh beacon and
+    no owned row counts as abandoned.
     """
-    window = f"-{int(grace_seconds)} seconds"
+    beacon_sql, beacon_params = _fresh_beacon_clause(
+        "jobs.worker_id", grace_seconds, job_ref="jobs.id"
+    )
+    if session_id is None:
+        return f"({beacon_sql})", beacon_params
     status_placeholders = ",".join("?" * len(CLAIMING_STATUSES))
-    own_sql = " OR w.session_id = ?" if session_id is not None else ""
-    own_params: tuple[Any, ...] = (session_id,) if session_id is not None else ()
     return (
         f"""(
-            EXISTS (
+            {beacon_sql}
+            OR EXISTS (
                 SELECT 1 FROM workers w
                 WHERE w.id = jobs.worker_id
                   AND w.status IN ({status_placeholders})
-                  AND (w.last_heartbeat > datetime('now', ?){own_sql})
-            )
-            OR EXISTS (
-                SELECT 1 FROM worker_heartbeats h
-                WHERE h.worker_id = jobs.worker_id
-                  AND h.job_id = jobs.id
-                  AND h.heartbeat_at > datetime('now', ?)
+                  AND w.session_id = ?
             )
         )""",
-        (*CLAIMING_STATUSES, window, *own_params, window),
+        (*beacon_params, *CLAIMING_STATUSES, session_id),
     )
 
 

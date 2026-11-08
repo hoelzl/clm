@@ -38,6 +38,7 @@ from clm.infrastructure.api.models import (
 from clm.infrastructure.database.busy_retry import retry_on_busy
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.database.worker_heartbeats import touch_job_beacon
 from clm.infrastructure.notebook_serialization import (
     NotebookSerializationError,
     deserialize_notebook,
@@ -203,14 +204,19 @@ async def heartbeat(request: Request, body: HeartbeatRequest):
 
     try:
         conn = job_queue._get_conn()
-        conn.execute(
-            """
-            UPDATE workers
-            SET last_heartbeat = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (body.worker_id,),
-        )
+        if body.job_id is not None:
+            # A mid-job beacon. It leaves workers.last_heartbeat alone, which
+            # the pool monitor reads to spot a wedged busy container.
+            touch_job_beacon(conn, body.worker_id, body.job_id)
+        else:
+            conn.execute(
+                """
+                UPDATE workers
+                SET last_heartbeat = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (body.worker_id,),
+            )
 
         timestamp = datetime.now(timezone.utc).isoformat()
 

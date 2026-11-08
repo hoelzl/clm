@@ -1108,8 +1108,8 @@ class WorkerPoolManager:
     # whose most recent heartbeat is younger than this belongs to a LIVE
     # process and must not be deleted, even when no executor of the cleaning
     # pool can see that process. Generous enough to ride out short busy
-    # stretches (idle workers heartbeat every ~2s; busy notebook workers
-    # write per-cell heartbeats to worker_heartbeats), small enough that rows
+    # stretches (idle workers heartbeat every ~2s; busy workers refresh their
+    # job's beacon in worker_heartbeats every 30s), small enough that rows
     # left behind by crashed builds are still reaped on the next build.
     # Shared with the submission gate's liveness rule (issue #917) so "alive"
     # means the same thing to the cleaner and to the build's availability check.
@@ -1119,9 +1119,9 @@ class WorkerPoolManager:
         """Whether a worker row shows a heartbeat fresher than the grace period.
 
         Considers both heartbeat channels: ``workers.last_heartbeat`` (written
-        while idle-polling and between jobs) and the per-cell
-        ``worker_heartbeats`` store (written by busy notebook workers during
-        execution), so neither an idle nor a mid-job live worker looks dead.
+        while idle-polling and between jobs) and the ``worker_heartbeats``
+        beacon (refreshed by busy workers for the job they hold), so neither an
+        idle nor a mid-job live worker looks dead.
 
         Args:
             conn: Open jobs-DB connection.

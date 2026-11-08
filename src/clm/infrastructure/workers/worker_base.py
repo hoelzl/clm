@@ -19,6 +19,7 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
 import time
 import traceback
 from abc import ABC, abstractmethod
@@ -29,6 +30,11 @@ from typing import TYPE_CHECKING, Any
 from clm.core.messaging.base_classes import ProcessingWarning
 from clm.infrastructure.database.busy_retry import retry_on_busy
 from clm.infrastructure.database.job_queue import Job, JobQueue
+from clm.infrastructure.database.worker_heartbeats import (
+    JOB_BEACON_INTERVAL_SECONDS,
+    clear_job_beacon,
+    touch_job_beacon,
+)
 
 if TYPE_CHECKING:
     pass
@@ -320,6 +326,13 @@ class Worker(ABC):
         # with the job result so the host can register and cache them.
         self._current_job_companion_files: list[str] = []
 
+        # The job this worker holds, re-announced in the background so a long
+        # silent cell never looks like a dead worker (#799 C3).
+        self._beacon_job_id: int | None = None
+        self._beacon_lock = threading.Lock()
+        self._beacon_stop = threading.Event()
+        self._beacon_thread: threading.Thread | None = None
+
         # Store parent process ID for orphan detection
         self.parent_pid = os.getppid()
         logger.debug(f"Worker {worker_id} initialized with parent PID: {self.parent_pid}")
@@ -365,6 +378,57 @@ class Worker(ABC):
             self._last_heartbeat = datetime.now()
         except Exception as e:
             logger.error(f"Worker {self.worker_id} failed to update heartbeat: {e}")
+
+    # Seconds between job-beacon refreshes; a class attribute so tests can
+    # shorten it.
+    JOB_BEACON_INTERVAL = JOB_BEACON_INTERVAL_SECONDS
+
+    def _write_job_beacon(self, job_id: int) -> None:
+        """Announce that this worker is still working on *job_id*. Best effort."""
+        try:
+            if self._api_mode:
+                from clm.infrastructure.api.job_queue_adapter import ApiJobQueue
+
+                assert isinstance(self.job_queue, ApiJobQueue)
+                self.job_queue.update_heartbeat(self.worker_id, job_id=job_id)
+            else:
+                touch_job_beacon(self.job_queue._get_conn(), self.worker_id, job_id)
+        except Exception as e:
+            logger.warning(f"Worker {self.worker_id}: could not refresh job {job_id}'s beacon: {e}")
+
+    def _beacon_loop(self) -> None:
+        while not self._beacon_stop.wait(self.JOB_BEACON_INTERVAL):
+            with self._beacon_lock:
+                if self._beacon_job_id is not None:
+                    self._write_job_beacon(self._beacon_job_id)
+
+    def _begin_job_beacon(self, job_id: int) -> None:
+        """Start announcing *job_id*, so its hung-job reset sees a live worker.
+
+        ``workers.last_heartbeat`` isn't written mid-job, and the notebook
+        worker's per-cell beacon goes quiet during a long silent cell. Without
+        this, another build or ``clm db prune`` can't tell such a job from one
+        whose worker died, and would run it a second time (#799 C3).
+        """
+        if self._beacon_thread is None:
+            self._beacon_thread = threading.Thread(
+                target=self._beacon_loop, name=f"job-beacon-{self.worker_id}", daemon=True
+            )
+            self._beacon_thread.start()
+        with self._beacon_lock:
+            self._beacon_job_id = job_id
+            self._write_job_beacon(job_id)
+
+    def _end_job_beacon(self, job_id: int) -> None:
+        """Stop announcing *job_id*. In API mode the beacon simply goes stale."""
+        with self._beacon_lock:
+            self._beacon_job_id = None
+            if self._api_mode:
+                return
+            try:
+                clear_job_beacon(self.job_queue._get_conn(), self.worker_id, job_id)
+            except Exception as e:
+                logger.debug(f"Worker {self.worker_id}: could not clear job {job_id}'s beacon: {e}")
 
     def _should_update_heartbeat(self) -> bool:
         """Check if enough time has passed to send another heartbeat.
@@ -512,7 +576,9 @@ class Worker(ABC):
             on_retry=self._update_heartbeat,
         )
         if not accepted:
-            logger.warning(
+            # INFO: the queue already logged why, at WARNING unless the job was
+            # just cancelled, which is routine in watch mode.
+            logger.info(
                 f"Worker {self.worker_id}: job {job_id} is no longer ours; "
                 f"its '{status}' result was discarded"
             )
@@ -840,6 +906,7 @@ class Worker(ABC):
                     f"({job.job_type}): {job.input_file} -> {job.output_file}"
                 )
                 self._update_status("busy")
+                self._begin_job_beacon(job.id)
 
                 # Clear warnings from previous job
                 self._clear_job_warnings()
@@ -940,10 +1007,10 @@ class Worker(ABC):
                         logger.debug(f"Failed to categorize error: {cat_error}")
 
                     error_msg = json.dumps(error_info)
-                    self._write_terminal_status(job.id, "failed", error=error_msg)
-
-                    # Update worker stats
-                    self._update_stats(success=False, processing_time=processing_time)
+                    # A rejected write means the job is no longer ours, so it
+                    # doesn't count toward this worker's stats.
+                    if self._write_terminal_status(job.id, "failed", error=error_msg):
+                        self._update_stats(success=False, processing_time=processing_time)
 
                 else:
                     # Mark job as completed. If this write still fails after
@@ -951,7 +1018,8 @@ class Worker(ABC):
                     # main-loop handler (logged, backed off) and the job stays
                     # 'processing' for the host's stall handling — it is NOT
                     # reported as a failed build of the file.
-                    self._write_terminal_status(job.id, "completed", result=result_json)
+                    if not self._write_terminal_status(job.id, "completed", result=result_json):
+                        continue
 
                     if self._current_job_warnings:
                         logger.debug(
@@ -969,6 +1037,7 @@ class Worker(ABC):
 
                 finally:
                     # Always return to idle and update heartbeat
+                    self._end_job_beacon(job.id)
                     self._update_status("idle")
                     self._update_heartbeat()
 
@@ -987,6 +1056,7 @@ class Worker(ABC):
 
                 time.sleep(1)  # Back off on errors
 
+        self._beacon_stop.set()
         logger.info(f"Worker {self.worker_id} ({self.worker_type}) stopped")
 
         # Log worker stopped event

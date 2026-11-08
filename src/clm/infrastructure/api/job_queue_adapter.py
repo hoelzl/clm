@@ -146,18 +146,20 @@ class ApiJobQueue:
             logger.error(f"Failed to check job cancellation: {e}")
             return False  # Assume not cancelled on error
 
-    def update_heartbeat(self, worker_id: int | None = None):
+    def update_heartbeat(self, worker_id: int | None = None, *, job_id: int | None = None):
         """Update worker heartbeat.
 
         Args:
             worker_id: Worker ID (uses self.worker_id if not provided)
+            job_id: The job the worker is still working on; refreshes that
+                job's beacon instead of the idle heartbeat (#799 C3)
         """
         wid = worker_id or self.worker_id
         if wid is None:
             raise ValueError("worker_id must be set")
 
         try:
-            self._client.heartbeat(wid)
+            self._client.heartbeat(wid, job_id=job_id)
         except WorkerApiError as e:
             logger.warning(f"Failed to update heartbeat: {e}")
             # Don't raise - heartbeat failures shouldn't stop processing

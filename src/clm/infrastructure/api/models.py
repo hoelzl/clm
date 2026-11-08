@@ -85,6 +85,13 @@ class HeartbeatRequest(BaseModel):
     """Request body for worker heartbeat."""
 
     worker_id: int = Field(..., description="ID of the worker sending heartbeat")
+    job_id: int | None = Field(
+        default=None,
+        description=(
+            "The job the worker is still working on. When set, only that job's "
+            "beacon is refreshed, not the worker's idle heartbeat (#799 C3)."
+        ),
+    )
 
 
 class HeartbeatResponse(BaseModel):

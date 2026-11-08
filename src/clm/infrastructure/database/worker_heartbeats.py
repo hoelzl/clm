@@ -62,6 +62,51 @@ def _format_timestamp(value: datetime) -> str:
     return value.isoformat(sep=" ", timespec="seconds")
 
 
+# How often a worker refreshes the beacon of the job it holds (#799 C3). The
+# hung-job reset counts a job's worker as alive while this beacon is fresher
+# than the reset's window (at least ``WORKER_HEARTBEAT_GRACE_SECONDS``), so the
+# interval must stay well below that.
+JOB_BEACON_INTERVAL_SECONDS = 30.0
+
+
+def touch_job_beacon(conn: sqlite3.Connection, worker_id: int, job_id: int) -> None:
+    """Mark *worker_id* as still working on *job_id*, now.
+
+    Writes the same ``worker_heartbeats`` row the per-cell store uses, but
+    only its ``job_id`` and ``heartbeat_at``: the cell fields stay as the
+    notebook processor left them, and are cleared when the job changes.
+    Unlike ``workers.last_heartbeat``, the beacon names the job, so it can
+    vouch for that job and no other (#799 C3). Raises on database errors;
+    callers decide whether that matters.
+    """
+    conn.execute(
+        """
+        INSERT INTO worker_heartbeats (worker_id, job_id, heartbeat_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(worker_id) DO UPDATE SET
+            current_cell_index = CASE WHEN job_id IS excluded.job_id
+                                      THEN current_cell_index END,
+            total_cells = CASE WHEN job_id IS excluded.job_id THEN total_cells END,
+            current_cell_started_at = CASE WHEN job_id IS excluded.job_id
+                                           THEN current_cell_started_at END,
+            last_output_excerpt = CASE WHEN job_id IS excluded.job_id
+                                       THEN last_output_excerpt END,
+            last_output_at = CASE WHEN job_id IS excluded.job_id THEN last_output_at END,
+            job_id = excluded.job_id,
+            heartbeat_at = excluded.heartbeat_at
+        """,
+        (worker_id, job_id),
+    )
+
+
+def clear_job_beacon(conn: sqlite3.Connection, worker_id: int, job_id: int) -> None:
+    """Drop *worker_id*'s beacon if it still names *job_id*."""
+    conn.execute(
+        "DELETE FROM worker_heartbeats WHERE worker_id = ? AND job_id = ?",
+        (worker_id, job_id),
+    )
+
+
 # Maximum length of the captured output excerpt (characters). The intent is
 # "one human-readable line on a monitor row", not "a transcript" — the full
 # output is still in the executed notebook.
