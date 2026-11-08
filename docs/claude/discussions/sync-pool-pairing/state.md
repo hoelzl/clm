@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-07
-review-by: 2027-05-07
+updated: 2026-11-08
+review-by: 2027-05-08
 ---
 
 # State: sync pool pairing (moved + edited un-id'd shared cells, #1130)
@@ -89,6 +89,16 @@ only the conversational position.
 - **#799: C12 is won't-fix, start C3 + C5** (owner, 2026-11-07, "Yes to all").
   No damage was found for C12. C3 + C5 go in one small PR with the
   forced-interleaving test; the rest of #799 stays piecemeal, in the issue's order.
+- **Adversarial review of #1201, then the rest of #799** (owner, 2026-11-08). The
+  review's two serious findings shared one root cause: the hung-job reset trusted
+  `workers.last_heartbeat`, which says the process lives, not that it is still on
+  this job. Every worker now refreshes a per-job beacon every 30 s, and only that
+  beacon or the owning session's monitor vouches for a job (#1204).
+- **No opt-out flag for the cached-output digest check** (owner, 2026-11-08, after
+  measuring). A side agent warned that every build would re-read every output;
+  a no-change build of `machine-learning-azav.xml` hashed nothing (all 4,582
+  lookups were `processed_files` hits). Numbers in `caching.md`.
+- **#799 closed** (owner, 2026-11-08).
 
 ## Shipped (all merged 2026-11-03/06)
 
@@ -117,9 +127,12 @@ only the conversational position.
   #1139, #1163 (spec, validate, Markdown/CSV export). After 1.37.0: #1167,
   #1120 (docs), #1119 and the #1044 guard, #1145 (bumps the notebook epoch, so
   every course re-executes once), #1040.
-- #1172 (#1093, #908) and #1176 (#1143), merged 2026-11-06, unreleased when
-  this was written (latest release 1.37.0). The next release carries them and
-  #1145's notebook re-execution.
+- #1172 (#1093, #908) and #1176 (#1143), merged 2026-11-06.
+- #799, all merged 2026-11-07/08: #1201 (C3 + C5), #1204 (review fixes), #1206
+  (C11 + C6), #1207 (C9), #1208 (C2), #1209 (C10). #799 is closed; its status
+  table lists the residuals.
+- Unreleased when this was written (latest release 1.37.0): everything since
+  1.37.0 above, including #1145's notebook re-execution.
 
 ## Open / revisit conditions
 
@@ -130,9 +143,13 @@ only the conversational position.
   #787 is cut down to `--keep-twin`/`--confirm` and slide-scoped answers.
 - **Unexplained:** an xdist worker dies without a trace and the run then hangs
   (#1194). Seen on a machine shared with several agents; cause not established.
-- **#799 re-baselined:** C4, C7, C8 done, C12 won't-fix; C3 is the only live
-  route to a double run, and the damage is latent in the field sample. C3 + C5
-  started after this save; check #799 and its PR for where they stand.
+- **#799 residuals, accepted:** a crashed build's jobs stay `processing` until
+  `clm db prune`; `hung` workers' jobs wait for the stall detector (Docker's hung
+  test also matches a notebook waiting on a slow HTTP/LLM call). Not verified: a
+  real two-build race, Docker end to end. Phase 6 (#800) is the next phase of
+  the remediation plan; nothing started.
+- **Unregistered sessions:** the 2026-11-08 audit lists seven older sessions no
+  register mentions (2026-10-09 to 2026-11-02). Not triaged in this save.
 - **`recovered/` branches, owner to keep or delete:** nothing uncommitted, one
   commit each, all superseded on master. `wip-2026-11-03-a` and `-b` are the
   same patch (identical patch-id) on different bases: the sweep tooling #1132
@@ -182,6 +199,15 @@ only the conversational position.
   S15's transcript was scanned against the live values.
 - S15: the first S15 save left a compaction summary inside an owner block; the
   agent's filter and block check both missed it, and the extended save removed it.
+- S15: the agent shipped #1201 without measuring what it guarded against; the
+  adversarial review then found the reset could still double-run a silent cell
+  through `clm db prune`, and could hold an abandoned job forever.
+- S15: the agent committed C11 + C6 before reading the tier result, which had one
+  failure (the notebook-output epoch guard). Caught right after; kept with a reason.
+- S15: the first C10 regression test passed on the unfixed code (it timed the
+  wrong sleep). The fail-first run caught it.
+- S15: the digest check shipped without a timing; the owner asked for one after a
+  side agent's warning. The warning was wrong for normal builds.
 
 - The first livelock count (1,196) answered only placement and order
   questions. Answering `conflict_shared` too gave 1,190; the correction is

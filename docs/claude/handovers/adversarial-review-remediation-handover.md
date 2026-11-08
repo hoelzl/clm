@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 4, 7, 8 DONE — **Phase 4 COMPLETE 2026-08-18** (S4, S8, S12, S11, S9, S10+D7; #798 closed). Remaining work is **Phase 5** (#799, job-queue correctness; re-baselined 2026-11-05, the issue's table is current) and **Phase 6** (#800, cross-machine coordination, not started) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–3, 3a, 4, 7, 8 DONE — **Phase 4 COMPLETE 2026-08-18** (S4, S8, S12, S11, S9, S10+D7; #798 closed). **Phase 5 COMPLETE 2026-11-08** (#799 closed; PRs #1201, #1204, #1206, #1207, #1208, #1209; C12 won't-fix). Remaining work is **Phase 6** (#800, cross-machine coordination, not started) | **Owner**: unassigned
 
 **2026-08-18 update (2)**: the S9 audit was **run** against PythonCourses, and
 it found a bug in the auditor rather than in the corpus. Three cassette
@@ -26,7 +26,8 @@ the next run (S11's manifest, two review rounds), and a security filter that
 *raises* is worse than one that does nothing when the caller treats
 "unfilterable" as "pass through" (S9's live-network bypass). What remains of
 the whole plan is **Phase 5** (#799) and **Phase 6** (#800), neither started
-(as of 2026-08-18; for Phase 5 now, see #799's status table).
+(as of 2026-08-18). Phase 5 was completed on 2026-11-08 (#799 closed; its
+status table lists the PRs and residuals), so only Phase 6 remains.
 
 **2026-08-14 update**: Phase 3 status audit against git history and issues — two
 items shipped under the #656 ceremony arc without being recorded here: **item 3
@@ -1682,7 +1683,7 @@ recorded cassette contains no Azure/Gemini key and no `Set-Cookie`;
 
 ---
 
-### Phase 5 — Job-queue correctness  ▸ STATUS: partly done, C12 won't-fix; #799's status table supersedes the text below ▸ TRACKED: #799
+### Phase 5 — Job-queue correctness  ▸ STATUS: DONE 2026-11-08 (#799 closed), C12 won't-fix; #799's status table supersedes the text below ▸ TRACKED: #799
 **Depends on**: Phase 1 (T1's resurrected tests cover exactly this code).
 
 **Goal**: no job runs twice, no build interferes with another, no corrupted
@@ -2067,24 +2068,23 @@ incrementally so the doc is always true of the current code.
 
 Every finding from the review, and where it is handled. IDs match
 `docs/claude/adversarial-review-2026-07-24.md`. **✔ = shipped.** Since
-2026-08-18 the only findings without a ✔ are the C-family, and they are the
-whole content of the two phases that have not started — Phase 5 (#799) and
-C1's final form in Phase 6 (#800). Nothing else is outstanding.
+2026-11-08 the only finding without a ✔ is C1's final form in Phase 6 (#800).
+C12 is won't-fix (owner, 2026-11-07). Nothing else is outstanding.
 
 | Finding | Phase | Finding | Phase | Finding | Phase |
 |---|---|---|---|---|---|
 | S1 | 0 ✔ | C1 | 0 ✔ (interim) → 6 (final) | Y1 | 3 ✔ |
-| S2 | 2 ✔ | C2 | 5 | Y2 | 3 ✔ |
-| S3 | 2 ✔ | C3 | 5 | Y3 | 3 ✔ |
-| S4 | 4 ✔ | C4 | 5 | Y4 | 3 ✔ |
-| S5 | **3a** ✔ | C5 | 5 | Y5 | 3 ✔ |
-| S6 | 2 ✔ | C6 | 5 | Y6 | 3 ✔ |
-| S7 | 2 ✔ | C7 | 5 | Y7 | 3 ✔ |
-| S8 | 4 ✔ | C8 | 5 | Y8 | 3 ✔ |
-| S9 | 4 ✔ | C9 | 5 | Y9 | 3 ✔ |
-| S10 | 4 ✔ | C10 | 5 | A1 | 8 ✔ |
-| S11 | 4 ✔ | C11 | 5 | A2 | 8 ✔ |
-| S12 | 4 ✔ | C12 | 5 | A3 | 8 ✔ |
+| S2 | 2 ✔ | C2 | 5 ✔ | Y2 | 3 ✔ |
+| S3 | 2 ✔ | C3 | 5 ✔ | Y3 | 3 ✔ |
+| S4 | 4 ✔ | C4 | 5 ✔ | Y4 | 3 ✔ |
+| S5 | **3a** ✔ | C5 | 5 ✔ | Y5 | 3 ✔ |
+| S6 | 2 ✔ | C6 | 5 ✔ | Y6 | 3 ✔ |
+| S7 | 2 ✔ | C7 | 5 ✔ | Y7 | 3 ✔ |
+| S8 | 4 ✔ | C8 | 5 ✔ | Y8 | 3 ✔ |
+| S9 | 4 ✔ | C9 | 5 ✔ | Y9 | 3 ✔ |
+| S10 | 4 ✔ | C10 | 5 ✔ | A1 | 8 ✔ |
+| S11 | 4 ✔ | C11 | 5 ✔ | A2 | 8 ✔ |
+| S12 | 4 ✔ | C12 | 5 (won't fix) | A3 | 8 ✔ |
 | T1 | 1 ✔ | T5 | 1 ✔ | A4 | 8 ✔ |
 | T2 | 1 ✔ | T6 | 1 ✔ | A5 | 8 ✔ |
 | T3 | 7 ✔ | T7 | 1 ✔ | A6 | 8 ✔ |
