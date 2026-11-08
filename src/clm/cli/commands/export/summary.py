@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.slide_text.slide_parser import is_percent_marker
 from clm.core.utils.notebook_utils import find_notebook_titles
 from clm.core.utils.text_utils import Text, sanitize_file_name
 
@@ -215,7 +216,7 @@ def _extract_from_py(text: str, audience: str, comment_token: str = "#") -> str:
     current_block: list[str] = []
 
     for line in text.splitlines():
-        if line.startswith(comment_token + " %%") or line.startswith(comment_token + " +"):
+        if is_percent_marker(line, comment_token) or line.startswith(comment_token + " +"):
             # Flush current block
             if current_block:
                 block_text = "\n".join(current_block)
