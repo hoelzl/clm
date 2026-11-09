@@ -36,12 +36,12 @@ EXCLUDE_DIRS = {"_archive", "_deleted", "_old", "Old", ".ipynb_checkpoints", "co
 
 COURSES = {
     "cpp": {
-        "slides": Path(r"C:/Users/tc/Programming/Cpp/CppCourses/slides"),
+        "slides": Path(r"G:/Courses/CppCourses/slides"),
         "ext": "cpp",
         "fmt": "cpp:percent",
     },
     "csharp": {
-        "slides": Path(r"C:/Users/tc/Programming/CSharp/CSharpCourses/slides"),
+        "slides": Path(r"G:/Courses/CSharpCourses/slides"),
         "ext": "cs",
         "fmt": "cs:percent",
     },
