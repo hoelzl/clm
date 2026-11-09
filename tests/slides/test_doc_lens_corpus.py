@@ -63,7 +63,7 @@ def _real_corpus_dir() -> Path | None:
         path = Path(env)
         if path.is_dir():
             return path
-    maintainer = Path(r"C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\slides")
+    maintainer = Path(r"G:\Courses\PythonCourses\slides")
     if maintainer.is_dir():
         return maintainer
     return None

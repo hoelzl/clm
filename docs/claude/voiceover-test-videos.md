@@ -3,8 +3,8 @@
 ## Test Video Inventory
 
 All videos are in `D:\OBS\Recordings\AZAV Software-Engineering\`.
-All slides are in `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\slides\`.
-The course spec is `C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\course-specs\software-engineering-azav.xml`.
+All slides are in `G:\Courses\PythonCourses\slides\`.
+The course spec is `G:\Courses\PythonCourses\course-specs\software-engineering-azav.xml`.
 
 ### 1. Iteration Patterns Part 1 (HARD - worst case)
 

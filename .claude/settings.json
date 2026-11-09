@@ -1,8 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/**)",
-      "Read(//c/Users/tc/Programming/Python/Courses/Own/PythonCourses/course-specs/**)",
+      "Read(//g/Courses/PythonCourses/**)",
+      "Read(//g/Courses/PythonCourses/course-specs/**)",
       "WebFetch(domain:textual.textualize.io)",
       "Bash(.venv/Scripts/mypy:*)",
       "WebFetch(domain:callowayproject.github.io)"

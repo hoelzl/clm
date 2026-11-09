@@ -13,7 +13,7 @@ Examples:
     uv run python tools/voiceover_diagnostic.py "D:/OBS/Recordings/AZAV Software-Engineering/06 Sequenzen/13 Iterations-Muster (Teil 2).mp4"
 
     # With OCR matching against slides
-    uv run python tools/voiceover_diagnostic.py "D:/OBS/Recordings/AZAV Software-Engineering/06 Sequenzen/13 Iterations-Muster (Teil 2).mp4" --ocr --slides "C:/Users/tc/Programming/Python/Courses/Own/PythonCourses/slides/module_150_collections/topic_360_iteration_patterns2/slides_iteration_patterns2.py" --lang de
+    uv run python tools/voiceover_diagnostic.py "D:/OBS/Recordings/AZAV Software-Engineering/06 Sequenzen/13 Iterations-Muster (Teil 2).mp4" --ocr --slides "G:/Courses/PythonCourses/slides/module_150_collections/topic_360_iteration_patterns2/slides_iteration_patterns2.py" --lang de
 """
 
 from __future__ import annotations

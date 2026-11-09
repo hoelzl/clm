@@ -239,8 +239,7 @@ def test_split_then_unify_outputs_match(text: str) -> None:
 
 
 _FIXTURE_DIR = Path(
-    "C:/Users/tc/Programming/Python/Courses/Own/PythonCourses/slides/"
-    "module_550_ml_azav/topic_050_langchain_simple_chatbot"
+    "G:/Courses/PythonCourses/slides/module_550_ml_azav/topic_050_langchain_simple_chatbot"
 )
 
 
