@@ -19,10 +19,10 @@ The laws, with no question answered (the judge refuses every one):
 3. symmetric      swapping the halves gives the same content. The ORDER may
                   differ: ties between unrelated additions are broken DE first
 4. conserving     a merge that asked nothing never holds more copies of a cell
-                  than a half holds, and never drops an addition. It may hold
-                  FEWER copies than both halves hold: only when the recorded
-                  deck holds byte-identical cells and each half changed a
-                  different one (reported, not counted as a violation)
+                  than a half holds, never fewer than both halves hold, and
+                  never drops an addition. (Where the recorded deck holds
+                  byte-identical cells and each half edited a different one,
+                  the model asks: ``conflict_copies``.)
 
     python scripts/sync_model_laws.py            # about 4 minutes
 
@@ -124,10 +124,7 @@ def main() -> int:
                     if max(cd[c], ce[c]) > cb[c] and cr[c] == 0:
                         bad["conserving"].append(("an addition vanished", b, d, e, got))
                     if cr[c] < min(cd[c], ce[c]):
-                        if cb[c] >= 2:
-                            stats["fewer copies than both halves (identical recorded cells)"] += 1
-                        else:
-                            bad["conserving"].append(("fewer than both halves", b, d, e, got))
+                        bad["conserving"].append(("fewer than both halves", b, d, e, got))
                 mirrored = merge(base(b), cells(e, "de"), cells(d, "en"), refuse)
                 if mirrored.open is not None or Counter(mirrored.labels()) != cr:
                     bad["symmetric"].append((b, d, e, got, mirrored.labels()))
