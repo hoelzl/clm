@@ -117,6 +117,7 @@ def patch_notebook_kernelspec(notebook_path: Path, kernel: str) -> None:
     notebook_path.write_text(
         json.dumps(nb, indent=1, ensure_ascii=False) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -253,7 +254,7 @@ def write_jupyter_lite_json(lite_dir: Path, *, kernel: str) -> dict:
     }
 
     path = lite_dir / "jupyter-lite.json"
-    path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
     return config
 
 
@@ -286,7 +287,9 @@ def write_overrides(
         }
 
     overrides_path = lite_dir / "overrides.json"
-    overrides_path.write_text(json.dumps(overrides, indent=2, sort_keys=True), encoding="utf-8")
+    overrides_path.write_text(
+        json.dumps(overrides, indent=2, sort_keys=True), encoding="utf-8", newline="\n"
+    )
     return overrides
 
 

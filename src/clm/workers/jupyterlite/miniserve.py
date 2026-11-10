@@ -128,7 +128,8 @@ def _emit_launch_bat(output_dir: Path) -> None:
 echo Starting JupyterLite...
 "%~dp0miniserve-windows.exe" --index lab/index.html "%~dp0_output"
 """
-    (output_dir / "launch.bat").write_text(text, encoding="utf-8")
+    # cmd.exe scripts want CRLF; be explicit so a Linux/Docker build matches.
+    (output_dir / "launch.bat").write_text(text, encoding="utf-8", newline="\r\n")
 
 
 def _emit_launch_command(output_dir: Path) -> None:

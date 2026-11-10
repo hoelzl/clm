@@ -495,7 +495,8 @@ def write_cmake_projects(course: Course) -> list[Path]:
         for rel, content in files.items():
             path = kind_root / PurePosixPath(rel)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            # LF on every host: the export lands in git-tracked course repos.
+            path.write_text(content, encoding="utf-8", newline="\n")
             written.append(path)
         logger.info(
             "Wrote %d CMake file(s) under %s (%d deck targets, %d workshop targets, "

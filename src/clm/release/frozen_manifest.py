@@ -90,7 +90,11 @@ class FrozenManifest:
             # Sorted so the published file is deterministic and diffs cleanly.
             "frozen": {topic_id: asdict(self.frozen[topic_id]) for topic_id in sorted(self.frozen)},
         }
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
     def is_frozen(self, topic_id: str) -> bool:
         return topic_id in self.frozen
