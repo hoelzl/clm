@@ -395,7 +395,8 @@ about un-id'd cells is asked at all depends on the cells around it: "possibly
 moved" is read off the recorded order of the neighbours, a removal is unsure
 because of another byte-identical copy, a new cell is placed by its neighbour.
 Applying any part of a pass while such a question is open changes what the next
-pass asks. §4.8 (items 6 to 8) has what was tried first.
+pass asks. §4.8 (items 6 to 10) has what was tried first and what else the
+check forced.
 
 `scripts/sync_model_passes.py` checks five laws with questions left open. A
 judge answers each question by a fixed rule, and gives the same answer when the
