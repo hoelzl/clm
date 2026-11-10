@@ -32,15 +32,23 @@ checks are `scripts/sync_model.py`, `scripts/sync_model_probe.py` and
 - **Land the investigation** (owner, after reading the report): PR #1217,
   merged 2026-11-10. Nothing else is decided.
 - **No engine change, no design-note amendment, no changelog fragment, no
-  issue filed** (agent's call, stated in the landing report): the proposal is
-  undecided and nothing user-visible changed.
+  issue for the proposal** (agent's call, stated in the landing report): the
+  proposal is undecided and nothing user-visible changed.
+- **Save the discussion, and file the cleaner issue** (owner). The save was
+  asked for twice, after the landing and again at the end. The issue was filed
+  only once the owner wrote "with my explicit permission".
 
 ## Shipped
 
 - PR #1217 (merged 2026-11-10): the investigation doc, the three scripts, and
   the issue classification under `docs/claude/analysis/sync-structural-core/`.
-- With this save: the doc's §4.8 (what was tried and dropped while building
-  the prototype), added by the knowledge audit.
+- PR #1218 (merged): the first S20 save, and the doc's §4.8 (what was tried
+  and dropped while building the prototype), added by the knowledge audit.
+- Issue #1219 (open): the transcript-cleaner defect.
+- PR #1220 (merged): the two lines of the first save that #1219 made false.
+- The second save extends the transcript to the end of the session and brings
+  this file and the register up to date. Its knowledge audit found nothing new
+  for the repository.
 
 ## Open: the five decisions (the doc's §9)
 
@@ -60,8 +68,9 @@ the current engine, where the one-sided law fails today.
 
 Also open, unrelated to sync: `scripts/clean_transcript.py` cleans
 `api-request-blob` rows as dialogue and files a subagent hand-back under the
-owner. Filed as #1219 after the save, once the owner gave explicit permission
-(the first attempt was stopped by the permission classifier).
+owner (#1219). Until it is fixed, a save of a Claude Code session needs the
+staging step the register describes under S20. The worktree
+`sync-structural-core` is left in place with all four branches merged.
 
 ## Known weak points of the proposal
 
@@ -86,7 +95,9 @@ owner. Filed as #1219 after the save, once the owner gave explicit permission
   changed after each measurement) is the doc's §4.8 and the corrections below.
 - The subagent's report was removed from the transcript as harness-delivered
   text. Its substance is the committed issue classification.
-- The save itself: this file covers it.
+- The output of a `/context` command the owner ran before asking for the
+  issue: harness output, dropped by the cleaner.
+- The second save itself, after its first step: this file covers it.
 
 ## Agent corrections recorded in the transcript, or made on the way
 
@@ -106,3 +117,10 @@ owner. Filed as #1219 after the save, once the owner gave explicit permission
   merge.
 - A proof was not attempted: no proof assistant is installed on the machine.
   The doc's §6 is an assessment, not a result.
+- The first save recorded "no issue exists" for the cleaner defect. Once the
+  issue was filed, that was false in two places, and it took PR #1220 to
+  correct them. A save that records a blocked action goes stale the moment
+  the action happens; check for it before closing the session.
+- The issue draft said the second copy of the subagent's report came through
+  a second queue row. It came through the report's `api-request-blob` copy.
+  Corrected before filing.
