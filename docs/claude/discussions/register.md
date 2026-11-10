@@ -35,6 +35,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | `sync-structural-core` (S20 save extension) | After the first save: the owner gave explicit permission to file the transcript-cleaner defect the save had found, and asked for the save again at the end. Nothing new on the proposal itself | Proposed — unchanged: D1–D5 open; the cleaner issue open | PR #1218 (first save, merged); issue #1219; PR #1220 (the first save's two now-false lines, merged) | S20 |
 | `studio-preview-review` | The adversarial review of PR #704 (Studio tier-2 preview) with the owner's wider brief: find the design mistakes behind two bad review rounds and fix root causes "rather than putting patches on patches". Three causes named (no defense in depth, a hand-rolled layer over nh3, wired claims without an executing test); the owner had #704 merged and the pattern made a standing rule, and chose the bundled-logo-only option for #706. The same session then root-caused the failing nightly (#694) | Decided — all shipped 2026-07-26; a record, saved retroactively on 2026-11-10 | PRs #704, #707 (the claimed-wired rule), #708 (#705, CSP), #709 (#706, logo asset), #710 (#694); `docs/developer-guide/testing.md`; `docs/claude/design/mobile-deck-studio.md` | S21 |
 | `cache-performance-regression` | #711: the owner's impression that cached builds of a large course were slower on clm 1.23 than on 1.21. Measured on the real course without deleting cache or output; the "content changed" storms traced to CRLF against LF templates in two installs of the same clm, and the slow hit path profiled with py-spy. The owner had the results written down, a PR opened and the first three optimizations started | Decided — shipped 2026-07-27, #711 closed 2026-09-18; a record, saved retroactively on 2026-11-10 | issue #711; PR #712 (`docs/claude/cache-performance-investigation.md`); PR #713 (the three fixes) | S22 |
+| `sync-structural-core` (S23) | The owner's answers to D1, D2 and D3 after a resume at conversation depth (pursue the replacement core in a revised order, keep the width of the order question, ask on byte-identical copies), and the two steps the agent then carried out alone: the oracle-free laws as a ratchet against the engine, and the prototype's pass with open questions, tags and slide-hood. A check across passes refuted the first design of that pass | Decided (D1 to D3) — steps 1 and 2 shipped; the owner has not read their findings yet; step 3 (the ledger) waits for the owner's word | PR #1224 (merged), PR #1225 (merged); the doc's §2.5, §4.6, §4.8 items 6 to 10, §4.9 and §9; `tests/slides/test_sync_laws.py`, `scripts/sync_laws.py`, `scripts/sync_model_passes.py` | S23 |
 
 ### Dropped threads / corrections worth keeping
 
@@ -196,6 +197,26 @@ the reasons behind it are in `README.md`; the save procedure is
   marker). The cleaner also printed each session's start, in local time, as
   its content boundary; both were replaced by hand. (S21, S22)
 
+- The investigation doc's §4.6 said that a member with an open question keeps
+  its state while the rest of a pass goes on. Checked across passes on every
+  small input, that holds only for questions about id'd cells (`translate_new`,
+  `remove_localized_side`). Whether a question about un-id'd cells or about
+  order is asked depends on the cells around it, so any other open question has
+  to hold the whole part. Do not design a finer partial apply again without
+  `scripts/sync_model_passes.py`; the doc's §4.8, items 6 to 10, lists what
+  broke. (S23)
+- The agent recommended D1 on the probe's "18% of one-sided cases fail". The
+  law check on small decks measured 92% (15,400 of 16,744), of which 9,200 are
+  the engine's designed answerless `verify_cold` for a one-sided un-id'd
+  insertion. The probe counts an answered question as convergence and has few
+  insertions; its rate describes the probe, not the engine. (S23)
+- A recorded cell that gains a `slide_id` on one half looked like a detail of
+  the cell's output. Folding the new id into the member's identity at once
+  dropped the cell from the identical-copies rule, and the exhaustive check
+  with tags found merges that applied both halves' edits to two identical
+  cells without asking (the D3 case). The recorded identity stays as recorded
+  until the pass is over. (S23)
+
 ## Sessions
 
 | S | Date | Transcript | Size | Owner/agent blocks | Source | Boundary |
@@ -226,6 +247,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S20 (save extension) | 2026-11-10 | `sync-structural-core/transcripts/2026-11-10-s20.md` | 5.57 MB → 24 kchar (same staging: 114 `api-request-blob` rows, the hand-back rows, three skill bodies and the task notifications removed from a temporary source copy; the cleaner accepted the overwrite, so no earlier dialogue line was lost) | 3 / 13 (167 tool stubs; the output of a `/context` command is harness text and absent) | same Claude Code session `4c2074d5-e2ad-424b-ac0f-4831cdc6a870.jsonl` | content through 2026-11-10 08:13 UTC — extends the row above with the first save (PR #1218), the owner's permission to file the cleaner issue, #1219 and PR #1220, and the second save request; supersedes the earlier boundary. Scanned against the 15 live secret-named env values: 0 hits |
 | S21 | 2026-07-26 | `studio-preview-review/transcripts/2026-07-26-s21.md` | 2.47 MB → 72 kchar (staged full lineage, 1,049 rows of which 778 archived; cleaned from a filtered temporary copy without 182 compaction copies, 10 delegation results, 6 background-process notices, and with the `next-issue` skill body reduced to one line; the cleaner dropped 3 compaction summaries) | 9 / 104 (336 tool stubs) | Hermes session `20260726_191709_03773c` ("Ongoing CLM fixes"), the maintainer's Hermes profile, staged with `scripts/stage_hermes_session.py`; saved retroactively on 2026-11-10 in worktree `sync-structural-core` | content through 2026-07-26 22:56 UTC (the last dialogue record; the cleaner's boundary was replaced by hand): the #704 review, the three follow-ups, the #706 option, the #694 flake hunt, the break. Scanned against the 15 live secret-named env values: 0 hits; read in full |
 | S22 | 2026-07-27 | `cache-performance-regression/transcripts/2026-07-27-s22.md` | 1.88 MB → 46 kchar (staged full lineage, 976 rows of which 805 archived; filtered copy without 213 compaction copies, 4 background-process notices and 2 preserved-task-list rows; the cleaner dropped 3 compaction summaries) | 9 / 68 (282 tool stubs; 2 owner blocks delivered out-of-band; two owner steers the agent replies to are absent from the source) | Hermes session `20260727_003818_23147e` ("Investigating CLM build performance regression"), same profile and staging; started in the main checkout, later worktree `issue-711-cache-perf` | content through 2026-07-27 02:20 UTC (the last dialogue record; boundary replaced by hand): #711, the measurements, the pause, the instrumented owner build, the root cause, PR #712 and PR #713. Scanned against the 15 live secret-named env values: 0 hits; read in full. Precedes S1; numbered in save order, like S21 |
+| S23 | 2026-11-10 | `sync-structural-core/transcripts/2026-11-10-s23.md` | 5.30 MB → 26 kchar (after removing 114 `api-request-blob` rows, 25 task notifications and the skill body from a temporary source copy) | 1 / 26 (250 tool stubs; the owner's choice of thread and depth is in the AskUserQuestion stub; one owner message, after which the session is solo work) | Claude Code session `0cc4adea-2dd6-4968-b25d-bf5719caa9c4.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm`, started in the main checkout with `/resume-discussion` on S20; the work and this save in worktree `sync-structural-core`) | content through 2026-11-10 13:51 UTC: the resume report, the agent's read of D1 to D5, the owner's three answers, steps 1 and 2 with their two PRs, and the first steps of this save; the rest of the save is covered by the state file. Scanned against the live secret-named env values: 0 hits; read in full |
 
 ### Deliberately skipped
 
@@ -245,3 +267,4 @@ the reasons behind it are in `README.md`; the save procedure is
 | 2026-10-09 … 2026-10-11 (at S16-S19) | `0d92656a-6fad-4d83-a754-3e5bc92a8d53` (empty, 0 owner turns), `47bc20f8-acd3-48f9-9145-8d7e15e56c63` (2 owner turns: `uv tool install` blocked by a locked `Scripts` dir, fixed by closing VS Code), `81ca7aad-d1dc-4e0a-80de-96546ba2c1ad` (2 owner turns as counted by the audit, one message: a release request) | Nothing to resume; the release is in the changelog. The other four sessions that audit listed were saved as S16-S19 |
 | 2026-11-10 (at S20) | the two July Hermes reviews (`20260726_191709_03773c`, 18 owner turns; `20260727_003818_23147e`, 22 owner turns), the only other sessions the audit lists | Not triaged at S20 (other sessions' work); the earlier verdict stands: candidates, not skipped for good |
 | 2026-11-10 (at S21, S22) | the same two July Hermes reviews | No longer skipped: saved as S21 and S22 at the owner's request, after the row above had made the audit stop listing them. The candidate notes in the rows above are discharged for these two |
+| 2026-11-10 (at S23) | none | The audit lists only the session being saved; nothing to skip |
