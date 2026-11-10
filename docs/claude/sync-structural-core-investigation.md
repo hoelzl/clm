@@ -1,7 +1,9 @@
 # Sync Structural Core: Can Pairing and Order Be Fixed at the Root?
 
-**Status**: Investigation, complete. The proposal in §4 is not decided; §9 lists
-the decisions it needs from the maintainer.
+**Status**: Investigation, complete. The maintainer decided D1 to D3 on
+2026-11-10 (§9): pursue the proposal in §4 in the order §9 gives, with a
+go/no-go before the engine is switched over. Step 1 has landed (§2.5). D4 and
+D5 are open.
 **Date**: 2026-11-10
 **Author**: Claude (Fable 5.2), at the maintainer's request
 **Measured against**: master `2e011286` (clm 1.38.0)
@@ -89,6 +91,54 @@ scores 67,593 converged, 141 visible stops, 137 silently wrong. All 278 are in
 the `both_edit_both_move` family: both halves move and edit a slide's un-id'd
 cells, the residual accepted with #1144. So the question is what closes that
 residual, and nothing else on the probe needs it.
+
+### 2.5 The laws on the engine (step 1, added 2026-11-10)
+
+The laws of §5 need no oracle, so they can be checked on the engine itself.
+`tests/slides/sync_laws.py` drives `report -> apply` with every question
+refused over every small deck: up to 3 recorded cells between two slides (id'd
+voiceovers and un-id'd code cells, contents may repeat), a changed half of up
+to 4 cells; where both halves changed, up to 2 recorded cells and 3 per half.
+`scripts/sync_laws.py run --model` puts the prototype in the engine's place.
+
+| law | cases | master holds | prototype holds |
+|---|---:|---:|---:|
+| nothing changed: the report is clean | 63 | 63 | 63 |
+| one half changed: no question, both halves end as that half | 16,744 | 1,344 | 16,744 |
+| both changed: a question-free sync converges, conserves cells, and does not depend on which half is which | 11,450 | 10,906 | 11,450 |
+
+What master does instead in the 15,400 one-sided cases:
+
+| outcome | cases | what it is |
+|---|---:|---|
+| `stalls:verify_cold` | 9,200 | the half added an un-id'd cell (9,196 of them). The engine does not copy it (design note §5): the row has no answer, and the author gives the cell a `slide_id` |
+| `asks:pool_placement_divergence` | 5,816 | the slide also holds an id'd cell, and the half changed the un-id'd cells around it (4,608 of these add one). The engine asks which half is right |
+| `livelock_withheld` | 384 | the report never turns clean. The smallest: recorded `x x`, one half `y x` (one of two identical cells edited) |
+
+The 1,344 that hold are removals (504), replacements in place (736) and
+reorders (104). No case that adds a cell holds.
+
+Of the 544 two-sided violations, 426 are livelocks and 118 are asymmetries: the
+engine converges with the halves one way round and asks with them swapped.
+
+Three things this adds to §2.2:
+
+- **No violation is silent.** In all 28,257 cases the engine either satisfies
+  the law or stops visibly. The probe's silent failures lie outside this
+  scope: its decks are larger and its questions are answered.
+- **The share is much higher than the probe's 18%, for two reasons.** The probe
+  counts a correctly answered question as convergence, and the law counts any
+  question as a violation, because the other half is exactly what the last
+  sync left and nothing needs deciding. And 13,872 of the 16,744 cases add a
+  cell on one half, and none of those holds.
+- **The largest class is by design, not a defect.** A one-sided un-id'd
+  insertion is refused because the positional key cannot say where its twin
+  goes. It is the "give it a `slide_id`" exit of §3.5, measured.
+
+The cases with at most 3 cells per half are a ratchet in CI
+(`tests/slides/test_sync_laws.py`, 4,767 cases, 2,658 baseline entries); see
+"Sync laws" in `docs/developer-guide/testing.md`. The prototype's column is
+asserted on the same cases by `tests/scripts/test_sync_model_laws.py`.
 
 ---
 
@@ -289,9 +339,16 @@ such recorded cell, "which of these cells is it, or was it removed?" when
 "Possibly its place" is exact: some longest run of recorded cells still in
 recorded order on that half does without the cell.
 
-One rule of the same kind covers byte-identical cells: when a half removed one
-of several identical recorded cells and the other half changed another copy,
-which copy was removed is unknowable, so the removal is a question.
+Two rules of the same kind cover byte-identical cells:
+
+- When a half removed one of several identical recorded cells and the other
+  half changed another copy, which copy was removed is unknowable, so the
+  removal is a question.
+- When each half edited one of several identical recorded cells, whether they
+  edited the same cell is unknowable. If they did not, both edits stand; if
+  they did, it is a conflict and the other copy survives. The model asks
+  (`conflict_copies`, answered `distinct`, `de` or `en`). This is decision D3
+  (§9); before it, the prototype merged both edits.
 
 This question is meant to replace what the engine expresses today as
 `pool_placement_divergence`, `pool_pairing_shifted`, `ambiguous_alignment`, the
@@ -361,25 +418,28 @@ answered.
 |---|---:|---:|
 | Nothing changed: no question, nothing changes | 191 | 0 |
 | Only one half changed: no question, and the result is exactly that half | 212,612 | 0 |
-| Swapping the halves gives the same content | 500,395 | 0 |
-| No merge that asked nothing holds more copies of a cell than a half holds | 500,395 | 0 |
-| No merge that asked nothing drops an addition | 500,395 | 0 |
+| Swapping the halves gives the same content | 492,567 | 0 |
+| No merge that asked nothing holds more copies of a cell than a half holds, or fewer than both hold | 492,567 | 0 |
+| No merge that asked nothing drops an addition | 492,567 | 0 |
 
-Two qualifications:
+One qualification:
 
-- **Order under swap.** In 128,848 of the 500,395 merges the swapped result has
+- **Order under swap.** In 128,444 of the 492,567 merges the swapped result has
   the same cells in a different order. The model breaks ties between unrelated
   additions German first, which explains such differences; they were not
   classified one by one.
-- **Fewer copies than both halves hold.** In 7,828 merges the result holds fewer
-  copies of a content than each half holds. In all of them the recorded deck
-  holds two byte-identical cells and each half changed a different one, and the
-  model merges both changes. The engine's conservation gate (#1141) withholds
-  this shape. Whether to ask there is a policy choice (§9, D3).
+
+The numbers are those after decision D3 (§9). Before it, 500,395 merges asked
+nothing, and in 7,828 of them the result held fewer copies of a content than
+each half: the recorded deck held two byte-identical cells, each half had
+edited a different one, and the model merged both edits. The model now asks in
+exactly those 7,828 (`conflict_copies`, §4.5), as the engine's conservation
+gate (#1141) withholds that shape. The probe never produces it: the model's
+score and its question counts on the probe are unchanged.
 
 The exhaustive check found two defects in the prototype that the probe had not:
-the identical-cells removal case of §4.5, fixed, and the case above, left as a
-policy choice. That is the argument for laws over a hand-built probe.
+the identical-cells removal case of §4.5, and the case above. That is the
+argument for laws over a hand-built probe.
 
 The second law is the one the engine lacks today (§2.2). It holds in the model
 for a structural reason: when one half equals the record, every merge rule
@@ -486,29 +546,46 @@ compared field by field.
 
 ---
 
-## 9. Suggested path, and decisions
+## 9. The path, and decisions
 
-Each step is useful on its own and can be stopped after.
+Each step is useful on its own and can be stopped after. The order is the one
+the maintainer agreed to on 2026-11-10; it differs from the first draft of this
+document by step 2, which was not in it.
 
-1. **Laws as tests against the current engine.** The one-sided law fails today
-   (§2.2), so this gives a measurable target and a guard that needs no oracle.
-2. **Record the cell sequence in the ledger,** additively, beside the current
+1. **Laws as tests against the current engine.** Done (§2.5):
+   `tests/slides/test_sync_laws.py` is a ratchet in CI, and
+   `scripts/sync_laws.py` runs the wider scope and the prototype.
+2. **Extend the prototype before touching the engine**: partial progress
+   (§4.6), and tags with slide-hood. These carry the claims §8 marks "by
+   construction" or "if built as designed", and testing them costs no engine
+   risk.
+3. **Record the cell sequence in the ledger,** additively, beside the current
    entries.
-3. **Run the new core in shadow** beside the differ: on the probe, and on real
-   history through `scripts/scan_sync_history.py`.
-4. **Switch the structural rows over** and delete what §4.7 lists.
+4. **Run the new core in shadow** beside the differ: on the probe, on the law
+   cases, and on real history through `scripts/scan_sync_history.py`. The probe
+   and the law cases are generated shapes; real history is what measures the
+   benefit to an author.
+5. **Switch the structural rows over** and delete what §4.7 lists. The
+   maintainer decides go or no-go before this step, on the results of 2 and 4.
 
-Decisions for the maintainer:
+Decisions:
 
-- **D1.** Pursue this, or keep fixing the current structure.
-- **D2.** How wide an order question is: whenever both halves reordered within
-  one slide (today's doctrine, what the prototype does), or only when the two
-  reorders are incompatible.
-- **D3.** Identical recorded cells where each half changed a different copy:
-  merge both changes (the prototype), or ask (the conservation gate's stance).
-- **D4.** The ledger migration: re-record from a clean report, and what happens
-  to a deck with pending items.
-- **D5.** Whether to prove the laws in Lean once the core is in production (§6).
+- **D1. Pursue this, or keep fixing the current structure.** Decided
+  2026-11-10: pursue it, in the order above, with the go/no-go before step 5.
+- **D2. How wide an order question is.** Decided 2026-11-10: as today, whenever
+  both halves reordered within one slide (what the prototype does). The
+  switch-over then changes the mechanism and not the policy, and the probe's
+  oracle stays valid. Narrowing it to incompatible reorders can be measured
+  later; it would save at most the 2,533 order questions of §2.3.
+- **D3. Identical recorded cells where each half changed a different copy.**
+  Decided 2026-11-10: ask. The prototype does (§4.5, `conflict_copies`), and
+  the conservation law of §5 now holds without an exception.
+- **D4. The ledger migration**: re-record from a clean report, and what
+  happens to a deck with pending items. Open. It is not needed before step 3
+  is designed, and it needs a count of decks with pending items in the course
+  repositories first.
+- **D5. Whether to prove the laws in Lean** once the core is in production
+  (§6). Open, and no decision is needed before then.
 
 ---
 
@@ -520,6 +597,8 @@ python scripts/sync_model_probe.py run MODEL.json              # the prototype
 python scripts/sync_model_probe.py run NOID.json --no-identify # without the identity question
 python scripts/sync_model_probe.py compare ENGINE.json MODEL.json
 python scripts/sync_model_laws.py                              # the laws, about 4 minutes
+python scripts/sync_laws.py run LAWS.json --scope full          # the laws on the engine, 28,257 cases
+python scripts/sync_laws.py run LAWS_MODEL.json --scope full --model   # and on the prototype
 ```
 
 The engine run took 252 seconds with 20 workers on the development machine; the
@@ -531,4 +610,5 @@ run. The result files are not committed.
 | `scripts/sync_model.py` | the prototype core |
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |
+| `tests/slides/sync_laws.py`, `scripts/sync_laws.py` | the laws on the engine (§2.5), with `tests/slides/test_sync_laws.py` as the ratchet |
 | `docs/claude/analysis/sync-structural-core/issue-classification.md` | the issue classification behind §3.5 |

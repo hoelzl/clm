@@ -546,6 +546,57 @@ merges with cases worse must list them and say why (#1144 did: when both
 halves move *and* edit a slide's un-id'd cells, no pairing rule is right for
 every case, and only ids close that class).
 
+### Sync laws: checks that need no oracle
+
+The sweep and the probe have to be told what each case intended. **The laws**
+(`tests/slides/sync_laws.py`) hold for every input, so they are checked on
+every small deck with every question refused:
+
+1. **unchanged**: nothing changed since the record, so the report is clean;
+2. **one-sided**: only one half changed, so there is no question and both
+   halves end as the changed half;
+3. **progress**: a report without a question converges;
+4. **conserving**: a sync that asked nothing leaves the halves equal, and
+   neither duplicates nor loses a cell;
+5. **symmetric**: swapping the two halves changes neither whether the engine
+   asks nor the cells of the result.
+
+A deck is up to three cells between two slides: id'd voiceovers and un-id'd
+code cells, whose content may repeat. `tests/slides/test_sync_laws.py` (4,767
+cases, `slow` tier, one test per recorded deck) is a ratchet like the sweep's.
+The engine does not satisfy the laws today, so
+`tests/slides/sync_laws_baseline.json` lists every violating case with what
+the engine does instead, and a test fails when a case differs from it in
+either direction. The entries fall into a few classes:
+
+- `stalls:verify_cold`: one half added an un-id'd cell. The engine does not
+  copy it: the row has no answer, and the author gives the cell a `slide_id`
+  (`clm slides normalize --stamp-ids`) and reports again.
+- `asks:pool_placement_divergence`: one half moved an un-id'd cell past an
+  id'd one, and the engine asks which half is right although the other half
+  is exactly what the last sync left.
+- `livelock_withheld`, `livelock_stalled`: the report never turns clean.
+- `asymmetric:...`: the engine asks with the halves one way round and not
+  the other.
+
+When a fix makes cases hold, regenerate the baseline:
+
+```bash
+python scripts/sync_laws.py update --workers 8      # refuses to write if a case got worse
+python scripts/sync_laws.py trace "one-sided|x y|x y|z x"   # one case, pass by pass
+python scripts/sync_laws.py run OUT.json --scope full       # 28,257 cases, about a minute
+python scripts/sync_laws.py compare BASE.json NEW.json
+```
+
+A case got worse when it held and now violates a law, or when a visible
+violation became a silent one (the report is clean and the halves are wrong).
+`--accept-worse` overrides the refusal for a deliberate trade, which the PR
+must name. `run --model` checks the reference model of a replacement
+structural core (`scripts/sync_model.py`) on the same cases. It satisfies all
+five laws; `tests/scripts/test_sync_model_laws.py` asserts that on the
+ratchet's cases in the fast suite. Background:
+`docs/claude/sync-structural-core-investigation.md`.
+
 ## Troubleshooting
 
 ### "I don't see any logs during test execution"

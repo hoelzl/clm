@@ -22,6 +22,9 @@ The rule for inference: a guess is acted on only where every reading of the
 files gives the same result, or where it is the only one-to-one reading
 ("edited in place"). Otherwise the model asks which cell is which
 (``identify``), and only when the other half changed one of those cells.
+Byte-identical recorded cells get the same treatment: where each half edited
+one of them, or one half removed one and the other changed another, the model
+asks (``conflict_copies``, ``remove_vs_edit``).
 
 The model sees what a sync engine can see: per half a sequence of cells
 (slide id or none, kind, content) and the recorded sequence. Content is only
@@ -203,14 +206,17 @@ class Member:
 
 @dataclass
 class Question:
-    #: order | conflict_shared | remove_vs_edit | remove_localized_side |
-    #: translate_new | identify
+    #: order | conflict_shared | conflict_copies | remove_vs_edit |
+    #: remove_localized_side | translate_new | identify
     kind: str
     member: int | None
     inferred: bool = False
     #: ``identify`` only: the half, and the cells that may be the member
     side: str | None = None
     candidates: tuple[int, ...] = ()
+    #: ``conflict_copies`` only: the byte-identical copy the English half
+    #: edited (``member`` is the one the German half edited)
+    twin: int | None = None
 
 
 @dataclass
@@ -428,6 +434,34 @@ def merge(
             and (x.pos[side] is None or x.body[side] != x.base_body[side] or maybe_moved(x, side))
             for x in recorded
         )
+
+    # -- byte-identical recorded cells where each half edited one -------------
+    # Which copy a half edited cannot be read from the files. If the halves
+    # edited different copies, both edits stand; if they edited the same one,
+    # it is a conflict and the other copy survives. The result depends on the
+    # reading, so the model asks: ``distinct``, or ``de`` / ``en`` for one
+    # cell with that half's edit.
+    copies: dict[tuple, list[Member]] = {}
+    for m in recorded:
+        if m.sid is None and not m.localized and None not in (*m.body.values(), m.base_body["en"]):
+            copies.setdefault((m.kind, m.base_body["de"]), []).append(m)
+    for group in copies.values():
+        only = {
+            s: [
+                m
+                for m in group
+                if m.body[s] != m.base_body[s] and m.body[other(s)] == m.base_body[other(s)]
+            ]
+            for s in SIDES
+        }
+        for m_de, m_en in zip(only["de"], only["en"], strict=False):
+            got = ask(Question("conflict_copies", m_de.key, inferred=True, twin=m_en.key))
+            if got is None:
+                return out
+            if got == "de":  # one cell: German's edit stands, the other copy is as recorded
+                m_en.body["en"] = m_en.base_body["en"]
+            elif got == "en":
+                m_de.body["de"] = m_de.base_body["de"]
 
     # -- membership and content, per member ---------------------------------
     for m in members:
