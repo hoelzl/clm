@@ -60,8 +60,8 @@ the current engine, where the one-sided law fails today.
 
 Also open, unrelated to sync: `scripts/clean_transcript.py` cleans
 `api-request-blob` rows as dialogue and files a subagent hand-back under the
-owner (the register's S20 correction has the details). The agent drafted an
-issue; filing it was not permitted in this session, so none exists yet.
+owner. Filed as #1219 after the save, once the owner gave explicit permission
+(the first attempt was stopped by the permission classifier).
 
 ## Known weak points of the proposal
 

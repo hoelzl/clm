@@ -168,6 +168,8 @@ the reasons behind it are in `README.md`; the save procedure is
   from a temporary source copy (90 blob rows, the hand-back rows, the skill
   bodies; a line-by-line comparison showed no dialogue lost). No issue is
   filed for the cleaner yet. (S20)
+- Follow-up to the line above: the cleaner defect is filed as #1219, after the
+  owner gave explicit permission. (S20, after the save)
 
 ## Sessions
 
