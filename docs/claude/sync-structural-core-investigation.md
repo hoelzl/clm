@@ -321,6 +321,31 @@ alignment, spans, crossed sync points, the order scopes, the placement
 executors, the pool freezes, and the lens's positional pairing. This list is the
 design's intent, not a measured diff.
 
+### 4.8 Tried and dropped while building the prototype
+
+Recorded so the next attempt does not start from them again.
+
+1. **A plain 3-way sequence merge (diff3) with the content as the token.** A
+   move is then a delete plus an insert. When the other half edited the moved
+   cell, its edit meets a deletion, and no answer gives "moved and edited".
+   That is the probe's most common family. Hence identity first (§4.2), with
+   order and content merged separately.
+2. **Placing a new cell by all its pairwise relations on its own half.** Its
+   relations to a cell the other half moved are stale, and the new cell landed
+   on the wrong side of it (124 `split_other_only` cases). Hence neighbours
+   only (§4.4).
+3. **Reading an unmatched recorded cell as removed whenever its gap did not
+   pair one for one.** Where the other half had moved that cell, the edit
+   silently stayed behind (108 `insert_delete` cases). Matching cells new on
+   both halves first, the replaced-block reading and the identity question
+   closed it in steps: 108, 36, 10, 0.
+4. **Pairing by body similarity.** Not used. The ledger holds fingerprints, so
+   similarity is only available half to half, and a threshold tuned to a
+   synthetic probe would be one more special case. The identity question covers
+   what similarity would guess at.
+5. **Acting on a guess among byte-identical cells.** Found by the exhaustive
+   check, not by the probe (§5).
+
 ---
 
 ## 5. Laws, and what was checked

@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-08
-review-by: 2027-05-08
+updated: 2026-11-10
+review-by: 2027-05-10
 ---
 # Register: discussions index
 
@@ -31,6 +31,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | `sync-pool-pairing` | #1130: moved + edited un-id'd shared cells livelock or silently misplace under B2. The adversarial review of #1129 led to its revert and the root-cause framing (row splitting under the pre-write verify). The owner chose slot-atomic + split-answer (options 2 + 3, not 1) and asked for safety by design (→ content conservation). The order oracle showed the real defect is pairing (71 silent misplacements), so the plan was re-ordered to ledger spans, conservation, ids, placement. #1144 shipped with a documented residual after zero-worse proved unreachable (owner: "which half moved" without ids is whack-a-mole). Step 3 (ids) was withdrawn after a history scan found 0 field instances | Decided — #1130, #1142, #1137, #1150 closed; residuals accepted with a re-open trigger; silent bugs #1179-#1182 next | PRs #1131, #1132, #1133, #1134, #1141, #1144, #1146; #1148; design doc §13 (#1130 and #1142 rows); `docs/developer-guide/testing.md` (sweeps); `scripts/scan_sync_history.py` | S19 (opening, saved later), S14, S15 |
 | `sync-prewrite-verify` | #1051: per-item apply left structurally broken halves on disk. The agent laid out A (per-item, verify after writing), B1/B2 (verify the projected files, deck-wide or per slide group) and C (hold back dependent mechanical rows); the owner chose B2 + C with agents as the primary users. During implementation the guarantee was narrowed to violations the apply introduces | Decided — #1051 closed | PR #1074; sync design note §13 (#1051 row); the S16 triage's PRs #1059-#1072 | S16 |
 | `docker-workers-ops` | Docker worker images and the Docker host: the 1.34.2 rebuild and the owner's correction that the httpx2 replay fix had already shipped; slow-to-activate workers marked dead (#1078) and the container-path executed-notebook cache key (#1079), released as 1.34.3; moving Docker's disk to G: rather than USB/QLC P:; `force-unsafe-io` measured useless | Decided — work shipped; 0.6.0 backup containers/images and the Ubuntu WSL disk left open | 1.34.3; PRs #1080, #1085, #1086, #1087, #1089; `docker/BUILDING.md` | S17, S18 |
+| `sync-structural-core` | Whether the sync engine can be improved at the level of the algorithm instead of by more special cases, and whether its operation can be formalized. A one-session investigation: the root cause traced to positional identity for un-id'd cells (no total order in the ledger, half-to-half pairing before the ledger is consulted, rows executed one at a time); a prototype replacement core scored on the sync probe (67,871 of 67,871 against master's 50,031; with one half untouched 27,502 of 27,502 against 22,513); its laws checked on every small input; Lean assessed as feasible and not attempted | Proposed — investigation landed; the owner has decided nothing beyond landing it (the doc's §9, D1–D5, is open) | PR #1217 (merged); `docs/claude/sync-structural-core-investigation.md`; `scripts/sync_model.py`, `sync_model_probe.py`, `sync_model_laws.py`; `docs/claude/analysis/sync-structural-core/issue-classification.md`; the doc's §4.8 with this save | S20 |
 
 ### Dropped threads / corrections worth keeping
 
@@ -146,6 +147,28 @@ the reasons behind it are in `README.md`; the save procedure is
   deck convention (always `;`, `SHOW`), which dissolved #930's premise
   rather than escalating it. (S1)
 
+- The agent's first prototype of a replacement sync core was a plain diff3
+  over cell content. It cannot carry one half's edit along with the other
+  half's move of the same cell, which is the probe's main family. Identity has
+  to be settled first (each half aligned to the recorded sequence), then order
+  and content merged separately. Do not start from diff3 again; the
+  investigation doc's §4.8 lists this and four more dropped approaches. (S20)
+- An oracle-free exhaustive check found in minutes what the 67,871-case probe
+  had not: the prototype silently chose which of several byte-identical cells
+  a half had removed. Laws over every small input are the stronger tool for
+  this engine, and the one-sided law fails on master today. (S20)
+- Not attempted, on purpose: pairing by body similarity (the ledger holds
+  fingerprints only, and a tuned threshold would be one more special case) and
+  a Lean proof (no proof assistant on the machine). (S20)
+- The raw session file holds `api-request-blob` rows that repeat user and
+  assistant text, and `clean_transcript.py` cleans them as dialogue: every
+  block appeared twice, and two skill bodies came back as owner text through
+  their unflagged blob copies. The subagent hand-back arrives as a
+  `queue-operation` enqueue row and was filed under the owner. All were dropped
+  from a temporary source copy (90 blob rows, the hand-back rows, the skill
+  bodies; a line-by-line comparison showed no dialogue lost). No issue is
+  filed for the cleaner yet. (S20)
+
 ## Sessions
 
 | S | Date | Transcript | Size | Owner/agent blocks | Source | Boundary |
@@ -172,6 +195,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S17 | 2026-10-11 | `docker-workers-ops/transcripts/2026-10-11-s17.md` | 1.84 MB → 28 kchar (65:1) | 6 / 6 (111 tool stubs; owner messages queued mid-turn appear twice, left as cleaned) | Claude Code session `d0088deb-6f22-4d3d-aff2-bc20b2fc546b.jsonl` (slug `C--Users-tc-Programming-Python-Projects-clm`, main checkout; cleaned retroactively on 2026-11-08 in worktree `save-s15c`) | content through 2026-10-11 22:00 UTC (the cleaner's file-mtime boundary (2026-10-29 22:42) was replaced by hand with the last dialogue record): the 1.34.2 image rebuild, the openai/httpx2 correction, the push, the CppCourses Docker build. Secrets scan: 0 hits |
 | S18 | 2026-10-12/13 | `docker-workers-ops/transcripts/2026-10-12-s18.md` | 5.91 MB → 99 kchar (60:1) | 21 / 21 (361 tool stubs; owner messages queued mid-turn appear twice, left as cleaned) | Claude Code session `0ace84b6-a03c-4f15-a188-b253a78bbece.jsonl` (slug `C--Users-tc-Programming-Python-Projects-clm`, main checkout; cleaned retroactively on 2026-11-08 in worktree `save-s15c`) | content through 2026-10-13 01:11 UTC (the cleaner's file-mtime boundary (2026-10-29 22:42) was replaced by hand with the last dialogue record): #1078/#1079 and 1.34.3, the disk move to G:, `force-unsafe-io`, cam container recreation, the cache-dir setting, #1088. Secrets scan: 0 hits |
 | S19 | 2026-11-01/02 | `sync-pool-pairing/transcripts/2026-11-02-s19.md` | 3.08 MB → 32 kchar (97:1, after removing delivered blocks, skill bodies and harness notices filed under the owner) | 3 / 16 (118 tool stubs) | Claude Code session `e79f0a58-3fe1-4931-a4c9-59f1a38ea215.jsonl` (slug `C--Users-tc-Programming-Python-Projects-clm`, main checkout; cleaned retroactively on 2026-11-08 in worktree `save-s15c`) | content through 2026-11-02 00:45 UTC: the 39-issue triage and the start of the #1124 fix that became #1129. Precedes S14; numbered in save order. Secrets scan: 0 hits |
+| S20 | 2026-11-10 | `sync-structural-core/transcripts/2026-11-10-s20.md` | 5.12 MB → 19 kchar (after removing the `api-request-blob` rows, the subagent hand-back rows, two skill bodies and the task notifications from a temporary source copy) | 2 / 10 (136 tool stubs; the agent's short progress messages between the opening and the report are absent from the raw source) | Claude Code session `4c2074d5-e2ad-424b-ac0f-4831cdc6a870.jsonl` (slug `C--Users-tc-Programming-Python-Projects-clm`, started in the main checkout; the landing and this save written in worktree `sync-structural-core`) | content through 2026-11-10 07:18 UTC: the investigation request, the report, the landing of PR #1217, the save request and the first steps of the save; the rest of the save is covered by the state file. Scanned against the 15 live secret-named env values: 0 hits |
 
 ### Deliberately skipped
 
@@ -189,3 +213,4 @@ the reasons behind it are in `README.md`; the save procedure is
 | 2026-10-09 (at S13) | `53821502…` (2026-10-03, 8 owner turns, issues #1031/#1034) and `0d0c3183…` (2026-10-09, 11 owner turns, issue triage) plus the earlier unsaved ones | Not triaged at S13 (other sessions' work; the triage session is a candidate); earlier verdicts stand |
 | 2026-10-09 … 2026-11-02 (at S14) | `0d0c3183…` (13 owner turns, issue triage), `81ca7aad…` / `47bc20f8…` (2 each), `d0088deb…` (6), `0ace84b6…` (24, C++ build errors), `e79f0a58…` (16, issue triage) plus the two July Hermes reviews | Not triaged at S14 (other sessions' work); the two triage sessions and `0ace84b6…` are candidates; earlier verdicts stand |
 | 2026-10-09 … 2026-10-11 (at S16-S19) | `0d92656a-6fad-4d83-a754-3e5bc92a8d53` (empty, 0 owner turns), `47bc20f8-acd3-48f9-9145-8d7e15e56c63` (2 owner turns: `uv tool install` blocked by a locked `Scripts` dir, fixed by closing VS Code), `81ca7aad-d1dc-4e0a-80de-96546ba2c1ad` (2 owner turns as counted by the audit, one message: a release request) | Nothing to resume; the release is in the changelog. The other four sessions that audit listed were saved as S16-S19 |
+| 2026-11-10 (at S20) | the two July Hermes reviews (`20260726_191709_03773c`, 18 owner turns; `20260727_003818_23147e`, 22 owner turns), the only other sessions the audit lists | Not triaged at S20 (other sessions' work); the earlier verdict stands: candidates, not skipped for good |
