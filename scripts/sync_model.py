@@ -13,8 +13,9 @@ order scopes or placement rows). Three layers:
 2. merge    membership and content are 3-way value merges per member. The
             order of recorded members is a 3-way merge of pairwise precedence
             ("x before y"): where only one half changed a pair, the change
-            wins; a cycle is an order question. A member only one half places
-            goes next to its neighbours on that half.
+            wins; a cycle is an order question. A new member only one half
+            places goes next to its neighbours on that half; two that both
+            halves added in a different order are an order question too.
 3. result   ONE merged sequence, from which both halves are rendered, so they
             agree by construction.
 
@@ -26,20 +27,48 @@ Byte-identical recorded cells get the same treatment: where each half edited
 one of them, or one half removed one and the other changed another, the model
 asks (``conflict_copies``, ``remove_vs_edit``).
 
+A pass with open questions can still make progress (``Outcome.halves``
+and ``Outcome.record``). Which questions allow it is a finding, not a choice
+(``scripts/sync_model_passes.py``):
+
+- a question about an id'd cell (``translate_new``,
+  ``remove_localized_side``) holds that cell only. Each half keeps its own
+  cell, the record keeps its entry, and everything else is applied and
+  recorded around it. An id'd cell's identity rests on no inference, and the
+  laws across passes hold with it held;
+- any other open question holds the whole part: nothing is written and
+  nothing is recorded. Whether such a question is asked at all depends on the
+  cells around it, so applying a part of the pass would change what the next
+  pass asks.
+
+Tags are one more aspect of a cell, merged like its content: 3-way, per
+member, with a question (``conflict_tags``) when both halves changed them
+differently. They play no part in which cell is which. Whether a cell starts
+a slide is a tag, so an un-id'd cell that is promoted to a ``subslide`` is a
+cell whose tags changed, and nothing about the cells under it changes. A
+recorded cell that gains a ``slide_id`` on one half is still matched by its
+content, and the other half gains the id.
+
 The model sees what a sync engine can see: per half a sequence of cells
-(slide id or none, kind, content) and the recorded sequence. Content is only
-ever compared for equality, so a fingerprint would do.
+(slide id or none, kind, content, tags) and the recorded sequence. Content is
+only ever compared for equality, so a fingerprint would do.
 
 Scored on the repo's sync probe by ``scripts/sync_model_probe.py``; its laws
-are checked by ``scripts/sync_model_laws.py``.
+are checked by ``scripts/sync_model_laws.py`` (one pass) and
+``scripts/sync_model_passes.py`` (several passes with questions left open).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 ANCHOR_KINDS = ("slide", "subslide")
+#: Tags that make a cell start a slide, whatever its kind.
+ANCHOR_TAGS = frozenset(ANCHOR_KINDS)
 SIDES = ("de", "en")
+#: Questions that hold back only the cell they are about (see the module
+#: docstring). Any other open question holds the whole part.
+LOCAL_QUESTIONS = ("translate_new", "remove_localized_side")
 
 
 def other(side: str) -> str:
@@ -52,6 +81,10 @@ class Cell:
     kind: str  # slide | subslide | vo | code | md
     body: str  # content (per-language text for a localized cell)
     localized: bool
+    #: Carried through a pass and never read by the model. The checks use it
+    #: to recognise a cell across passes.
+    mark: object = field(default=None, compare=False)
+    tags: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -61,6 +94,8 @@ class BaseMember:
     localized: bool
     de: str | None  # recorded content per half (None = absent on that half)
     en: str | None
+    mark: object = field(default=None, compare=False)  # as ``Cell.mark``
+    tags: frozenset[str] = frozenset()  # recorded tags, the same on both halves
 
     def content(self, side: str) -> str | None:
         return self.de if side == "de" else self.en
@@ -77,20 +112,42 @@ def token(sid: str | None, kind: str, body: str | None) -> tuple:
 
 
 def _lcs_pairs(a: list, b: list) -> list[tuple[int, int]]:
+    """A longest common subsequence of two token lists, as index pairs.
+
+    Byte-identical cells make several of them equally long, and which one is
+    taken decides how the leftovers read. Two preferences settle it, so that
+    the same files always read the same way:
+
+    - an unmatched ``a`` beside an unmatched ``b`` of its kind ("replaced in
+      place") is better than a reading that needs a move;
+    - of several identical recorded cells, the earliest are the ones kept.
+    """
     n, m = len(a), len(b)
+    big = n + m + 1  # one match outweighs every in-place pairing
+
+    def in_place(x: tuple, y: tuple) -> bool:
+        return x[0] == "c" == y[0] and x[1] == y[1]
+
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(n - 1, -1, -1):
         for j in range(m - 1, -1, -1):
-            dp[i][j] = dp[i + 1][j + 1] + 1 if a[i] == b[j] else max(dp[i + 1][j], dp[i][j + 1])
+            best = max(dp[i + 1][j], dp[i][j + 1])
+            if a[i] == b[j]:
+                best = max(best, dp[i + 1][j + 1] + big)
+            elif in_place(a[i], b[j]):
+                best = max(best, dp[i + 1][j + 1] + 1)
+            dp[i][j] = best
     out, i, j = [], 0, 0
     while i < n and j < m:
-        if a[i] == b[j]:
+        if a[i] == b[j] and dp[i][j] == dp[i + 1][j + 1] + big:
             out.append((i, j))
             i, j = i + 1, j + 1
-        elif dp[i + 1][j] >= dp[i][j + 1]:
-            i += 1
-        else:
+        elif a[i] != b[j] and in_place(a[i], b[j]) and dp[i][j] == dp[i + 1][j + 1] + 1:
+            i, j = i + 1, j + 1
+        elif dp[i][j] == dp[i][j + 1]:
             j += 1
+        else:
+            i += 1
     return out
 
 
@@ -121,10 +178,14 @@ def _lis_chain(pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def align_exact(base: list[BaseMember], cells: list[Cell], side: str) -> dict[int, int]:
-    """Base index -> cell index, on identity evidence only (id or content)."""
+    """Base index -> cell index, on identity evidence only (id or content).
+
+    A cell whose id the record does not know is matched by its content: it
+    may be a recorded cell that gained its id on this half."""
     present = [i for i, m in enumerate(base) if m.content(side) is not None]
+    known = {m.sid for m in base if m.sid is not None}
     b_tok = [token(base[i].sid, base[i].kind, base[i].content(side)) for i in present]
-    c_tok = [token(c.sid, c.kind, c.body) for c in cells]
+    c_tok = [token(c.sid if c.sid in known else None, c.kind, c.body) for c in cells]
     of: dict[int, int] = {}
     used: set[int] = set()
     for bi, cj in _lcs_pairs(b_tok, c_tok):  # in order
@@ -202,12 +263,26 @@ class Member:
     inferred: bool = False
     content: str | None = None  # decided content of a shared member
     alive: bool = True
+    #: The kind of open question about this member, if any. When the pass
+    #: goes on around it, a held member stays as it is: on both halves and in
+    #: the record.
+    held: str | None = None
+    tags: dict[str, frozenset[str] | None] = field(default_factory=dict)  # side -> tags now
+    base_tags: frozenset[str] | None = None
+    merged_tags: frozenset[str] = frozenset()  # decided tags
+    #: An id a half gave to a recorded cell that has none. ``sid`` stays as
+    #: recorded: until the pass is over, the cell is still an un-id'd one.
+    stamp: str | None = None
+
+    @property
+    def new_sid(self) -> str | None:
+        return self.sid or self.stamp
 
 
 @dataclass
 class Question:
-    #: order | conflict_shared | conflict_copies | remove_vs_edit |
-    #: remove_localized_side | translate_new | identify
+    #: order | conflict_shared | conflict_copies | conflict_tags |
+    #: remove_vs_edit | remove_localized_side | translate_new | identify
     kind: str
     member: int | None
     inferred: bool = False
@@ -217,6 +292,11 @@ class Question:
     #: ``conflict_copies`` only: the byte-identical copy the English half
     #: edited (``member`` is the one the German half edited)
     twin: int | None = None
+    #: the ``mark`` of the member the question is about (see ``Cell.mark``)
+    mark: object = None
+    #: what the question is about, in terms that last across passes: an id,
+    #: or the kind and recorded content of an un-id'd cell
+    about: tuple = ()
 
 
 @dataclass
@@ -224,34 +304,54 @@ class Outcome:
     status: str  # merged | question
     sequence: list[Member] = field(default_factory=list)
     asked: list[Question] = field(default_factory=list)
+    #: the first open question, and all of them
     open: Question | None = None
+    opened: list[Question] = field(default_factory=list)
+    #: What each half holds after the pass, and what is recorded. With open
+    #: questions this is the progress the pass made, if any (see the module
+    #: docstring).
+    halves: dict[str, list[Cell]] = field(default_factory=dict)
+    record: list[BaseMember] = field(default_factory=list)
 
     def labels(self) -> list[str]:
-        return [f"id:{m.sid}" if m.sid else f"body:{m.content}" for m in self.sequence]
+        return [
+            (f"id:{m.new_sid}" if m.new_sid else f"body:{m.content}")
+            + "".join(f"^{t}" for t in sorted(m.merged_tags))
+            for m in self.sequence
+        ]
 
 
 def _align(base, cells):
     """Exact alignment of both halves, the cells new on both, the inferences."""
     of = {s: align_exact(base, cells[s], s) for s in SIDES}
     news = {s: [j for j in range(len(cells[s])) if j not in of[s].values()] for s in SIDES}
-    # cells new on BOTH halves with the same id or the same content
+    # cells new on BOTH halves: the same id, or the same content where the
+    # halves did not give them different ids (one half may have stamped it)
     twins: list[tuple[int, int]] = []
-    taken_en: set[int] = set()
-    for j in news["de"]:
-        c = cells["de"][j]
-        k = next(
-            (
-                k
-                for k in news["en"]
-                if k not in taken_en
-                and token(cells["en"][k].sid, cells["en"][k].kind, cells["en"][k].body)
-                == token(c.sid, c.kind, c.body)
-            ),
-            None,
-        )
-        if k is not None:
-            taken_en.add(k)
-            twins.append((j, k))
+    taken: dict[str, set[int]] = {"de": set(), "en": set()}
+
+    def same_new_cell(c: Cell, d: Cell, by_id: bool) -> bool:
+        if by_id:
+            return c.sid is not None and c.sid == d.sid
+        return not c.localized and (c.kind, c.body) == (d.kind, d.body) and None in (c.sid, d.sid)
+
+    for by_id in (True, False):
+        for j in news["de"]:
+            if j in taken["de"]:
+                continue
+            k = next(
+                (
+                    k
+                    for k in news["en"]
+                    if k not in taken["en"] and same_new_cell(cells["de"][j], cells["en"][k], by_id)
+                ),
+                None,
+            )
+            if k is not None:
+                taken["de"].add(j)
+                taken["en"].add(k)
+                twins.append((j, k))
+    twins.sort()
     claimed = {"de": {j for j, _ in twins}, "en": {k for _, k in twins}}
     evidence = {s: infer(base, cells[s], s, of[s], claimed[s]) for s in SIDES}
     return of, twins, claimed, evidence
@@ -266,7 +366,7 @@ def _members(base, cells, of, twins, claimed, evidence) -> tuple[list[Member], d
             m.pos[s] = j
             m.body[s] = cells[s][j].body if j is not None else None
             if j is not None:
-                m.sid = m.sid or cells[s][j].sid
+                m.stamp = m.stamp or cells[s][j].sid
                 m.inferred = m.inferred or i in evidence[s]
         out.append(m)
     for j, k in twins:
@@ -274,7 +374,7 @@ def _members(base, cells, of, twins, claimed, evidence) -> tuple[list[Member], d
         out.append(
             Member(
                 len(out),
-                c.sid,
+                c.sid or cells["en"][k].sid,
                 c.kind,
                 c.localized,
                 None,
@@ -299,6 +399,9 @@ def _members(base, cells, of, twins, claimed, evidence) -> tuple[list[Member], d
             )
             if c.sid is None:
                 loose[s].add(c.kind)
+    for m in out:
+        m.tags = {s: cells[s][m.pos[s]].tags if m.pos[s] is not None else None for s in SIDES}
+        m.base_tags = base[m.base_idx].tags if m.base_idx is not None else None
     return out, loose
 
 
@@ -308,7 +411,7 @@ def _groups(base: list[BaseMember]) -> dict[int, object]:
     out: dict[int, object] = {}
     cur: object = "~head"
     for i, m in enumerate(base):
-        if m.kind in ANCHOR_KINDS:
+        if m.kind in ANCHOR_KINDS or m.tags & ANCHOR_TAGS:
             cur = i
             out[i] = "~anchors"
         else:
@@ -319,7 +422,10 @@ def _groups(base: list[BaseMember]) -> dict[int, object]:
 def _linearize(members: list[Member], before: set[tuple[int, int]], follows: dict[int, int]):
     """A total order satisfying ``before`` (pairs of member keys), or ``None``
     when it is cyclic. A member listed in ``follows`` goes right behind the
-    member it names when it can; other ties: DE's order, then EN's."""
+    member it names when it can. Other ties: two recorded members that share
+    no half keep their recorded order (nothing else relates them, and the
+    record must not reorder them from one pass to the next); otherwise DE's
+    order, then EN's."""
     by_key = {m.key: m for m in members}
     preds: dict[int, set[int]] = {m.key: set() for m in members}
     for x, y in before:
@@ -339,6 +445,15 @@ def _linearize(members: list[Member], before: set[tuple[int, int]], follows: dic
             return None
         sticky = [k for k in ready if follows.get(k) == last and last is not None]
         nxt = min(sticky or ready, key=rank)
+        for k in sticky or ready:
+            m, n = by_key[k], by_key[nxt]
+            if (
+                m.base_idx is not None
+                and n.base_idx is not None
+                and m.base_idx < n.base_idx
+                and not any(m.pos[s] is not None and n.pos[s] is not None for s in SIDES)
+            ):
+                nxt = k
         out.append(by_key[nxt])
         rest.remove(nxt)
         last = nxt
@@ -353,7 +468,8 @@ def merge(
     *,
     identify: bool = True,
 ) -> Outcome:
-    """3-way merge. ``answer(Question) -> str | None`` plays the judge."""
+    """One pass of a 3-way merge. ``answer(Question) -> str | None`` plays the
+    judge; ``None`` leaves the question open."""
     cells = {"de": de_cells, "en": en_cells}
     of, twins, claimed, evidence = _align(base, cells)
     out = Outcome(status="merged")
@@ -361,15 +477,26 @@ def merge(
     def ask(q: Question):
         got = answer(q)
         if got is None:
-            out.status, out.open = "question", q
+            out.opened.append(q)
         else:
             out.asked.append(q)
         return got
 
+    def unchanged() -> Outcome:
+        """The pass ends with a question that holds the whole part."""
+        out.status, out.open = "question", out.opened[0]
+        out.halves = {s: list(cells[s]) for s in SIDES}
+        out.record = list(base)
+        return out
+
     # -- identity: ask which cell is which, where it is unknown AND matters ----
     def touched_by(i: int, side: str) -> bool:
-        """Did ``side`` change base member ``i`` (content, presence, place)?"""
+        """Did ``side`` change base member ``i`` (content, tags, id, presence,
+        place)?"""
         if i not in of[side] or i in evidence[side]:
+            return True
+        now = cells[side][of[side][i]]
+        if now.tags != base[i].tags or now.sid != base[i].sid:
             return True
         exact = sorted((k for k in of[side] if k not in evidence[side]), key=lambda k: of[side][k])
         return _lis_len([k for k in exact if k != i]) == _lis_len(exact)
@@ -404,9 +531,17 @@ def merge(
                 for i in open_base:
                     if not open_cells:
                         break
-                    got = ask(Question("identify", i, side=s, candidates=tuple(open_cells)))
-                    if got is None:
-                        return out
+                    q = Question(
+                        "identify",
+                        i,
+                        side=s,
+                        candidates=tuple(open_cells),
+                        mark=base[i].mark,
+                        about=("cell", kind, base[i].content(s)),
+                    )
+                    got = ask(q)
+                    if got is None:  # everything below rests on the answer
+                        return unchanged()
                     if got != "removed":
                         of[s][i] = got
                         open_cells.remove(got)
@@ -414,6 +549,26 @@ def merge(
     members, loose = _members(base, cells, of, twins, claimed, evidence)
 
     recorded = [m for m in members if m.base_idx is not None]
+
+    def mark_of(m: Member) -> object:
+        if m.base_idx is not None:
+            return base[m.base_idx].mark
+        return next(cells[s][m.pos[s]].mark for s in SIDES if m.pos[s] is not None)
+
+    def about(m: Member) -> tuple:
+        if m.sid is not None:
+            return ("id", m.sid)
+        if m.base_idx is not None:
+            return ("cell", m.kind, m.base_body["de"] or m.base_body["en"])
+        return ("new", m.kind, m.body["de"] or m.body["en"])
+
+    def changed(m: Member, side: str) -> bool:
+        """Does ``side`` hold recorded ``m`` with another content, tags or id?"""
+        return (
+            m.body[side] != m.base_body[side]
+            or m.tags[side] != m.base_tags
+            or cells[side][m.pos[side]].sid != base[m.base_idx].sid
+        )
 
     def maybe_moved(m: Member, side: str) -> bool:
         """Could ``side`` have moved ``m``? True when some longest run of
@@ -431,7 +586,7 @@ def merge(
             and x.sid is None
             and x.kind == m.kind
             and x.base_body[side] == m.base_body[side]
-            and (x.pos[side] is None or x.body[side] != x.base_body[side] or maybe_moved(x, side))
+            and (x.pos[side] is None or changed(x, side) or maybe_moved(x, side))
             for x in recorded
         )
 
@@ -455,56 +610,69 @@ def merge(
             for s in SIDES
         }
         for m_de, m_en in zip(only["de"], only["en"], strict=False):
-            got = ask(Question("conflict_copies", m_de.key, inferred=True, twin=m_en.key))
+            got = ask(
+                Question(
+                    "conflict_copies",
+                    m_de.key,
+                    inferred=True,
+                    twin=m_en.key,
+                    mark=mark_of(m_de),
+                    about=about(m_de),
+                )
+            )
             if got is None:
-                return out
-            if got == "de":  # one cell: German's edit stands, the other copy is as recorded
+                m_de.held = m_en.held = "conflict_copies"
+            elif got == "de":  # one cell: German's edit stands, the other copy is as recorded
                 m_en.body["en"] = m_en.base_body["en"]
             elif got == "en":
                 m_de.body["de"] = m_de.base_body["de"]
 
     # -- membership and content, per member ---------------------------------
-    for m in members:
+    def decide(m: Member) -> None:
+        """Settle ``m``, or hold it when its question stays open."""
+
+        def asks(kind: str, inferred: bool = False):
+            got = ask(Question(kind, m.key, inferred, mark=mark_of(m), about=about(m)))
+            if got is None:
+                m.held = kind
+            return got
+
         d, e = m.body["de"], m.body["en"]
         if m.base_idx is None:
             if d is not None and e is not None:
                 m.content = None if m.localized else d
             elif m.localized:
-                if ask(Question("translate_new", m.key)) is None:
-                    return out
+                asks("translate_new")
             else:
                 m.content = d if d is not None else e  # mechanical copy
-            continue
+            return
         if d is None and e is None:
             m.alive = False
-            continue
+            return
         if d is None or e is None:
             gone = "de" if d is None else "en"
             kept = other(gone)
             if m.localized:
-                if ask(Question("remove_localized_side", m.key)) is None:
-                    return out
-                m.alive = False
-                continue
-            edited = m.body[kept] != m.base_body[kept]
+                if asks("remove_localized_side") is not None:
+                    m.alive = False
+                return
+            edited = changed(m, kept)
             # "removed" is only one reading when that half also holds a cell
             # nothing claims: it may be this member, edited. The readings
             # differ exactly when the other half changed the member too.
             unsure = (m.kind in loose[gone] and maybe_moved(m, kept)) or copy_changed(m, kept)
             if not edited and not unsure:
                 m.alive = False  # removed on one half, untouched on the other
-                continue
-            got = ask(Question("remove_vs_edit", m.key, inferred=unsure and not edited))
-            if got is None:
-                return out
+                return
+            got = asks("remove_vs_edit", unsure and not edited)
             if got == "remove":
                 m.alive = False
-            else:
+            elif got is not None:
                 m.content = m.body[kept]
                 m.pos[gone] = None
-            continue
+            return
         if m.localized:
-            continue
+            return
         if d == e:
             m.content = d
         elif d == m.base_body["de"]:
@@ -512,36 +680,87 @@ def merge(
         elif e == m.base_body["en"]:
             m.content = d
         else:
-            got = ask(Question("conflict_shared", m.key, m.inferred))
+            got = asks("conflict_shared", m.inferred)
+            if got is not None:
+                m.content = d if got == "de" else e
+
+    for m in members:
+        if m.held is None:
+            decide(m)
+
+    # -- tags: one more 3-way value merge per member --------------------------
+    for m in members:
+        if m.held is not None or not m.alive:
+            continue
+        d_tags, e_tags = m.tags["de"], m.tags["en"]
+        if d_tags is None or e_tags is None:
+            m.merged_tags = d_tags if d_tags is not None else e_tags
+        elif d_tags == e_tags or e_tags == m.base_tags:
+            m.merged_tags = d_tags
+        elif d_tags == m.base_tags:
+            m.merged_tags = e_tags
+        else:
+            got = ask(Question("conflict_tags", m.key, mark=mark_of(m), about=about(m)))
             if got is None:
-                return out
-            m.content = d if got == "de" else e
+                m.held = "conflict_tags"
+            else:
+                m.merged_tags = d_tags if got == "de" else e_tags
 
-    alive = [m for m in members if m.alive]
-    both = [m for m in alive if m.base_idx is not None and None not in m.pos.values()]
-    floating = [m for m in alive if m not in both]
+    alive = [m for m in members if m.alive]  # a held member counts as it stands
+    known = [m for m in alive if m.base_idx is not None]
+    both = [m for m in known if None not in m.pos.values()]
+    #: cells both halves added: each half has a word on their order, the record has none
+    added = [m for m in alive if m.base_idx is None and None not in m.pos.values()]
 
-    # -- order of recorded members: 3-way merge of pairwise precedence --------
+    # -- order: 3-way merge of pairwise precedence -----------------------------
+    def says(x: Member, y: Member, side: str) -> bool | None:
+        """``side``'s word on "x before y": ``None`` when it lacks one of them."""
+        if x.pos[side] is None or y.pos[side] is None:
+            return None
+        return x.pos[side] < y.pos[side]
+
     groups = _groups(base)
     touched: dict[str, set] = {"de": set(), "en": set()}
-    for a_i, x in enumerate(both):
-        for y in both[a_i + 1 :]:
-            bb = x.base_idx < y.base_idx
+    for a_i, x in enumerate(known):
+        for y in known[a_i + 1 :]:
             for s in SIDES:
-                if (x.pos[s] < y.pos[s]) != bb:
+                if says(x, y, s) not in (None, x.base_idx < y.base_idx):
                     touched[s] |= {groups[x.base_idx], groups[y.base_idx]}
+    #: two cells both halves added, in a different order on each: no record
+    #: says which half changed it
+    clash = any(
+        says(x, y, "de") != says(x, y, "en")
+        for a_i, x in enumerate(added)
+        for y in added[a_i + 1 :]
+    )
 
     def recorded_order(choose: str | None) -> set[tuple[int, int]]:
+        """Which member goes first, per pair of recorded members and per pair
+        of cells both halves added. Unasked, a pair of recorded members has
+        the word of the half that holds both, the changed one if the halves
+        differ, and the record's where no half holds both. After an order
+        answer, the chosen half orders the members both halves hold, and the
+        others are placed like new ones."""
         rel: set[tuple[int, int]] = set()
-        for a_i, x in enumerate(both):
-            for y in both[a_i + 1 :]:
-                db, eb = x.pos["de"] < y.pos["de"], x.pos["en"] < y.pos["en"]
+        pool = known if choose is None else both
+        for a_i, x in enumerate(pool):
+            for y in pool[a_i + 1 :]:
+                was = x.base_idx < y.base_idx
+                de_says, en_says = says(x, y, "de"), says(x, y, "en")
                 if choose is not None:
-                    first = db if choose == "de" else eb
-                elif db == eb:
-                    first = db
+                    first = de_says if choose == "de" else en_says
+                elif de_says is None or en_says is None:  # one half's word, or nobody's
+                    first = de_says if de_says is not None else en_says
+                elif de_says == en_says:
+                    first = de_says
                 else:  # exactly one half changed this pair: take the change
-                    first = db if db != (x.base_idx < y.base_idx) else eb
+                    first = de_says if de_says != was else en_says
+                if first is None:  # no half holds both: they stay as recorded
+                    first = was
+                rel.add((x.key, y.key) if first else (y.key, x.key))
+        for a_i, x in enumerate(added):
+            for y in added[a_i + 1 :]:  # where the halves differ, the order question decides
+                first = says(x, y, choose or "de")
                 rel.add((x.key, y.key) if first else (y.key, x.key))
         return rel
 
@@ -551,10 +770,11 @@ def merge(
     ) -> tuple[set[tuple[int, int]], dict[int, int]]:
         rel: set[tuple[int, int]] = set()
         follows: dict[int, int] = {}
+        placed_by_pairs = known if choose is None else both
         for s in SIDES:
             seq = sorted((m for m in alive if m.pos[s] is not None), key=lambda m: m.pos[s])
             for at, m in enumerate(seq):
-                if m not in floating:
+                if m in placed_by_pairs:
                     continue
                 if choose is not None and s != choose and m.pos[choose] is not None:
                     continue  # the chosen half places it
@@ -574,14 +794,50 @@ def merge(
                 return seq
         return None
 
-    contested = bool(touched["de"] & touched["en"])
+    contested = clash or bool(touched["de"] & touched["en"])
     sequence = None if contested else order(None)
     if sequence is None:
         got = ask(Question("order", None))
-        if got is None:
-            return out
-        sequence = order(got)
-        if sequence is None:  # pragma: no cover - one half's order is acyclic
-            raise AssertionError("no order after an order answer")
-    out.sequence = sequence
+        if got is not None:
+            sequence = order(got)
+            if sequence is None:  # pragma: no cover - one half's order is acyclic
+                raise AssertionError("no order after an order answer")
+    if any(q.kind not in LOCAL_QUESTIONS for q in out.opened):
+        return unchanged()
+    assert sequence is not None
+
+    # -- result: what each half holds, and what is recorded --------------------
+    def cell_for(m: Member, s: str) -> Cell | None:
+        """The cell half ``s`` holds for ``m`` after this pass."""
+        j = m.pos[s]
+        own = cells[s][j] if j is not None else None
+        if m.held is not None:
+            return own
+        if own is not None:
+            if m.localized:
+                return replace(own, tags=m.merged_tags)
+            return replace(own, sid=m.new_sid, body=m.content, tags=m.merged_tags)
+        o = other(s)
+        theirs = cells[o][m.pos[o]]
+        mark = ("copy", theirs.mark)
+        if m.localized:  # the answer to ``translate_new``; the text is not modelled
+            return Cell(theirs.sid, theirs.kind, f"{theirs.body} >{s}", True, mark, m.merged_tags)
+        return Cell(m.new_sid, m.kind, m.content, False, mark, m.merged_tags)
+
+    def entry_for(m: Member) -> BaseMember | None:
+        """What the record holds for ``m`` after this pass."""
+        if m.held is not None:
+            return base[m.base_idx] if m.base_idx is not None else None
+        de, en = (cell_for(m, s) for s in SIDES)
+        assert de is not None and en is not None
+        mark = mark_of(m) if m.base_idx is not None else ("new", mark_of(m))
+        return BaseMember(m.new_sid, m.kind, m.localized, de.body, en.body, mark, m.merged_tags)
+
+    for s in SIDES:
+        out.halves[s] = [c for m in sequence if (c := cell_for(m, s)) is not None]
+    out.record = [r for m in sequence if (r := entry_for(m)) is not None]
+    if out.opened:
+        out.status, out.open = "question", out.opened[0]
+    else:
+        out.sequence = sequence
     return out

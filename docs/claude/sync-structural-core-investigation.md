@@ -27,14 +27,15 @@ a cell without a `slide_id` gets its identity from its position,
 about (pools, spans, order scopes, placement rows, suspensions, freezes,
 deferrals) exists to recover what that choice throws away.
 
-A replacement for this part of the engine fits in about 450 lines of Python
+A replacement for this part of the engine fits in about 800 lines of Python
 (`scripts/sync_model.py`). On the repo's own sync probe (67,871 deck shapes) master converges on 50,031 cases; the
 prototype converges on all of them, with a fifth of the questions (§2). Its
 three basic laws hold on every small input (§5), and they do not depend on the
 pairing heuristics, which is what makes a proof feasible (§6).
 
 The evidence has limits, listed in §7. The main ones: the prototype works on an
-abstract view of a deck, not on files, and it does not model partial progress.
+abstract view of a deck, not on files, and a pass with open questions makes
+progress only around questions about id'd cells (§4.6).
 
 The id-keyed half of the engine (translation rows, the wire contract, the
 ledger file, the gates) is not the problem and stays.
@@ -79,8 +80,8 @@ Three small ones (`S` slide, `a b e` id'd voiceovers, `c k` un-id'd cells):
 ### 2.3 Questions
 
 On the 50,031 cases both converge on, master answers 45,142 questions, 41,204 of
-them `pool_placement_divergence`. The prototype answers 9,842: 4,712 identity
-questions (§4.5), 2,533 order questions, and the content and removal questions
+them `pool_placement_divergence`. The prototype answers 9,890: 4,712 identity
+questions (§4.5), 2,581 order questions, and the content and removal questions
 it shares with master.
 
 ### 2.4 Without the identity question
@@ -266,7 +267,11 @@ For one half, in this order:
 2. **By exact content,** first in order (a longest common subsequence), then
    moved (the same content among what is left, in occurrence order).
    Byte-identical cells are interchangeable, so occurrence order is the only
-   pairing they admit.
+   pairing they admit. Where several subsequences are equally long, the one
+   taken leaves an unmatched recorded cell beside an unmatched current cell of
+   its kind (a replacement in place) and keeps the earliest of several
+   identical recorded cells. Without that preference the same two files could
+   read differently from one pass to the next (§4.8, item 8).
 3. **New on both halves.** Cells unmatched on both halves with the same id or
    the same content are one new member.
 4. **Replaced in place** (inference). Between two neighbours that kept their
@@ -301,23 +306,29 @@ content keeps today's per-id classification; the prototype does not model it.
 
 ### 4.4 Merge order, per pair of cells
 
-For every two recorded cells present on both halves, compare "x before y" in the
-record, in German and in English. If the halves agree, take that. Otherwise
-exactly one half changed it: take the change.
+For every two recorded cells, compare "x before y" in the record, in German and
+in English. If the halves agree, take that. Otherwise exactly one half changed
+it: take the change. A half that lacks one of the two has no word on the pair:
+the other half's word stands, and if no half holds both, the recorded order
+does.
 
 - If the result is a consistent order, that is the merged order. Independent
   moves on the two halves merge without a rule for moves.
 - If it is cyclic, the halves reordered the same cells incompatibly: one order
   question, answered `de` or `en`.
+- Two cells that both halves added have no recorded order. If the halves hold
+  them in a different order, nothing says which half changed it: the same
+  order question.
 - **Policy, not mechanism:** the prototype also asks when both halves changed
   order within the same slide, even where the changes are compatible. That is
   today's doctrine ("decision when both moved") and what the probe's oracle
   expects. Slides are used only to decide how wide this question is.
 
-A cell that only one half places (a new cell, or one kept after a removal
-question) goes directly after its predecessor on that half and before its
-successor. If the other half moved one of the two, it goes after the
-predecessor. Two unrelated additions at the same place: German first.
+A new cell that only one half places goes directly after its predecessor on
+that half and before its successor. If the other half moved one of the two, it
+goes after the predecessor. Two unrelated additions at the same place: German
+first. After an order answer, the chosen half orders the recorded cells both
+halves hold, and a recorded cell only one half holds is placed like a new one.
 
 ### 4.5 The one new question: which cell is which
 
@@ -363,9 +374,57 @@ structural verify becomes an assertion about the renderer rather than a judge
 of the plan.
 
 Recording is the merge's own output: the merged sequence and the fingerprints
-of the members that were resolved. A member with an open question keeps its
-recorded state, and both halves keep their own cell. **This part is designed and
-not prototyped**: the prototype stops at the first unanswered question.
+of the members that were resolved.
+
+**A pass with open questions** (prototyped 2026-11-10, step 2 of §9). The first
+draft of this section said: a member with an open question keeps its recorded
+state, both halves keep their own cell, and the rest goes on. Checked on every
+small input, that holds for one class of question only. The rule the prototype
+ends with:
+
+- **A question about an id'd cell holds that cell only** (`translate_new`,
+  `remove_localized_side`). Each half keeps its own cell, the record keeps its
+  entry, and everything else is applied and recorded around it. An id'd cell's
+  identity rests on no inference, and the laws below hold with it held.
+- **Any other open question holds the whole part**: nothing is written and
+  nothing is recorded. That covers the identity question, the order question,
+  and every question about an un-id'd cell.
+
+The reason for the second half is the finding of this step. Whether a question
+about un-id'd cells is asked at all depends on the cells around it: "possibly
+moved" is read off the recorded order of the neighbours, a removal is unsure
+because of another byte-identical copy, a new cell is placed by its neighbour.
+Applying any part of a pass while such a question is open changes what the next
+pass asks. §4.8 (items 6 to 8) has what was tried first.
+
+`scripts/sync_model_passes.py` checks five laws with questions left open. A
+judge answers each question by a fixed rule, and gives the same answer when the
+question comes back. The direct run answers everything in one pass; every
+other run leaves a subset open in its first pass and answers the rest later.
+
+| law | what it rules out |
+|---|---|
+| complete: with every question answered, one pass ends it | a pass that leaves work for the next |
+| fixpoint: after a pass with open questions, a pass that answers nothing changes nothing | the engine reading its own write as an author edit (#885, #1071, #1137, #1179) |
+| held: what an open question is about stays as it was, on both halves and in the record | recording that banks more than was decided (#1181, #1187) |
+| confluent: answering later gives the same halves as answering at once | a result that depends on the order of the answers |
+| no new ask: a later pass asks nothing the direct run was not asked | questions that appear because of a partial apply |
+
+Checked on every recorded deck of up to 3 cells against every pair of halves of
+up to 3 cells, where a half may also add or drop an id'd cell: 1,016,127 cases,
+each with three judges and with every subset of its questions left open first
+(by kind where there are more than four). No law is violated. Of the
+12,203,482 passes that left a question open, 3,534,626 (29%) still made
+progress, which is what the first half of the rule buys. In 63,146 cases the
+two routes end with the same cells and the recorded ones in the same order,
+and cells the halves added sit in another order; §5 has the same exception.
+
+Two limits. The unit that is held is "the part", which in the prototype is
+everything given to one merge; how small a part can be in a real deck (a slide
+group, when no cell crosses its border) is not modelled. And an identity answer
+is not recorded on its own: it lasts only when the pass that got it completes.
+Recording it would need the ledger to say "this cell is that one", which is
+what a `slide_id` does.
 
 ### 4.7 What it would replace
 
@@ -402,6 +461,78 @@ Recorded so the next attempt does not start from them again.
    what similarity would guess at.
 5. **Acting on a guess among byte-identical cells.** Found by the exhaustive
    check, not by the probe (§5).
+6. **Holding back only what an open question names** (the first design of
+   §4.6: the member for a question about a member, the order for the order
+   question, the inferred cells for an identity question). 60,036 of 306,451
+   small cases broke a law of §4.6. Four narrower repairs brought that to
+   6,714 and no further: an identity answer deferred when its cell was held
+   after all, byte-identical copies settled together, nothing placed while the
+   order was open, identical cells matched in place. Each repair closed one
+   way in which a partial apply changed the next pass's questions, and the
+   check kept finding another. The rule of §4.6 has no such case.
+7. **Recording a cell both halves added while the order question was open.**
+   Its place in the record settled part of the open order: the next pass saw
+   one half's order as recorded and took the other half's as a change.
+8. **Breaking ties among byte-identical cells by the order of the walk.** The
+   exact matcher picked the earlier or the later of two identical cells
+   depending on unrelated cells nearby, so the same two files read differently
+   after a pass. It now prefers the reading with a replacement in place, then
+   the earliest recorded copy. The probe score and question counts are the
+   same under both.
+9. **Ordering only the recorded cells both halves hold.** A recorded cell that
+   one half had removed and an answer kept was placed by its neighbour, like a
+   new cell, and two such cells could end in the reverse of their recorded
+   order although no half had reordered them. Whether they did depended on
+   whether an id'd cell beside them was still waiting for its answer, which
+   the check across passes found (296 of 1,016,127 cases). Every pair of
+   recorded cells now has a word (§4.4). On the probe that asks 48 more order
+   questions (2,581 against 2,533 on the cases both engines converge on); its
+   score is unchanged.
+10. **Noticing a clash between two cells both halves added only through their
+    neighbours.** Each was placed after its predecessor on its half, and two
+    opposite placements made a cycle, hence a question. A third cell between
+    them on one half broke the cycle, so whether the question was asked
+    depended on whether that cell was still waiting for an answer (2,628 of
+    1,016,127 cases across passes). Such a pair is now compared directly
+    (§4.4). A first version compared every such cell with every recorded cell
+    as well; that asked 342 more order questions on the probe for no case it
+    fixed, and was narrowed to pairs of added cells.
+
+### 4.9 Tags, slide-hood, and an id gained on one half
+
+Added to the prototype on 2026-11-10 (step 2 of §9), because §8 had claimed
+three open issues "by construction".
+
+- **Tags are one more aspect of a cell**, merged like shared content: 3-way,
+  per member. One half changed them: take the change. Both changed them
+  differently: a question (`conflict_tags`), which holds the part, since a tag
+  can start a slide.
+- **Tags play no part in which cell is which.** A cell is matched by id or by
+  content, so a retagged cell is still an exact match and needs no inference.
+- **Slide-hood is a tag.** An un-id'd cell promoted to `subslide` is a cell
+  whose tags changed. No key embeds the slide, so nothing about the cells
+  under it changes. The slide a cell sits under is still only used to decide
+  how wide an order question is (§4.4).
+- **A recorded cell that gains a `slide_id` on one half is matched by its
+  content**, and the other half gains the id. A cell whose id the record does
+  not know is compared by content first; only if no recorded cell has that
+  content is it new.
+
+`scripts/sync_model_laws.py --tags` repeats the single-pass laws of §5 with
+tagged cells, promotions and stamped ids: 256 recorded decks, 901,872
+one-sided cases and 42,372 where both halves changed, without a violation.
+The issues' own shapes run as tests in
+`tests/scripts/test_sync_model_laws.py`: #1216 (a
+shared cell promoted without an id), the three shapes of #1092 (promoted with
+an id, cells inserted before a promoted cell, a new anchor with new cells
+under it) and #1187 (a move past a cell retagged in the same edit). Each is an
+edit of one half, so the model asks nothing and both halves end as that half.
+One more test has the other half edit the promoted cell: the edit, the tag
+and the id all land, without a question.
+
+Not modelled: both halves stamping different ids on one cell (German's is
+taken), and a cell that is stamped and edited in the same pass (it reads as
+removed plus new).
 
 ---
 
@@ -418,24 +549,29 @@ answered.
 |---|---:|---:|
 | Nothing changed: no question, nothing changes | 191 | 0 |
 | Only one half changed: no question, and the result is exactly that half | 212,612 | 0 |
-| Swapping the halves gives the same content | 492,567 | 0 |
-| No merge that asked nothing holds more copies of a cell than a half holds, or fewer than both hold | 492,567 | 0 |
-| No merge that asked nothing drops an addition | 492,567 | 0 |
+| Swapping the halves gives the same content | 475,959 | 0 |
+| No merge that asked nothing holds more copies of a cell than a half holds, or fewer than both hold | 475,959 | 0 |
+| No merge that asked nothing drops an addition | 475,959 | 0 |
+
+The last three are counted over the merges that asked nothing, 475,959 of
+1,134,567 where both halves changed.
 
 One qualification:
 
-- **Order under swap.** In 128,444 of the 492,567 merges the swapped result has
+- **Order under swap.** In 122,868 of the 475,959 merges the swapped result has
   the same cells in a different order. The model breaks ties between unrelated
   additions German first, which explains such differences; they were not
   classified one by one.
 
-The numbers are those after decision D3 (§9). Before it, 500,395 merges asked
-nothing, and in 7,828 of them the result held fewer copies of a content than
-each half: the recorded deck held two byte-identical cells, each half had
-edited a different one, and the model merged both edits. The model now asks in
-exactly those 7,828 (`conflict_copies`, §4.5), as the engine's conservation
-gate (#1141) withholds that shape. The probe never produces it: the model's
-score and its question counts on the probe are unchanged.
+How the count of question-free merges came about. In the first version 500,395
+merges asked nothing, and in 7,828 of them the result held fewer copies of a
+content than each half: the recorded deck held two byte-identical cells, each
+half had edited a different one, and the model merged both edits. Since
+decision D3 (§9) the model asks in exactly those 7,828 (`conflict_copies`,
+§4.5), as the engine's conservation gate (#1141) withholds that shape. The
+probe never produces it. The changes of step 2 (§4.8, items 8 to 10) moved the
+count again, mostly because two cells that both halves added in a different
+order are now a question.
 
 The exhaustive check found two defects in the prototype that the probe had not:
 the identical-cells removal case of §4.5, and the case above. That is the
@@ -492,15 +628,17 @@ list edits.
 
 ## 7. Limits of the evidence
 
-- **The prototype is abstract.** A cell is an id or none, a kind and a content.
-  There is no text layer, no tags, no `lang`, no companion files, no id
-  stamping, no fork or unify. The probe exercises none of these either: it
-  reorders, inserts, deletes and edits.
+- **The prototype is abstract.** A cell is an id or none, a kind, a content
+  and its tags. There is no text layer, no `lang`, no companion files, no fork
+  or unify, and id stamping only as far as §4.9 goes. The probe exercises none
+  of these: it reorders, inserts, deletes and edits.
 - **The identity question is answered by a perfect reader.** The harness knows
   the right cell from the names the case was built from. The probe's other
   policies have the same character, but an agent can misread.
-- **Partial progress is not modelled.** The prototype stops at the first
-  unanswered question (§4.6).
+- **Partial progress is modelled for whole parts only.** A pass goes on around
+  open questions about id'd cells; any other open question holds everything
+  given to the merge (§4.6). Whether a deck can be cut into smaller parts is
+  open.
 - **The probe was built around the current engine's failures.** A new core will
   have blind spots of its own and needs its own adversarial review. §5 is a
   start: it found two cases the probe could not.
@@ -522,18 +660,21 @@ shape, two id'd voiceovers swapped and a new slide inserted after them, was
 checked directly and merges with the one `translate_new`); both halves moving
 and editing un-id'd cells (#1144's residual, now a question).
 
-**Expected by construction, not measured** (the prototype has no tags):
+**Run on the issue's own shape, in the prototype** (§4.9,
+`tests/scripts/test_sync_model_laws.py`): #1092, #1187 and #1216. A slide-hood
+change re-keys the cells under it in the engine. Here no key embeds the slide,
+and an un-id'd cell that becomes a `subslide` is a cell whose tags changed.
 
-- #1092, #1187, #1216: a slide-hood change re-keys the cells under it. No key
-  embeds the slide, so an un-id'd cell that becomes a `subslide` is a content
-  change of one cell.
+**Expected by construction, not measured:**
+
 - #1185: a new un-id'd cell under a new slide is a plain addition.
 - The frequency of "give it a `slide_id`" as the manual exit, since an un-id'd
   cell no longer needs an id to be addressed.
 
-**Addressed by §4.6 if built as designed, not prototyped:** the engine reading
-its own write (#885, #1071, #1137, #1179), and recording that banks more than
-was decided (#1181, #1187).
+**Addressed by §4.6, prototyped and checked on every small input, not on the
+issues' own decks:** the engine reading its own write (#885, #1071, #1137,
+#1179) is the fixpoint law, and recording that banks more than was decided
+(#1181, #1187) is the held law.
 
 **Not addressed:** #1180 (`vo_anchor` is not a synced aspect), #1182, #1188,
 #1189, #1171, #1191, #1192 (answer contract and report), #1183 and #1190
@@ -558,7 +699,7 @@ document by step 2, which was not in it.
 2. **Extend the prototype before touching the engine**: partial progress
    (§4.6), and tags with slide-hood. These carry the claims §8 marks "by
    construction" or "if built as designed", and testing them costs no engine
-   risk.
+   risk. Done: partial progress (§4.6), tags and slide-hood (§4.9).
 3. **Record the cell sequence in the ledger,** additively, beside the current
    entries.
 4. **Run the new core in shadow** beside the differ: on the probe, on the law
@@ -576,7 +717,7 @@ Decisions:
   both halves reordered within one slide (what the prototype does). The
   switch-over then changes the mechanism and not the policy, and the probe's
   oracle stays valid. Narrowing it to incompatible reorders can be measured
-  later; it would save at most the 2,533 order questions of §2.3.
+  later; it would save at most the 2,581 order questions of §2.3.
 - **D3. Identical recorded cells where each half changed a different copy.**
   Decided 2026-11-10: ask. The prototype does (§4.5, `conflict_copies`), and
   the conservation law of §5 now holds without an exception.
@@ -597,6 +738,7 @@ python scripts/sync_model_probe.py run MODEL.json              # the prototype
 python scripts/sync_model_probe.py run NOID.json --no-identify # without the identity question
 python scripts/sync_model_probe.py compare ENGINE.json MODEL.json
 python scripts/sync_model_laws.py                              # the laws, about 4 minutes
+python scripts/sync_model_passes.py --base 2 --half 3           # passes with open questions (§4.6)
 python scripts/sync_laws.py run LAWS.json --scope full          # the laws on the engine, 28,257 cases
 python scripts/sync_laws.py run LAWS_MODEL.json --scope full --model   # and on the prototype
 ```
@@ -610,5 +752,6 @@ run. The result files are not committed.
 | `scripts/sync_model.py` | the prototype core |
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |
+| `scripts/sync_model_passes.py` | the laws across passes with questions left open (§4.6) |
 | `tests/slides/sync_laws.py`, `scripts/sync_laws.py` | the laws on the engine (§2.5), with `tests/slides/test_sync_laws.py` as the ratchet |
 | `docs/claude/analysis/sync-structural-core/issue-classification.md` | the issue classification behind §3.5 |
