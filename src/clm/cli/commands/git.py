@@ -873,7 +873,7 @@ Thumbs.db
             # banner promised no changes (#686 review: this wrote for real).
             click.echo(f"  [dry-run] Would create {gitignore_path}")
         else:
-            gitignore_path.write_text(gitignore_content)
+            gitignore_path.write_text(gitignore_content, encoding="utf-8", newline="\n")
 
     # Initialize repo
     result = run_git(repo.path, "init")

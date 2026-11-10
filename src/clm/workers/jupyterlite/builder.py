@@ -185,6 +185,7 @@ def _normalize_contents_paths(site_dir: Path) -> int:
             all_json.write_text(
                 json.dumps(data, indent=2, sort_keys=True),
                 encoding="utf-8",
+                newline="\n",
             )
             rewritten += 1
     if rewritten:
@@ -258,7 +259,7 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 '''
-    (output_dir / "launch.py").write_text(launcher_text, encoding="utf-8")
+    (output_dir / "launch.py").write_text(launcher_text, encoding="utf-8", newline="\n")
 
 
 def _emit_readme(output_dir: Path, *, launcher: str) -> None:
@@ -314,7 +315,7 @@ The entire directory is self-contained. Copy it to a USB stick, a network share,
 or any static web server. The launcher or any HTTP server that sets the correct
 MIME type for `.wasm` files (`application/wasm`) will work.
 """
-    (output_dir / "README-offline.md").write_text(readme_text, encoding="utf-8")
+    (output_dir / "README-offline.md").write_text(readme_text, encoding="utf-8", newline="\n")
 
 
 def build_site(args: BuildArgs) -> BuildResult:
@@ -370,6 +371,7 @@ def build_site(args: BuildArgs) -> BuildResult:
             sort_keys=True,
         ),
         encoding="utf-8",
+        newline="\n",
     )
 
     return BuildResult(

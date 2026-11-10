@@ -62,7 +62,7 @@ class Ledger:
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         body = "\n".join(self.released)
-        path.write_text(_HEADER + body + ("\n" if body else ""), encoding="utf-8")
+        path.write_text(_HEADER + body + ("\n" if body else ""), encoding="utf-8", newline="\n")
 
     @property
     def released_set(self) -> frozenset[str]:

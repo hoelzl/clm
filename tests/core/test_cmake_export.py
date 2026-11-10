@@ -270,6 +270,25 @@ class TestWriteCmakeProjects:
         for path in module_files:
             assert path.read_text(encoding="utf-8").count("add_executable(") == 2
 
+    def test_writes_lf_line_endings(self, tmp_path):
+        """CMake files are LF on every host, like every other exported file.
+
+        Without ``newline="\\n"``, text mode on Windows turned each ``\\n``
+        into ``\\r\\n``. The output repos store LF (``eol=lf``), so every
+        rebuild showed ~30 content-identical ``CMakeLists.txt`` files as
+        modified. The check only bites on Windows, the primary dev platform.
+        """
+        course = _make_cpp_course(tmp_path)
+        _materialize_code_outputs(course, course.output_targets[0])
+
+        written = write_cmake_projects(course)
+
+        assert written
+        for path in written:
+            data = path.read_bytes()
+            assert b"\n" in data
+            assert b"\r" not in data, f"CRLF in {path}"
+
     def test_lists_only_existing_outputs(self, tmp_path):
         course = _make_cpp_course(tmp_path)
         target = course.output_targets[0]
