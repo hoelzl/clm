@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-10
-review-by: 2027-05-10
+updated: 2026-11-11
+review-by: 2027-05-11
 ---
 
 # State: sync structural core (can pairing and order be fixed at the root?)
@@ -59,8 +59,14 @@ This file keeps only the conversational position.
 - PR #1225 (S23, merged 2026-11-10): step 2. The prototype's pass with open
   questions, tags, slide-hood and an id gained on one half, with a check
   across passes (`scripts/sync_model_passes.py`).
+- PR #1226 (S23, merged 2026-11-10): the first save of S23.
 
-## What the two steps found (the owner has not seen these yet)
+## What the two steps found (reported to the owner, not answered yet)
+
+The agent's closing message of S23 (2026-11-10, in the transcript) reported
+these, with the two open items below as "Open, for you". The owner's next
+input, a day later, was a session rename and the request for this save; the
+owner has said nothing on the findings or on step 3.
 
 - **The engine violates the one-sided law far more often than the probe
   suggested.** On every small deck, with every question refused, the law holds
@@ -92,8 +98,10 @@ This file keeps only the conversational position.
   slide groups that do not affect each other is not modelled.
 - **D5** (Lean), no decision needed before the core is in production.
 
-The next conversational boundary is the owner's reading of the two steps'
-findings and the word on step 3.
+The next conversational boundary is the owner's answer to the closing report:
+the word on step 3 (with D4), and whether the size of a "part" should be
+looked at first. A resuming agent need not present the findings again in
+full; they are in the transcript's last agent block and in the doc.
 
 Also open, unrelated to sync: `scripts/clean_transcript.py` cleans
 `api-request-blob` rows as dialogue (#1219). Until it is fixed, a save of a
@@ -122,6 +130,10 @@ Claude Code session needs the staging step the register describes under S20.
 - S23: the work after the owner's one message is solo. The transcript has its
   progress notes; the reasoning is in the doc's §4.6, §4.8 (items 6 to 10) and
   §4.9, and in the two PR descriptions.
+- S23, after the closing report: the session's context was compacted once (the
+  harness's summary is not dialogue and is absent), and the owner renamed the
+  session "Sync engine improvements" before asking for the second save. The
+  rename is a local command and leaves no line in the transcript.
 
 ## Agent corrections recorded in the transcripts, or made on the way
 
