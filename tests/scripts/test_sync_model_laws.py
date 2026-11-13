@@ -255,3 +255,63 @@ def test_both_halves_retag_a_cell_differently() -> None:
     assert [q.kind for q in out.opened] == ["conflict_tags"]
     assert "conflict_tags" not in sync_model.LOCAL_QUESTIONS
     assert _shape(out.halves["de"]) == [("S0", ()), ("x = 1", ("keep",))]
+
+
+# ---------------------------------------------------------------------------
+# Fork and unify: a cell that changes between shared and per-language
+# ---------------------------------------------------------------------------
+
+
+def _cell(sid, body: str, localized: bool):
+    return sync_model.Cell(sid, "code", body, localized)
+
+
+def _fork_case(german_localized: bool, english_localized: bool, recorded_localized: bool = False):
+    body = {"de": "plot()  # Achse", "en": "plot()  # axis"}
+    shared = "plot()"
+    base = [
+        sync_model.BaseMember(
+            "fit",
+            "code",
+            recorded_localized,
+            body["de"] if recorded_localized else shared,
+            body["en"] if recorded_localized else shared,
+        )
+    ]
+
+    def half(lang: str, localized: bool):
+        return [_cell("fit", body[lang] if localized else shared, localized)]
+
+    return base, half("de", german_localized), half("en", english_localized)
+
+
+def test_a_fork_on_one_half_is_a_question_that_holds_the_part() -> None:
+    """Found by the shadow on real history (the doc's §2.6): German turns a
+    shared cell into its own language. Copying it would put German text in the
+    English file; the English variant has to be written, which is a question."""
+    base, de, en = _fork_case(True, False)
+    out = sync_model.merge(base, de, en, lambda _q: None)
+    assert [q.kind for q in out.opened] == ["fork"]
+    assert out.halves == {"de": de, "en": en} and out.record == base
+    answered = sync_model.merge(base, de, en, lambda q: "body" if q.kind == "fork" else None)
+    assert not answered.opened
+    assert answered.halves["de"] == de
+    english = answered.halves["en"][0]
+    assert english.localized and english.body != de[0].body and english.sid == "fit"
+
+
+def test_a_fork_on_both_halves_needs_no_question() -> None:
+    base, de, en = _fork_case(True, True)
+    out = sync_model.merge(base, de, en, lambda _q: None)
+    assert not out.opened and out.halves == {"de": de, "en": en}
+    assert out.record[0].localized
+
+
+def test_a_unify_on_one_half_is_a_question_and_takes_that_half() -> None:
+    base, de, en = _fork_case(False, True, recorded_localized=True)
+    out = sync_model.merge(base, de, en, lambda _q: None)
+    assert [q.kind for q in out.opened] == ["unify"]
+    answered = sync_model.merge(base, de, en, lambda q: "accept" if q.kind == "unify" else None)
+    assert not answered.opened
+    assert answered.halves["de"] == answered.halves["en"] == de
+    assert not answered.record[0].localized

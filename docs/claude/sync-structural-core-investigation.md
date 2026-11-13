@@ -2,9 +2,10 @@
 
 **Status**: Investigation, complete. The maintainer decided D1 to D3 on
 2026-11-10 (§9): pursue the proposal in §4 in the order §9 gives, with a
-go/no-go before the engine is switched over. Step 1 has landed (§2.5). D4 and
-D5 are open.
-**Date**: 2026-11-10
+go/no-go before the engine is switched over. On 2026-11-13 the maintainer
+moved the shadow run ahead of the ledger change. Steps 1 to 3 have landed
+(§2.5, §4.6, §4.9, §2.6). D4 and D5 are open.
+**Date**: 2026-11-10, shadow run added 2026-11-13
 **Author**: Claude (Fable 5.2), at the maintainer's request
 **Measured against**: master `2e011286` (clm 1.38.0)
 **Question**: The sync engine works reasonably well, but agents still hit
@@ -140,6 +141,98 @@ The cases with at most 3 cells per half are a ratchet in CI
 (`tests/slides/test_sync_laws.py`, 4,767 cases, 2,658 baseline entries); see
 "Sync laws" in `docs/developer-guide/testing.md`. The prototype's column is
 asserted on the same cases by `tests/scripts/test_sync_model_laws.py`.
+
+### 2.6 The shadow on real history (step 3, added 2026-11-13)
+
+The probe and the law cases are generated shapes. `scripts/sync_shadow.py`
+replays what authors actually did. In a course repository's first-parent
+history it takes each deck's committed states in which both halves are in
+sync: the bundle parses with no refusal and no observation, every member has
+both sides, the halves hold each part's cells in one order, and tags agree. It
+then replays each change from one such state `B` to the next `N` as an edit of
+one half: `N`'s German half (deck and companion) beside `B`'s English half, and
+the other way round. `N` is the oracle. A sync that ends must leave the leading
+half as it was and turn the other half into `N`'s. The text of localized cells
+is not compared, because a translator writes it.
+
+Both sides get the same judge. Translations are answered from `N` (a perfect
+translator), including the one a fork needs (a shared cell the leading half
+turned into its own language). A localized cell the leading half removed is
+removed, and a cell it made shared again takes its content. Every other question
+is refused, as in §2.5. The engine records `B` and runs `report` and `apply` up to
+six passes. The prototype gets real cells through an adapter: a cell's id, its
+`cell_type` as the kind, its tags, and every other byte as the content. It
+merges the deck and the voiceover companion as two parts.
+
+| | PythonCourses | CppCourses |
+|---|---:|---:|
+| committed deck states read / in sync | 5,215 / 3,307 | 2,362 / 2,072 |
+| changes between in-sync states | 2,076 | 1,372 |
+| one-sided replays | 3,849 | 2,734 |
+| **prototype ends as the author did** | **3,849** | **2,734** |
+| **engine ends as the author did** | **3,577** | **2,279** |
+| engine asks a question the judge refuses | 150 | 162 |
+| engine stalls on `verify_cold` (an un-id'd cell added) | 74 | 283 |
+| engine livelocks | 33 | 8 |
+| engine ends "clean" with companion narration out of order (#1118) | 15 | 0 |
+| engine ends and also completes a pending id stamp on the leading half | 0 | 2 |
+
+The questions the engine asks on a one-sided edit are `stamp_vs_new` (an id
+stamped on one half), `remove_vs_split` and `remove_vs_edit` (after a removed
+slide), `conflict_owner` (a re-homed voiceover), `pool_placement_divergence`,
+`order_decision`, `verify_translation` and `conflict_tags`. The prototype asks
+none of these on any replay. What both had answered by the judge is
+translation and removal of localized cells: the prototype 5,216 + 5,266
+`translate_new`, 130 `fork` and 6 `unify`. The engine has 5,130 + 5,359
+`translate_new` and 237 `fork_pending_twin`. It also has 22,534 `translate_edit`
+answers for localized text, which the prototype leaves to a text layer it does
+not have.
+
+What the shadow found in the prototype, fixed before the numbers above:
+
+- **Forks were not modelled.** A shared cell that one half turned into its own
+  language (`lang=` added) was merged as shared content, so the German variant
+  was copied into the English file without a word. On the first run that was
+  18 replays, all of them silent. A fork on one half is now a question
+  (`fork`), and so is its reverse (`unify`). Both hold the part, the
+  conservative rule of §4.6, because the checks across passes do not generate
+  forks yet. A fork on both halves needs no question.
+- **The identity question and the inferences were written for the probe's two
+  kinds** (`code`, `md`). A real deck's un-id'd markdown cells are `markdown`,
+  so the prototype would never have asked about them. The kinds now come from
+  the cells.
+
+The probe, both law checks and the check across passes give the same numbers
+as before both changes.
+
+Limits of this shadow:
+
+- **One half leads.** Each replay hands one half's edit to the sync. An author
+  who edited both halves before syncing is not replayed as such, and the
+  two-sided cases stay with the probe and the laws.
+- **Cells that change part.** 42 PythonCourses replays (21 changes) move 193
+  id'd cells between a deck and its companion. The prototype merges each part alone, so such a cell reads as
+  removed from one part and new in the other: it matches `N`, but only
+  because the judge's translator supplies the follower's text again. The
+  engine treats it as one member. `clm voiceover extract` and `inline` work on
+  both halves at once, so a one-sided move is rarer in practice than here, but
+  the switch-over has to merge across parts.
+- **Not compared:** the preamble, the order of a cell's tags, and the text of
+  localized cells.
+- **States out of sync are skipped.** Most of them are parser refusals
+  (PythonCourses: 1,291 `duplicate_id`, 335 `idless_localized`, 121
+  `idless_anchor`; CppCourses: 164 `duplicate_id`). Their causes were not
+  examined.
+
+Four defects of the shadow itself were found and fixed before these numbers.
+Three had at first looked like engine failures, and the fourth hid most of
+CppCourses' history. A new companion is
+written into the `voiceover/` subdirectory, so the result has to be read the way
+sync reads it. The title macro's member key is `id:title` without a `slide_id`.
+A merge commit lists its files only with `-m --first-parent`. And the probe's
+`apply` helper passes `#` to the verify gate, which fails every C++ deck (the
+CLI passes the deck's own token). `scripts/sync_shadow.py` has the corrected
+versions.
 
 ---
 
@@ -535,6 +628,15 @@ Not modelled: both halves stamping different ids on one cell (German's is
 taken), and a cell that is stamped and edited in the same pass (it reads as
 removed plus new).
 
+**Fork and unify** (added 2026-11-13, found by the shadow, §2.6). A recorded
+shared cell that one half turned into its own language is a question
+(`fork`): answered, the other half gets its own variant. A recorded localized
+cell that one half made shared is a question too (`unify`): answered, both
+halves take that half's content. Where both halves did the same, nothing is
+asked. Both questions hold the part, because `scripts/sync_model_passes.py`
+does not generate them, so it cannot show that a narrower hold is safe. Tests:
+`tests/scripts/test_sync_model_laws.py`.
+
 ---
 
 ## 5. Laws, and what was checked
@@ -630,9 +732,12 @@ list edits.
 ## 7. Limits of the evidence
 
 - **The prototype is abstract.** A cell is an id or none, a kind, a content
-  and its tags. There is no text layer, no `lang`, no companion files, no fork
-  or unify, and id stamping only as far as §4.9 goes. The probe exercises none
-  of these: it reorders, inserts, deletes and edits.
+  and its tags. There is no text layer: it decides which cell goes where, not
+  what a translation says, and it renders cells, not files. The probe
+  exercises none of `lang`, companions, forks or real ids; the shadow on real
+  history does (§2.6), as one-sided edits only, and found two gaps that are
+  now closed and one that is open (cells that move between a deck and its
+  companion).
 - **The identity question is answered by a perfect reader.** The harness knows
   the right cell from the names the case was built from. The probe's other
   policies have the same character, but an agent can misread.
@@ -661,6 +766,11 @@ shape, two id'd voiceovers swapped and a new slide inserted after them, was
 checked directly and merges with the one `translate_new`); both halves moving
 and editing un-id'd cells (#1144's residual, now a question).
 
+**Measured on real history** (§2.6): #1118 (companion order). The prototype
+merges a voiceover companion as one more sequence. On 15 PythonCourses replays
+the engine ended "clean" with the following half's narration in the old order,
+and the prototype ended as the author did.
+
 **Run on the issue's own shape, in the prototype** (§4.9,
 `tests/scripts/test_sync_model_laws.py`): #1092, #1187 and #1216. A slide-hood
 change re-keys the cells under it in the engine. Here no key embeds the slide,
@@ -680,8 +790,7 @@ issues' own decks:** the engine reading its own write (#885, #1071, #1137,
 **Not addressed:** #1180 (`vo_anchor` is not a synced aspect), #1182, #1188,
 #1189, #1171, #1191, #1192 (answer contract and report), #1183 and #1190
 (verify and `for_slide`), #1186 (stamping across a fork in flight), #1102
-(fingerprint definition), #1117 (cross-deck move). #1118 (companion order) is
-one more sequence to merge, not modelled. #1180 points at a second, smaller
+(fingerprint definition), #1117 (cross-deck move). #1180 points at a second, smaller
 design gap: header attributes are merged by specific rows (tags, owner, `lang`,
 id) and anything else falls through, where design §6.3 intended one record
 compared field by field.
@@ -690,9 +799,20 @@ compared field by field.
 
 ## 9. The path, and decisions
 
-Each step is useful on its own and can be stopped after. The order is the one
-the maintainer agreed to on 2026-11-10; it differs from the first draft of this
-document by step 2, which was not in it.
+Each step is useful on its own and can be stopped after. The maintainer agreed
+to the order on 2026-11-10. It differs from the first draft of this document by
+step 2, which was not in it. On 2026-11-13 the maintainer moved the shadow run
+(now step 3) ahead of the ledger change (now step 4), for these reasons:
+
+- The shadow does not need the ledger change. The probe and the law cases have
+  their base deck, and on real history the base is the last commit in which
+  both halves agreed.
+- Recorded first, the sequence would be a field in every committed course
+  ledger that nothing reads until step 5: PythonCourses 575 ledgers (33.8 MB),
+  CppCourses 340. It would show in every ledger diff during the shadow period,
+  and after a no-go it would have to be removed again.
+- Its format would also be fixed before the shadow showed what the core needs
+  from the record.
 
 1. **Laws as tests against the current engine.** Done (§2.5):
    `tests/slides/test_sync_laws.py` is a ratchet in CI, and
@@ -701,14 +821,16 @@ document by step 2, which was not in it.
    (§4.6), and tags with slide-hood. These carry the claims §8 marks "by
    construction" or "if built as designed", and testing them costs no engine
    risk. Done: partial progress (§4.6), tags and slide-hood (§4.9).
-3. **Record the cell sequence in the ledger,** additively, beside the current
-   entries.
-4. **Run the new core in shadow** beside the differ: on the probe, on the law
-   cases, and on real history through `scripts/scan_sync_history.py`. The probe
-   and the law cases are generated shapes; real history is what measures the
-   benefit to an author.
+3. **Run the new core in shadow** beside the engine: on the probe, on the law
+   cases, and on real history. Done for the probe and the laws (§2, §5) and for
+   real history as one-sided edits (§2.6, `scripts/sync_shadow.py`). It
+   closed two gaps of the prototype (forks, kinds) and left one open: cells
+   that move between a deck and its companion.
+4. **Record the cell sequence in the ledger,** additively, beside the current
+   entries, in the form the shadow showed the core needs: per part (the deck,
+   the companion), each cell's id or none, kind, tags and content fingerprint.
 5. **Switch the structural rows over** and delete what §4.7 lists. The
-   maintainer decides go or no-go before this step, on the results of 2 and 4.
+   maintainer decides go or no-go before this step, on the results of 2 and 3.
 
 Decisions:
 
@@ -723,9 +845,13 @@ Decisions:
   Decided 2026-11-10: ask. The prototype does (§4.5, `conflict_copies`), and
   the conservation law of §5 now holds without an exception.
 - **D4. The ledger migration**: re-record from a clean report, and what
-  happens to a deck with pending items. Open. It is not needed before step 3
-  is designed, and it needs a count of decks with pending items in the course
-  repositories first.
+  happens to a deck with pending items. Open, and not needed before step 4.
+  The count it waited for, taken on 2026-11-13 with `clm slides sync report
+  --json` over both course repositories: 45 of 1,074 decks have pending items.
+  PythonCourses has 21 of 708, 6 of them refused for un-id'd localized cells.
+  CppCourses has 24 of 366, mostly mechanical `record_*` rows that one `apply`
+  clears. The proposal for step 4: write the sequence on each deck's first
+  clean pass, and finish the pending decks before the switch-over.
 - **D5. Whether to prove the laws in Lean** once the core is in production
   (§6). Open, and no decision is needed before then.
 
@@ -742,11 +868,16 @@ python scripts/sync_model_laws.py                              # the laws, about
 python scripts/sync_model_passes.py --base 2 --half 3           # passes with open questions (§4.6)
 python scripts/sync_laws.py run LAWS.json --scope full          # the laws on the engine, 28,257 cases
 python scripts/sync_laws.py run LAWS_MODEL.json --scope full --model   # and on the prototype
+python scripts/sync_shadow.py run COURSE_REPO SHADOW.json --workers 24  # the shadow on real history (§2.6)
+python scripts/sync_shadow.py run CPP_REPO SHADOW_CPP.json --ext cpp --workers 24
+python scripts/sync_shadow.py summary SHADOW.json --show 10
+python scripts/sync_shadow.py trace COURSE_REPO DECK B N de   # one replay, with the engine's passes
 ```
 
 The engine run took 252 seconds with 20 workers on the development machine; the
-prototype run takes about half a minute. Point `TMP` at a fast drive for the engine
-run. The result files are not committed.
+prototype run takes about half a minute. The shadow took about four minutes per
+course repository with 24 workers, most of it reading history. Point `TMP` at
+a fast drive for the engine runs. The result files are not committed.
 
 | file | what |
 |---|---|
@@ -754,5 +885,6 @@ run. The result files are not committed.
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |
 | `scripts/sync_model_passes.py` | the laws across passes with questions left open (§4.6) |
+| `scripts/sync_shadow.py` | the prototype beside the engine on real history (§2.6), with `tests/scripts/test_sync_shadow.py` |
 | `tests/slides/sync_laws.py`, `scripts/sync_laws.py` | the laws on the engine (§2.5), with `tests/slides/test_sync_laws.py` as the ratchet |
 | `docs/claude/analysis/sync-structural-core/issue-classification.md` | the issue classification behind §3.5 |
