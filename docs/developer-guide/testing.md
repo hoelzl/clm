@@ -592,10 +592,11 @@ A case got worse when it held and now violates a law, or when a visible
 violation became a silent one (the report is clean and the halves are wrong).
 `--accept-worse` overrides the refusal for a deliberate trade, which the PR
 must name. `run --model` checks the reference model of a replacement
-structural core (`scripts/sync_model.py`) on the same cases. It satisfies all
-five laws; `tests/scripts/test_sync_model_laws.py` asserts that on the
-ratchet's cases in the fast suite. Background:
-`docs/claude/sync-structural-core-investigation.md`.
+structural core (`clm.slides.doc_core`) on the same cases. It satisfies all
+five laws; `tests/slides/test_doc_core.py` asserts that on the ratchet's
+cases in the fast suite. Background:
+`docs/claude/sync-structural-core-investigation.md` and
+`docs/claude/design/sync-sequence-core.md`.
 
 ## Troubleshooting
 

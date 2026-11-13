@@ -1,15 +1,17 @@
-"""The sync reference model satisfies every sync law (``scripts/sync_model.py``).
+"""The sequence core satisfies every sync law (``clm.slides.doc_core``).
 
-``docs/claude/sync-structural-core-investigation.md`` proposes replacing the
-structural core of ``clm slides sync`` and rests on a claim: its reference
-model satisfies the oracle-free laws of ``tests/slides/sync_laws.py`` on every
-small deck, where the engine does not. This is the test that executes that
-claim, over the same cases the engine's ratchet runs
-(``tests/slides/test_sync_laws.py``). It also keeps the model and
-``scripts/sync_laws.py --model`` from rotting while the engine is unchanged.
+The switch-over of ``docs/claude/design/sync-sequence-core.md`` rests on a
+claim: the core satisfies the oracle-free laws of ``tests/slides/sync_laws.py``
+on every small deck, where the current engine does not. This is the test that
+executes that claim, over the same cases the engine's ratchet runs
+(``tests/slides/test_sync_laws.py``), plus the laws across passes on their
+smallest scope and the adapter from parsed decks and the recorded sequence.
 
-The model's own, wider check is ``scripts/sync_model_laws.py`` (about four
-minutes, run by hand).
+The wider checks run by hand before any change to the core's rules (the
+module docstring lists them): ``scripts/sync_model_probe.py``,
+``scripts/sync_model_laws.py [--tags]``,
+``scripts/sync_model_passes.py --base 3 --half 3`` and
+``scripts/sync_shadow.py`` on both course repositories.
 """
 
 from __future__ import annotations
@@ -20,6 +22,9 @@ from pathlib import Path
 
 import pytest
 
+from clm.slides import doc_core
+from clm.slides.doc_lenses import _read_source, parse_bundle
+from clm.slides.doc_sequence import deck_sequence, sequence_fingerprint
 from tests.slides.sync_laws import HOLDS, Case, cases, check
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -61,7 +66,7 @@ def test_reference_model_asks_about_identical_cells_each_half_edited() -> None:
 # Several passes, with questions left open (scripts/sync_model_passes.py)
 # ---------------------------------------------------------------------------
 
-sync_model = sys.modules["sync_model"]
+
 passes = _load("sync_model_passes")
 
 
@@ -97,7 +102,7 @@ def test_pass_goes_on_around_a_question_about_an_id_cell() -> None:
     shared one. With the translation left open, the shared cell still lands
     on the German half and in the record; the localized cell waits."""
     base, de, en = passes.start(_word("x"), _word("x A"), _word("x y"))
-    out = sync_model.merge(base, de, en, lambda _q: None)
+    out = doc_core.merge(base, de, en, lambda _q: None)
     assert [q.kind for q in out.opened] == ["translate_new"]
     assert passes.labels(out.halves["de"]) == ("body:x", "id:A", "body:y")
     assert passes.labels(out.halves["en"]) == ("body:x", "body:y")
@@ -109,8 +114,8 @@ def test_any_other_open_question_holds_the_whole_part() -> None:
     While the conflict is open nothing is written: whether a question about
     un-id'd cells is asked depends on the cells around it."""
     base, de, en = passes.start(_word("x"), _word("y"), _word("z z"))
-    out = sync_model.merge(base, de, en, lambda _q: None)
-    assert out.opened and out.opened[0].kind not in sync_model.LOCAL_QUESTIONS
+    out = doc_core.merge(base, de, en, lambda _q: None)
+    assert out.opened and out.opened[0].kind not in doc_core.LOCAL_QUESTIONS
     assert (out.halves["de"], out.halves["en"], out.record) == (de, en, base)
 
 
@@ -138,7 +143,7 @@ def _half(lang: str, *specs: tuple) -> list:
         localized = sid is not None and sid.startswith(("S", "vo-"))
         text = f"{body} {lang}" if localized else body
         kind = "slide" if localized and sid.startswith("S") else "vo" if localized else "code"
-        out.append(sync_model.Cell(sid, kind, text, localized, tags=frozenset(tags)))
+        out.append(doc_core.Cell(sid, kind, text, localized, tags=frozenset(tags)))
     return out
 
 
@@ -146,10 +151,10 @@ def _sync(recorded: list[tuple], de: list[tuple], en: list[tuple]):
     """Record ``recorded`` on both halves, then merge ``de`` / ``en`` with
     every question refused."""
     base = [
-        sync_model.BaseMember(d.sid, d.kind, d.localized, d.body, e.body, tags=d.tags)
+        doc_core.BaseMember(d.sid, d.kind, d.localized, d.body, e.body, tags=d.tags)
         for d, e in zip(_half("de", *recorded), _half("en", *recorded), strict=True)
     ]
-    return sync_model.merge(base, _half("de", *de), _half("en", *en), lambda _q: None)
+    return doc_core.merge(base, _half("de", *de), _half("en", *en), lambda _q: None)
 
 
 def _shape(cells: list) -> list[tuple]:
@@ -253,7 +258,7 @@ def test_both_halves_retag_a_cell_differently() -> None:
     recorded = [S0, (None, "x = 1")]
     out = _sync(recorded, [S0, (None, "x = 1", "keep")], [S0, (None, "x = 1", "subslide")])
     assert [q.kind for q in out.opened] == ["conflict_tags"]
-    assert "conflict_tags" not in sync_model.LOCAL_QUESTIONS
+    assert "conflict_tags" not in doc_core.LOCAL_QUESTIONS
     assert _shape(out.halves["de"]) == [("S0", ()), ("x = 1", ("keep",))]
 
 
@@ -263,14 +268,14 @@ def test_both_halves_retag_a_cell_differently() -> None:
 
 
 def _cell(sid, body: str, localized: bool):
-    return sync_model.Cell(sid, "code", body, localized)
+    return doc_core.Cell(sid, "code", body, localized)
 
 
 def _fork_case(german_localized: bool, english_localized: bool, recorded_localized: bool = False):
     body = {"de": "plot()  # Achse", "en": "plot()  # axis"}
     shared = "plot()"
     base = [
-        sync_model.BaseMember(
+        doc_core.BaseMember(
             "fit",
             "code",
             recorded_localized,
@@ -290,10 +295,10 @@ def test_a_fork_on_one_half_is_a_question_that_holds_the_part() -> None:
     shared cell into its own language. Copying it would put German text in the
     English file; the English variant has to be written, which is a question."""
     base, de, en = _fork_case(True, False)
-    out = sync_model.merge(base, de, en, lambda _q: None)
+    out = doc_core.merge(base, de, en, lambda _q: None)
     assert [q.kind for q in out.opened] == ["fork"]
     assert out.halves == {"de": de, "en": en} and out.record == base
-    answered = sync_model.merge(base, de, en, lambda q: "body" if q.kind == "fork" else None)
+    answered = doc_core.merge(base, de, en, lambda q: "body" if q.kind == "fork" else None)
     assert not answered.opened
     assert answered.halves["de"] == de
     english = answered.halves["en"][0]
@@ -302,16 +307,80 @@ def test_a_fork_on_one_half_is_a_question_that_holds_the_part() -> None:
 
 def test_a_fork_on_both_halves_needs_no_question() -> None:
     base, de, en = _fork_case(True, True)
-    out = sync_model.merge(base, de, en, lambda _q: None)
+    out = doc_core.merge(base, de, en, lambda _q: None)
     assert not out.opened and out.halves == {"de": de, "en": en}
     assert out.record[0].localized
 
 
 def test_a_unify_on_one_half_is_a_question_and_takes_that_half() -> None:
     base, de, en = _fork_case(False, True, recorded_localized=True)
-    out = sync_model.merge(base, de, en, lambda _q: None)
+    out = doc_core.merge(base, de, en, lambda _q: None)
     assert [q.kind for q in out.opened] == ["unify"]
-    answered = sync_model.merge(base, de, en, lambda q: "accept" if q.kind == "unify" else None)
+    answered = doc_core.merge(base, de, en, lambda q: "accept" if q.kind == "unify" else None)
     assert not answered.opened
     assert answered.halves["de"] == answered.halves["en"] == de
     assert not answered.record[0].localized
+
+
+# ---------------------------------------------------------------------------
+# The adapter: parsed cells and the recorded sequence
+# ---------------------------------------------------------------------------
+
+DE = """# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# # Einführung
+
+# %%
+x = 1
+
+# %% tags=["keep"]
+y = 2
+
+# %% [markdown] lang="de" tags=["subslide"] slide_id="more"
+# Mehr
+"""
+EN = (
+    DE.replace('lang="de"', 'lang="en"')
+    .replace("# # Einführung", "# # Introduction")
+    .replace("# Mehr", "# More")
+)
+
+
+def _core_input(
+    de: str, en: str
+) -> tuple[list[doc_core.BaseMember], dict[str, list[doc_core.Cell]]]:
+    """The recorded sequence of the in-sync pair ``DE``/``EN`` and the cells
+    of ``de``/``en``, both with fingerprints as content: what a pass that
+    reads the ledger compares."""
+    deck = parse_bundle(DE, EN).deck
+    sequence = deck_sequence(deck)
+    assert not isinstance(sequence, str), sequence
+    halves = {
+        lang: doc_core.cells_of(_read_source(text, lang, "deck", "#").cells, sequence_fingerprint)
+        for lang, text in (("de", de), ("en", en))
+    }
+    return doc_core.base_of(sequence), halves
+
+
+def test_an_in_sync_deck_is_its_own_recorded_sequence() -> None:
+    base, halves = _core_input(DE, EN)
+    assert [(m.sid, m.kind, m.localized, sorted(m.tags)) for m in base] == [
+        ("intro", "markdown", True, ["slide"]),
+        (None, "code", False, []),
+        (None, "code", False, ["keep"]),
+        ("more", "markdown", True, ["subslide"]),
+    ]
+    out = doc_core.merge(base, halves["de"], halves["en"], lambda _q: None)
+    assert out.status == "merged" and not out.asked
+    assert out.halves == halves
+    assert out.record == base
+
+
+def test_a_one_sided_edit_of_an_unid_cell_reaches_the_other_half() -> None:
+    """German edits an un-id'd shared cell. Matched against the recorded
+    sequence by fingerprint, the edit is one member's new content, and the
+    English half gets the German cell."""
+    base, halves = _core_input(DE.replace("x = 1", "x = 10"), EN)
+    out = doc_core.merge(base, halves["de"], halves["en"], lambda _q: None)
+    assert out.status == "merged" and not out.asked
+    assert out.halves["en"][1].body == halves["de"][1].body != base[1].de
+    assert [c.body for c in out.halves["en"][2:]] == [c.body for c in halves["en"][2:]]
