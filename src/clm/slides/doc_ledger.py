@@ -45,12 +45,14 @@ from attrs import define, evolve, field, frozen
 
 from clm.slides.bilingual_doc import BilingualDeck, Lang
 from clm.slides.doc_identity import DeckBaseline, MemberBaseline, baseline_from_deck
+from clm.slides.doc_sequence import SequenceEntry, deck_sequence
 
 __all__ = [
     "LEDGER_FILENAME",
     "LEDGER_HASH_VERSION",
     "LEDGER_SUBDIR",
     "SCHEMA_VERSION",
+    "SEQUENCE_VERSION",
     "DeckLedger",
     "LedgerMember",
     "TopicLedger",
@@ -74,6 +76,11 @@ SCHEMA_VERSION = 2
 #: and friends). Bump when the hashing form changes; entries recorded under an
 #: older version drop to cold at load (§5's lazy migration rule, #458).
 LEDGER_HASH_VERSION = 1
+
+#: Version of the recorded cell sequence (:mod:`clm.slides.doc_sequence`): its
+#: entry shape and its fingerprint function. A section recorded under another
+#: version loads without a sequence, and the next clean pass records it again.
+SEQUENCE_VERSION = 1
 
 #: Same committed location the v1 ledger established (issue #448 / #453).
 LEDGER_SUBDIR = ".clm"
@@ -148,6 +155,12 @@ class DeckLedger:
     member_order: dict[tuple[str, str, str], list[str]] = field(factory=dict)
     #: keyed ``(lang, part)`` exactly as ``DeckBaseline.preamble_fps``
     preamble_fps: dict[tuple[str, str], str | None] = field(factory=dict)
+    #: The deck's cell sequence as of the last pass that left it in sync
+    #: (:mod:`clm.slides.doc_sequence`; structural-core step 4). ``None`` = never
+    #: recorded. Nothing reads it yet. It is written by a full record and by an
+    #: apply pass with nothing left open, and only from a deck in sync; any other
+    #: write keeps the previous one, which is still a state both halves agreed on.
+    sequence: list[SequenceEntry] | None = None
 
 
 @define
@@ -273,8 +286,85 @@ def _member_from_json(key: str, rec: dict) -> LedgerMember | None:
     )
 
 
+# One line per recorded cell, so a ledger diff shows one changed line per
+# changed cell (the M13 lesson: a trust store must stay reviewable):
+#
+#   <file> <kind> S <tags> <fp> <id>          a shared cell: one content
+#   <file> <kind> L <tags> <de-fp> <en-fp> <id>   a localized cell
+#
+# ``<tags>`` is comma-joined and sorted, ``-`` for none; ``<id>`` is the rest
+# of the line (an id may hold spaces), ``-`` for none. A sequence these fields
+# cannot carry is not recorded (:func:`_encodable`).
+
+
+def _encodable(sequence: list[SequenceEntry]) -> bool:
+    for e in sequence:
+        if e.sid is not None and (e.sid == "-" or e.sid != e.sid.strip() or "\n" in e.sid):
+            return False
+        if any(not t or t == "-" or "," in t or any(c.isspace() for c in t) for t in e.tags):
+            return False
+        if any(not x or any(c.isspace() for c in x) for x in (e.file, e.kind, e.de, e.en)):
+            return False
+    return True
+
+
+def _sequence_entry_to_line(entry: SequenceEntry) -> str:
+    tags = ",".join(entry.tags) or "-"
+    content = f"L {tags} {entry.de} {entry.en}" if entry.localized else f"S {tags} {entry.de}"
+    return f"{entry.file} {entry.kind} {content} {entry.sid if entry.sid is not None else '-'}"
+
+
+def _sequence_from_json(rec: object) -> list[SequenceEntry] | None:
+    """A recorded sequence, or ``None`` when absent, of another version, or
+    malformed (fail-safe: the next clean pass records it again)."""
+    if not isinstance(rec, dict) or rec.get("version") != SEQUENCE_VERSION:
+        return None
+    cells = rec.get("cells")
+    if not isinstance(cells, list):
+        return None
+    out: list[SequenceEntry] = []
+    for line in cells:
+        if not isinstance(line, str):
+            return None
+        head = line.split(" ", 3)
+        if len(head) != 4 or head[2] not in ("S", "L"):
+            return None
+        file, kind, mark, rest = head
+        localized = mark == "L"
+        fields = rest.split(" ", 3 if localized else 2)
+        if len(fields) != (4 if localized else 3):
+            return None
+        tags = () if fields[0] == "-" else tuple(fields[0].split(","))
+        de, en = (fields[1], fields[2]) if localized else (fields[1], fields[1])
+        sid = fields[-1]
+        out.append(
+            SequenceEntry(
+                sid=None if sid == "-" else sid,
+                kind=kind,
+                file=file,
+                localized=localized,
+                tags=tags,
+                de=de,
+                en=en,
+            )
+        )
+    return out
+
+
 def _deck_to_json(deck: DeckLedger) -> dict[str, object]:
+    # Written only when recorded, so a section without one keeps its exact bytes.
+    sequence: dict[str, object] = (
+        {
+            "sequence": {
+                "version": SEQUENCE_VERSION,
+                "cells": [_sequence_entry_to_line(e) for e in deck.sequence],
+            }
+        }
+        if deck.sequence is not None
+        else {}
+    )
     return {
+        **sequence,
         "members": {key: _member_to_json(lm) for key, lm in deck.members.items()},
         "group_order": list(deck.group_order),
         "group_order_by_side": {
@@ -342,6 +432,7 @@ def _deck_from_json(rec: dict) -> DeckLedger:
             lang, sep, part = str(joined).partition(":")
             if sep:
                 deck.preamble_fps[(lang, part)] = fp if isinstance(fp, str) else None
+    deck.sequence = _sequence_from_json(rec.get("sequence"))
     return deck
 
 
@@ -639,6 +730,7 @@ def snapshot_deck(
 ) -> DeckLedger:
     """A full :class:`DeckLedger` snapshot of a parsed deck's current state."""
     base = baseline_from_deck(deck)
+    sequence = deck_sequence(deck)
     return DeckLedger(
         members={
             key: LedgerMember(entry=entry, provenance=provenance, confirmed_commit=commit)
@@ -648,6 +740,7 @@ def snapshot_deck(
         group_order_by_side={lang: list(base.group_order_by_side[lang]) for lang in _SIDES},
         member_order={key: list(handles) for key, handles in base.member_order.items()},
         preamble_fps=dict(base.preamble_fps),
+        sequence=sequence if isinstance(sequence, list) and _encodable(sequence) else None,
     )
 
 
@@ -738,6 +831,9 @@ def record_deck_snapshot(
                 )
                 for key, lm in fresh.members.items()
             }
+            if fresh.sequence is None:
+                # Not in sync now: keep the last state both halves agreed on.
+                fresh.sequence = old.sequence
         ledger.decks[deck_key] = fresh
         return len(fresh.members), migrations
     target = old if old is not None else DeckLedger()
@@ -881,6 +977,50 @@ def seed_order_scopes(target: DeckLedger, fresh: DeckLedger) -> int:
     return seeded
 
 
+def record_sequence(target: DeckLedger, fresh: DeckLedger) -> bool:
+    """Adopt the fresh cell sequence, when the deck it was taken from is in sync.
+
+    For an apply pass with nothing left open (the same condition as
+    :func:`seed_order_scopes`). Returns whether a sequence was adopted.
+    """
+    if fresh.sequence is None:
+        return False
+    target.sequence = list(fresh.sequence)
+    return True
+
+
+def rename_sequence_id(target: DeckLedger, old: str, new: str) -> bool:
+    """Rename a slide id inside the recorded sequence (a group rename, or
+    ``rename-id``). Returns whether an entry changed."""
+    if target.sequence is None or not any(e.sid == old for e in target.sequence):
+        return False
+    target.sequence = [evolve(e, sid=new) if e.sid == old else e for e in target.sequence]
+    return True
+
+
+def migrate_sequence(target: DeckLedger, before: BilingualDeck, after: BilingualDeck) -> bool:
+    """Carry the recorded sequence across a rewrite that only renamed an id.
+
+    ``rename-id`` rewrites ``slide_id``, ``for_slide`` and ``vo_anchor`` bytes,
+    which the sequence's fingerprints cover. When the recorded sequence is the
+    deck as it was before the rewrite (with the id already renamed or not), it
+    becomes the deck after it. Otherwise it was recorded from an older state
+    and stays as it is: never re-fingerprint an edit (the rule of
+    :func:`clm.slides.rename_id.migrate_reference_fingerprints`).
+    """
+    recorded = target.sequence
+    was, now = deck_sequence(before), deck_sequence(after)
+    if recorded is None or not isinstance(was, list) or not isinstance(now, list):
+        return False
+    if not len(recorded) == len(was) == len(now):
+        return False
+    pairs = zip(recorded, was, now, strict=True)
+    if all(r == b or r == evolve(b, sid=a.sid) for r, b, a in pairs) and recorded != now:
+        target.sequence = now
+        return True
+    return False
+
+
 def record_preamble_scope(target: DeckLedger, fresh: DeckLedger, part: str) -> None:
     """Adopt the fresh preamble fingerprints for ``part`` (both sides)."""
     for lang in _SIDES:
@@ -948,6 +1088,7 @@ def rename_group_scopes(target: DeckLedger, old_group: str, new_group: str) -> N
     for scope_key, handles in list(target.member_order.items()):
         if old_key in handles:
             target.member_order[scope_key] = [new_key_id if h == old_key else h for h in handles]
+    rename_sequence_id(target, old_group, new_group)
     target.group_order = [new_group if g == old_group else g for g in target.group_order]
     target.group_order_by_side = {
         lang: [new_group if g == old_group else g for g in order]

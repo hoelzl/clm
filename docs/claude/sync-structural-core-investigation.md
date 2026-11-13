@@ -3,9 +3,10 @@
 **Status**: Investigation, complete. The maintainer decided D1 to D3 on
 2026-11-10 (§9): pursue the proposal in §4 in the order §9 gives, with a
 go/no-go before the engine is switched over. On 2026-11-13 the maintainer
-moved the shadow run ahead of the ledger change. Steps 1 to 3 have landed
-(§2.5, §4.6, §4.9, §2.6). D4 and D5 are open.
-**Date**: 2026-11-10, shadow run added 2026-11-13
+moved the shadow run ahead of the ledger change, and on the shadow's
+results gave the go for the switch-over. Steps 1 to 4 have landed (§2.5,
+§4.6, §4.9, §2.6, §9). D5 is open.
+**Date**: 2026-11-10, shadow run and ledger sequence added 2026-11-13
 **Author**: Claude (Fable 5.2), at the maintainer's request
 **Measured against**: master `2e011286` (clm 1.38.0)
 **Question**: The sync engine works reasonably well, but agents still hit
@@ -761,8 +762,9 @@ list edits.
 - **The probe was built around the current engine's failures.** A new core will
   have blind spots of its own and needs its own adversarial review. §5 is a
   start: it found two cases the probe could not.
-- **The ledger changes.** Recording the cell sequence is a schema change with a
-  migration (§9, D4).
+- **The ledger changed.** The cell sequence is recorded beside the current
+  entries (§9, step 4), and nothing reads it yet. Whether it is enough for the
+  core in production is shown only by the switch-over.
 - **Small scope.** §5 covers decks of up to 4 recorded cells. The laws are
   structural and unlikely to fail only on large inputs, but that is an argument,
   not a measurement.
@@ -842,9 +844,22 @@ step 2, which was not in it. On 2026-11-13 the maintainer moved the shadow run
 4. **Record the cell sequence in the ledger,** additively, beside the current
    entries, in the form the shadow showed the core needs: one sequence over
    both files, each cell's id or none, kind, file, tags and content
-   fingerprint.
+   fingerprint. Done: `clm.slides.doc_sequence` defines the sequence and
+   when a deck is in sync, and `doc_ledger` stores it as the section's
+   `sequence`, one line per cell. It is written by a full record and by an
+   apply pass with nothing left open, and only from a deck in sync; any other
+   write keeps the previous one. `rename-id` and group renames carry it.
+   Nothing reads it yet. `scripts/sync_shadow.py` builds its base with the
+   same function, so the shadow checks what is recorded. Measured on the
+   working trees on 2026-11-13: 683 of 707 PythonCourses decks and 360 of
+   360 CppCourses decks are in sync and get it on their next clean pass. The
+   ledgers grow by 3.7 MB (29,354 lines; now 33.8 MB) and 1.7 MB (13,311
+   lines; now 14.2 MB). A JSON object per cell would have been 261,026 lines.
 5. **Switch the structural rows over** and delete what §4.7 lists. The
-   maintainer decides go or no-go before this step, on the results of 2 and 3.
+   maintainer decided go on 2026-11-13, on the results of steps 2 and 3. Still
+   to build before it: the text layer (rendering cells into files, the
+   translation questions the prototype leaves to it, header attributes of
+   localized cells), and how small a part can be (§4.6).
 
 Decisions:
 
@@ -859,13 +874,17 @@ Decisions:
   Decided 2026-11-10: ask. The prototype does (§4.5, `conflict_copies`), and
   the conservation law of §5 now holds without an exception.
 - **D4. The ledger migration**: re-record from a clean report, and what
-  happens to a deck with pending items. Open, and not needed before step 4.
+  happens to a deck with pending items. Decided 2026-11-13 with the go, as
+  proposed: no migration step. The sequence is written on each deck's first
+  clean pass, and the decks still pending have to be finished before the
+  switch-over.
   The count it waited for, taken on 2026-11-13 with `clm slides sync report
   --json` over both course repositories: 45 of 1,074 decks have pending items.
   PythonCourses has 21 of 708, 6 of them refused for un-id'd localized cells.
   CppCourses has 24 of 366, mostly mechanical `record_*` rows that one `apply`
-  clears. The proposal for step 4: write the sequence on each deck's first
-  clean pass, and finish the pending decks before the switch-over.
+  clears. The deck-by-deck rule of step 4 leaves 24 PythonCourses decks
+  without a sequence today (6 refused, 12 with tags that differ between the
+  halves, 4 with cells in another order, 2 with an observation).
 - **D5. Whether to prove the laws in Lean** once the core is in production
   (§6). Open, and no decision is needed before then.
 
@@ -895,6 +914,7 @@ a fast drive for the engine runs. The result files are not committed.
 
 | file | what |
 |---|---|
+| `src/clm/slides/doc_sequence.py` | the recorded cell sequence and when a deck is in sync (step 4), with `tests/slides/test_doc_sequence.py` |
 | `scripts/sync_model.py` | the prototype core |
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |

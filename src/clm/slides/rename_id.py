@@ -42,7 +42,12 @@ from clm.core.slide_text.slide_parser import parse_cell_header
 from clm.core.slide_text.voiceover_merge import parse_vo_anchor
 from clm.slides.bilingual_doc import BilingualDeck, Lang
 from clm.slides.doc_identity import baseline_from_deck
-from clm.slides.doc_ledger import DeckLedger, rename_group_scopes
+from clm.slides.doc_ledger import (
+    DeckLedger,
+    migrate_sequence,
+    rename_group_scopes,
+    rename_sequence_id,
+)
 
 #: A usable ``slide_id``: non-empty, no whitespace, no ``"`` (which would break
 #: the header attribute). Deliberately permissive — slug *quality* is a separate
@@ -260,6 +265,11 @@ def migrate_ledger_key(
             rename_group_scopes(deck, old, new)
             changed = True
 
+        # The recorded cell sequence names cells by bare id (a group rename
+        # above already did this for an anchor; renaming twice is a no-op).
+        if rename_sequence_id(deck, old, new):
+            changed = True
+
         # The member entry itself (rename_group_scopes leaves the id: entry to us).
         lm = deck.members.pop(old_key, None)
         if lm is not None:
@@ -373,4 +383,6 @@ def migrate_reference_fingerprints(
         if migrated != entry:
             deck.members[ea.key] = evolve(lm, entry=migrated)
             touched += 1
+    if migrate_sequence(deck, before, after):
+        touched += 1
     return touched

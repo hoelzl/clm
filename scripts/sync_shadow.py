@@ -74,6 +74,7 @@ from clm.core.voiceover_companions import (  # noqa: E402
 from clm.slides import doc_apply  # noqa: E402
 from clm.slides.bilingual_doc import SideCell  # noqa: E402
 from clm.slides.doc_lenses import _bare, _read_source, parse_bundle  # noqa: E402
+from clm.slides.doc_sequence import canonical, deck_sequence, is_localized  # noqa: E402
 
 MAX_PASSES = 6
 #: Questions the judge answers. Everything else is refused.
@@ -90,28 +91,6 @@ MODEL_ANSWERS = {
     "fork": "body",
     "unify": "accept",
 }
-
-_ID_ATTR_RE = re.compile(r'\s*slide_id="[^"]*"')
-_TAGS_ATTR_RE = re.compile(r"\s*tags=\[[^\]]*\]")
-
-
-# ---------------------------------------------------------------------------
-# The adapter: a real deck half as the prototype's cells
-# ---------------------------------------------------------------------------
-
-
-def canonical(sc: SideCell) -> str:
-    """A cell's content as the prototype compares it: every byte the file holds
-    for it, except the ``slide_id`` and ``tags`` attributes, which the
-    prototype carries as identity and as an aspect of their own."""
-    header = _TAGS_ATTR_RE.sub("", _ID_ATTR_RE.sub("", sc.lines[0]))
-    return "\n".join((header, *sc.lines[1:]))
-
-
-def is_localized(sc: SideCell) -> bool:
-    """A cell each half holds in its own language. A ``j2`` cell counts: the
-    header macros differ per half by design (``header_de`` / ``header_en``)."""
-    return sc.lang_attr is not None or sc.cell_type == "j2"
 
 
 def to_cell(sc: SideCell) -> Cell:
@@ -153,55 +132,27 @@ def base_members(
     """The recorded sequence of each part of an in-sync pair, or why the pair
     is not in sync.
 
-    In sync means: the bundle parses with no refusal and no observation, every
-    member has both sides, the two halves hold each part's cells in one order,
-    and a cell's tags are the same on both halves. Each part (the deck, the
-    voiceover companion) is then one sequence of members, which is what the
-    prototype records. The prototype merges the parts at once, the deck first.
+    The rule and the sequence are :func:`clm.slides.doc_sequence.deck_sequence`,
+    the one the ledger records (structural-core step 4), with the content as
+    text instead of a fingerprint. The prototype merges the parts at once, the
+    deck first.
     """
     if (de_companion is None) != (en_companion is None):
         return "one_companion"
     outcome = parse_bundle(
         de_text, en_text, de_companion, en_companion, comment_token=comment_token
     )
-    deck = outcome.deck
-    if deck is None:
+    if outcome.deck is None:
         reasons = outcome.refusal.reasons if outcome.refusal is not None else []
         return "refused:" + (reasons[0].code if reasons else "?")
-    if deck.observations:
-        return "observation:" + deck.observations[0].kind
-    out: dict[str, list[BaseMember]] = {}
-    for part in PARTS:
-        members = [m for m in deck.members() if m.de is not None and m.de.part == part]
-        if any(m.en is None or m.en.part != part for m in members):
-            return "one_sided_member"
-        if sum(1 for m in deck.members() if m.en is not None and m.en.part == part) != len(members):
-            return "one_sided_member"
-        by_de = sorted(members, key=lambda m: m.de.index)  # type: ignore[union-attr]
-        by_en = sorted(members, key=lambda m: m.en.index)  # type: ignore[union-attr]
-        if [id(m) for m in by_de] != [id(m) for m in by_en]:
-            return "order_differs"
-        seq: list[BaseMember] = []
-        for m in by_de:
-            de, en = m.de, m.en
-            assert de is not None and en is not None
-            if frozenset(de.tags) != frozenset(en.tags):
-                return "tags_differ"
-            if not is_localized(de) and canonical(de) != canonical(en):
-                return "shared_differs"
-            seq.append(
-                BaseMember(
-                    _bare(de.slide_id) or _bare(en.slide_id),
-                    de.cell_type,
-                    is_localized(de),
-                    canonical(de),
-                    canonical(en),
-                    de,
-                    frozenset(de.tags),
-                    part,
-                )
-            )
-        out[part] = seq
+    sequence = deck_sequence(outcome.deck, content=canonical)
+    if isinstance(sequence, str):
+        return sequence
+    out: dict[str, list[BaseMember]] = {part: [] for part in PARTS}
+    for e in sequence:
+        out[e.file].append(
+            BaseMember(e.sid, e.kind, e.localized, e.de, e.en, None, frozenset(e.tags), e.file)
+        )
     return out
 
 
