@@ -41,6 +41,10 @@ and ``Outcome.record``). Which questions allow it is a finding, not a choice
   cells around it, so applying a part of the pass would change what the next
   pass asks.
 
+A cell's file (the deck, or a voiceover companion) is one more aspect, merged
+like its tags, so a cell that moves between the two stays one cell. Order is
+defined within a file only, and the files are kept as blocks, deck first.
+
 A cell that changes between shared and per-language on one half only is a
 question too: ``fork`` (a shared cell one half turned into its own language;
 answered, the other half gets its own variant) or ``unify`` (the reverse).
@@ -90,6 +94,8 @@ class Cell:
     #: to recognise a cell across passes.
     mark: object = field(default=None, compare=False)
     tags: frozenset[str] = frozenset()
+    #: the file the cell sits in on its half: ``deck`` or ``companion``
+    part: str = "deck"
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,7 @@ class BaseMember:
     en: str | None
     mark: object = field(default=None, compare=False)  # as ``Cell.mark``
     tags: frozenset[str] = frozenset()  # recorded tags, the same on both halves
+    part: str = "deck"  # as ``Cell.part``, the same on both halves
 
     def content(self, side: str) -> str | None:
         return self.de if side == "de" else self.en
@@ -282,6 +289,9 @@ class Member:
     #: The half that forked a shared member into per-language cells, or
     #: unified a localized one into a shared cell, when only one half did.
     lead: str | None = None
+    parts: dict[str, str | None] = field(default_factory=dict)  # side -> part now
+    base_part: str | None = None
+    merged_part: str = "deck"  # decided part
 
     @property
     def new_sid(self) -> str | None:
@@ -292,7 +302,7 @@ class Member:
 class Question:
     #: order | conflict_shared | conflict_copies | conflict_tags |
     #: remove_vs_edit | remove_localized_side | translate_new | identify |
-    #: fork | unify
+    #: fork | unify | conflict_part
     kind: str
     member: int | None
     inferred: bool = False
@@ -412,6 +422,9 @@ def _members(base, cells, of, twins, claimed, evidence) -> tuple[list[Member], d
     for m in out:
         m.tags = {s: cells[s][m.pos[s]].tags if m.pos[s] is not None else None for s in SIDES}
         m.base_tags = base[m.base_idx].tags if m.base_idx is not None else None
+        m.parts = {s: cells[s][m.pos[s]].part if m.pos[s] is not None else None for s in SIDES}
+        m.base_part = base[m.base_idx].part if m.base_idx is not None else None
+        m.merged_part = m.base_part or next(p for p in m.parts.values() if p is not None)
     return out, loose
 
 
@@ -734,32 +747,80 @@ def merge(
             else:
                 m.merged_tags = d_tags if got == "de" else e_tags
 
+    # -- the part (deck or companion file): the same 3-way merge ---------------
+    for m in members:
+        if m.held is not None or not m.alive:
+            continue
+        d_part, e_part = m.parts["de"], m.parts["en"]
+        if d_part is None or e_part is None:
+            m.merged_part = d_part if d_part is not None else e_part  # type: ignore[assignment]
+        elif d_part == e_part or e_part == m.base_part:
+            m.merged_part = d_part
+        elif d_part == m.base_part:
+            m.merged_part = e_part
+        else:  # pragma: no cover - two parts exist, so one half kept the recorded one
+            got = ask(Question("conflict_part", m.key, mark=mark_of(m), about=about(m)))
+            if got is None:
+                m.held = "conflict_part"
+            else:
+                m.merged_part = d_part if got == "de" else e_part
+
+    def ppos(m: Member, side: str) -> int | None:
+        """Where ``side`` holds ``m``, if it holds it in the part it ends in. A
+        cell the other half moved to another file has no place in that file
+        on this half yet: like a new cell, it is placed by the half that moved
+        it."""
+        j = m.pos[side]
+        return j if j is not None and cells[side][j].part == m.merged_part else None
+
     alive = [m for m in members if m.alive]  # a held member counts as it stands
     known = [m for m in alive if m.base_idx is not None]
-    both = [m for m in known if None not in m.pos.values()]
+    both = [m for m in known if all(ppos(m, s) is not None for s in SIDES)]
     #: cells both halves added: each half has a word on their order, the record has none
-    added = [m for m in alive if m.base_idx is None and None not in m.pos.values()]
+    added = [m for m in alive if m.base_idx is None and all(ppos(m, s) is not None for s in SIDES)]
 
     # -- order: 3-way merge of pairwise precedence -----------------------------
+    # Order is defined within a part (a file) only. Cells in different parts
+    # are never compared; the parts are kept as blocks, deck first.
     def says(x: Member, y: Member, side: str) -> bool | None:
         """``side``'s word on "x before y": ``None`` when it lacks one of them."""
-        if x.pos[side] is None or y.pos[side] is None:
+        px, py = ppos(x, side), ppos(y, side)
+        if px is None or py is None:
             return None
-        return x.pos[side] < y.pos[side]
+        return px < py
+
+    def record_says(x: Member, y: Member) -> bool | None:
+        """The record's word on "x before y": ``None`` across parts."""
+        assert x.base_idx is not None and y.base_idx is not None
+        if base[x.base_idx].part != base[y.base_idx].part:
+            return None
+        return x.base_idx < y.base_idx
+
+    def same_part(x: Member, y: Member) -> bool:
+        return x.merged_part == y.merged_part
 
     groups = _groups(base)
     touched: dict[str, set] = {"de": set(), "en": set()}
+    #: two cells the halves order differently where no record says which half
+    #: changed it: both added them, or both moved them into a part they share
+    clash = False
     for a_i, x in enumerate(known):
         for y in known[a_i + 1 :]:
+            if not same_part(x, y):
+                continue
+            was = record_says(x, y)
+            if was is None:
+                de_says, en_says = says(x, y, "de"), says(x, y, "en")
+                clash = clash or None not in (de_says, en_says) and de_says != en_says
+                continue
             for s in SIDES:
-                if says(x, y, s) not in (None, x.base_idx < y.base_idx):
+                if says(x, y, s) not in (None, was):
                     touched[s] |= {groups[x.base_idx], groups[y.base_idx]}
-    #: two cells both halves added, in a different order on each: no record
-    #: says which half changed it
-    clash = any(
+    clash = clash or any(
         says(x, y, "de") != says(x, y, "en")
         for a_i, x in enumerate(added)
         for y in added[a_i + 1 :]
+        if same_part(x, y)
     )
 
     def recorded_order(choose: str | None) -> set[tuple[int, int]]:
@@ -773,7 +834,10 @@ def merge(
         pool = known if choose is None else both
         for a_i, x in enumerate(pool):
             for y in pool[a_i + 1 :]:
-                was = x.base_idx < y.base_idx
+                if not same_part(x, y):
+                    continue
+                recorded = record_says(x, y)
+                was = recorded if recorded is not None else x.base_idx < y.base_idx  # type: ignore[operator]
                 de_says, en_says = says(x, y, "de"), says(x, y, "en")
                 if choose is not None:
                     first = de_says if choose == "de" else en_says
@@ -788,8 +852,15 @@ def merge(
                 rel.add((x.key, y.key) if first else (y.key, x.key))
         for a_i, x in enumerate(added):
             for y in added[a_i + 1 :]:  # where the halves differ, the order question decides
+                if not same_part(x, y):
+                    continue
                 first = says(x, y, choose or "de")
                 rel.add((x.key, y.key) if first else (y.key, x.key))
+        # the parts as blocks, deck first
+        for x in alive:
+            for y in alive:
+                if x.merged_part == "deck" != y.merged_part:
+                    rel.add((x.key, y.key))
         return rel
 
     # -- a member only one half places: next to its neighbours there ----------
@@ -800,11 +871,11 @@ def merge(
         follows: dict[int, int] = {}
         placed_by_pairs = known if choose is None else both
         for s in SIDES:
-            seq = sorted((m for m in alive if m.pos[s] is not None), key=lambda m: m.pos[s])
+            seq = sorted((m for m in alive if ppos(m, s) is not None), key=lambda m: ppos(m, s))
             for at, m in enumerate(seq):
                 if m in placed_by_pairs:
                     continue
-                if choose is not None and s != choose and m.pos[choose] is not None:
+                if choose is not None and s != choose and ppos(m, choose) is not None:
                     continue  # the chosen half places it
                 if at > 0:
                     rel.add((seq[at - 1].key, m.key))
@@ -846,15 +917,24 @@ def merge(
                 if m.lead is not None and s != m.lead:  # the answer to ``fork``
                     lead = cells[m.lead][m.pos[m.lead]]
                     body = f"{lead.body} >{s}"
-                    return Cell(lead.sid, lead.kind, body, True, ("fork", lead.mark), m.merged_tags)
-                return replace(own, tags=m.merged_tags)
-            return replace(own, sid=m.new_sid, body=m.content, localized=False, tags=m.merged_tags)
+                    mark = ("fork", lead.mark)
+                    return Cell(lead.sid, lead.kind, body, True, mark, m.merged_tags, m.merged_part)
+                return replace(own, tags=m.merged_tags, part=m.merged_part)
+            return replace(
+                own,
+                sid=m.new_sid,
+                body=m.content,
+                localized=False,
+                tags=m.merged_tags,
+                part=m.merged_part,
+            )
         o = other(s)
         theirs = cells[o][m.pos[o]]
         mark = ("copy", theirs.mark)
         if m.localized:  # the answer to ``translate_new``; the text is not modelled
-            return Cell(theirs.sid, theirs.kind, f"{theirs.body} >{s}", True, mark, m.merged_tags)
-        return Cell(m.new_sid, m.kind, m.content, False, mark, m.merged_tags)
+            body = f"{theirs.body} >{s}"
+            return Cell(theirs.sid, theirs.kind, body, True, mark, m.merged_tags, m.merged_part)
+        return Cell(m.new_sid, m.kind, m.content, False, mark, m.merged_tags, m.merged_part)
 
     def entry_for(m: Member) -> BaseMember | None:
         """What the record holds for ``m`` after this pass."""
@@ -863,7 +943,9 @@ def merge(
         de, en = (cell_for(m, s) for s in SIDES)
         assert de is not None and en is not None
         mark = mark_of(m) if m.base_idx is not None else ("new", mark_of(m))
-        return BaseMember(m.new_sid, m.kind, m.localized, de.body, en.body, mark, m.merged_tags)
+        return BaseMember(
+            m.new_sid, m.kind, m.localized, de.body, en.body, mark, m.merged_tags, m.merged_part
+        )
 
     for s in SIDES:
         out.halves[s] = [c for m in sequence if (c := cell_for(m, s)) is not None]

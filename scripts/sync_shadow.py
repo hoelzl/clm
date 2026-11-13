@@ -28,8 +28,9 @@ edit should need no other answer.
   text is not modelled; its translation answer leaves a placeholder, which the
   comparison does not read.
 
-Voiceover companion files are a second part: the prototype merges each part
-alone (cells never cross parts), the engine reads the bundle as it does in a
+Voiceover companion files are a second part. The prototype merges both parts
+at once, with a cell's part as one more aspect of it (a cell can move between
+the deck and its companion); the engine reads the bundle as it does in a
 course repository.
 
 **Not covered (limits of this shadow):** the preamble (the lines before the
@@ -115,7 +116,13 @@ def is_localized(sc: SideCell) -> bool:
 
 def to_cell(sc: SideCell) -> Cell:
     return Cell(
-        _bare(sc.slide_id), sc.cell_type, canonical(sc), is_localized(sc), sc, frozenset(sc.tags)
+        _bare(sc.slide_id),
+        sc.cell_type,
+        canonical(sc),
+        is_localized(sc),
+        sc,
+        frozenset(sc.tags),
+        sc.part,
     )
 
 
@@ -150,7 +157,7 @@ def base_members(
     member has both sides, the two halves hold each part's cells in one order,
     and a cell's tags are the same on both halves. Each part (the deck, the
     voiceover companion) is then one sequence of members, which is what the
-    prototype records. Cells never cross parts, so each part is merged alone.
+    prototype records. The prototype merges the parts at once, the deck first.
     """
     if (de_companion is None) != (en_companion is None):
         return "one_companion"
@@ -191,6 +198,7 @@ def base_members(
                     canonical(en),
                     de,
                     frozenset(de.tags),
+                    part,
                 )
             )
         out[part] = seq
@@ -424,14 +432,21 @@ def run_model(case: Case) -> Result:
             answered[q.kind] += 1
         return got
 
-    got: dict[tuple[str, str], list[Cell]] = {}
-    opened: set[str] = set()
-    for part in PARTS:
-        cells = {lang: part_cells(case.now(lang, part), lang, part, case.token) for lang in SIDES}
-        out = merge(base[part], cells["de"], cells["en"], answer)
-        opened |= {q.kind for q in out.opened}
-        for lang in SIDES:
-            got[(lang, part)] = out.halves[lang]
+    # One merge over both parts: a cell's part is an aspect, like its tags, so
+    # a cell that moves between the deck and its companion stays one cell.
+    cells = {
+        lang: [
+            c for part in PARTS for c in part_cells(case.now(lang, part), lang, part, case.token)
+        ]
+        for lang in SIDES
+    }
+    out = merge(base["deck"] + base["companion"], cells["de"], cells["en"], answer)
+    opened = {q.kind for q in out.opened}
+    got = {
+        (lang, part): [c for c in out.halves[lang] if c.part == part]
+        for lang in SIDES
+        for part in PARTS
+    }
     res = Result("clean", answered=dict(answered))
     if opened:
         res.status, res.detail = "asks", "+".join(sorted(opened))
