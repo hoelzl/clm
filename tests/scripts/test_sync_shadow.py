@@ -133,3 +133,28 @@ def test_narration_added_on_one_half_is_a_translation_in_both_runs() -> None:
     ), model
     engine = shadow.run_engine(case)
     assert (engine.status, engine.verdict) == ("clean", "match"), engine
+
+
+def test_narration_moved_into_the_companion_keeps_the_other_halfs_text() -> None:
+    """A voiceover cell one half moves from the deck into its companion is one
+    cell that changed part, not a removal and a new cell: the other half's
+    narration moves with it and nothing is translated again."""
+    vo = {"de": "Sprechertext", "en": "Narration"}
+
+    def inline(lang: str) -> str:
+        cell = f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="vo-x"\n# {vo[lang]}\n'
+        return deck(lang, "x = 1").replace("# %%\nx = 1\n", f"# %%\nx = 1\n\n{cell}")
+
+    def moved(lang: str) -> str:
+        cell = (
+            f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="vo-x" for_slide="intro"\n'
+            f"# {vo[lang]}\n"
+        )
+        return cell
+
+    b = (inline("de"), inline("en"), None, None)
+    n = (deck("de", "x = 1"), deck("en", "x = 1"), moved("de"), moved("en"))
+    assert not isinstance(shadow.base_members(*b[:2]), str)
+    case = shadow.Case("slides/t/slides_t", "py", "b" * 40, "n" * 40, "de", b, n)
+    model = shadow.run_model(case)
+    assert (model.status, model.verdict, model.answered) == ("clean", "match", {}), model

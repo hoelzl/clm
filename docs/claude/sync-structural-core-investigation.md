@@ -161,8 +161,8 @@ turned into its own language). A localized cell the leading half removed is
 removed, and a cell it made shared again takes its content. Every other question
 is refused, as in §2.5. The engine records `B` and runs `report` and `apply` up to
 six passes. The prototype gets real cells through an adapter: a cell's id, its
-`cell_type` as the kind, its tags, and every other byte as the content. It
-merges the deck and the voiceover companion as two parts.
+`cell_type` as the kind, its tags, its file (deck or voiceover companion), and
+every other byte as the content. It merges both files at once (§4.9).
 
 | | PythonCourses | CppCourses |
 |---|---:|---:|
@@ -182,7 +182,7 @@ stamped on one half), `remove_vs_split` and `remove_vs_edit` (after a removed
 slide), `conflict_owner` (a re-homed voiceover), `pool_placement_divergence`,
 `order_decision`, `verify_translation` and `conflict_tags`. The prototype asks
 none of these on any replay. What both had answered by the judge is
-translation and removal of localized cells: the prototype 5,216 + 5,266
+translation and removal of localized cells: the prototype 4,830 + 5,266
 `translate_new`, 130 `fork` and 6 `unify`. The engine has 5,130 + 5,359
 `translate_new` and 237 `fork_pending_twin`. It also has 22,534 `translate_edit`
 answers for localized text, which the prototype leaves to a text layer it does
@@ -201,22 +201,26 @@ What the shadow found in the prototype, fixed before the numbers above:
   kinds** (`code`, `md`). A real deck's un-id'd markdown cells are `markdown`,
   so the prototype would never have asked about them. The kinds now come from
   the cells.
+- **Cells that change file.** 42 PythonCourses replays (21 changes) move 193
+  id'd cells between a deck and its companion. Merged one file at a time, such
+  a cell read as removed from one file and new in the other. That matched `N`
+  only because the judge's translator wrote the following half's text again,
+  where the engine keeps it as one member. A cell's file is now one more
+  aspect of it (§4.9), and those replays answer 386 fewer removals and 386
+  fewer `translate_new`.
 
 The probe, both law checks and the check across passes give the same numbers
-as before both changes.
+as before these changes.
 
 Limits of this shadow:
 
 - **One half leads.** Each replay hands one half's edit to the sync. An author
   who edited both halves before syncing is not replayed as such, and the
   two-sided cases stay with the probe and the laws.
-- **Cells that change part.** 42 PythonCourses replays (21 changes) move 193
-  id'd cells between a deck and its companion. The prototype merges each part alone, so such a cell reads as
-  removed from one part and new in the other: it matches `N`, but only
-  because the judge's translator supplies the follower's text again. The
-  engine treats it as one member. `clm voiceover extract` and `inline` work on
-  both halves at once, so a one-sided move is rarer in practice than here, but
-  the switch-over has to merge across parts.
+- **Header attributes of localized cells.** A localized cell's header is part
+  of its text here, so attributes such as `for_slide` on a voiceover moved into
+  the companion are left to the translator, as the text is (the shape of
+  #1180).
 - **Not compared:** the preamble, the order of a cell's tags, and the text of
   localized cells.
 - **States out of sync are skipped.** Most of them are parser refusals
@@ -637,6 +641,16 @@ asked. Both questions hold the part, because `scripts/sync_model_passes.py`
 does not generate them, so it cannot show that a narrower hold is safe. Tests:
 `tests/scripts/test_sync_model_laws.py`.
 
+**The file a cell sits in** (added 2026-11-13, found by the shadow, §2.6). A
+voiceover can sit in the deck or in its companion file, and a cell's file is
+one more aspect, merged like its tags. A cell one half moved into the companion
+is one cell that changed file, so the other half's narration moves with it and
+keeps its text. Order is defined within a file only. A half's word on two cells
+counts where it holds both in the file they end in, and the files are kept as
+blocks, deck first. A cell the other half has not moved yet is placed like a new
+cell, by the half that moved it. The probe's decks have one file, so none of
+its results change. Test: `tests/scripts/test_sync_shadow.py`.
+
 ---
 
 ## 5. Laws, and what was checked
@@ -735,9 +749,8 @@ list edits.
   and its tags. There is no text layer: it decides which cell goes where, not
   what a translation says, and it renders cells, not files. The probe
   exercises none of `lang`, companions, forks or real ids; the shadow on real
-  history does (§2.6), as one-sided edits only, and found two gaps that are
-  now closed and one that is open (cells that move between a deck and its
-  companion).
+  history does (§2.6), as one-sided edits only, and found three gaps, now
+  closed: forks, kinds, and cells that move between a deck and its companion.
 - **The identity question is answered by a perfect reader.** The harness knows
   the right cell from the names the case was built from. The probe's other
   policies have the same character, but an agent can misread.
@@ -824,11 +837,12 @@ step 2, which was not in it. On 2026-11-13 the maintainer moved the shadow run
 3. **Run the new core in shadow** beside the engine: on the probe, on the law
    cases, and on real history. Done for the probe and the laws (§2, §5) and for
    real history as one-sided edits (§2.6, `scripts/sync_shadow.py`). It
-   closed two gaps of the prototype (forks, kinds) and left one open: cells
-   that move between a deck and its companion.
+   found three gaps in the prototype, all closed: forks, kinds, and cells that
+   move between a deck and its companion.
 4. **Record the cell sequence in the ledger,** additively, beside the current
-   entries, in the form the shadow showed the core needs: per part (the deck,
-   the companion), each cell's id or none, kind, tags and content fingerprint.
+   entries, in the form the shadow showed the core needs: one sequence over
+   both files, each cell's id or none, kind, file, tags and content
+   fingerprint.
 5. **Switch the structural rows over** and delete what §4.7 lists. The
    maintainer decides go or no-go before this step, on the results of 2 and 3.
 
