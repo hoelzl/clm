@@ -41,6 +41,11 @@ and ``Outcome.record``). Which questions allow it is a finding, not a choice
   cells around it, so applying a part of the pass would change what the next
   pass asks.
 
+A cell that changes between shared and per-language on one half only is a
+question too: ``fork`` (a shared cell one half turned into its own language;
+answered, the other half gets its own variant) or ``unify`` (the reverse).
+Both hold the part.
+
 Tags are one more aspect of a cell, merged like its content: 3-way, per
 member, with a question (``conflict_tags``) when both halves changed them
 differently. They play no part in which cell is which. Whether a cell starts
@@ -228,16 +233,17 @@ def infer(
     # edited in place: between two neighbours that kept their relative order,
     # the unmatched base members and the unmatched cells of one kind pair up
     # in order (a diff's "replaced block"). A surplus is removed / new.
+    kinds = sorted({base[i].kind for i in free_base()} | {cells[j].kind for j in free_cells()})
     chain = _lis_chain(list(of.items()))
     bounds = [(-1, -1), *chain, (len(base), len(cells))]
     for (bi0, cj0), (bi1, cj1) in zip(bounds, bounds[1:], strict=False):
-        for kind in ("code", "md"):
+        for kind in kinds:
             fb = [i for i in free_base() if bi0 < i < bi1 and base[i].kind == kind]
             fc = [j for j in free_cells() if cj0 < j < cj1 and cells[j].kind == kind]
             for i, j in zip(fb, fc, strict=False):
                 of[i], evidence[i] = j, "in_place" if len(fb) == len(fc) else "block"
     # the only one left of its kind: moved and edited
-    for kind in ("code", "md"):
+    for kind in kinds:
         fb = [i for i in free_base() if base[i].kind == kind]
         fc = [j for j in free_cells() if cells[j].kind == kind]
         if len(fb) == 1 and len(fc) == 1:
@@ -273,6 +279,9 @@ class Member:
     #: An id a half gave to a recorded cell that has none. ``sid`` stays as
     #: recorded: until the pass is over, the cell is still an un-id'd one.
     stamp: str | None = None
+    #: The half that forked a shared member into per-language cells, or
+    #: unified a localized one into a shared cell, when only one half did.
+    lead: str | None = None
 
     @property
     def new_sid(self) -> str | None:
@@ -282,7 +291,8 @@ class Member:
 @dataclass
 class Question:
     #: order | conflict_shared | conflict_copies | conflict_tags |
-    #: remove_vs_edit | remove_localized_side | translate_new | identify
+    #: remove_vs_edit | remove_localized_side | translate_new | identify |
+    #: fork | unify
     kind: str
     member: int | None
     inferred: bool = False
@@ -503,7 +513,10 @@ def merge(
 
     if identify:
         for s in SIDES:
-            for kind in ("code", "md"):
+            un_ided = {m.kind for m in base if m.sid is None} | {
+                c.kind for c in cells[s] if c.sid is None
+            }
+            for kind in sorted(un_ided):
                 exact = {i for i in of[s] if i not in evidence[s]}
                 open_base = [
                     i
@@ -638,6 +651,21 @@ def merge(
             return got
 
         d, e = m.body["de"], m.body["en"]
+        if m.base_idx is not None and None not in m.pos.values():
+            now = {s: cells[s][m.pos[s]].localized for s in SIDES}
+            if now["de"] == now["en"] != m.localized:
+                m.localized = now["de"]  # both halves forked, or both unified
+            elif now["de"] != now["en"]:
+                # One half forked a shared cell into its own language, or
+                # unified a localized one: the other half needs its own
+                # variant written, or loses it. Either way someone has to say.
+                lead = next(s for s in SIDES if now[s] != m.localized)
+                if asks("unify" if m.localized else "fork") is None:
+                    return
+                m.localized, m.lead = not m.localized, lead
+                if not m.localized:
+                    m.content = m.body[lead]
+                    return
         if m.base_idx is None:
             if d is not None and e is not None:
                 m.content = None if m.localized else d
@@ -815,8 +843,12 @@ def merge(
             return own
         if own is not None:
             if m.localized:
+                if m.lead is not None and s != m.lead:  # the answer to ``fork``
+                    lead = cells[m.lead][m.pos[m.lead]]
+                    body = f"{lead.body} >{s}"
+                    return Cell(lead.sid, lead.kind, body, True, ("fork", lead.mark), m.merged_tags)
                 return replace(own, tags=m.merged_tags)
-            return replace(own, sid=m.new_sid, body=m.content, tags=m.merged_tags)
+            return replace(own, sid=m.new_sid, body=m.content, localized=False, tags=m.merged_tags)
         o = other(s)
         theirs = cells[o][m.pos[o]]
         mark = ("copy", theirs.mark)
