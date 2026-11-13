@@ -248,19 +248,19 @@ def _insert_attribute_like(header: str, holder: str, name: str) -> str:
 
 
 def _with_owners(header: str, have: Owners, want: Owners) -> str:
-    """``header`` (whose owner attributes are ``have``) with ``want``'s."""
-    for name, old, new in zip(("for_slide", "vo_anchor"), have, want, strict=True):
-        if old == new:
-            continue
-        attr = re.compile(rf'\s*{name}="[^"]*"')
-        found = attr.search(header)
-        if new is None:
-            header = attr.sub("", header, count=1)
-        elif found is not None:
-            header = header[: found.start()] + f' {name}="{new}"' + header[found.end() :]
-        else:
-            header = header.rstrip() + f' {name}="{new}"'
-    return header
+    """``header`` (whose owners are ``have``) with ``want``'s ``for_slide``,
+    written as the executor writes it (``doc_apply._set_for_slide``: dropped
+    and appended at the end). The text layer leaves ``vo_anchor`` to each
+    half, so ``want`` carries the header's own."""
+    if have[0] == want[0]:
+        return header
+    stripped = _FOR_SLIDE_RE.sub("", header)
+    if want[0] is None:
+        return stripped
+    return stripped.rstrip() + f' for_slide="{want[0]}"'
+
+
+_FOR_SLIDE_RE = re.compile(r'\s*for_slide="[^"]*"')
 
 
 def _other(lang: str) -> str:
