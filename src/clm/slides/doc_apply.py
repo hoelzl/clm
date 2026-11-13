@@ -125,6 +125,8 @@ __all__ = [
     "parse_decision_rows",
     "parse_decisions",
     "VerifyGate",
+    "header_with_slide_id_of",
+    "twin_lines",
 ]
 
 logger = logging.getLogger(__name__)
@@ -549,6 +551,17 @@ def _macro_header_from_body(cell: SideCell, body: str, comment_token: str, *, ba
     return _MACRO_QUOTED_ARG_RE.sub(lambda _m: f'"{line}"', cell.header, count=1)
 
 
+def twin_lines(source: SideCell, target: Lang, body: str, comment_token: str) -> tuple[str, ...]:
+    """The ``target`` twin of a localized ``source`` cell with ``body`` as its
+    text: the source's header with its ``lang`` swapped (a ``j2`` macro takes
+    the body as its line) and the source's trailing separator. What a
+    ``translate_new`` answer writes; the sequence core's renderer builds its
+    twins with it too. Raises ``_ItemError`` on a body the guards refuse."""
+    header = swap_lang(source.header, target) if source.lang_attr else source.header
+    template = evolve(source, lines=(header, *source.lines[1:]))
+    return _replacement_lines(template, body, comment_token, bare_ok=False)
+
+
 def _replacement_lines(
     cell: SideCell, body: str, comment_token: str, *, bare_ok: bool = True
 ) -> tuple[str, ...]:
@@ -803,6 +816,11 @@ def _with_slide_id_of(source_lines: tuple[str, ...], target_header: str) -> tupl
     fingerprint ignores the attribute anyway (parity is judged modulo id).
     """
     return (_header_with_slide_id_of(source_lines[0], target_header), *source_lines[1:])
+
+
+def header_with_slide_id_of(source_header: str, target_header: str) -> str:
+    """Public name of :func:`_header_with_slide_id_of`."""
+    return _header_with_slide_id_of(source_header, target_header)
 
 
 def _header_with_slide_id_of(source_header: str, target_header: str) -> str:
@@ -2230,13 +2248,9 @@ def _apply_body_decision(
         source_cell = member.side(source)
         if source_cell is None:
             raise _ItemError(f"the {source} source cell of {item.key} is missing")
-        header = (
-            swap_lang(source_cell.header, target) if source_cell.lang_attr else (source_cell.header)
-        )
-        template = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
         new_cell = evolve(
             source_cell,
-            lines=_replacement_lines(template, body, ex.comment_token, bare_ok=False),
+            lines=twin_lines(source_cell, target, body, ex.comment_token),
             lang_attr=target if source_cell.lang_attr else None,
         )
         ex.insert_mirrored(member, source, target, source_cell.part, new_cell)
