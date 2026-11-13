@@ -182,6 +182,24 @@ class TestSpecStandardReachesEveryPayload:
         assert payloads
         assert {p.prog_lang_standard for p in payloads} == {""}
 
+    def test_the_standard_applies_to_the_course_language_only(self, tmp_path):
+        """A deck in another language keeps that language's default standard."""
+        course = self._course(tmp_path, '<prog-lang standard="23">cpp</prog-lang>')
+
+        assert course.standard_for("cpp") == "23"
+        assert course.standard_for("python") == ""
+        assert course.standard_for("") == ""
+
+    @pytest.mark.asyncio
+    async def test_a_cpp_deck_in_another_course_language_is_built_at_the_default(self, tmp_path):
+        """The standard belongs to ``<prog-lang>``: a Python course has none to give."""
+        course = self._course(tmp_path, "<prog-lang>python</prog-lang>")
+
+        payloads = await self._payloads(course)
+
+        assert {p.prog_lang for p in payloads} == {"cpp"}
+        assert {p.prog_lang_standard for p in payloads} == {""}
+
     @pytest.mark.asyncio
     async def test_the_same_deck_gets_different_cache_keys_per_standard(self, tmp_path):
         """A deck shared by a C++20 and a C++23 course must not share cache entries."""
