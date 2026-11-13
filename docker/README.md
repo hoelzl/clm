@@ -110,17 +110,38 @@ From the repository root:
 
 Two variants, each multi-architecture (linux/amd64 and linux/arm64):
 
-- **lite** — base `python:3.12-slim`; scientific stack, no ML/GPU libraries.
-- **full** — ML stack. On amd64 the base is `nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04`
-  (CUDA/PyTorch, GPU-accelerated). On arm64 (Apple Silicon) there is no CUDA
-  base image, so it reuses `python:3.12-slim` and installs CPU PyTorch wheels;
-  GPU-only packages with no aarch64 wheel (e.g. `fastembed-gpu`) are skipped.
+- **lite** — base `ubuntu:26.04`; scientific stack, no ML/GPU libraries.
+- **full** — ML stack. On amd64 the base is `nvidia/cuda:13.3.1-cudnn-runtime-ubuntu26.04`
+  (CUDA 13 / PyTorch; GPU-accelerated when the container is started with
+  GPUs, which needs a host NVIDIA driver that supports CUDA 13.3). On arm64 (Apple Silicon) the variant is CPU-only: it
+  reuses the lite base and installs CPU PyTorch wheels; GPU-only packages with
+  no aarch64 wheel (e.g. `fastembed-gpu`) are skipped.
+- Both variants sit on the **same Ubuntu release**, and Python comes from
+  micromamba in both — the base image contributes the system packages only.
 - Package manager: uv (modern Python package installer)
 - External deps: .NET SDK, Deno, IJava
 - Python deps: PyTorch, FastAI, Jupyter, scientific stack (full variant)
 - Jupyter kernels: Python, C++, C#, Java, TypeScript
-- C++ toolchain: the system g++ (`build-essential`) and `cmake`. With them the
-  image can compile the C++ code export, so no host toolchain is needed:
+- C++ toolchain: the system g++ (`build-essential`, **g++ 15** on Ubuntu 26.04)
+  and `cmake`. It serves two purposes at once (#1228):
+
+  - it is the **standard library of the xeus-cpp kernel**. The kernel embeds
+    its own clang (21, via the pinned `cppinterop`), but takes its libstdc++
+    headers from whichever `c++` is on `PATH` — the system g++. No conda
+    libstdc++ headers are installed; they would not be used.
+  - it **compiles the C++ code export**.
+
+  So a notebook and its exported project always see the same library, and the
+  base image's g++ decides which C++23 library features a deck can use: g++ 15
+  provides `<print>`, `std::ranges::to`, `<generator>` and `<flat_map>` (not
+  `<mdspan>`). g++ 14 is *not* a safe floor: it has no `<flat_map>`, and with
+  the headers of the 14.2.0 release (Ubuntu 24.04's `g++-14`) pipe-form
+  `r | std::ranges::to<…>()` does not compile under the kernel's clang 21 —
+  later 14.x snapshots (Debian 13's) carry the fix. Pinned by
+  `tests/infrastructure/workers/test_docker_image_cpp_toolchain.py`.
+
+  With it the image can compile the C++ code export, so no host toolchain is
+  needed:
 
   ```bash
   # <out> = a clm output tree; <dir> = e.g. "<course>/Slides/Cpp/Completed"
@@ -128,7 +149,7 @@ Two variants, each multi-architecture (linux/amd64 and linux/arm64):
     sh -c 'cmake -S "<dir>" -B /tmp/b && cmake --build /tmp/b --parallel'
   ```
 
-  `/opt/conda/bin` comes first on `PATH` but holds no `c++`, so CMake picks the
-  system g++. Keep it that way: a conda clang there compiles the export, but
+  `/opt/conda/bin` comes first on `PATH` but holds no `c++`, so CMake — and the
+  kernel — pick the system g++. Keep it that way: a conda clang there compiles the export, but
   its binaries fail at run time against the conda `libstdc++` (the
   cam-notebook `cpp` image in PythonCourses pins `CXX` for exactly this).

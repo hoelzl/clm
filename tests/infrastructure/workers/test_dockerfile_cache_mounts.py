@@ -77,7 +77,7 @@ def test_apt_cache_and_lists_use_distinct_ids() -> None:
 
 
 def test_notebook_lite_and_full_bases_use_separate_apt_caches() -> None:
-    """The lite (Debian) and full (Ubuntu/CUDA) bases must not share apt state."""
+    """The lite (plain Ubuntu) and full (CUDA, extra apt repo) bases must not share apt state."""
     dockerfile = REPO_ROOT / "docker" / "notebook" / "Dockerfile"
     stage = None
     ids_by_stage: dict[str, set[str]] = defaultdict(set)
