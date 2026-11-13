@@ -9,6 +9,8 @@ subset to disk, and assert the generator picks up exactly those.
 import io
 import shutil
 
+import pytest
+
 from clm.build.engine import _compute_section_dirs_for_cleanup
 from clm.core.cmake_export import (
     CMAKELISTS_FILENAME,
@@ -533,6 +535,76 @@ def _cmake_tree(kind_roots) -> dict:
         for kind_root in kind_roots
         for path in sorted(kind_root.rglob(CMAKELISTS_FILENAME))
     }
+
+
+class TestCxxStandard:
+    """``CMAKE_CXX_STANDARD`` follows the course's ``<prog-lang standard>`` (#1228)."""
+
+    def _course(self, tmp_path, prog_lang_element: str) -> Course:
+        data_dir = tmp_path / "course"
+        topic_dir = data_dir / "slides" / "module_100_test" / "topic_100_intro"
+        topic_dir.mkdir(parents=True)
+        (topic_dir / "slides_intro.cpp").write_text(
+            CPP_DECK_TEMPLATE.format(de="Intro", en="Intro"), encoding="utf-8"
+        )
+        xml = COURSE_CPP_XML.replace("<prog-lang>cpp</prog-lang>", prog_lang_element).replace(
+            "<topic>more</topic>", ""
+        )
+        assert prog_lang_element in xml
+        return Course.from_spec(CourseSpec.from_file(io.StringIO(xml)), data_dir, tmp_path / "out")
+
+    def _standards_written(self, course) -> set[str]:
+        _materialize_code_outputs(course, course.output_targets[0])
+        written = write_cmake_projects(course)
+        assert written
+        found = set()
+        for path in written:
+            lines = [
+                line.strip()
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if "CMAKE_CXX_STANDARD " in line
+            ]
+            assert len(lines) == 1, path
+            found.add(lines[0])
+        return found
+
+    def test_generate_defaults_to_cpp20(self):
+        files = generate_cmake_files("p", ["01 Intro/01 Hello.cpp"])
+        assert all("set(CMAKE_CXX_STANDARD 20)" in text for text in files.values())
+
+    def test_generate_writes_the_given_standard_into_root_and_module_projects(self):
+        files = generate_cmake_files("p", ["01 Intro/01 Hello.cpp"], cxx_standard="23")
+        assert set(files) == {"CMakeLists.txt", "01 Intro/CMakeLists.txt"}
+        for text in files.values():
+            assert "set(CMAKE_CXX_STANDARD 23)" in text
+            assert "CMAKE_CXX_STANDARD 20" not in text
+            assert "set(CMAKE_CXX_STANDARD_REQUIRED ON)" in text
+
+    def test_a_cpp23_course_exports_cpp23_projects(self, tmp_path):
+        course = self._course(tmp_path, '<prog-lang standard="23">cpp</prog-lang>')
+        assert self._standards_written(course) == {"set(CMAKE_CXX_STANDARD 23)"}
+
+    @pytest.mark.parametrize(
+        "element", ["<prog-lang>cpp</prog-lang>", '<prog-lang standard="20">cpp</prog-lang>']
+    )
+    def test_a_course_without_a_standard_still_exports_cpp20(self, tmp_path, element):
+        course = self._course(tmp_path, element)
+        assert self._standards_written(course) == {"set(CMAKE_CXX_STANDARD 20)"}
+
+    def test_notebook_kernel_and_cmake_standard_come_from_the_same_setting(self, tmp_path):
+        """The point of #1228: one switch, so notebook and export cannot disagree."""
+        from clm.core.course_files.notebook_file import NotebookFile
+        from clm.core.utils.prog_lang_utils import kernelspec_for
+
+        course = self._course(tmp_path, '<prog-lang standard="23">cpp</prog-lang>')
+        notebooks = [f for f in course.files if isinstance(f, NotebookFile)]
+        assert notebooks
+        for notebook in notebooks:
+            assert notebook.prog_lang_standard == "23"
+            assert kernelspec_for(notebook.prog_lang, notebook.prog_lang_standard)["name"] == (
+                "xcpp23"
+            )
+        assert self._standards_written(course) == {"set(CMAKE_CXX_STANDARD 23)"}
 
 
 class TestWriteCmakeProjectsOnlySections:

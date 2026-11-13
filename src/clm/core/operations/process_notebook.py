@@ -235,6 +235,10 @@ class ProcessNotebookOperation(Operation):
     format: str
     kind: str
     prog_lang: str
+    # Language standard the notebook is built at (issue #1228); ``""`` means
+    # the language's default. From the course spec's
+    # ``<prog-lang standard="…">`` via ``NotebookFile.prog_lang_standard``.
+    prog_lang_standard: str = ""
     fallback_execute: bool = False
     # If True, the notebook is rendered without spawning a kernel: cells
     # are converted to all configured output formats with empty outputs.
@@ -495,6 +499,7 @@ class ProcessNotebookOperation(Operation):
             output_file=str(self.output_file),
             kind=self.kind,
             prog_lang=self.prog_lang,
+            prog_lang_standard=self.prog_lang_standard,
             language=self.language,
             format=self.format,
             template_fingerprint=compute_template_fingerprint(self.prog_lang),

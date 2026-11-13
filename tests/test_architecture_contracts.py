@@ -221,6 +221,9 @@ class TestWorkerPayloadContract:
         "organization",
         "other_files",
         "prog_lang",
+        # Added with a default (#1228): a lagging worker ignores it and runs
+        # the deck at the default standard, a lagging host never sends it.
+        "prog_lang_standard",
         "skip_errors",
         "skip_evaluation",
         "source_topic_dir",

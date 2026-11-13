@@ -721,7 +721,9 @@ would put statements and mid-file `#include`s at namespace scope) but a
   - A deck with neither workshops nor `global` cells stays a single
     `<deck>.cpp` with its includes at the top.
 
-Every code-output directory also gets generated CMake projects (C++20):
+Every code-output directory also gets generated CMake projects (C++20, or
+the course's `<prog-lang standard="23">` since CLM {version} — the same
+setting that selects the notebook kernel; see `clm info spec-files`):
 a `CMakeLists.txt` at the kind root that adds one subdirectory per module,
 and a standalone `CMakeLists.txt` in every module directory with **one
 executable target per deck and per workshop file**
@@ -1561,7 +1563,8 @@ Two spec-structure checks added in CLM {version} (both **warnings**):
   element with everything inside it, so a typo or a misplaced element would
   otherwise drop its `<topic>`s from the build silently. Only the outermost
   unknown element is reported. Unknown attributes on the agenda elements
-  `<block>`, `<agenda>`, `<agenda-targets>` are `unknown_attribute` warnings.
+  `<block>`, `<agenda>`, `<agenda-targets>` and on `<prog-lang>` are
+  `unknown_attribute` warnings.
 - **Agenda rules** — only when the spec uses `<block>` (see `clm info
   spec-files`, *`<block>` — agenda time blocks*): `agenda_block_without_units`,
   `agenda_unblocked_topic` (a bare `<topic>` in a subsection that has blocks),
@@ -4068,8 +4071,9 @@ Read-only build-cache inspection.
 
 Shows, for one slide source file, the exact cache-key components a build
 would compute (the deck text digest, every hashed topic sibling, the
-bundled-template fingerprint, the worker image identity, and the
-`evaluate=`/`skip-errors=` flags), the resulting `content_hash` /
+bundled-template fingerprint, the worker image identity, the
+`evaluate=`/`skip-errors=` flags, and the language standard from
+`<prog-lang standard>`), the resulting `content_hash` /
 `execution_cache_hash` per output artifact, and the hit/miss state of every
 cache layer (`processed_files`, `executed_notebooks`, `results_cache`) with
 stored-at timestamps — ending in a per-artifact verdict: replays stored

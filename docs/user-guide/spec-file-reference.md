@@ -61,6 +61,28 @@ Programming language for the course notebooks.
 <prog-lang>python</prog-lang>
 ```
 
+**Optional attribute `standard`** — the language standard of the course. Only
+C++ offers a choice: `"20"` (the default) or `"23"`.
+
+```xml
+<prog-lang standard="23">cpp</prog-lang>
+```
+
+The attribute sets two things together: the Jupyter kernel the notebooks run
+in (`xcpp23` instead of `xcpp20`) and the `CMAKE_CXX_STANDARD` of the exported
+CMake projects. It is a course-level setting — every C++ deck of the course is
+built at that standard. An unsupported value is an error.
+
+C++23 library features (`<print>`, `std::ranges::to`, `<generator>`,
+`<flat_map>`) come from the worker image's g++ 15 standard library, so build
+C++23 courses in Docker mode with a current notebook image. Students need a
+compiler with a C++23 standard library too (GCC 15 or comparable).
+
+In a notebook cell, output written with `std::cout` (and `SHOW`) is displayed
+before output written with `std::print` / `std::println`, regardless of the
+order in the code. Avoid mixing them in one cell, or use
+`std::println(std::cout, ...)`.
+
 ### `<description>` (Required)
 
 Bilingual course description.

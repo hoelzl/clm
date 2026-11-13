@@ -1949,6 +1949,13 @@ class CourseSpec:
     # CLM_NOTEBOOK_KERNEL_PYTHON env var; overrides the project-level clm.toml
     # [jupyter].kernel_python. From ``<kernel-python>``.
     kernel_python: str = ""
+    # Language standard of the course's programming language (issue #1228),
+    # from ``<prog-lang standard="23">cpp</prog-lang>``. Normalized: ``""``
+    # means the language's default standard, also when the spec names that
+    # default explicitly (see ``prog_lang_utils.normalize_standard``). For C++
+    # it selects the kernel (``xcpp23``) and the exported CMake projects'
+    # ``CMAKE_CXX_STANDARD`` together.
+    prog_lang_standard: str = ""
     # Course-level ``<agenda-targets>`` for the agenda layer (issue #1163):
     # unit length plus the optional per-day / per-week / total unit targets
     # ``clm validate`` checks the ``<block>`` units against. ``None`` = absent.
@@ -3100,6 +3107,21 @@ class CourseSpec:
         prog_lang = prog_lang_elem.text if prog_lang_elem is not None else ""
         if prog_lang is None:
             prog_lang = ""
+        prog_lang_standard = ""
+        if prog_lang_elem is not None and "standard" in prog_lang_elem.attrib:
+            from clm.core.utils.prog_lang_utils import normalize_standard
+
+            # A hard error, unlike other ignorable spec values: silently
+            # falling back would build the course at a different language
+            # standard than its author asked for.
+            try:
+                prog_lang_standard = normalize_standard(
+                    prog_lang.strip(), prog_lang_elem.attrib["standard"]
+                )
+            except ValueError as e:
+                raise CourseSpecError(
+                    f"Invalid <prog-lang standard=...> in spec file '{file_name}': {e}"
+                ) from None
 
         # Parse project slug from both locations
         top_level_slug = element_text(root, "project-slug") or None
@@ -3172,6 +3194,7 @@ class CourseSpec:
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             sidecar_layout=sidecar_layout,
             kernel_python=element_text(root, "kernel-python").strip(),
+            prog_lang_standard=prog_lang_standard,
             agenda_targets=cls.parse_agenda_targets(root),
             author=author,
             organization=organization,
@@ -3277,11 +3300,15 @@ class UnknownElement:
     attribute: str | None = None
 
 
-# Attribute vocabulary of the agenda elements (issue #1163), checked by
-# ``clm validate`` (``unknown_attribute``). Limited to these new elements, which
-# have no legacy specs: an ignored attribute such as ``enabled="false"`` on a
-# <block> would otherwise look like it disabled the block's decks.
+# Attribute vocabulary checked by ``clm validate`` (``unknown_attribute``).
+# Limited to the agenda elements (issue #1163), which have no legacy specs —
+# an ignored attribute such as ``enabled="false"`` on a <block> would otherwise
+# look like it disabled the block's decks — and ``<prog-lang>``, which took no
+# attribute before ``standard`` (issue #1228).
 SPEC_ELEMENT_ATTRIBUTES: dict[str, frozenset[str]] = {
+    # ``standard`` selects the language standard (issue #1228); a misspelt
+    # attribute would otherwise leave the course on the default silently.
+    "prog-lang": frozenset({"standard"}),
     "block": frozenset({"units", "form", "status", "standalone", "pace"}),
     "agenda": frozenset(),
     "agenda-targets": frozenset({"unit-minutes", "units-per-day", "days-per-week", "units-total"}),

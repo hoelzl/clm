@@ -1465,6 +1465,57 @@ def test_kernel_python_parsed_from_element():
     assert spec.kernel_python == "/opt/course-venv/bin/python"
 
 
+class TestProgLangStandard:
+    """``<prog-lang standard="…">`` (issue #1228)."""
+
+    def _spec(self, prog_lang_element: str) -> CourseSpec:
+        xml = COURSE_1_XML.replace("<prog-lang>python</prog-lang>", prog_lang_element)
+        assert xml != COURSE_1_XML
+        return CourseSpec.from_file(io.StringIO(xml))
+
+    def test_defaults_to_empty(self):
+        assert CourseSpec.from_file(io.StringIO(COURSE_1_XML)).prog_lang_standard == ""
+        assert self._spec("<prog-lang>cpp</prog-lang>").prog_lang_standard == ""
+
+    def test_cpp23_is_parsed(self):
+        spec = self._spec('<prog-lang standard="23">cpp</prog-lang>')
+        assert spec.prog_lang == "cpp"
+        assert spec.prog_lang_standard == "23"
+
+    def test_the_default_standard_is_normalized_away(self):
+        """An explicit default must not change cache keys or outputs."""
+        assert self._spec('<prog-lang standard="20">cpp</prog-lang>').prog_lang_standard == ""
+
+    def test_an_unsupported_standard_is_a_spec_error(self):
+        with pytest.raises(CourseSpecError, match="expected one of 20, 23"):
+            self._spec('<prog-lang standard="17">cpp</prog-lang>')
+
+    def test_a_standard_on_a_language_without_standards_is_a_spec_error(self):
+        with pytest.raises(CourseSpecError, match="has no selectable standard"):
+            self._spec('<prog-lang standard="3.13">python</prog-lang>')
+
+    def test_a_misspelt_attribute_is_reported_by_validate(self):
+        from xml.etree import ElementTree as ET
+
+        from clm.core.course_spec import find_unknown_elements
+
+        xml = COURSE_1_XML.replace(
+            "<prog-lang>python</prog-lang>", '<prog-lang standrad="23">cpp</prog-lang>'
+        )
+        unknown = [u for u in find_unknown_elements(ET.fromstring(xml)) if u.attribute]
+        assert [(u.tag, u.attribute) for u in unknown] == [("prog-lang", "standrad")]
+
+    def test_the_standard_attribute_is_known_to_validate(self):
+        from xml.etree import ElementTree as ET
+
+        from clm.core.course_spec import find_unknown_elements
+
+        xml = COURSE_1_XML.replace(
+            "<prog-lang>python</prog-lang>", '<prog-lang standard="23">cpp</prog-lang>'
+        )
+        assert [u for u in find_unknown_elements(ET.fromstring(xml)) if u.attribute] == []
+
+
 class TestGitHubSpecDeriveDirName:
     """Tests for GitHubSpec.derive_dir_name."""
 

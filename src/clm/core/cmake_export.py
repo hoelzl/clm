@@ -41,7 +41,7 @@ from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.cpp_export_files import companion_output_files, workshop_ordinal
 from clm.core.deck_markers import has_no_compile_marker
 from clm.core.utils.path_utils import ext_for, output_specs
-from clm.core.utils.prog_lang_utils import comment_token_for_path
+from clm.core.utils.prog_lang_utils import comment_token_for_path, effective_standard
 from clm.core.utils.text_utils import sanitize_file_name
 
 if TYPE_CHECKING:
@@ -113,10 +113,16 @@ class _Target:
 _CONFIGURED_VAR = "CLM_CODE_EXPORT_CONFIGURED"
 
 
-def _toolchain_lines(include_dir: str | None, indent: str = "") -> list[str]:
+DEFAULT_CXX_STANDARD = effective_standard("cpp")
+"""``CMAKE_CXX_STANDARD`` of a course that selects no standard (``"20"``)."""
+
+
+def _toolchain_lines(
+    include_dir: str | None, indent: str = "", cxx_standard: str = DEFAULT_CXX_STANDARD
+) -> list[str]:
     lines = [
         f"{indent}set({_CONFIGURED_VAR} ON)",
-        f"{indent}set(CMAKE_CXX_STANDARD 20)",
+        f"{indent}set(CMAKE_CXX_STANDARD {cxx_standard})",
         f"{indent}set(CMAKE_CXX_STANDARD_REQUIRED ON)",
         f"{indent}if(MSVC)",
         f"{indent}    # Slide sources are UTF-8; MSVC assumes the local codepage without this.",
@@ -188,6 +194,7 @@ def generate_cmake_files(
     with_include_dir: bool = False,
     extra_modules: Collection[str] = (),
     reserved_targets: Collection[str] = (),
+    cxx_standard: str = DEFAULT_CXX_STANDARD,
 ) -> dict[str, str]:
     """Generate the CMake files of one code-output directory.
 
@@ -207,6 +214,10 @@ def generate_cmake_files(
     (#1138): module directories whose decks are not passed in but which the
     kind root must still ``add_subdirectory``, and the target names their
     existing project files already use.
+
+    *cxx_standard* is the ``CMAKE_CXX_STANDARD`` of every project file
+    written — the same standard the course's notebooks are executed at
+    (issue #1228).
     """
     targets = _assign_targets(deck_rel_paths, excluded, workshops or {}, reserved_targets)
     include_dir = SUPPORT_INCLUDE_DIRNAME if with_include_dir else None
@@ -231,7 +242,7 @@ def generate_cmake_files(
         "cmake_minimum_required(VERSION 3.21)",
         f"project({project_ident} LANGUAGES CXX)",
         "",
-        *_toolchain_lines(include_dir),
+        *_toolchain_lines(include_dir, cxx_standard=cxx_standard),
         "",
     ]
     root_lines += [f'add_subdirectory("{module}")' for module in sorted({*modules, *extra_modules})]
@@ -249,7 +260,11 @@ def generate_cmake_files(
             "",
             f"if(NOT {_CONFIGURED_VAR})",
             "    # Opened standalone: the parent project did not configure the toolchain.",
-            *_toolchain_lines(f"../{include_dir}" if include_dir else None, indent="    "),
+            *_toolchain_lines(
+                f"../{include_dir}" if include_dir else None,
+                indent="    ",
+                cxx_standard=cxx_standard,
+            ),
             "endif()",
             "",
             *_target_lines(module_targets),
@@ -265,6 +280,7 @@ def generate_cmakelists(
     *,
     workshops: Mapping[str, Sequence[str]] | None = None,
     with_include_dir: bool = False,
+    cxx_standard: str = DEFAULT_CXX_STANDARD,
 ) -> str:
     """The kind-root ``CMakeLists.txt`` text of :func:`generate_cmake_files`."""
     return generate_cmake_files(
@@ -273,6 +289,7 @@ def generate_cmakelists(
         excluded,
         workshops=workshops,
         with_include_dir=with_include_dir,
+        cxx_standard=cxx_standard,
     )[CMAKELISTS_FILENAME]
 
 
@@ -465,9 +482,15 @@ def write_cmake_projects(course: Course) -> list[Path]:
     deck — still adding every unselected section's module directory that
     holds a ``CMakeLists.txt`` from an earlier build; those module files
     are left as they are.
+
+    ``CMAKE_CXX_STANDARD`` is the course's C++ standard (the spec's
+    ``<prog-lang standard="…">``, default 20) — the one setting that also
+    selects the kernel the notebooks run in, so a deck cannot be C++23 in
+    the notebook and C++20 in its exported project (issue #1228).
     """
     if course.prog_lang != "cpp":
         return []
+    cxx_standard = effective_standard("cpp", course.standard_for("cpp"))
     partial = course.section_selection is not None
     projects = collect_cpp_code_outputs(course)
     if partial:
@@ -491,6 +514,7 @@ def write_cmake_projects(course: Course) -> list[Path]:
             with_include_dir=bool(support),
             extra_modules=kept,
             reserved_targets=set().union(*kept.values()),
+            cxx_standard=cxx_standard,
         )
         for rel, content in files.items():
             path = kind_root / PurePosixPath(rel)

@@ -2,15 +2,15 @@
   "epoch": 3,
   "decision": {
     "action": "keep",
-    "reason": "#799 C11: notebook_worker writes the same UTF-8/LF bytes via atomic_write_bytes instead of a text-mode open(newline='\\n'); output content is unchanged, only the write is atomic and a digest is recorded"
+    "reason": "#1228 per-course language standard: a payload without prog_lang_standard gets the same kernelspec/language_info and the same cache hashes as before (pinned by TestProgLangStandardInCacheKeys.test_default_standard_keeps_the_pre_field_hashes and TestLanguageStandards.test_the_default_standard_leaves_the_metadata_untouched); a course that selects a standard gets new cache keys through the new field, so no stale output can be replayed."
   },
   "sources": {
     "clm/core/cpp_export_files.py": "32d55d727cc7b300dd1d966f5898c481c28f7af12402818b27f4744849866f6c",
     "clm/core/cross_references.py": "0b293a27219c07cd011498a703aa641c00070d18c7e085681759f0ba731d3643",
-    "clm/core/messaging/notebook_classes.py": "ee75027d2ad7a2a14a905d10c910f85560b797851e2544bf7bf63e9fd778c5a2",
-    "clm/core/operations/process_notebook.py": "9415971f76bf00ce41f81d1b8b216bcaeefa8d05417c57b27b007365fb89b658",
+    "clm/core/messaging/notebook_classes.py": "7ac69fbeb88bb70bd77c1af0ba8674d48e625152aa157b8b0461efbc5f605f00",
+    "clm/core/operations/process_notebook.py": "4a15caee06cbae68feffd3691b4df431f31542459713e23de729f3dab2cebce5",
     "clm/core/tags.py": "f28e6bdacdc89f7223d851a85ff16eb5623f745b8b28080d1f7cdf036516ea85",
-    "clm/core/utils/prog_lang_utils.py": "ebaebaf30ab1facca6cd7ac16a6aa1e7c698abc794380718e25ad18caa132581",
+    "clm/core/utils/prog_lang_utils.py": "013245bc21585d3d23f8475f259473e982cb8947d8fed49e94df0ffa23950207",
     "clm/core/utils/text_utils.py": "b30fbd3fe330f86ea369adc22845371e43a41dcbde2f967b7632713658cb9cd7",
     "clm/core/workshop_scope.py": "4256bb2c5fa92f10608e8c8982e4b3dd6886b29dd23f4ac39e1a1f50103f5fe5",
     "clm/infrastructure/http_replay_mitm/__init__.py": "c2bfe0c6d6e7d03b0feb2394c1ca49e2a1e9dc5c04a26ea2a62725d008498b6b",
@@ -27,7 +27,7 @@
     "clm/workers/notebook/commented_installs.py": "8c056e6e8a36aaae61ec7772fee7ad74fd23fb7e364694b9bff1463b343e2ed2",
     "clm/workers/notebook/cpp_code_analysis.py": "555387facc24fe1fbba0d9f81d12bc4cc624b6c79314f742c88780add6fa68f2",
     "clm/workers/notebook/cpp_code_emitter.py": "3a6fa932a274ac771448e2c88e756f8ca189ad3ca9d0ff9829cf9d937b3ea507",
-    "clm/workers/notebook/notebook_processor.py": "c3ab212ba288b73432047d7b50c74020c4c16bba2540bc5318ae00481d09d07c",
+    "clm/workers/notebook/notebook_processor.py": "91ec2a220e04ee281adb560bef00736fd7cae8ca2ec044a14d691092a7b3e006",
     "clm/workers/notebook/notebook_worker.py": "2172eef7ff46264cc7c912906c7439c40895e5f82e970aaff3eea8c0b5505ae5",
     "clm/workers/notebook/output_spec.py": "92a341dade00736476a2c1ac42920569725f31f4609fd60a1575dd9e229c2698",
     "clm/workers/notebook/utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

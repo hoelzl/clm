@@ -306,6 +306,7 @@ class NotebookFile(CourseFile):
                 format=format_,
                 kind=mode,
                 prog_lang=self.prog_lang,
+                prog_lang_standard=self.prog_lang_standard,
                 fallback_execute=self.course.fallback_execute,
                 skip_evaluation=self.skip_evaluation,
                 skip_errors=self.skip_errors,
@@ -380,6 +381,7 @@ class NotebookFile(CourseFile):
                             format=format_,
                             kind=kind,
                             prog_lang=self.prog_lang,
+                            prog_lang_standard=self.prog_lang_standard,
                             fallback_execute=self.course.fallback_execute,
                             skip_evaluation=self.skip_evaluation,
                             skip_errors=self.skip_errors,
@@ -416,6 +418,11 @@ class NotebookFile(CourseFile):
             return "python"
         # 3. For other extensions: use extension-based mapping
         return extension_to_prog_lang(self.path.suffix)
+
+    @property
+    def prog_lang_standard(self) -> str:
+        """Language standard this notebook is built at (``""`` = the default)."""
+        return self.course.standard_for(self.prog_lang)
 
     def file_name(self, lang: str, ext: str) -> str:
         sanitized_title = sanitize_file_name(self.title[lang])

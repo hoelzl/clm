@@ -107,7 +107,7 @@ def test_the_notebook_image_serves_every_kernel_to_an_arbitrary_uid() -> None:
     """
     image = _image_or_skip("notebook")
     listing = _run(image, "jupyter kernelspec list 2>&1")
-    for kernel in ("python3", "deno", "java", ".net-csharp", "xcpp20"):
+    for kernel in ("python3", "deno", "java", ".net-csharp", "xcpp20", "xcpp23"):
         assert kernel in listing, f"{kernel} missing for uid 4242:\n{listing}"
 
 

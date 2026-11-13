@@ -15,6 +15,22 @@ _cpp_config: ProgLangConfig = {
         "version": "20",
     },
     "kernelspec": {"display_name": "C++20", "language": "cpp", "name": "xcpp20"},
+    # Selectable language standards (issue #1228): the course spec's
+    # ``<prog-lang standard="23">cpp</prog-lang>``. Each entry overlays the
+    # ``kernelspec`` and ``language_info`` above; the default standard must
+    # reproduce them exactly, so a course that names no standard — or names
+    # the default — builds the same notebooks as before.
+    "default_standard": "20",
+    "standards": {
+        "20": {
+            "kernelspec": {"display_name": "C++20", "name": "xcpp20"},
+            "language_info": {"version": "20"},
+        },
+        "23": {
+            "kernelspec": {"display_name": "C++23", "name": "xcpp23"},
+            "language_info": {"version": "23"},
+        },
+    },
 }
 
 _csharp_config: ProgLangConfig = {
@@ -163,11 +179,71 @@ def jupytext_format_for(prog_lang: str) -> str | dict[str, str]:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
-def language_info(prog_lang: str) -> dict[str, Any]:
+def supported_standards(prog_lang: str) -> tuple[str, ...]:
+    """The language standards a course can select for *prog_lang*.
+
+    Empty for a language without selectable standards (and for an unknown
+    language). For C++: ``("20", "23")``.
+    """
+    lang_config = config.prog_lang.get(prog_lang, {})
+    return tuple(lang_config.get("standards", {}))
+
+
+def default_standard(prog_lang: str) -> str:
+    """The standard *prog_lang* is built with when a course names none (``""`` if n/a)."""
+    return cast(str, config.prog_lang.get(prog_lang, {}).get("default_standard", ""))
+
+
+def normalize_standard(prog_lang: str, standard: str | None) -> str:
+    """Canonical form of a requested language standard: ``""`` means "the default".
+
+    Returns ``""`` for no standard and for the language's default standard,
+    so that naming the default explicitly is indistinguishable from omitting
+    it — in the notebook metadata, the CMake export and the cache keys.
+
+    Raises :class:`ValueError` for a standard *prog_lang* does not offer,
+    which includes any standard for a language that has none.
+    """
+    requested = (standard or "").strip()
+    if not requested:
+        return ""
+    offered = supported_standards(prog_lang)
+    if requested not in offered:
+        if not offered:
+            raise ValueError(
+                f"Programming language {prog_lang!r} has no selectable standard "
+                f"(got standard {requested!r})."
+            )
+        raise ValueError(
+            f"Unsupported standard {requested!r} for programming language {prog_lang!r}: "
+            f"expected one of {', '.join(offered)}."
+        )
+    return "" if requested == default_standard(prog_lang) else requested
+
+
+def effective_standard(prog_lang: str, standard: str | None = "") -> str:
+    """The standard actually in force: *standard*, or the language's default.
+
+    ``""`` for a language without selectable standards.
+    """
+    return normalize_standard(prog_lang, standard) or default_standard(prog_lang)
+
+
+def _standard_overlay(prog_lang: str, standard: str | None, key: str) -> dict[str, Any]:
+    normalized = normalize_standard(prog_lang, standard)
+    if not normalized:
+        return {}
+    return cast(dict[str, Any], config.prog_lang[prog_lang]["standards"][normalized][key])
+
+
+def language_info(prog_lang: str, standard: str | None = "") -> dict[str, Any]:
+    """Notebook ``language_info`` metadata for *prog_lang* at *standard*."""
     try:
-        return cast(dict[str, Any], config.prog_lang[prog_lang]["language_info"])
+        base = cast(dict[str, Any], config.prog_lang[prog_lang]["language_info"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
+    overlay = _standard_overlay(prog_lang, standard, "language_info")
+    return {**base, **overlay} if overlay else base
 
 
 def file_extension_for(prog_lang: str) -> str:
@@ -177,11 +253,28 @@ def file_extension_for(prog_lang: str) -> str:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
-def kernelspec_for(prog_lang: str) -> dict[str, Any]:
+def kernelspec_for(prog_lang: str, standard: str | None = "") -> dict[str, Any]:
+    """Notebook ``kernelspec`` metadata — the kernel a deck is executed in.
+
+    *standard* selects among the language's standards (see
+    :func:`supported_standards`); empty means the default.
+    """
     try:
-        return cast(dict[str, Any], config.prog_lang[prog_lang]["kernelspec"])
+        base = cast(dict[str, Any], config.prog_lang[prog_lang]["kernelspec"])
     except KeyError as e:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
+    overlay = _standard_overlay(prog_lang, standard, "kernelspec")
+    return {**base, **overlay} if overlay else base
+
+
+def all_kernelspec_names(prog_lang: str) -> tuple[str, ...]:
+    """Every kernel name CLM can request for *prog_lang*, default first."""
+    names = [cast(str, kernelspec_for(prog_lang)["name"])]
+    for standard in supported_standards(prog_lang):
+        name = cast(str, kernelspec_for(prog_lang, standard)["name"])
+        if name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def comment_token_for_path(path: Path) -> str:

@@ -9,13 +9,18 @@ import pytest
 
 from clm.core.utils.prog_lang_utils import (
     Config,
+    all_kernelspec_names,
     config,
+    default_standard,
+    effective_standard,
     file_extension_for,
     jinja_prefix_for,
     jupytext_format_for,
     kernelspec_for,
     language_info,
+    normalize_standard,
     suffix_for,
+    supported_standards,
 )
 
 
@@ -381,3 +386,80 @@ class TestEdgeCases:
         """All language names in config should be lowercase."""
         for lang in config.prog_lang.keys():
             assert lang == lang.lower(), f"Language name '{lang}' should be lowercase"
+
+
+class TestLanguageStandards:
+    """Selectable language standards (issue #1228): ``<prog-lang standard="23">cpp``."""
+
+    def test_cpp_offers_20_and_23_with_20_as_default(self):
+        assert supported_standards("cpp") == ("20", "23")
+        assert default_standard("cpp") == "20"
+
+    @pytest.mark.parametrize("prog_lang", ["python", "csharp", "java", "typescript", "rust"])
+    def test_other_languages_offer_no_standard(self, prog_lang):
+        assert supported_standards(prog_lang) == ()
+        assert default_standard(prog_lang) == ""
+        assert effective_standard(prog_lang) == ""
+
+    def test_the_default_standard_normalizes_to_empty(self):
+        """Naming the default must be indistinguishable from naming nothing."""
+        assert normalize_standard("cpp", "") == ""
+        assert normalize_standard("cpp", None) == ""
+        assert normalize_standard("cpp", "20") == ""
+        assert normalize_standard("cpp", " 23 ") == "23"
+
+    def test_effective_standard_resolves_the_default(self):
+        assert effective_standard("cpp") == "20"
+        assert effective_standard("cpp", "20") == "20"
+        assert effective_standard("cpp", "23") == "23"
+
+    @pytest.mark.parametrize("standard", ["17", "26", "c++23", "2b"])
+    def test_unsupported_cpp_standard_is_rejected(self, standard):
+        with pytest.raises(ValueError, match="expected one of 20, 23"):
+            normalize_standard("cpp", standard)
+
+    def test_a_standard_for_a_language_without_standards_is_rejected(self):
+        with pytest.raises(ValueError, match="has no selectable standard"):
+            normalize_standard("python", "3.12")
+
+    def test_cpp23_selects_the_xcpp23_kernel(self):
+        assert kernelspec_for("cpp", "23") == {
+            "display_name": "C++23",
+            "language": "cpp",
+            "name": "xcpp23",
+        }
+        assert language_info("cpp", "23")["version"] == "23"
+
+    @pytest.mark.parametrize("standard", ["", None, "20"])
+    def test_the_default_standard_leaves_the_metadata_untouched(self, standard):
+        """A course without a standard must build byte-identical notebooks."""
+        assert kernelspec_for("cpp", standard) == kernelspec_for("cpp")
+        assert kernelspec_for("cpp")["name"] == "xcpp20"
+        assert language_info("cpp", standard) == language_info("cpp")
+        assert language_info("cpp")["version"] == "20"
+
+    def test_selecting_a_standard_does_not_mutate_the_shared_config(self):
+        before = dict(kernelspec_for("cpp")), dict(language_info("cpp"))
+        kernelspec_for("cpp", "23")["name"] = "tampered"
+        language_info("cpp", "23")["version"] = "tampered"
+        assert (dict(kernelspec_for("cpp")), dict(language_info("cpp"))) == before
+
+    def test_every_standard_of_the_default_table_is_consistent(self):
+        """The default standard's overlay must reproduce the base metadata."""
+        for prog_lang, lang_config in config.prog_lang.items():
+            if "standards" not in lang_config:
+                continue
+            default = lang_config["default_standard"]
+            overlay = lang_config["standards"][default]
+            assert lang_config["kernelspec"] == {
+                **lang_config["kernelspec"],
+                **overlay["kernelspec"],
+            }
+            assert lang_config["language_info"] == {
+                **lang_config["language_info"],
+                **overlay["language_info"],
+            }, prog_lang
+
+    def test_all_kernelspec_names_lists_every_requestable_kernel(self):
+        assert all_kernelspec_names("cpp") == ("xcpp20", "xcpp23")
+        assert all_kernelspec_names("python") == ("python3",)
