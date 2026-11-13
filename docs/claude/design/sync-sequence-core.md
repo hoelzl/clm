@@ -3,8 +3,8 @@
 **Status**: ACCEPTED 2026-11-13. The decision to switch over was taken on
 2026-11-13 (the go of `docs/claude/sync-structural-core-investigation.md`
 §9); this note is the design of step 5. The maintainer answered the
-decisions of §11 the same day, each as recommended. Phase A is next; nothing
-in this note is implemented yet.
+decisions of §11 the same day, each as recommended. Phase A is done (§9);
+phase B is next.
 **Author**: Claude (Opus 5.5), at the maintainer's request
 **Builds on**: `docs/claude/sync-structural-core-investigation.md` (the
 finding, the prototype, its laws and the shadow on real history),
