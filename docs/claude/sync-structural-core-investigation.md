@@ -239,6 +239,79 @@ A merge commit lists its files only with `-m --first-parent`. And the probe's
 CLI passes the deck's own token). `scripts/sync_shadow.py` has the corrected
 versions.
 
+### 2.7 Bytes on real history (phase B, added 2026-11-13)
+
+Phase B of the design note (`docs/claude/design/sync-sequence-core.md` §9)
+adds the renderer (`clm.slides.doc_render`) and the text layer
+(`clm.slides.doc_text`). With `--model-only`, the shadow renders every replay
+of §2.6 and compares the files with `N` byte for byte. The text layer's
+questions are answered as the author did: `translate_edit` gets `body` when the
+twin changed in `N`, otherwise `keep_twin`, and the translator's text is taken
+from `N`. So the comparison is exact, the translator's text included. It also
+checks the identity law on every base state: merging a state with itself and
+rendering it gives back its bytes.
+
+| | PythonCourses | CppCourses |
+|---|---|---|
+| replays | 3,849 | 2,734 |
+| identity law holds | 3,849 | 2,734 |
+| byte-identical with `N` | 3,548 | 2,540 |
+| the author also edited the follower | 241 | 153 |
+| only blank lines after localized cells differ | 49 | 40 |
+| other differences | 11 | 1 |
+
+Every replay merged without a held question.
+
+**The author also edited the follower** (`follower_edited`). In the same
+commit, the author changed something on the follower that the leader's edit
+did not ask for:
+- the text of a localized cell the leader left alone (for example a
+  re-translation, or a deck title re-worded on both halves);
+- a header re-formatted with the same attributes (attribute order, spacing);
+- an owner attribute set by hand where the plan kept the follower's value;
+- a preamble.
+
+No sync produces these edits, so these replays are not one-sided in their
+text. The shadow still checks their structure, masking the headers the author
+edited by hand: a structural difference in such a replay counts as one of the
+other differences.
+
+**Blank lines only** (`localized_separator`). The author re-spaced a localized
+twin while the leader's spacing stayed. The rule (§6.2 of the design note,
+amended) is that a rewritten twin takes the edited cell's blank lines only when
+the edit changed them, and keeps its own otherwise. Mirroring the author's own
+re-spacing would need a rule for whitespace alone, which the maintainer asked
+not to add.
+
+**The other differences**, each explained:
+- **Seven are commits from before #1053 (2026-10-09).** When the leader adds
+  `tags` to a cell, the renderer mirrors it with `set_header_tags`, which
+  since #1053 writes the block before `slide_id`. The engine of the time
+  appended it.
+- **Three are a `vo_anchor` changed to an `id:` anchor on one half.** The
+  author kept the other half's anchor (2 replays), or re-formatted both
+  headers in the same commit (langsmith, 2 replays, counted as one case).
+  The owner rule below fits the many other commits.
+- **One C++ replay is a doubled space.** When `set_header_tags` (shared with
+  today's engine) removes a `tags` block, it tidies doubled spaces, and the
+  German header had `// %%  lang`.
+
+Rules found on this history (each is in the design note, with a test):
+- **`vo_anchor` and `for_slide`.** An owner attribute changed on one half
+  reaches the other, written in place. The exception: when the halves
+  recorded different values (`fp:` anchors fingerprint a localized cell per
+  language) and the new value is another `fp:` anchor or none, each half
+  keeps its own. Two other rules were measured and dropped:
+  - "`vo_anchor` never propagates" left 80 differences, because authors
+    dropping an `id:` anchor dropped it on both halves;
+  - "`for_slide` dropped and appended", as the executor writes it, moved the
+    attribute in all but one replay.
+- **The deck title** (the `j2` `header` line) has no `slide_id`. The text
+  layer knows it by the reserved id `title`, as the lens does. A rewritten
+  title twin takes the edited cell's shape (one line or several).
+- **A `slide_id` gained on one half** sits where that half has it in the
+  header, not at the end.
+
 ---
 
 ## 3. The root cause
@@ -919,9 +992,11 @@ a fast drive for the engine runs. The result files are not committed.
 | `src/clm/slides/doc_sequence.py` | the recorded cell sequence and when a deck is in sync (step 4), with `tests/slides/test_doc_sequence.py` |
 | `src/clm/slides/doc_core.py` | the core, ported from the prototype (design note phase A), with `tests/slides/test_doc_core.py` |
 | `scripts/sync_model.py` | the prototype's old name, now a re-export of `clm.slides.doc_core` |
+| `src/clm/slides/doc_text.py` | the text layer (design note phase B, §2.7), with `tests/slides/test_doc_text.py` |
+| `src/clm/slides/doc_render.py` | the renderer (design note phase B, §2.7), with `tests/slides/test_doc_render.py` |
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |
 | `scripts/sync_model_passes.py` | the laws across passes with questions left open (§4.6) |
-| `scripts/sync_shadow.py` | the prototype beside the engine on real history (§2.6), with `tests/scripts/test_sync_shadow.py` |
+| `scripts/sync_shadow.py` | the core beside the engine on real history (§2.6), and with `--model-only` its rendered bytes (§2.7), with `tests/scripts/test_sync_shadow.py` |
 | `tests/slides/sync_laws.py`, `scripts/sync_laws.py` | the laws on the engine (§2.5), with `tests/slides/test_sync_laws.py` as the ratchet |
 | `docs/claude/analysis/sync-structural-core/issue-classification.md` | the issue classification behind §3.5 |

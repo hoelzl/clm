@@ -3,8 +3,8 @@
 **Status**: ACCEPTED 2026-11-13. The decision to switch over was taken on
 2026-11-13 (the go of `docs/claude/sync-structural-core-investigation.md`
 §9); this note is the design of step 5. The maintainer answered the
-decisions of §11 the same day, each as recommended. Phase A is done (§9);
-phase B is next.
+decisions of §11 the same day, each as recommended. Phases A and B are
+done (§9); phase C is next.
 **Author**: Claude (Opus 5.5), at the maintainer's request
 **Builds on**: `docs/claude/sync-structural-core-investigation.md` (the
 finding, the prototype, its laws and the shadow on real history),
@@ -187,6 +187,22 @@ un-id'd shared cell is always in the recorded sequence or new, and the
 positional cold row (the "give it a `slide_id`" exit, 9,200 of the 16,744
 one-sided small cases of investigation §2.5) has no reason to exist.
 
+**As built (phase B, `clm.slides.doc_text`).**
+- **What counts as text.** A localized cell's text is every byte of the cell
+  except the id, the tags and the owner attributes, its separator included.
+- **The deck title.** The `j2` `header` line carries no `slide_id`. The text
+  layer knows it by the reserved id `title`, as the lens does.
+- **Owners.** An owner attribute changed on one half reaches the other. The
+  exception is `vo_anchor`: when the halves recorded different values (an
+  `fp:` anchor fingerprints a localized cell in each language) and the new
+  value is an `fp:` anchor or none, each half keeps its own.
+- **`broken_owner`** holds the deck for a `for_slide` that names no slide, as
+  today. A stale `vo_anchor` is `clm validate`'s to report.
+- **Preambles** are shared, as in today's differ.
+
+These rules were fitted on the course repositories' history (investigation
+§2.7), and two alternatives were measured and dropped there.
+
 The fork and unify rows of the v3 design (§7.2 there: `fork_pending_twin`,
 `unify_pending_twin`, `unify_choose_body`, `record_fork`, `record_unify`)
 become the core's `fork` / `unify` questions. A `fork` answer is the twin's
@@ -227,6 +243,28 @@ Phase B has to state that rule in one place and test it. The identity law and
 the byte-level oracle of §6.3 are the tests. A file the pass creates (a
 companion that only the other half had) goes where `expected_companion`
 says.
+
+**As built (phase B).** The renderer (`clm.slides.doc_render`) does not add or
+trim blank lines anywhere, because a cell's separator is part of its content
+on both halves:
+- a cell keeps its own separator wherever it moves;
+- a copied shared cell brings the separator of the cell it copies (the same
+  content);
+- a new twin takes the separator of the cell it renders;
+- a twin rewritten by a `translate_edit` `body` answer takes the edited cell's
+  separator only when the edit changed it, and keeps its own otherwise.
+
+Whitespace gets no rule of its own: re-spacing a localized cell is an edit of
+its text like any other.
+
+Header attributes:
+- a `slide_id` gained on one half is placed where that half has it;
+- a changed `for_slide` is replaced in place;
+- a `tags` block the merge sets is written by `set_header_tags`.
+
+Each file keeps its preamble unless the text layer propagates the other
+half's. Tests: `tests/slides/test_doc_render.py`,
+`tests/slides/test_doc_text.py`.
 
 ### 6.3 The laws of the renderer
 
@@ -367,6 +405,18 @@ and has an exit gate. The v3 cutover followed the same pattern (v3 design §11).
   repositories. Exit: every one-sided replay ends in the next in-sync commit's
   bytes, up to the translator's text. Each difference is fixed or explained in
   the investigation doc.
+  **Done 2026-11-13.** `clm.slides.doc_render` (#1243) and
+  `clm.slides.doc_text`. With the translator's text taken from the next
+  commit, the comparison is exact. Of 3,849 and 2,734 one-sided replays
+  (PythonCourses, CppCourses):
+  - **byte-identical:** 3,548 and 2,540;
+  - **the author also edited the follower:** 241 and 153 (not one-sided in
+    their text; their structure is still checked);
+  - **only the blank lines of a twin the author re-spaced differ:** 49 and 40;
+  - **other differences:** 11 and 1, all explained in investigation §2.7
+    (seven come from commits before #1053).
+
+  The identity law holds on every base state, and no replay held a question.
 - **Phase C — report and apply behind a switch.** `CLM_SYNC_CORE=sequence`
   selects the new core for `report`, `apply` and `record`; the default stays
   positional. The new handles and rows (§7) exist only under the switch. The
