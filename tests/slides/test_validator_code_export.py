@@ -614,7 +614,12 @@ class TestShowWithInlineLambda:
     """Regression tests for #1044 (guard only): these shapes kill the xcpp20
     kernel, which fails the whole deck. The boundary below was measured in
     ``mhoelzl/clm-notebook-processor:1.34.3-lite``, each shape in a fresh
-    kernel, except where a comment says otherwise."""
+    kernel, except where a comment says otherwise.
+
+    The findings are picked by the display-macro rule's own wording: a lambda
+    *outside* ``SHOW`` is the business of another rule (#1228,
+    ``test_cpp_lambda_hazards.py``), which may report a shape that is silent
+    here."""
 
     @pytest.mark.parametrize(
         "body",
@@ -653,7 +658,7 @@ class TestShowWithInlineLambda:
         ],
     )
     def test_warns_and_says_how_to_fix(self, tmp_path, body):
-        findings = _show_findings(_deck_with_cell(tmp_path, body), "inline lambda")
+        findings = _show_findings(_deck_with_cell(tmp_path, body), "inline lambda, which kills")
         assert len(findings) == 1
         assert findings[0].severity == "warning"
         assert findings[0].category == "code_export"
@@ -712,40 +717,46 @@ class TestShowWithInlineLambda:
         ],
     )
     def test_silent(self, tmp_path, body):
-        assert _show_findings(_deck_with_cell(tmp_path, body), "inline lambda") == []
+        assert _show_findings(_deck_with_cell(tmp_path, body), "inline lambda, which kills") == []
 
     @pytest.mark.parametrize("tag", ["start", "del"])
     def test_cell_that_is_never_executed_is_silent(self, tmp_path, tag):
         body = "SHOW([](int a) { return a; }(1));"
         p = _deck_with_cell(tmp_path, body, f'// %% tags=["{tag}"]')
-        assert _show_findings(p, "inline lambda") == []
+        assert _show_findings(p, "inline lambda, which kills") == []
 
     def test_completed_cell_is_executed(self, tmp_path):
         body = "SHOW([](int a) { return a; }(1));"
         p = _deck_with_cell(tmp_path, body, '// %% tags=["completed"]')
-        assert len(_show_findings(p, "inline lambda")) == 1
+        assert len(_show_findings(p, "inline lambda, which kills")) == 1
 
     def test_one_finding_per_show_not_per_lambda(self, tmp_path):
         body = "SHOW(f([](int a) { return a; }, [](int b) { return b; }));"
-        assert len(_show_findings(_deck_with_cell(tmp_path, body), "inline lambda")) == 1
+        assert (
+            len(_show_findings(_deck_with_cell(tmp_path, body), "inline lambda, which kills")) == 1
+        )
 
     def test_nested_show_is_one_finding(self, tmp_path):
         body = "SHOW([] { SHOW(1); return 2; }());"
-        assert len(_show_findings(_deck_with_cell(tmp_path, body), "inline lambda")) == 1
+        assert (
+            len(_show_findings(_deck_with_cell(tmp_path, body), "inline lambda, which kills")) == 1
+        )
 
     def test_unterminated_call_is_silent(self, tmp_path):
         body = "SHOW([](int a) { return a; }(1)"
-        assert _show_findings(_deck_with_cell(tmp_path, body), "inline lambda") == []
+        assert _show_findings(_deck_with_cell(tmp_path, body), "inline lambda, which kills") == []
 
     def test_global_cell_gets_both_findings(self, tmp_path):
         p = _deck_with_cell(tmp_path, "SHOW([](int a) { return a; }(1));", '// %% tags=["global"]')
-        assert len(_show_findings(p, "inline lambda")) == 1
+        assert len(_show_findings(p, "inline lambda, which kills")) == 1
         assert len(_show_findings(p, "`global` cell")) == 1
 
     def test_long_call_is_shortened_in_the_message(self, tmp_path):
         args = ", ".join(f"arg{i}" for i in range(50))
         body = f"SHOW(f([](int a) {{ return a; }},\n    {args}));"
-        message = _show_findings(_deck_with_cell(tmp_path, body), "inline lambda")[0].message
+        message = _show_findings(_deck_with_cell(tmp_path, body), "inline lambda, which kills")[
+            0
+        ].message
         assert len(message) < 160
         assert "\n" not in message
         assert "..." in message

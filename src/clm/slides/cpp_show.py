@@ -22,7 +22,8 @@ the bare form merely prints nothing. Files are rewritten losslessly
 (:mod:`clm.core.slide_text.raw_cells`); a second run changes nothing.
 
 :func:`find_show_calls` is the read-only side of the same knowledge, used by
-``clm validate`` (#1119, #1044).
+``clm validate`` (#1119, #1044). :func:`find_lambda_hazards` covers the lambdas
+that are *not* inside a display macro (#1228).
 """
 
 from __future__ import annotations
@@ -90,6 +91,25 @@ _FATAL_STATEMENT_RE = re.compile(r"\s*(?:(?:for|switch)\b|\{)")
 _SURVIVING_STATEMENT_RE = re.compile(r"\s*(?:if|else|while|do|try)\b")
 _MAX_CALL_TEXT = 60
 
+# Lambdas outside the display macros (#1228). Measured in the notebook image
+# built for #1228 (xeus-cpp 0.10.0 on libstdc++ 15, ``xcpp20`` and ``xcpp23``,
+# each shape in a fresh kernel, three runs with identical outcomes); the shapes
+# are the parameters of ``tests/slides/test_cpp_lambda_hazards.py``.
+#
+# A lambda expression written anywhere inside a top-level ``for`` (classic,
+# range-based, with or without braces) or ``switch`` statement kills the
+# kernel under both standards: passed inline, called at once, in a declaration
+# inside the loop, even bound to a name there. The same loop inside a function
+# or a named lambda body runs, as does a loop that uses a lambda named before it.
+_LAMBDA_FATAL_STATEMENT_RE = re.compile(r"\s*(for|switch)\b")
+# A lambda in a top-level call or expression statement, or below ``do`` /
+# ``try``, runs or kills the kernel depending on the function called, the
+# standard, the libstdc++ version and the headers earlier cells included:
+# ``std::ranges::sort(v, <lambda>);`` runs under ``xcpp23`` and kills
+# ``xcpp20``; ``total = std::accumulate(..., <lambda>);`` does the opposite.
+_LAMBDA_FRAGILE_STATEMENT_RE = re.compile(r"\s*(?:do|try)\b")
+_LAMBDA_FRAGILE_CATEGORIES = frozenset({"call_stmt", "expr_stmt"})
+
 
 @define
 class ShowRewrite:
@@ -111,6 +131,18 @@ class ShowCall:
     """Outside all braces, not counting those of a namespace or linkage block."""
     kills_kernel: bool
     """Holds an inline lambda at a place where that kills the xeus-cpp kernel (#1044)."""
+
+
+@define(frozen=True)
+class LambdaHazard:
+    """A top-level statement holding a lambda where the xeus-cpp kernel may not survive it."""
+
+    text: str
+    """The statement, on one line and shortened to a readable length."""
+    statement: str
+    """``"for"`` / ``"switch"`` for a lambda inside such a statement, else ``""``."""
+    kills_kernel: bool
+    """Dies in every configuration measured (``True``), or in some of them (``False``)."""
 
 
 @define
@@ -259,6 +291,66 @@ def find_show_calls(source: str) -> list[ShowCall]:
                 )
             )
     return calls
+
+
+def _blank_show_calls(masked: str) -> str:
+    """*masked* with every display-macro call blanked: those lambdas are :func:`find_show_calls`'s."""
+    out = list(masked)
+    pos = 0
+    while match := _SHOW_CALL_RE.search(masked, pos):
+        pos = match.end()
+        if not _is_macro_use(masked, match.start()):
+            continue
+        close = _closing(masked, match.end() - 1, "(", ")")
+        if close < 0:
+            # Never closed: the cell is mid-edit, and the rest of it is this call's.
+            close = len(masked) - 1
+        for i in range(match.start(), close + 1):
+            if out[i] != "\n":
+                out[i] = " "
+        pos = close + 1
+    return "".join(out)
+
+
+def find_lambda_hazards(source: str) -> list[LambdaHazard]:
+    """Top-level statements of a code cell whose lambda can take the kernel down.
+
+    See the measurement notes at ``_LAMBDA_FATAL_STATEMENT_RE``. Comments,
+    strings and ``#`` lines are ignored, and so is a lambda inside a
+    ``SHOW`` / ``CLM_DISPLAY`` call, which :func:`find_show_calls` judges.
+
+    Not reported, because every configuration measured ran them: a lambda in
+    a declaration (``auto f = [] { ... };``, ``auto n = std::ranges::count_if(v,
+    [](int i) { ... });``), in a ``std::cout <<`` statement, below ``if`` /
+    ``else`` / ``while``, in a bare block, and in the body of a function, a
+    class or a named lambda.
+    """
+    hazards: list[LambdaHazard] = []
+    if "[" not in source:
+        return hazards
+    for item in classify_source_spans(source):
+        if item.category in ("include", "preproc_other"):
+            continue
+        masked = _blank_show_calls(mask_comments_and_strings(item.original))
+        fatal = _LAMBDA_FATAL_STATEMENT_RE.match(masked)
+        if fatal is None and not (
+            item.category in _LAMBDA_FRAGILE_CATEGORIES
+            or _LAMBDA_FRAGILE_STATEMENT_RE.match(masked)
+            # A lambda called on the spot: ``[](int a) { ... }(1);``.
+            or (item.category == "unknown" and masked.lstrip().startswith("["))
+        ):
+            continue
+        # The leading ``(`` puts the start of the statement where an expression can start.
+        if not _has_lambda_introducer("(" + masked):
+            continue
+        hazards.append(
+            LambdaHazard(
+                text=_one_line(item.original),
+                statement=fatal.group(1) if fatal else "",
+                kills_kernel=fatal is not None,
+            )
+        )
+    return hazards
 
 
 def is_display_item(item: CppItem) -> bool:

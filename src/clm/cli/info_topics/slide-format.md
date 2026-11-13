@@ -56,6 +56,22 @@ neither is a loop or a function that uses both. Use `std::println(std::cout,
 ...)` to print through `std::cout`, or split the cell. `clm validate` warns on
 the shapes the notebook reorders.
 
+**Errors go to `std::cerr`** (since CLM {version}): the notebook displays
+nothing a C++ cell writes to C `stderr` (`std::println(stderr, ...)`,
+`fprintf(stderr, ...)`, `fputs`, `perror`) or to `std::clog`. Use `std::cerr <<
+...` or `std::println(std::cerr, ...)`. `clm validate` warns.
+
+**No lambda inside a top-level `for` or `switch`** (since CLM {version}): the
+kernel dies on a lambda expression written anywhere inside one — also one
+bound to a name there — and the whole deck fails. Define the lambda in a
+statement of its own before the loop and use its name; inside a function body
+the same loop is fine. `clm validate` warns. A lambda passed inline in a
+top-level call statement (`std::ranges::sort(v, [](int a, int b) { ... });`)
+runs in some configurations and kills the kernel in others (it depends on the
+function, the C++ standard and earlier cells); `clm validate` lists such
+statements as information, and naming the lambda first is the fix if a deck's
+kernel dies there. A lambda in a declaration is always fine.
+
 ## Magics, shell escapes, and install hints
 
 jupytext (the percent-format reader) **reactivates commented magics**: a

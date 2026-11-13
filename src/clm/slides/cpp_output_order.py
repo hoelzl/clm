@@ -37,6 +37,14 @@ comments, string contents and preprocessor lines blanked. Where it cannot
 tell what a brace block is, it treats the block as straight-line code and
 stays silent rather than guess. It does not follow calls: a function that
 prints, called next to a ``std::cout`` write, is not seen.
+
+A third channel is not displayed at all (:func:`find_undisplayed_write`):
+whatever a cell writes to C ``stderr`` — ``std::print(stderr, ...)``,
+``std::println(stderr, ...)``, ``fprintf(stderr, ...)``, ``fputs(..., stderr)``,
+``perror`` — or to ``std::clog`` never reaches the notebook, flushed or not,
+in the cell or after it. ``std::cerr`` is displayed, also through
+``std::println(std::cerr, ...)``. Measured in the same image, under both
+kernels for the C functions.
 """
 
 from __future__ import annotations
@@ -60,6 +68,14 @@ _C_STDIO_RE = re.compile(r"(?<![\w.>:])(?:std\s*::\s*)?(printf|puts)\s*\(")
 # or a format held in a variable, which this check cannot tell from a stream.
 _STRING_LITERAL_START_RE = re.compile(r'\s*(?:(?:u8|[uUL])?R?")')
 _NO_ARGUMENT_RE = re.compile(r"\s*\)")
+
+# Writers whose output the notebook drops. ``std::print`` takes the stream
+# first; the C functions take it anywhere in their argument list.
+_STD_PRINT_STDERR_RE = re.compile(r"\bstd\s*::\s*(print|println)\s*\(\s*(?:std\s*::\s*)?stderr\b")
+_C_STDERR_WRITER_RE = re.compile(r"(?<![\w.>:])(?:std\s*::\s*)?(fprintf|fputs)\s*\(")
+_STDERR_ARGUMENT_RE = re.compile(r"(?<![\w.>])(?:std\s*::\s*)?stderr\b")
+_PERROR_RE = re.compile(r"(?<![\w.>:])(?:std\s*::\s*)?perror\s*\(")
+_CLOG_RE = re.compile(r"\bstd\s*::\s*clog\b|(?<![\w.>:])clog\b")
 
 _LOOP_KEYWORD_RE = re.compile(r"\b(?:for|while)\s*\(")
 _LOOP_HEAD_RE = re.compile(r"\s*(?:else\s+)?(?:(?:for|while)\b|do\s*$)")
@@ -261,3 +277,26 @@ def find_output_order_problem(source: str) -> OutputOrderProblem | None:
             if in_loop_stdio and in_loop_stream:
                 return OutputOrderProblem(in_loop_stdio[0].name, in_loop_stream[0].name, "loop")
     return None
+
+
+def find_undisplayed_write(source: str) -> str | None:
+    """The first write of a code cell that the notebook does not display, if any.
+
+    Returns the writer as the finding names it — ``std::println(stderr, ...)``,
+    ``fprintf(stderr, ...)``, ``fputs(..., stderr)``, ``perror``, ``std::clog``
+    — or ``None``. See the module docstring for the measurement.
+    """
+    masked = _blank_preprocessor_lines(mask_comments_and_strings(source))
+    found: list[tuple[int, str]] = []
+    for match in _STD_PRINT_STDERR_RE.finditer(masked):
+        found.append((match.start(), f"std::{match.group(1)}(stderr, ...)"))
+    for match in _C_STDERR_WRITER_RE.finditer(masked):
+        close = _closing_paren(masked, match.end() - 1)
+        arguments = masked[match.end() : close if close >= 0 else len(masked)]
+        if _STDERR_ARGUMENT_RE.search(arguments):
+            name = match.group(1)
+            shape = "(stderr, ...)" if name == "fprintf" else "(..., stderr)"
+            found.append((match.start(), f"{name}{shape}"))
+    found += [(match.start(), "perror") for match in _PERROR_RE.finditer(masked)]
+    found += [(match.start(), "std::clog") for match in _CLOG_RE.finditer(masked)]
+    return min(found)[1] if found else None
