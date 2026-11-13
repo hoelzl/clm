@@ -88,6 +88,7 @@ class TestNotebookPayload:
             "data": "SOURCE",
             "kind": "trainer",
             "prog_lang": "cpp",
+            "prog_lang_standard": "23",
             "language": "de",
             "format": "html",
             "template_fingerprint": "tfp-distinctive",
@@ -528,3 +529,55 @@ class TestNotebookResult:
         # has no ``companion_files`` entry in its ``__dict__``.
         del sample_result.__dict__["companion_files"]
         assert sample_result.companion_bytes() == {}
+
+
+class TestProgLangStandardInCacheKeys:
+    """The language standard is part of both cache keys (issue #1228).
+
+    A deck shared by a C++20 and a C++23 course is executed by a different
+    kernel in each, so one course must never replay the other's result. And a
+    course that selects no standard must keep the keys it had before the
+    field existed — otherwise introducing it would re-execute every notebook
+    of every course once.
+    """
+
+    #: Hashes of the payload below, computed BEFORE ``prog_lang_standard``
+    #: existed (clm 1.38.0). They pin "no invalidation for existing courses".
+    PRE_FIELD_CONTENT_HASH = "4e61576dc80b8cc2524de00b4aa09645a0d2961940f9dcd386e750e411b9c134"
+    PRE_FIELD_EXECUTION_HASH = "e410c163bb82d55adbb18859953fde2cacb9a147d03089742d77130349692c50"
+
+    def _payload(self, **overrides):
+        values = {
+            "correlation_id": "cid",
+            "input_file": "/slides_ranges.cpp",
+            "input_file_name": "slides_ranges.cpp",
+            "output_file": "/out/01 Ranges.html",
+            "data": "// %%\nint x{1};\n",
+            "kind": "completed",
+            "prog_lang": "cpp",
+            "language": "en",
+            "format": "html",
+            "template_fingerprint": "fingerprint",
+            "worker_image_identity": "docker:image:1",
+            "other_files": {"point.hpp": b"struct Point {};"},
+        }
+        values.update(overrides)
+        return NotebookPayload(**values)
+
+    def test_default_standard_keeps_the_pre_field_hashes(self):
+        payload = self._payload()
+        assert payload.prog_lang_standard == ""
+        assert payload.content_hash() == self.PRE_FIELD_CONTENT_HASH
+        assert payload.execution_cache_hash() == self.PRE_FIELD_EXECUTION_HASH
+
+    def test_a_non_default_standard_changes_both_hashes(self):
+        default, cpp23 = self._payload(), self._payload(prog_lang_standard="23")
+        assert cpp23.content_hash() != default.content_hash()
+        assert cpp23.execution_cache_hash() != default.execution_cache_hash()
+
+    def test_the_standard_survives_the_wire_format(self):
+        """Docker workers receive the payload as JSON."""
+        payload = self._payload(prog_lang_standard="23")
+        restored = NotebookPayload.model_validate_json(payload.model_dump_json())
+        assert restored.prog_lang_standard == "23"
+        assert restored.execution_cache_hash() == payload.execution_cache_hash()

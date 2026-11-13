@@ -15,9 +15,10 @@ What changes for a course repository that builds with `--workers docker`:
   13 in `full`). It is the standard library of the xeus-cpp kernel *and* of
   the compiler that builds the code export, so both now provide the C++23
   library: `<print>`, `std::ranges::to`, `<generator>`, `<flat_map>` (not
-  `<mdspan>`). CLM still runs every C++ deck in the `xcpp20` kernel and still
-  writes `CMAKE_CXX_STANDARD 20`; a per-course C++23 switch is a separate
-  change. Existing decks are compiled against newer headers, so rebuild the
+  `<mdspan>`). Without a change to the spec CLM still runs every C++ deck in
+  the `xcpp20` kernel and still writes `CMAKE_CXX_STANDARD 20`; a course opts
+  in to C++23 with `<prog-lang standard="23">cpp</prog-lang>` (see `clm info
+  spec-files`). Existing decks are compiled against newer headers, so rebuild the
   course and run its compile gate once, and run `clm kernel-triage` to see
   whether `evaluate="no"` workarounds can be lifted. The kernel itself
   (xeus-cpp 0.10.0, clang 21) is unchanged and now pinned.

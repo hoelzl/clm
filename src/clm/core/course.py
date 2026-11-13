@@ -317,6 +317,18 @@ class Course(NotebookMixin):
     def prog_lang(self) -> str:
         return self.spec.prog_lang
 
+    def standard_for(self, prog_lang: str) -> str:
+        """The language standard this course builds *prog_lang* notebooks at.
+
+        The spec's ``<prog-lang standard="…">`` applies to notebooks in the
+        course's own programming language only; a deck in another language
+        (a ``prog-lang`` topic override, a stray extension) keeps that
+        language's default. ``""`` means the default standard.
+        """
+        if prog_lang and prog_lang == self.spec.prog_lang.strip():
+            return self.spec.prog_lang_standard
+        return ""
+
     @property
     def sidecar_layout(self) -> str | None:
         """Effective course-wide sidecar-layout default, or ``None``.

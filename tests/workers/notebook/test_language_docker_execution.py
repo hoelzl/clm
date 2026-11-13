@@ -38,8 +38,13 @@ from pathlib import Path
 
 import pytest
 
+from clm.core.utils.prog_lang_utils import (
+    all_kernelspec_names,
+    kernelspec_for,
+    line_comment_for,
+    suffix_for,
+)
 from clm.core.utils.prog_lang_utils import config as prog_lang_config
-from clm.core.utils.prog_lang_utils import kernelspec_for, line_comment_for, suffix_for
 from tests.docker_image_helpers import docker_available, find_notebook_image
 
 pytestmark = [
@@ -80,20 +85,29 @@ class LanguageCase:
             language's own comment token so the deck is written exactly the way
             a course author would write it.
         marker: Substring the executed deck must contain. Always
-            ``smoke-result-<lang>=42``, where 42 is *computed* by the code — a
+            ``smoke-result-<label>=42``, where 42 is *computed* by the code — a
             literal would pass even if nothing ran.
+        standard: The language standard the deck is built at, as a course
+            spec's ``<prog-lang standard="…">`` sets it (issue #1228). Empty
+            for the language's default.
     """
 
     prog_lang: str
     cells: tuple[str, ...]
+    standard: str = ""
+
+    @property
+    def label(self) -> str:
+        """Test id and marker tag: ``cpp`` for the default, ``cpp23`` for C++23."""
+        return f"{self.prog_lang}{self.standard}"
 
     @property
     def marker(self) -> str:
-        return f"smoke-result-{self.prog_lang}=42"
+        return f"smoke-result-{self.label}=42"
 
 
-def _case(prog_lang: str, *cells: str) -> LanguageCase:
-    return LanguageCase(prog_lang=prog_lang, cells=cells)
+def _case(prog_lang: str, *cells: str, standard: str = "") -> LanguageCase:
+    return LanguageCase(prog_lang=prog_lang, cells=cells, standard=standard)
 
 
 #: One case per language whose kernel the images ship. Each computes 6 * 7 and
@@ -110,6 +124,20 @@ LANGUAGE_CASES = [
         "#include <iostream>",
         "int product(int a, int b) { return a * b; }",
         'std::cout << "smoke-result-cpp=" << product(6, 7) << std::endl;',
+    ),
+    # C++23 (#1228): the same deck pipeline, with the standard a course spec
+    # would set. Only the ``xcpp23`` kernel can run it — ``std::println`` and
+    # ``std::ranges::to`` are not declared in C++20 mode — so a pass proves the
+    # standard reached the worker and selected the kernel, and that the image's
+    # libstdc++ provides the C++23 library.
+    _case(
+        "cpp",
+        "#include <algorithm>\n#include <functional>\n#include <print>\n"
+        "#include <ranges>\n#include <vector>",
+        "auto factors = std::views::iota(6, 8) | std::ranges::to<std::vector>();",
+        'std::println("smoke-result-cpp23={}", '
+        "std::ranges::fold_left(factors, 1, std::multiplies{}));",
+        standard="23",
     ),
     _case(
         "csharp",
@@ -171,8 +199,13 @@ def test_image_ships_every_kernel_clm_requests() -> None:
         pytest.skip("No notebook Docker image available (run: clm docker build)")
 
     installed = _kernelspecs_in(image)
-    requested = {lang: kernelspec_for(lang)["name"] for lang in prog_lang_config.prog_lang}
-    missing = {lang for lang, kernel in requested.items() if kernel not in installed}
+    # Every kernel of every selectable language standard, not only the default
+    # one: a course with ``<prog-lang standard="23">cpp</prog-lang>`` asks for
+    # ``xcpp23`` (#1228).
+    requested = {lang: all_kernelspec_names(lang) for lang in prog_lang_config.prog_lang}
+    assert requested["cpp"] == ("xcpp20", "xcpp23")
+    assert all(kernels[0] == kernelspec_for(lang)["name"] for lang, kernels in requested.items())
+    missing = {lang for lang, kernels in requested.items() if not set(kernels) <= installed}
 
     assert missing == KNOWN_MISSING_KERNELS, (
         f"kernels CLM requests but {image} does not install: "
@@ -210,7 +243,7 @@ class TestLanguageExecutionInDocker:
         workspace = tmp_path / "output"
         workspace.mkdir()
 
-        topic_dir = tmp_path / "data" / "slides" / f"smoke_{case.prog_lang}"
+        topic_dir = tmp_path / "data" / "slides" / f"smoke_{case.label}"
         topic_dir.mkdir(parents=True)
         deck = topic_dir / f"smoke{suffix_for(case.prog_lang)}"
         deck.write_text(self._deck(case), encoding="utf-8")
@@ -245,7 +278,7 @@ class TestLanguageExecutionInDocker:
             time.sleep(0.25)
         raise TimeoutError(f"Expected {expected} active worker(s) within {timeout}s; got {active}")
 
-    @pytest.mark.parametrize("case", LANGUAGE_CASES, ids=lambda c: c.prog_lang)
+    @pytest.mark.parametrize("case", LANGUAGE_CASES, ids=lambda c: c.label)
     def test_deck_executes_and_html_carries_the_result(
         self, case: LanguageCase, tmp_path: Path
     ) -> None:
@@ -292,17 +325,18 @@ class TestLanguageExecutionInDocker:
             self._await_workers(env["db_path"], len(workers))
 
             queue = JobQueue(env["db_path"])
-            output_file = env["workspace"] / "public" / f"smoke_{case.prog_lang}.html"
+            output_file = env["workspace"] / "public" / f"smoke_{case.label}.html"
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
             job_id = queue.add_job(
                 job_type="notebook",
                 input_file=str(env["deck"]),
                 output_file=str(output_file),
-                content_hash=f"smoke-execution-{case.prog_lang}",
+                content_hash=f"smoke-execution-{case.label}",
                 payload={
                     "kind": "completed",
                     "prog_lang": case.prog_lang,
+                    "prog_lang_standard": case.standard,
                     "language": "en",
                     "format": "html",
                     "source_topic_dir": str(env["topic_dir"]),
@@ -318,13 +352,13 @@ class TestLanguageExecutionInDocker:
                 job = queue.get_job(job_id)
 
             assert job.status == "completed", (
-                f"{case.prog_lang} deck did not build: status {job.status!r}\nError: {job.error}"
+                f"{case.label} deck did not build: status {job.status!r}\nError: {job.error}"
             )
             assert output_file.is_file(), f"No output written to {output_file}"
 
             html = output_file.read_text(encoding="utf-8", errors="replace")
             assert case.marker in html, (
-                f"The executed {case.prog_lang} deck does not contain "
+                f"The executed {case.label} deck does not contain "
                 f"{case.marker!r}, so the kernel did not run the code (a cell "
                 f"failure absorbed by skip-errors looks like this too — check the "
                 f"worker log).\nOutput written to {output_file}"

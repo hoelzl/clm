@@ -400,6 +400,7 @@ def explain_cmd(
         "data_chars": len(first.data),
         "data_sha256": hashlib.sha256(first.data.encode("utf-8")).hexdigest(),
         "prog_lang": first.prog_lang,
+        "prog_lang_standard": first.prog_lang_standard,
         "template_fingerprint": first.template_fingerprint,
         "worker_image_identity": first.worker_image_identity,
         "skip_evaluation": first.skip_evaluation,
@@ -448,7 +449,8 @@ def _print_human(
         f"  data                  {components['data_chars']:,} chars, "
         f"sha256 {short(components['data_sha256'])}"
     )
-    click.echo(f"  prog_lang             {components['prog_lang']}")
+    standard = components.get("prog_lang_standard") or "(default)"
+    click.echo(f"  prog_lang             {components['prog_lang']}    standard  {standard}")
     click.echo(f"  template fingerprint  {short(components['template_fingerprint'])}")
     click.echo(f"  worker image          {components['worker_image_identity'] or '(unset)'}")
     click.echo(

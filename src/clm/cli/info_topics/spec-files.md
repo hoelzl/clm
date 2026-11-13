@@ -61,6 +61,48 @@ Bilingual course name with `<de>` and `<en>` children.
 
 Programming language. Valid values: `python`, `cpp`, `csharp`, `java`, `typescript`.
 
+Optional attribute `standard` (CLM {version}+) selects the language standard of
+the course. Only C++ has selectable standards:
+
+| `<prog-lang>` | `standard` | Kernel | Exported CMake projects |
+|---|---|---|---|
+| `cpp` | *(absent)* or `"20"` | `xcpp20` | `CMAKE_CXX_STANDARD 20` |
+| `cpp` | `"23"` | `xcpp23` | `CMAKE_CXX_STANDARD 23` |
+
+```xml
+<prog-lang standard="23">cpp</prog-lang>
+```
+
+The one attribute sets both the kernel the notebooks are executed in and the
+standard of the generated CMake projects (`clm info commands`, *C++ code
+export*), so a deck cannot be C++23 in the notebook and C++20 in its exported
+project. The built `.ipynb` files carry the same kernel name, so they open in
+`xcpp23` for students too.
+
+- It is a **course-level** setting; there is no per-topic standard. It applies
+  to the course's C++ decks. A deck shared with a C++20 course is built once
+  per course, at each course's standard, with separate cache entries.
+- Any other value (`"17"`, `"26"`), and any `standard` on a language without
+  selectable standards, is a spec error: the build stops instead of silently
+  falling back to the default. A misspelt attribute name is reported by
+  `clm validate` (`unknown_attribute`).
+- `standard="20"` is the same as no attribute: same outputs, same cache keys.
+  Changing the standard re-executes every deck of the course; run a full
+  build afterwards (not `--only-sections`), so every module's `CMakeLists.txt`
+  is regenerated.
+- **What C++23 needs.** The library, not only the language: `<print>`,
+  `std::ranges::to`, `<generator>` and `<flat_map>` come from the worker
+  image's libstdc++ (g++ 15 in the notebook images that ship with CLM
+  {version}; `<mdspan>` is not in it). Build C++23 courses with
+  `--workers docker` and an image of that version or newer — an older image
+  ignores the attribute and runs the deck in `xcpp20`. Students need a
+  C++23 standard library as well (GCC 15, or a compiler of similar vintage).
+- **Notebook output order.** In a notebook cell, everything written through
+  `std::cout` — including `SHOW(...)` — is displayed before everything
+  written by `std::print` / `std::println`, whatever the program order; the
+  exported program prints in order. Do not mix the two in one cell, or write
+  `std::println(std::cout, ...)`.
+
 ### `<description>`
 
 Bilingual course description with `<de>` and `<en>` children.
@@ -456,8 +498,8 @@ When the spec uses `<block>`, `clm validate` adds these **warnings**:
 
 A subsection that holds only topic-less blocks is **not** an `empty_day`, and
 a week whose days hold only topic-less blocks is not an `empty_section`.
-Unknown attributes on `<block>`, `<agenda>` and `<agenda-targets>` are
-`unknown_attribute` warnings (the prototype's `ue=` gets a hint to `units=`):
+Unknown attributes on `<block>`, `<agenda>`, `<agenda-targets>` and
+`<prog-lang>` are `unknown_attribute` warnings (the prototype's `ue=` gets a hint to `units=`):
 an ignored `enabled="false"` on a block would otherwise look effective while
 the block's decks are still built.
 

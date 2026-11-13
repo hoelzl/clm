@@ -61,6 +61,13 @@ class NotebookPayload(Payload):
     prog_lang: str
     language: str
     format: str
+    # Language standard the notebook is built at (issue #1228): ``""`` for the
+    # language's default, otherwise e.g. ``"23"`` for a C++ course whose spec
+    # says ``<prog-lang standard="23">cpp</prog-lang>``. The worker picks the
+    # kernel by it (``xcpp23`` instead of ``xcpp20``), so it is folded into
+    # both cache hashes — but only when non-empty, which leaves every key of
+    # a course that selects no standard exactly as it was.
+    prog_lang_standard: str = ""
     # Digest of the bundled Jinja template directory for this payload's
     # prog_lang plus the CLM version, computed HOST-side at payload
     # construction (``compute_template_fingerprint``). Templates are
@@ -147,8 +154,9 @@ class NotebookPayload(Payload):
         Folds in ``other_files`` (the complete byte content of every
         non-image topic sibling — C++ headers a deck ``#include``s, files
         pulled in via Jinja ``{% include %}``, runtime data files), the
-        template fingerprint, the worker image identity, and the
-        ``skip_evaluation`` / ``skip_errors`` execution flags. Editing any
+        template fingerprint, the worker image identity, the
+        ``skip_evaluation`` / ``skip_errors`` execution flags, and a
+        non-default language standard. Editing any
         topic sibling re-executes the deck:
         that over-invalidates slightly (a sibling the deck never reads also
         triggers re-execution), but over-invalidation is safe and cheap
@@ -173,6 +181,11 @@ class NotebookPayload(Payload):
             f"{self.template_fingerprint}:{self.worker_image_identity}:"
             f"{self.skip_evaluation}:{self.skip_errors}".encode()
         )
+        if self.prog_lang_standard:
+            # Appended only for a non-default standard, so the digest of
+            # every other payload is byte-for-byte what it was before the
+            # field existed (no cache invalidation for existing courses).
+            hasher.update(f":standard={self.prog_lang_standard}".encode())
         cassette_key = self.http_replay_cassette_name
         for name in sorted(self.other_files):
             if cassette_key is not None and name == cassette_key:

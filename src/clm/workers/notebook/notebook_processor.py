@@ -1461,8 +1461,8 @@ class NotebookProcessor:
         # and bilingual builds produce byte-equivalent output (issue #133).
         _strip_lines_to_next_cell(new_cells)
         nb.cells = new_cells
-        nb.metadata["language_info"] = language_info(payload.prog_lang)
-        nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang)
+        nb.metadata["language_info"] = language_info(payload.prog_lang, payload.prog_lang_standard)
+        nb.metadata["kernelspec"] = kernelspec_for(payload.prog_lang, payload.prog_lang_standard)
         _, normalized_nb = normalize(nb)
         return cast(NotebookNode, normalized_nb)
 

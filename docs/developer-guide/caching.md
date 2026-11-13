@@ -165,6 +165,10 @@ Do not assume they move together.
   another. ⚠️ Switching `--workers direct` ↔ `docker`, or a moved/retagged
   image, cold-misses everything.
 - **`skip_evaluation` / `skip_errors`** execution flags.
+- **`prog_lang_standard`** — the course's `<prog-lang standard="…">` (#1228),
+  which selects the kernel. Folded in only when it is not the language's
+  default, so a course that selects no standard has the keys it always had,
+  and a deck shared by a C++20 and a C++23 course gets one entry per standard.
 - **All sibling `other_files` bytes** — the C++ headers a deck `#include`s,
   Jinja `{% include %}` targets, data files. ⚠️ On Windows, CRLF↔LF
   normalization of a sibling between builds changes these bytes and invalidates
