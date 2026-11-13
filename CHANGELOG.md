@@ -9,6 +9,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.39.0] - 2026-11-13
+
+### Added
+
+- **C++23 per course: `<prog-lang standard="23">cpp</prog-lang>` (#1228).**
+  The new `standard` attribute of the course spec's `<prog-lang>` selects the
+  C++ standard of a course — `"20"` (default) or `"23"` — and drives both
+  places that were hardcoded to C++20: the Jupyter kernel the notebooks are
+  executed in and written for (`xcpp23`), and the `CMAKE_CXX_STANDARD` of the
+  exported CMake projects. One setting, so a deck cannot be C++23 in the
+  notebook and C++20 in its export. The standard is part of the notebook cache
+  keys only when it is not the default: courses without the attribute keep
+  their caches, and a deck shared by a C++20 and a C++23 course is cached per
+  standard. An unsupported value is a spec error; a misspelt attribute is an
+  `unknown_attribute` finding of `clm validate`; `clm cache explain` shows the
+  standard. Needs the Ubuntu 26.04 notebook images (g++ 15) for the C++23
+  library.
+
+### Changed
+
+- **Notebook worker images: Ubuntu 26.04 under both variants, g++ 15, CUDA 13
+  (#1228).** `lite` moves from `python:3.12-slim` (Debian) to `ubuntu:26.04`
+  and `full`/amd64 from `nvidia/cuda:12.6.1-…-ubuntu24.04` to
+  `nvidia/cuda:13.3.1-cudnn-runtime-ubuntu26.04`, with PyTorch from the CUDA
+  13.0 wheel index. The system g++ — the C++ standard library of both the
+  xeus-cpp kernel and the code-export compile — is now g++ 15 in every
+  variant (it was 14 under `lite` and 13 under `full`), which is what makes
+  the C++23 library usable: `<print>`, `std::ranges::to`, `<generator>`,
+  `<flat_map>`. The kernel stack is pinned (`xeus-cpp` 0.10.0, `cppinterop`
+  1.9.0 = clang 21) instead of resolving anew on every image build; the conda
+  `libstdcxx-devel` package, which the kernel never read, is no longer
+  installed; Java stays at 21 (`openjdk-21-jdk`). A `full` container started
+  with `--gpus` now needs a host NVIDIA driver that supports CUDA 13.3 (CLM's
+  own Docker worker mode passes no GPUs).
+
+### Fixed
+
+- **Generated `CMakeLists.txt` files (and other committed text outputs) are LF on Windows too.** They were written in text mode, so Windows builds produced CRLF and every rebuild flagged ~30 content-identical files as modified in `eol=lf` output repos. The `.gitignore` from `clm git init`, release manifests and ledgers, and JupyterLite site files now also use LF explicitly; `launch.bat` is explicitly CRLF.
+
 ## [1.38.0] - 2026-11-08
 
 ### Added
