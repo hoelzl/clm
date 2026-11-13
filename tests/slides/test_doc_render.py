@@ -117,6 +117,14 @@ def test_an_id_gained_on_one_half_is_stamped_on_the_other() -> None:
     assert _in_sync(files)
 
 
+def test_an_id_gained_on_one_half_sits_where_that_half_has_it() -> None:
+    de = DE.replace('# %% tags=["keep"]\ny = 2', '# %% slide_id="y-two" tags=["keep"]\ny = 2')
+    files = _sync(de, EN)
+    assert files[("en", "deck")] == EN.replace(
+        '# %% tags=["keep"]\ny = 2', '# %% slide_id="y-two" tags=["keep"]\ny = 2'
+    )
+
+
 def test_a_localized_cell_new_on_one_half_gets_a_twin_with_the_translator_s_text() -> None:
     new_de = '# %% [markdown] lang="de" slide_id="note"\n#\n# Hinweis\n\n'
     new_en = '# %% [markdown] lang="en" slide_id="note"\n#\n# Note\n\n'

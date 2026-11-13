@@ -65,6 +65,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from attrs import evolve  # noqa: E402
+
 from clm.core.voiceover_companions import (  # noqa: E402
     COMPANION_SUBDIR,
     companion_name,
@@ -86,6 +88,15 @@ from clm.slides.doc_core import (  # noqa: E402
 from clm.slides.doc_lenses import _read_source, parse_bundle, read_file  # noqa: E402
 from clm.slides.doc_render import RenderError, render  # noqa: E402
 from clm.slides.doc_sequence import canonical, deck_sequence, is_localized  # noqa: E402
+from clm.slides.doc_text import (  # noqa: E402
+    TextPlan,
+    TextRow,
+    owners_of,
+    plan_text,
+    recorded_by_half,
+    text_key,
+    text_of,
+)
 
 MAX_PASSES = 6
 #: Questions the judge answers. Everything else is refused.
@@ -341,10 +352,13 @@ class Result:
     #: the engine's passes: per pass, ``action key`` of every framed item
     passes: list[list[str]] = field(default_factory=list)
     #: the model only: the rendered files against the next in-sync state,
-    #: byte by byte with localized text masked (match | leader_changed |
-    #: differs | render_error), and where they first differ
+    #: the translator's text taken from it (match | text_differs | follower_edited |
+    #: localized_separator | differs | leader_changed | text_held |
+    #: render_error), and where they first differ
     bytes: str = ""
     bytes_detail: str = ""
+    #: the model only: the text layer's rows, ``kind`` or ``kind=answer``
+    text_rows: list[str] = field(default_factory=list)
     #: the model only: the identity law on the base state (rendering an
     #: unchanged deck from its own merge gives its bytes back): holds | fails
     identity: str = ""
@@ -410,7 +424,7 @@ def run_model(case: Case) -> Result:
         res.status, res.detail = "asks", "+".join(sorted(opened))
         return res
     res.verdict, res.detail = _verdict(case, got)
-    res.bytes, res.bytes_detail = _byte_verdict(case, out.halves)
+    res.bytes, res.bytes_detail = _byte_verdict(case, out.halves, res)
     return res
 
 
@@ -463,8 +477,14 @@ def _translator(case: Case):
                 if sc.slide_id is not None:
                     by_id.setdefault((lang, "sid:" + sc.slide_id.rstrip("!")), sc)
 
+    _, next_cells = _read_state(case, case.expected)
+    for lang in SIDES:
+        for sc in next_cells[lang]:
+            if sc.slide_id is None and text_key(sc) is not None:
+                by_id.setdefault((lang, "sid:" + str(text_key(sc))), sc)
+
     def translate(source: SideCell, lang: str) -> str:
-        sid = source.slide_id.rstrip("!") if source.slide_id else None
+        sid = text_key(source)
         got = by_id.get((lang, "sid:" + sid)) if sid else None
         if got is None:
             raise RenderError(f"no text for {sid or source.cell_type} on {lang}")
@@ -474,16 +494,25 @@ def _translator(case: Case):
 
 
 def _masked(
-    text: str | None, lang: str, part: str, token: str, *, separators: bool = True
+    text: str | None,
+    lang: str,
+    part: str,
+    token: str,
+    *,
+    separators: bool = True,
+    headers: frozenset[str] = frozenset(),
 ) -> list[str] | None:
     """A file's lines with each localized cell's text masked: its header
     and (with ``separators``) its trailing blank lines stay (a ``j2`` macro's
-    header is its text)."""
+    header is its text). The header of a cell whose id is in ``headers`` is
+    masked too."""
     if text is None:
         return None
     preamble, cells = read_file(text, lang, part, token)
     out = list(preamble)
     for sc in cells:
+        if sc.slide_id is not None and sc.slide_id.rstrip("!") in headers:
+            sc = evolve(sc, lines=("<header>", *sc.lines[1:]))
         if not is_localized(sc):
             out.extend(sc.lines)
             continue
@@ -492,50 +521,179 @@ def _masked(
         while body and body[-1] == "":
             body.pop()
             trailing += 1
-        out.append("<macro>" if sc.is_macro else sc.header)
+        out.append("<macro>" if sc.is_macro and sc.header != "<header>" else sc.header)
         out.append("<text>")
         out.extend([""] * trailing if separators else ["<sep>"])
     return out
 
 
-def _byte_verdict(case: Case, halves: dict[str, list[Cell]]) -> tuple[str, str]:
-    """Render the model's result and judge it against the next in-sync state
-    byte by byte: the leader's files unchanged, the follower's equal to the
-    next state's, localized text masked (the text layer's, not the core's)."""
-    preambles = {}
-    inputs: dict[str, list[SideCell]] = {lang: [] for lang in SIDES}
+def _read_state(
+    case: Case, text_of_file
+) -> tuple[dict[tuple[str, str], tuple[str, ...] | None], dict[str, list[SideCell]]]:
+    """Each file's preamble and each half's cells, ``text_of_file(lang,
+    part)`` giving a file's text."""
+    preambles: dict[tuple[str, str], tuple[str, ...] | None] = {}
+    cells: dict[str, list[SideCell]] = {lang: [] for lang in SIDES}
     for lang in SIDES:
         for part in PARTS:
-            text = case.now(lang, part)
+            text = text_of_file(lang, part)
             if text is None:
                 preambles[(lang, part)] = None
                 continue
-            pre, cells = read_file(text, lang, part, case.token)
+            pre, got = read_file(text, lang, part, case.token)
             preambles[(lang, part)] = pre
-            inputs[lang].extend(cells)
+            cells[lang].extend(got)
+    return preambles, cells
+
+
+def _text_judge(case: Case, now: dict[str, list[SideCell]], answered: list[str]):
+    """Answer the text layer's rows as the author did: from the next
+    in-sync state."""
+    next_pre, next_cells = _read_state(case, case.expected)
+    now_pre, _ = _read_state(case, case.now)
+    by_id = {(lang, k): sc for lang in SIDES for sc in now[lang] if (k := text_key(sc))}
+    want = {(lang, k): sc for lang in SIDES for sc in next_cells[lang] if (k := text_key(sc))}
+
+    def judge(row: TextRow) -> str | None:
+        answer: str | None = None
+        sid = row.handle.removeprefix("id:")
+        if row.kind == "translate_edit":
+            twin = other(row.side or "de")
+            have, then = by_id.get((twin, sid)), want.get((twin, sid))
+            if have is not None and then is not None:
+                answer = "keep_twin" if text_of(have) == text_of(then) else "body"
+        elif row.kind in ("verify_translation", "verify_cold"):
+            answer = "confirm"
+        elif row.kind == "conflict_owner":
+            then = want.get(("de", sid)) or want.get(("en", sid))
+            for lang in SIDES:
+                have = by_id.get((lang, sid))
+                if have is not None and then is not None and owners_of(have) == owners_of(then):
+                    answer = lang
+        elif row.kind == "conflict_preamble":
+            part = row.handle.removeprefix("preamble:")
+            for lang in SIDES:
+                if now_pre.get((lang, part)) == next_pre.get((lang, part)):
+                    answer = lang
+        answered.append(f"{row.kind}={answer}")
+        return answer
+
+    return judge
+
+
+def _attributes(header: str) -> list[str]:
+    """A cell header's attributes, in no particular order."""
+    return sorted(re.findall(r'\w+=(?:"[^"]*"|\[[^\]]*\])', header))
+
+
+def _follower_edits(
+    case: Case,
+    follow: str,
+    plan: TextPlan,
+    base_cells: dict[str, list[SideCell]],
+    base_preambles: dict[tuple[str, str], tuple[str, ...] | None],
+) -> list[str]:
+    """What the author changed on the follower between the base and the
+    next state that the text layer had no reason to change: the text of a
+    localized cell it did not retext, a header the author re-formatted, an
+    owner attribute the plan left as it was, a preamble it did not
+    propagate."""
+    next_preambles, next_cells = _read_state(case, case.expected)
+    then = {k: text_of(sc) for sc in base_cells[follow] if is_localized(sc) and (k := text_key(sc))}
+    out = []
+    for sc in next_cells[follow]:
+        sid = text_key(sc)
+        if sid is None or not is_localized(sc) or (follow, sid) in plan.retext:
+            continue
+        if sid in then and then[sid] != text_of(sc):
+            out.append(f"id:{sid}")
+    # A header the author re-formatted (attribute order, spacing) with the
+    # same attributes: the normalizer's work, which a sync does not mirror.
+    # An owner attribute the author changed by hand where the plan kept the
+    # follower's value (a fingerprint anchor re-computed, say).
+    cells = {sc.slide_id.rstrip("!"): sc for sc in base_cells[follow] if sc.slide_id is not None}
+    for sc in next_cells[follow]:
+        sid = sc.slide_id.rstrip("!") if sc.slide_id is not None else None
+        before = cells.get(sid) if sid is not None else None
+        if before is None or before.header == sc.header:
+            continue
+        if _attributes(before.header) == _attributes(sc.header):
+            out.append(f"format:{sid}")
+        else:
+            kept = plan.owners.get((follow, str(sid)))
+            then, now = owners_of(before), owners_of(sc)
+            if kept is not None and any(now[i] != then[i] and kept[i] == then[i] for i in range(2)):
+                out.append(f"owner:{sid}")
+    for part in PARTS:
+        key = (follow, part)
+        before, after = base_preambles.get(key), next_preambles.get(key)
+        if (
+            before is not None
+            and after is not None
+            and before != after
+            and key not in plan.preambles
+        ):
+            out.append(f"preamble:{part}")
+    return out
+
+
+def _byte_verdict(case: Case, halves: dict[str, list[Cell]], res: Result) -> tuple[str, str]:
+    """Render the model's result with the text layer and judge it against
+    the next in-sync state byte by byte: the leader's files unchanged, the
+    follower's equal to the next state's, the translator's text taken from
+    it. Where they differ, the comparison with localized text masked tells a
+    difference of text from one of structure."""
+    preambles, inputs = _read_state(case, case.now)
+    base_preambles, base_cells = _read_state(case, lambda lang, part: case.base[_slot(lang, part)])
+    answered: list[str] = []
+    plan = plan_text(
+        halves,
+        recorded_by_half(base_cells),
+        preambles,
+        base_preambles,
+        _text_judge(case, inputs, answered),
+    )
+    res.text_rows = answered + [r.kind for r in plan.mechanical]
+    if plan.held:
+        return "text_held", "+".join(sorted({r.kind for r in plan.held}))
     try:
-        files = render(halves, preambles, inputs, _translator(case), case.token)
+        files = render(halves, preambles, inputs, _translator(case), case.token, plan)
     except RenderError as exc:
         return "render_error", str(exc)[:200]
     lead, follow = case.leader, other(case.leader)
     for part in PARTS:
         if files[(lead, part)] != case.now(lead, part):
             return "leader_changed", part
+    if all(files[(follow, part)] == case.expected(follow, part) for part in PARTS):
+        return "match", ""
+    # The author also edited the follower where the leader's change asked
+    # for nothing (text, a header's format or owner, a preamble): no sync
+    # produces that, so the replay is not one-sided in its text.
+    edited = _follower_edits(case, follow, plan, base_cells, base_preambles)
+    by_hand = frozenset(e.split(":", 1)[1] for e in edited if e.startswith(("format:", "owner:")))
+    # Structure first: with localized text, separators and the headers the
+    # author edited by hand masked, any difference is the core's or the
+    # renderer's.
+    for part in PARTS:
+        loose = [
+            _masked(t, follow, part, case.token, separators=False, headers=by_hand)
+            for t in (files[(follow, part)], case.expected(follow, part))
+        ]
+        if loose[0] != loose[1]:
+            return "differs", f"{part}: {_first_line_difference(*loose)}"
+    if edited:
+        return "follower_edited", ", ".join(edited[:3])
     for part in PARTS:
         have = _masked(files[(follow, part)], follow, part, case.token)
         want = _masked(case.expected(follow, part), follow, part, case.token)
         if have != want:
-            loose = [
-                _masked(t, follow, part, case.token, separators=False)
-                for t in (files[(follow, part)], case.expected(follow, part))
-            ]
-            if loose[0] == loose[1]:
-                # Only the blank lines after localized cells differ: the
-                # author re-spaced the leader's cells and their twins. Whose
-                # job that is (the text layer's ``translate_edit``) is
-                # phase B's question; counted apart, not hidden.
-                return "localized_separator", f"{part}: {_first_line_difference(have, want)}"
-            return "differs", f"{part}: {_first_line_difference(have, want)}"
+            return "localized_separator", f"{part}: {_first_line_difference(have, want)}"
+    for part in PARTS:
+        got, exp = files[(follow, part)], case.expected(follow, part)
+        if got != exp:
+            have = got.split("\n") if got is not None else None
+            want = exp.split("\n") if exp is not None else None
+            return "text_differs", f"{part}: {_first_line_difference(have, want)}"
     return "match", ""
 
 
@@ -739,6 +897,10 @@ def summarize(results: list[dict], show: int) -> None:
     identity = Counter(r["model"].get("identity") or "-" for r in results)
     print("\nmodel, identity law on the base state:")
     for k, v in identity.most_common():
+        print(f"  {v:6d}  {k}")
+    rows = Counter(k for r in results for k in r["model"].get("text_rows") or [])
+    print("\nmodel, text layer rows:")
+    for k, v in rows.most_common():
         print(f"  {v:6d}  {k}")
     rendered = Counter(r["model"].get("bytes") or "-" for r in results)
     print("\nmodel, rendered files (localized text masked):")
