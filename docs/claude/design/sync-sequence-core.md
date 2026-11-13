@@ -351,6 +351,16 @@ and has an exit gate. The v3 cutover followed the same pattern (v3 design §11).
   suite; `scripts/sync_shadow.py` and the probe scorer import the library
   instead of the prototype. Exit: the probe, all law checks and the shadow
   give the prototype's numbers exactly.
+  **Done 2026-11-13.** `clm.slides.doc_core` holds the core with its rules
+  unchanged (type fixes only) and the adapter (`cell_of`, `cells_of`,
+  `base_of`). Every check run against master's prototype and against the
+  library gave identical output: the probe result files byte for byte (with
+  and without `identify`), the laws with and without `--tags`, the passes at
+  `--base 3 --half 3` (1,016,127 cases), and the shadow's result files on both
+  course repositories (3,849 and 2,734 replays). `scripts/sync_model.py` is
+  now a re-export of the library rather than a frozen copy, so the two cannot
+  drift; the parity above is the port's check. The law tests are
+  `tests/slides/test_doc_core.py`.
 - **Phase B — text layer and renderer, in shadow.** §5 and §6, run beside the
   engine by `scripts/sync_shadow.py`. The shadow's oracle becomes byte-level
   (§6.3), and the renderer laws run over every in-sync state of both course
@@ -387,7 +397,7 @@ nothing unless the switch is set.
 | The renderer gets bytes wrong in ways the cell-level shadow could not see (separators, preambles, CRLF) | phase B's byte-level oracle over every in-sync state of two repositories, and the identity law; the gate turns a renderer slip into a refused pass, never a written one |
 | A whole deck held by one open question costs more progress than today's per-row apply | measured in phase C (how often a pass with an open question wrote nothing although the old engine would have written something); narrowing the part to slide groups is decision O2 |
 | Agents built for schema 5 rows (`pos:` handles, `pool_*` rows) break | schema bump, info topics in the same PR, the old engine selectable for a release; course-repo skills are updated with phase D |
-| The prototype's behaviour drifts while being ported | phase A's exit gate is exact equality with the prototype's numbers; the prototype is deleted only in phase E |
+| The prototype's behaviour drifts while being ported | phase A's exit gate was exact equality with the prototype's output (met); the old script name is a re-export, so there is one copy |
 | Content questions the text layer must ask that the core hid | the text layer's rows are today's id'd-cell rows, already in use; the shadow counts its answered questions against the engine's (investigation §2.6) |
 
 ---
