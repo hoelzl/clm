@@ -81,7 +81,8 @@ compiler with a C++23 standard library too (GCC 15 or comparable).
 In a notebook cell, output written with `std::cout` (and `SHOW`) is displayed
 before output written with `std::print` / `std::println`, regardless of the
 order in the code. Avoid mixing them in one cell, or use
-`std::println(std::cout, ...)`.
+`std::println(std::cout, ...)`. `clm validate` warns on cells whose output the
+notebook shows in another order than the code.
 
 ### `<description>` (Required)
 

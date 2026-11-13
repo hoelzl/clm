@@ -186,6 +186,20 @@ def _is_macro_use(masked: str, at: int) -> bool:
     return token is None or token.group(1) in _STATEMENT_KEYWORDS
 
 
+def show_macro_positions(masked: str) -> list[tuple[int, str]]:
+    """``(position, macro name)`` of every display-macro use in *masked* source.
+
+    *masked* is source with comments and string contents blanked
+    (:func:`mask_comments_and_strings`). A member, a qualified name or a
+    declarator called ``SHOW`` is not a use of the macro.
+    """
+    return [
+        (match.start(), match.group(1))
+        for match in _SHOW_CALL_RE.finditer(masked)
+        if _is_macro_use(masked, match.start())
+    ]
+
+
 def _in_definition_body(masked: str, at: int) -> bool:
     """Whether ``at`` is inside braces other than a namespace-like block's."""
     stack: list[bool] = []

@@ -37,6 +37,7 @@ from clm.core.utils.path_utils import split_lang_suffix
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.core.voiceover_companions import is_voiceover_companion
 from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
+from clm.slides.cpp_output_order import find_output_order_problem
 from clm.slides.cpp_show import find_show_calls
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
@@ -2325,6 +2326,55 @@ def _check_show_calls(cell: Cell, file_path: str) -> list[Finding]:
     return findings
 
 
+_OUTPUT_ORDER_REASONS = {
+    "order": "`{stdio}` is written before `{stream}`, but the notebook displays it after",
+    "loop": (
+        "`{stream}` and `{stdio}` alternate in a loop, but the notebook displays "
+        "all `{stream}` output first"
+    ),
+    "function": (
+        "`{stream}` and `{stdio}` are mixed in one function, whose output the notebook reorders"
+    ),
+}
+
+
+def _check_output_order(cell: Cell, file_path: str) -> list[Finding]:
+    """Flag a cell whose output the notebook displays in another order than written.
+
+    The kernel shows everything written through ``std::cout`` (``SHOW``
+    included) before everything written through C stdio (``std::print``,
+    ``std::println``, ``printf``, ``puts``) — see
+    :mod:`clm.slides.cpp_output_order`. A ``del`` cell is in no output and a
+    ``start`` cell is never executed, so neither has notebook output.
+    """
+    tags = cell.metadata.tags
+    if "del" in tags or "start" in tags:
+        return []
+    problem = find_output_order_problem(cell.content)
+    if problem is None:
+        return []
+    message = _OUTPUT_ORDER_REASONS[problem.reason].format(
+        stdio=problem.stdio_writer, stream=problem.stream_writer
+    )
+    return [
+        Finding(
+            severity="warning",
+            category="code_export",
+            file=file_path,
+            line=cell.line_number,
+            message=message,
+            suggestion=(
+                "In a notebook cell the xeus-cpp kernel shows everything written through "
+                "`std::cout` (`SHOW` included) before everything written through C stdio "
+                "(`std::print`, `std::println`, `printf`, `puts`), whatever the order in "
+                "the code; the exported program prints in program order. Use one channel "
+                "per cell: `std::println(std::cout, ...)` writes through `std::cout`, or "
+                "split the cell."
+            ),
+        )
+    ]
+
+
 def _check_code_export(
     cells: list[Cell], file_path: str, *, allow_main: bool = False
 ) -> list[Finding]:
@@ -2344,7 +2394,8 @@ def _check_code_export(
     unless the deck carries the ``clm: allow-main`` header marker), Jinja
     directives inside code cells (untransformable), a ``SHOW`` the export would
     emit at namespace scope (#1119), a ``SHOW`` whose inline lambda kills the
-    kernel (#1044), and — informationally — cells mixing definitions with
+    kernel (#1044), output the notebook displays in another order than
+    written (#1228), and — informationally — cells mixing definitions with
     statements.
     """
     findings: list[Finding] = []
@@ -2380,6 +2431,7 @@ def _check_code_export(
             continue
 
         findings.extend(_check_show_calls(cell, file_path))
+        findings.extend(_check_output_order(cell, file_path))
 
         items = classify_source(source)
 
