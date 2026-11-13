@@ -13,9 +13,10 @@ module decides what the core leaves open, on the core's result:
   ``translate_new``, a fork the core's ``fork``; neither is asked here;
 - **the owner attributes** (``for_slide``, ``vo_anchor``) of a localized
   cell, merged 3-way like tags: one half changed it, take it; both changed
-  it differently, ``conflict_owner`` (``de``, ``en``). A fingerprint anchor
-  (``vo_anchor="fp:…"``) is the exception: it fingerprints the cell before
-  the narration in that half's language, so each half keeps its own. A
+  it differently, ``conflict_owner`` (``de``, ``en``). The exception is a
+  fingerprint anchor (``vo_anchor="fp:…"``) the halves recorded differently
+  (it fingerprints a localized cell in each language): a new fingerprint, or
+  dropping it, stays on its half. A
   ``for_slide`` that names no id of the merged deck is ``broken_owner``
   (held), as today; a stale ``vo_anchor`` is ``clm validate``'s, since
   placing narration falls back from it;
@@ -304,11 +305,14 @@ def _owners(
     """Each half's owners after the merge (``None``: held).
 
     Merged 3-way per attribute: a value one half changed reaches the other.
-    Except a fingerprint anchor (``vo_anchor="fp:…"``): it names the cell
-    before the narration by that cell's bytes, which differ per language by
-    design, so a half that moves to one keeps it to itself, and each half
-    keeps its own. An ``id:`` or ``tm:`` anchor and ``for_slide`` name the
-    same thing on both halves."""
+    Except where the halves already recorded different values, which a
+    fingerprint anchor (``vo_anchor="fp:…"``) does when the cell before the
+    narration is localized (it fingerprints that cell's bytes in each
+    language). Then a half that moves to another fingerprint, or drops its
+    anchor, keeps that to itself; only a value that names the same thing on
+    both halves (an ``id:`` or ``tm:`` anchor, ``for_slide``) reaches the
+    other half. A fingerprint of a shared cell is the same on both halves
+    and propagates like any value."""
     now = {lang: owners_of(sc) for lang in SIDES if (sc := present[lang].get(sid)) is not None}
     if len(now) == 1:
         return dict(now)
@@ -322,7 +326,11 @@ def _owners(
         }
         moved = [lang for lang in SIDES if lang in base and values[lang] != base[lang]]
         own = values["de"] == values["en"] or len(base) < 2 or not moved
-        if not own and all(_per_half(values[lang]) for lang in moved):
+        if (
+            not own
+            and base["de"] != base["en"]
+            and all(values[lang] is None or _per_half(values[lang]) for lang in moved)
+        ):
             own = True
         if own:
             for lang in SIDES:

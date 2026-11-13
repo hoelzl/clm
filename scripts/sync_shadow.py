@@ -65,6 +65,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from attrs import evolve  # noqa: E402
+
 from clm.core.voiceover_companions import (  # noqa: E402
     COMPANION_SUBDIR,
     companion_name,
@@ -492,16 +494,25 @@ def _translator(case: Case):
 
 
 def _masked(
-    text: str | None, lang: str, part: str, token: str, *, separators: bool = True
+    text: str | None,
+    lang: str,
+    part: str,
+    token: str,
+    *,
+    separators: bool = True,
+    headers: frozenset[str] = frozenset(),
 ) -> list[str] | None:
     """A file's lines with each localized cell's text masked: its header
     and (with ``separators``) its trailing blank lines stay (a ``j2`` macro's
-    header is its text)."""
+    header is its text). The header of a cell whose id is in ``headers`` is
+    masked too."""
     if text is None:
         return None
     preamble, cells = read_file(text, lang, part, token)
     out = list(preamble)
     for sc in cells:
+        if sc.slide_id is not None and sc.slide_id.rstrip("!") in headers:
+            sc = evolve(sc, lines=("<header>", *sc.lines[1:]))
         if not is_localized(sc):
             out.extend(sc.lines)
             continue
@@ -510,7 +521,7 @@ def _masked(
         while body and body[-1] == "":
             body.pop()
             trailing += 1
-        out.append("<macro>" if sc.is_macro else sc.header)
+        out.append("<macro>" if sc.is_macro and sc.header != "<header>" else sc.header)
         out.append("<text>")
         out.extend([""] * trailing if separators else ["<sep>"])
     return out
@@ -584,7 +595,9 @@ def _follower_edits(
 ) -> list[str]:
     """What the author changed on the follower between the base and the
     next state that the text layer had no reason to change: the text of a
-    localized cell it did not retext, a preamble it did not propagate."""
+    localized cell it did not retext, a header the author re-formatted, an
+    owner attribute the plan left as it was, a preamble it did not
+    propagate."""
     next_preambles, next_cells = _read_state(case, case.expected)
     then = {k: text_of(sc) for sc in base_cells[follow] if is_localized(sc) and (k := text_key(sc))}
     out = []
@@ -596,15 +609,20 @@ def _follower_edits(
             out.append(f"id:{sid}")
     # A header the author re-formatted (attribute order, spacing) with the
     # same attributes: the normalizer's work, which a sync does not mirror.
-    headers = {sc.slide_id: sc.header for sc in base_cells[follow] if sc.slide_id is not None}
+    # An owner attribute the author changed by hand where the plan kept the
+    # follower's value (a fingerprint anchor re-computed, say).
+    cells = {sc.slide_id.rstrip("!"): sc for sc in base_cells[follow] if sc.slide_id is not None}
     for sc in next_cells[follow]:
-        before = headers.get(sc.slide_id) if sc.slide_id is not None else None
-        if (
-            before is not None
-            and before != sc.header
-            and _attributes(before) == _attributes(sc.header)
-        ):
-            out.append(f"format:{sc.slide_id}")
+        sid = sc.slide_id.rstrip("!") if sc.slide_id is not None else None
+        before = cells.get(sid) if sid is not None else None
+        if before is None or before.header == sc.header:
+            continue
+        if _attributes(before.header) == _attributes(sc.header):
+            out.append(f"format:{sid}")
+        elif owners_of(sc) != owners_of(before) and plan.owners.get(
+            (follow, str(sid))
+        ) == owners_of(before):
+            out.append(f"owner:{sid}")
     for part in PARTS:
         key = (follow, part)
         before, after = base_preambles.get(key), next_preambles.get(key)
@@ -647,19 +665,21 @@ def _byte_verdict(case: Case, halves: dict[str, list[Cell]], res: Result) -> tup
             return "leader_changed", part
     if all(files[(follow, part)] == case.expected(follow, part) for part in PARTS):
         return "match", ""
-    # Structure first: with localized text and separators masked, any
-    # difference is the core's or the renderer's.
+    # The author also edited the follower where the leader's change asked
+    # for nothing (text, a header's format or owner, a preamble): no sync
+    # produces that, so the replay is not one-sided in its text.
+    edited = _follower_edits(case, follow, plan, base_cells, base_preambles)
+    by_hand = frozenset(e.split(":", 1)[1] for e in edited if e.startswith(("format:", "owner:")))
+    # Structure first: with localized text, separators and the headers the
+    # author edited by hand masked, any difference is the core's or the
+    # renderer's.
     for part in PARTS:
         loose = [
-            _masked(t, follow, part, case.token, separators=False)
+            _masked(t, follow, part, case.token, separators=False, headers=by_hand)
             for t in (files[(follow, part)], case.expected(follow, part))
         ]
         if loose[0] != loose[1]:
             return "differs", f"{part}: {_first_line_difference(*loose)}"
-    # The author also edited the follower's localized text or preamble
-    # where the leader's change asked for nothing: no sync can produce
-    # that, so the replay is not one-sided in its text.
-    edited = _follower_edits(case, follow, plan, base_cells, base_preambles)
     if edited:
         return "follower_edited", ", ".join(edited[:3])
     for part in PARTS:

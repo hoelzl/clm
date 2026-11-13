@@ -274,6 +274,22 @@ def test_a_fingerprint_anchor_replaced_by_an_id_anchor_on_one_half_reaches_the_o
     assert files[("en", "deck")] == en_base.replace("fp:bbbb#0", "id:intro#0")
 
 
+def test_a_fingerprint_anchor_dropped_on_one_half_stays_on_the_other() -> None:
+    de_base = DE.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"')
+    en_base = EN.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:bbbb#0"')
+    _, files = _run(DE, en_base, base=(de_base, en_base))
+    assert files is not None and files[("en", "deck")] == en_base
+
+
+def test_a_fingerprint_anchor_gained_where_the_halves_agreed_reaches_the_other() -> None:
+    de = DE.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"')
+    _, files = _run(de, EN)
+    assert files is not None
+    assert files[("en", "deck")] == EN.replace(
+        'for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"'
+    )
+
+
 def test_rendered_keep_twin_leaves_the_twin_s_bytes() -> None:
     de = DE.replace("# Hallo\n", "# Hallo, Welt\n\n")
     _, files = _run(de, EN, answers={"translate_edit": "keep_twin"})
