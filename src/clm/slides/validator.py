@@ -37,8 +37,8 @@ from clm.core.utils.path_utils import split_lang_suffix
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 from clm.core.voiceover_companions import is_voiceover_companion
 from clm.core.workshop_scope import find_workshop_ranges, is_in_workshop, is_workshop_opener
-from clm.slides.cpp_output_order import find_output_order_problem
-from clm.slides.cpp_show import find_show_calls
+from clm.slides.cpp_output_order import find_output_order_problem, find_undisplayed_write
+from clm.slides.cpp_show import find_lambda_hazards, find_show_calls
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
     is_valid_slug,
@@ -2375,6 +2375,97 @@ def _check_output_order(cell: Cell, file_path: str) -> list[Finding]:
     ]
 
 
+def _check_undisplayed_output(cell: Cell, file_path: str) -> list[Finding]:
+    """Flag output the notebook never displays: C ``stderr`` and ``std::clog``.
+
+    See :func:`clm.slides.cpp_output_order.find_undisplayed_write`. A ``del``
+    cell is in no output and a ``start`` cell is never executed.
+    """
+    tags = cell.metadata.tags
+    if "del" in tags or "start" in tags:
+        return []
+    writer = find_undisplayed_write(cell.content)
+    if writer is None:
+        return []
+    return [
+        Finding(
+            severity="warning",
+            category="code_export",
+            file=file_path,
+            line=cell.line_number,
+            message=f"`{writer}` output is not displayed in the notebook",
+            suggestion=(
+                "The xeus-cpp kernel shows nothing a cell writes to C `stderr` "
+                "(`std::print(stderr, ...)`, `fprintf(stderr, ...)`, `fputs`, `perror`) "
+                "or to `std::clog`, flushed or not; the exported program prints it. "
+                "Write through `std::cerr`, which the notebook displays: "
+                "`std::cerr << ...` or `std::println(std::cerr, ...)`."
+            ),
+        )
+    ]
+
+
+def _check_lambda_hazards(cell: Cell, file_path: str) -> list[Finding]:
+    """Flag lambdas outside the display macros that can take the kernel down.
+
+    See :func:`clm.slides.cpp_show.find_lambda_hazards`. A lambda inside a
+    top-level ``for`` / ``switch`` kills the kernel in every configuration
+    measured (a warning); one in a top-level call or expression statement
+    does so in some configurations and not in others (information, so that
+    the author of a deck whose kernel dies finds the candidates). A ``del``
+    cell is in no output and a ``start`` cell is never executed.
+    """
+    tags = cell.metadata.tags
+    if "del" in tags or "start" in tags:
+        return []
+    findings: list[Finding] = []
+    for hazard in find_lambda_hazards(cell.content):
+        if hazard.kills_kernel:
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="code_export",
+                    file=file_path,
+                    line=cell.line_number,
+                    message=(
+                        f"`{hazard.text}` holds a lambda inside a top-level "
+                        f"`{hazard.statement}`, which kills the kernel"
+                    ),
+                    suggestion=(
+                        "The xeus-cpp kernel dies on a lambda expression written anywhere "
+                        "inside a top-level `for` or `switch` statement, also one bound to "
+                        "a name there, and the whole deck fails. Define the lambda (or a "
+                        "function) in a statement of its own before the statement and use "
+                        "its name inside. The same loop inside a function body is fine."
+                    ),
+                )
+            )
+        else:
+            findings.append(
+                Finding(
+                    severity="info",
+                    category="code_export",
+                    file=file_path,
+                    line=cell.line_number,
+                    message=(
+                        f"`{hazard.text}` holds an inline lambda in a top-level "
+                        "statement, which can kill the kernel"
+                    ),
+                    suggestion=(
+                        "Whether the xeus-cpp kernel survives this shape depends on the "
+                        "function called, the C++ standard, the standard library version "
+                        "and the headers earlier cells included; the same statement runs "
+                        "in one deck and kills the kernel in another. If the kernel dies "
+                        "on this deck, name the lambda first: `auto f = [](int a) { ... };` "
+                        "in a statement of its own, then pass `f`. A lambda in a "
+                        "declaration (`auto n = std::ranges::count_if(v, [](int i) "
+                        "{ ... });`) is safe."
+                    ),
+                )
+            )
+    return findings
+
+
 def _check_code_export(
     cells: list[Cell], file_path: str, *, allow_main: bool = False
 ) -> list[Finding]:
@@ -2395,8 +2486,9 @@ def _check_code_export(
     directives inside code cells (untransformable), a ``SHOW`` the export would
     emit at namespace scope (#1119), a ``SHOW`` whose inline lambda kills the
     kernel (#1044), output the notebook displays in another order than
-    written (#1228), and — informationally — cells mixing definitions with
-    statements.
+    written or not at all (#1228), lambdas outside the display macros that
+    kill the kernel or can (#1228), and — informationally — cells mixing
+    definitions with statements.
     """
     findings: list[Finding] = []
     # (lang, kind, key) -> line of first definition, in the completed view.
@@ -2432,6 +2524,8 @@ def _check_code_export(
 
         findings.extend(_check_show_calls(cell, file_path))
         findings.extend(_check_output_order(cell, file_path))
+        findings.extend(_check_undisplayed_output(cell, file_path))
+        findings.extend(_check_lambda_hazards(cell, file_path))
 
         items = classify_source(source)
 

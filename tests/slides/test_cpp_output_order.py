@@ -21,7 +21,11 @@ from __future__ import annotations
 
 import pytest
 
-from clm.slides.cpp_output_order import OutputOrderProblem, find_output_order_problem
+from clm.slides.cpp_output_order import (
+    OutputOrderProblem,
+    find_output_order_problem,
+    find_undisplayed_write,
+)
 from clm.slides.validator import validate_file
 
 
@@ -260,3 +264,92 @@ class TestValidateFinding:
         path = tmp_path / "slides_test.cpp"
         path.write_bytes(b'// %%\r\nstd::println("1");\r\nstd::cout << "2\\n";\r\n')
         assert len(_order_findings(path)) == 1
+
+
+class TestOutputTheNotebookNeverDisplays:
+    """C ``stderr`` and ``std::clog`` (#1228).
+
+    Measured in the same image, each writer in a cell of its own followed by
+    a ``std::cout`` write: the ``std::cout`` line was displayed and the other
+    was not — not in that cell, and not with the next one. ``std::cerr`` was
+    displayed, as stderr output, also through ``std::println(std::cerr, ...)``.
+    The C functions were measured under ``xcpp20`` too.
+    """
+
+    @pytest.mark.parametrize(
+        ("body", "writer"),
+        [
+            ('std::println(stderr, "x");', "std::println(stderr, ...)"),
+            ('std::print(stderr, "x\\n");', "std::print(stderr, ...)"),
+            ('std::fprintf(stderr, "x\\n");', "fprintf(stderr, ...)"),
+            ('fprintf(stderr, "%d\\n", n);', "fprintf(stderr, ...)"),
+            ('std::fputs("x\\n", stderr);', "fputs(..., stderr)"),
+            # Flushing does not bring it back.
+            ('std::fprintf(stderr, "x\\n"); std::fflush(stderr);', "fprintf(stderr, ...)"),
+            ('std::perror("x");', "perror"),
+            ('std::clog << "x\\n";', "std::clog"),
+            ('std::clog << "x" << std::endl;', "std::clog"),
+            # ``using std::clog;`` decks.
+            ('clog << "x\\n";', "std::clog"),
+            # Not measured: the same writers in a function, where the call loses them.
+            ('void warn() { std::println(stderr, "x"); }', "std::println(stderr, ...)"),
+            # The first one names the finding.
+            ('std::clog << "a"; std::perror("b");', "std::clog"),
+        ],
+    )
+    def test_is_reported(self, body, writer):
+        assert find_undisplayed_write(body) == writer
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # Displayed.
+            'std::cerr << "x\\n";',
+            'std::println(std::cerr, "x");',
+            'std::println("x");',
+            'std::cout << "x\\n";',
+            'std::fprintf(stdout, "x\\n");',
+            # ``stderr`` named without being written to.
+            "std::fflush(stderr);",
+            "std::setbuf(stderr, nullptr);",
+            # Detection: text that only looks like a write.
+            '// std::println(stderr, "x");',
+            'const char* s{"std::clog << 1"}; std::cout << s;',
+            '#define WARN(x) std::fprintf(stderr, "%s", x)',
+            'std::fputs("stderr", stdout);',
+            # Another stream, another library's or a deck's own writer.
+            'std::fprintf(log_file, "x\\n");',
+            'std::println(log_file, "x");',
+            "logger.clog << 1;",
+            'my::perror("x");',
+            "",
+        ],
+    )
+    def test_is_silent(self, body):
+        assert find_undisplayed_write(body) is None
+
+    def test_validate_warns_and_says_how_to_fix(self, tmp_path):
+        path = _deck_with_cell(tmp_path, 'std::println(stderr, "x");')
+        result = validate_file(path, checks=["code_export"])
+        findings = [f for f in result.findings if "not displayed" in f.message]
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.severity == "warning"
+        assert finding.category == "code_export"
+        assert finding.line == 1
+        assert finding.message == (
+            "`std::println(stderr, ...)` output is not displayed in the notebook"
+        )
+        assert "std::println(std::cerr, ...)" in finding.suggestion
+
+    def test_one_finding_per_cell(self, tmp_path):
+        path = _deck_with_cell(tmp_path, 'std::clog << "a"; std::perror("b"); std::clog << "c";')
+        result = validate_file(path, checks=["code_export"])
+        assert len([f for f in result.findings if "not displayed" in f.message]) == 1
+
+    @pytest.mark.parametrize("tag", ["start", "del"])
+    def test_cell_that_is_never_executed_is_silent(self, tmp_path, tag):
+        path = _deck_with_cell(tmp_path, 'std::println(stderr, "x");', f'// %% tags=["{tag}"]')
+        result = validate_file(path, checks=["code_export"])
+        assert [f for f in result.findings if "not displayed" in f.message] == []
