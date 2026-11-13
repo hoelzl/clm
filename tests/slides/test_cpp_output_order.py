@@ -175,6 +175,29 @@ class TestDisplayedInProgramOrder:
         assert find_output_order_problem(body) is None
 
 
+class TestUnfinishedCode:
+    """A cell that is mid-edit must not break validation, nor hide a clear case."""
+
+    @pytest.mark.parametrize(
+        ("body", "reason"),
+        [
+            # A loop header that is never closed: no loop body to speak of.
+            ('for (int x : v std::cout << x; std::println("{}", x);', None),
+            # A single-statement loop body that runs into the end of the cell ...
+            ('for (int x : v) std::cout << x, std::println("{}", x)', "loop"),
+            # ... or into the brace that closes the surrounding block.
+            ('if (ok) { for (int x : v) std::cout << x, std::println("{}", x) }', "loop"),
+            # Unbalanced braces around a clear case.
+            ('} std::println("1"); std::cout << "2\\n";', "order"),
+            ('{ std::println("1"); std::cout << "2\\n";', "order"),
+            ("", None),
+        ],
+    )
+    def test_does_not_raise(self, body, reason):
+        problem = find_output_order_problem(body)
+        assert (problem.reason if problem else None) == reason
+
+
 class TestValidateFinding:
     def test_warns_and_says_how_to_fix(self, tmp_path):
         path = _deck_with_cell(tmp_path, 'std::println("1");\nstd::cout << "2\\n";')
