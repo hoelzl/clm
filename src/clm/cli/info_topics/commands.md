@@ -1832,6 +1832,19 @@ cell header:
 | `` `SHOW(x)` in a `global` cell will not compile in the export `` | `warning` | A `SHOW(...)` / `CLM_DISPLAY(...)` in a `global` cell, outside all braces (a `namespace` or `extern "C"` block does not count). The export emits the cell at namespace scope, where the macro's statement is ill-formed, so the failure would otherwise surface only in the downstream compile gate. Fix: move the call into a non-global cell. | A call in any other braces of a `global` cell, such as a function or lambda body (well-formed; the rule does not judge what else the braces might be); any `del` cell (in no output). |
 | `` `SHOW(...)` holds an inline lambda, which kills the kernel `` | `warning` | A `SHOW(...)` / `CLM_DISPLAY(...)` whose arguments contain a lambda expression, as a top-level statement of its cell or anywhere inside a top-level `for`, `switch` or bare `{ }` block. The xeus-cpp kernel dies on this and the whole deck fails. Fix: name the lambda first (`auto f = [](int a) { return a; };`, then `SHOW(f(1));`). | A named lambda passed or called in `SHOW`; a lambda in a plain declaration (`int t{std::accumulate(..., [](int s, int n) { return s + n; })};`); a `SHOW` inside a top-level function, lambda or class definition, or inside a top-level `if`, `else`, `while`, `do` or `try` (the kernel survives all of these); subscripts (`v[0]`); `start` and `del` cells (never executed). |
 
+A third `code_export` rule concerns the **order of a cell's notebook output**
+(since CLM {version}, #1228). The xeus-cpp kernel displays everything a cell
+writes through `std::cout` — `SHOW(...)` / `CLM_DISPLAY(...)` included — before
+everything it writes through C stdio (`std::print`, `std::println`, `printf`,
+`puts`), whatever the order in the code; flushing does not change that. The
+exported program prints in program order. One finding per cell:
+
+| Finding | Severity | Fires when | Stays silent on |
+|---------|----------|------------|-----------------|
+| `` `std::println` is written before `std::cout`, but the notebook displays it after `` | `warning` | A C-stdio write that is textually before a `std::cout` write in the cell's straight-line code (blocks such as `if` / `try` included). The notebook shows the later `std::cout` output first. Fix: one channel per cell — `std::println(std::cout, ...)` writes through `std::cout` — or split the cell. | `std::cout` output followed by C-stdio output (displayed as written); `std::print(std::cout, ...)`; a cell with one channel only; `stderr` (`std::cerr`, `std::println(stderr, ...)`); `start` and `del` cells (never executed). |
+| `` `std::cout` and `std::println` alternate in a loop, but the notebook displays all `std::cout` output first `` | `warning` | Both kinds of write inside one `for` / `while` / `do` loop, with or without braces: the second iteration's `std::cout` output is displayed before the first iteration's C-stdio output. | A loop that uses one channel, also when the other channel is used before or after it in the order above. |
+| `` `std::cout` and `std::println` are mixed in one function, whose output the notebook reorders `` | `warning` | Both kinds of write in one function, member function or lambda body: the output is reordered as soon as it is called twice in a cell. | Two functions that use one channel each; writes it cannot attribute — an unqualified `print(...)` / `println(...)` (usually a deck's own function), `fmt::println`, a member `x.println(...)`, a `std::print` whose first argument is neither a string literal nor `std::cout`. It does not follow calls: a function that prints, called next to a `std::cout` write, is not seen. |
+
 Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
 count parity, per-pair tag/type consistency, and DE/EN adjacency) are
 **skipped on single-language split files** (`*.de.py` / `*.en.py`) — a

@@ -101,7 +101,8 @@ project. The built `.ipynb` files carry the same kernel name, so they open in
   `std::cout` — including `SHOW(...)` — is displayed before everything
   written by `std::print` / `std::println`, whatever the program order; the
   exported program prints in order. Do not mix the two in one cell, or write
-  `std::println(std::cout, ...)`.
+  `std::println(std::cout, ...)`. `clm validate` warns where the notebook
+  shows another order than the code (see `clm info commands`).
 
 ### `<description>`
 

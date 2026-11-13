@@ -47,6 +47,15 @@ inside a top-level `SHOW(...)` — the kernel dies on it and the whole deck
 fails; bind the lambda to a name first and pass the name. `clm validate`
 warns on both (since CLM {version}).
 
+**One output channel per C++ cell** (since CLM {version}): in a notebook cell
+the kernel displays everything written through `std::cout` — `SHOW` included —
+before everything written through C stdio (`std::print`, `std::println`,
+`printf`, `puts`), whatever the order in the code. `std::cout` output followed
+by `std::println` output is therefore shown correctly, the reverse is not, and
+neither is a loop or a function that uses both. Use `std::println(std::cout,
+...)` to print through `std::cout`, or split the cell. `clm validate` warns on
+the shapes the notebook reorders.
+
 ## Magics, shell escapes, and install hints
 
 jupytext (the percent-format reader) **reactivates commented magics**: a
