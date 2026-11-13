@@ -100,6 +100,20 @@ pip install -e ".[dev]"      # Development tools
 pip install -e ".[all]"      # Everything clm needs (no ML stack; see below)
 ```
 
+### Global Editable `clm` Tool
+
+To put this checkout on your PATH as the global `clm`, use
+`python scripts/install_global_clm.py` instead of running
+`uv tool install --editable ".[all]" --force` yourself. On Windows, a
+reinstall fails partway, and leaves a broken tool behind, while any process
+(an agent's `clm mcp` server, a running build, an editor using the tool venv)
+still has the old tool environment in use. The script first lists such
+processes and probes whether the environment can be replaced, and installs
+only if it can. `--check` runs the checks without installing. With an
+editable install, code changes take effect without a reinstall (restart
+running servers); reinstall only when dependencies, extras or entry points
+change.
+
 ### Python Optional Dependencies
 
 CLM has several optional dependency groups for different features:
