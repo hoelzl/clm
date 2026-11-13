@@ -860,6 +860,7 @@ step 2, which was not in it. On 2026-11-13 the maintainer moved the shadow run
    to build before it: the text layer (rendering cells into files, the
    translation questions the prototype leaves to it, header attributes of
    localized cells), and how small a part can be (§4.6).
+   The design of this step is `docs/claude/design/sync-sequence-core.md`.
 
 Decisions:
 
