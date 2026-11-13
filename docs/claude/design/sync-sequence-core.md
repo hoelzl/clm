@@ -1,10 +1,10 @@
 # Sync: the Sequence Core — Switch-Over Design Note
 
-**Status**: PROPOSED 2026-11-13, for the maintainer's review. The decision to
-switch over was taken on 2026-11-13 (the go of
-`docs/claude/sync-structural-core-investigation.md` §9); this note is the
-design of step 5, and nothing in it is implemented yet. §11 lists the decisions
-it needs.
+**Status**: ACCEPTED 2026-11-13. The decision to switch over was taken on
+2026-11-13 (the go of `docs/claude/sync-structural-core-investigation.md`
+§9); this note is the design of step 5. The maintainer answered the
+decisions of §11 the same day, each as recommended. Phase A is next; nothing
+in this note is implemented yet.
 **Author**: Claude (Opus 5.5), at the maintainer's request
 **Builds on**: `docs/claude/sync-structural-core-investigation.md` (the
 finding, the prototype, its laws and the shadow on real history),
@@ -362,9 +362,9 @@ and has an exit gate. The v3 cutover followed the same pattern (v3 design §11).
   positional. The new handles and rows (§7) exist only under the switch. The
   probe, the laws ratchet (`tests/slides/test_sync_laws.py`) and the sweep run
   against both engines in CI. Exit: no case worse than the old engine in any of
-  them, and the maintainer's own course work done with the switch for a period
-  the maintainer sets (decision O4), counting manual fall-backs as the v3
-  dogfood week did.
+  them, and the maintainer's own course work done with the switch for two
+  weeks or 50 sync passes, whichever comes later (decision O4), counting
+  manual fall-backs as the v3 dogfood week did.
 - **Phase D — the default flips.** Finish the decks still pending (D4); wire
   schema 6; info topics, changelog, the `migration.md` entry. The old engine
   stays selectable with `CLM_SYNC_CORE=positional` for one release.
@@ -393,6 +393,12 @@ nothing unless the switch is set.
 ---
 
 ## 11. Decisions for the maintainer
+
+All five were decided by the maintainer on 2026-11-13, each as recommended:
+O1 index handles; O2 the whole deck; O3 ask `identify`; O4 two weeks or 50
+sync passes, whichever comes later; O5 keep the positional entries through
+phases C and D and drop them in phase E. The options and reasons are kept
+below.
 
 - **O1. Handles for un-id'd cells** (§7.1): `seq:<n>` / `new:<lang>:<file>:<n>`,
   pinned by `report_id`. Alternative: content-derived handles
