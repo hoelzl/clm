@@ -2592,6 +2592,16 @@ the member whose halves the engine can compare *directly* (`record_neutral`,
 below): there the relationship is observed, not assumed. Ledger files are
 committed with the course content; merge conflicts in them are true positives.
 
+**The recorded cell sequence.** A deck section also carries `sequence`: the
+deck's cells as both halves last agreed on them, one line per cell
+(`<file> <kind> S|L <tags> <fingerprint(s)> <id>`). It is written by a full
+`record` and by an `apply` pass that leaves nothing open, and only when the
+halves are in sync; every other write keeps the previous one. No verb reads it
+yet. It is the base for the coming structural core, so the first clean pass
+after an upgrade adds it to each ledger once. Never edit it by hand. In a
+merge conflict, take either side or delete the `sequence` key; the next clean
+pass records it again.
+
 **Seeding.** A fresh checkout or a never-recorded deck reports every member it
 cannot settle by direct comparison as cold. Seed trust once from a verified state: `clm slides sync record DIR`
 (gated per pair on the structural verify). `clm slides split` and

@@ -87,6 +87,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DocLensError",
+    "bare_slide_id",
     "LoadedBundle",
     "load_bundle",
     "parse_bundle",
@@ -199,6 +200,11 @@ def _bare(slide_id: str | None) -> str | None:
     if not slide_id:
         return None
     return strip_preserve_marker(slide_id) or None
+
+
+#: The public name of :func:`_bare`, for readers of a deck outside the lens
+#: (the recorded cell sequence, :mod:`clm.slides.doc_sequence`).
+bare_slide_id = _bare
 
 
 def _segment_deck(source: _Source, demoted: frozenset[str] = frozenset()) -> _DeckSeg:

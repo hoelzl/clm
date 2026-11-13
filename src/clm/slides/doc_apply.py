@@ -89,6 +89,7 @@ from clm.slides.doc_ledger import (
     record_group_order,
     record_order_scope,
     record_preamble_scope,
+    record_sequence,
     rename_group_scopes,
     rerecord_pool,
     seed_order_scopes,
@@ -3750,6 +3751,9 @@ def apply_deck(
     # structural verify faulted anywhere seeds nothing.
     if not unresolved_keys and not outcome.verify_violations:
         seed_order_scopes(target, fresh)
+        # The cell sequence (structural-core step 4) on the same condition;
+        # ``fresh`` carries one only when the written deck is in sync.
+        record_sequence(target, fresh)
     # Order scopes must not carry handles the ledger cannot back: a landed
     # order item beside still-pending members of its scope would otherwise
     # record handles that prune_dangling_refs strips at save with a
