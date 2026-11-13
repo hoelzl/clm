@@ -64,8 +64,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sync_model import SIDES, BaseMember, Cell, Question, merge, other  # noqa: E402
-
 from clm.core.voiceover_companions import (  # noqa: E402
     COMPANION_SUBDIR,
     companion_name,
@@ -73,8 +71,19 @@ from clm.core.voiceover_companions import (  # noqa: E402
 )
 from clm.slides import doc_apply  # noqa: E402
 from clm.slides.bilingual_doc import SideCell  # noqa: E402
-from clm.slides.doc_lenses import _bare, _read_source, parse_bundle  # noqa: E402
-from clm.slides.doc_sequence import canonical, deck_sequence, is_localized  # noqa: E402
+from clm.slides.doc_core import (  # noqa: E402
+    PARTS,
+    SIDES,
+    BaseMember,
+    Cell,
+    Question,
+    base_of,
+    cell_of,
+    merge,
+    other,
+)
+from clm.slides.doc_lenses import _read_source, parse_bundle  # noqa: E402
+from clm.slides.doc_sequence import canonical, deck_sequence  # noqa: E402
 
 MAX_PASSES = 6
 #: Questions the judge answers. Everything else is refused.
@@ -94,18 +103,7 @@ MODEL_ANSWERS = {
 
 
 def to_cell(sc: SideCell) -> Cell:
-    return Cell(
-        _bare(sc.slide_id),
-        sc.cell_type,
-        canonical(sc),
-        is_localized(sc),
-        sc,
-        frozenset(sc.tags),
-        sc.part,
-    )
-
-
-PARTS = ("deck", "companion")
+    return cell_of(sc)
 
 
 def part_cells(
@@ -149,10 +147,8 @@ def base_members(
     if isinstance(sequence, str):
         return sequence
     out: dict[str, list[BaseMember]] = {part: [] for part in PARTS}
-    for e in sequence:
-        out[e.file].append(
-            BaseMember(e.sid, e.kind, e.localized, e.de, e.en, None, frozenset(e.tags), e.file)
-        )
+    for member in base_of(sequence):
+        out[member.part].append(member)
     return out
 
 

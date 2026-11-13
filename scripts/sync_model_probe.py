@@ -31,11 +31,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sync_model import BaseMember, Cell, Question, merge  # noqa: E402
 from tests.slides import sync_probe as sp  # noqa: E402
 from tests.slides import sync_probe_cross as spc  # noqa: E402
 from tests.slides import sync_probe_ext as spx  # noqa: E402
 from tests.slides.sync_probe import SILENT  # noqa: E402
+
+from clm.slides.doc_core import BaseMember, Cell, Question, merge  # noqa: E402
 
 FAMILIES = {**sp.FAMILIES, **spx.FAMILIES, **spc.FAMILIES}
 PREFIX = {"slide": "s-", "subslide": "u-", "vo": "vo-"}

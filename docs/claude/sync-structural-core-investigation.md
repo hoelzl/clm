@@ -141,7 +141,7 @@ Three things this adds to §2.2:
 The cases with at most 3 cells per half are a ratchet in CI
 (`tests/slides/test_sync_laws.py`, 4,767 cases, 2,658 baseline entries); see
 "Sync laws" in `docs/developer-guide/testing.md`. The prototype's column is
-asserted on the same cases by `tests/scripts/test_sync_model_laws.py`.
+asserted on the same cases by `tests/slides/test_doc_core.py`.
 
 ### 2.6 The shadow on real history (step 3, added 2026-11-13)
 
@@ -621,7 +621,7 @@ three open issues "by construction".
 tagged cells, promotions and stamped ids: 256 recorded decks, 901,872
 one-sided cases and 42,372 where both halves changed, without a violation.
 The issues' own shapes run as tests in
-`tests/scripts/test_sync_model_laws.py`: #1216 (a
+`tests/slides/test_doc_core.py`: #1216 (a
 shared cell promoted without an id), the three shapes of #1092 (promoted with
 an id, cells inserted before a promoted cell, a new anchor with new cells
 under it) and #1187 (a move past a cell retagged in the same edit). Each is an
@@ -640,7 +640,7 @@ cell that one half made shared is a question too (`unify`): answered, both
 halves take that half's content. Where both halves did the same, nothing is
 asked. Both questions hold the part, because `scripts/sync_model_passes.py`
 does not generate them, so it cannot show that a narrower hold is safe. Tests:
-`tests/scripts/test_sync_model_laws.py`.
+`tests/slides/test_doc_core.py`.
 
 **The file a cell sits in** (added 2026-11-13, found by the shadow, §2.6). A
 voiceover can sit in the deck or in its companion file, and a cell's file is
@@ -787,7 +787,7 @@ the engine ended "clean" with the following half's narration in the old order,
 and the prototype ended as the author did.
 
 **Run on the issue's own shape, in the prototype** (§4.9,
-`tests/scripts/test_sync_model_laws.py`): #1092, #1187 and #1216. A slide-hood
+`tests/slides/test_doc_core.py`): #1092, #1187 and #1216. A slide-hood
 change re-keys the cells under it in the engine. Here no key embeds the slide,
 and an un-id'd cell that becomes a `subslide` is a cell whose tags changed.
 
@@ -917,7 +917,8 @@ a fast drive for the engine runs. The result files are not committed.
 | file | what |
 |---|---|
 | `src/clm/slides/doc_sequence.py` | the recorded cell sequence and when a deck is in sync (step 4), with `tests/slides/test_doc_sequence.py` |
-| `scripts/sync_model.py` | the prototype core |
+| `src/clm/slides/doc_core.py` | the core, ported from the prototype (design note phase A), with `tests/slides/test_doc_core.py` |
+| `scripts/sync_model.py` | the prototype's old name, now a re-export of `clm.slides.doc_core` |
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |
 | `scripts/sync_model_passes.py` | the laws across passes with questions left open (§4.6) |

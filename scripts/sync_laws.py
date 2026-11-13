@@ -22,7 +22,7 @@ trade, which the PR must name.
 about a minute on 16 workers), ``compare`` sets two such files side by side,
 and ``trace`` replays one case and prints each pass's rows and both halves.
 ``--model`` checks the reference model of a replacement structural core
-(``scripts/sync_model.py``) on the same cases instead of the engine.
+(``clm.slides.doc_core``) on the same cases instead of the engine.
 
 ``run`` and ``update`` use whichever ``clm`` is importable (prepend another
 ``src/`` to PYTHONPATH to check it). Point ``TMP`` at a fast drive.
@@ -43,10 +43,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sync_model import BaseMember, Cell, merge  # noqa: E402
 from tests.slides import sync_laws  # noqa: E402
 from tests.slides.sync_laws import BASELINE_PATH, HOLDS, IDS, Case, Run, Word, check  # noqa: E402
 from tests.slides.sync_probe import engine_file  # noqa: E402
+
+from clm.slides.doc_core import BaseMember, Cell, merge  # noqa: E402
 
 #: Violations where the engine reports success and the result is wrong.
 SILENT = (
@@ -103,7 +104,11 @@ def _work(case: Case, model: bool = False) -> tuple[str, str]:
 
 
 def _engine(model: bool) -> str:
-    return str(Path(__file__).with_name("sync_model.py")) if model else engine_file()
+    if model:
+        from clm.slides import doc_core
+
+        return str(doc_core.__file__)
+    return engine_file()
 
 
 def _run_all(scope: str, workers: int | None, model: bool = False) -> dict[str, str]:

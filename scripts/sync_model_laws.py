@@ -47,7 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sync_model import BaseMember, Cell, merge  # noqa: E402
+from clm.slides.doc_core import BaseMember, Cell, merge  # noqa: E402
 
 IDS = ("A", "B")
 BODIES = ("x", "y", "z")
