@@ -92,6 +92,7 @@ __all__ = [
     "load_bundle",
     "parse_bundle",
     "project",
+    "read_file",
 ]
 
 LANGS: tuple[Lang, ...] = ("de", "en")
@@ -205,6 +206,17 @@ def _bare(slide_id: str | None) -> str | None:
 #: The public name of :func:`_bare`, for readers of a deck outside the lens
 #: (the recorded cell sequence, :mod:`clm.slides.doc_sequence`).
 bare_slide_id = _bare
+
+
+def read_file(
+    text: str, lang: Lang, part: Part, comment_token: str
+) -> tuple[tuple[str, ...], list[SideCell]]:
+    """One file of one half on its own: its verbatim preamble lines and its
+    cells in file order. ``"\\n".join`` of the preamble and every cell's
+    ``lines`` gives ``text`` back (the sequence core reads each file this
+    way, never paired with the other half)."""
+    source = _read_source(text, lang, part, comment_token)
+    return source.preamble_lines, source.cells
 
 
 def _segment_deck(source: _Source, demoted: frozenset[str] = frozenset()) -> _DeckSeg:

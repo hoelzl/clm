@@ -58,6 +58,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
+from functools import partial
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,8 +83,9 @@ from clm.slides.doc_core import (  # noqa: E402
     merge,
     other,
 )
-from clm.slides.doc_lenses import _read_source, parse_bundle  # noqa: E402
-from clm.slides.doc_sequence import canonical, deck_sequence  # noqa: E402
+from clm.slides.doc_lenses import _read_source, parse_bundle, read_file  # noqa: E402
+from clm.slides.doc_render import RenderError, render  # noqa: E402
+from clm.slides.doc_sequence import canonical, deck_sequence, is_localized  # noqa: E402
 
 MAX_PASSES = 6
 #: Questions the judge answers. Everything else is refused.
@@ -338,6 +340,14 @@ class Result:
     verdict: str = ""  # match | leader_changed | differs
     #: the engine's passes: per pass, ``action key`` of every framed item
     passes: list[list[str]] = field(default_factory=list)
+    #: the model only: the rendered files against the next in-sync state,
+    #: byte by byte with localized text masked (match | leader_changed |
+    #: differs | render_error), and where they first differ
+    bytes: str = ""
+    bytes_detail: str = ""
+    #: the model only: the identity law on the base state (rendering an
+    #: unchanged deck from its own merge gives its bytes back): holds | fails
+    identity: str = ""
 
 
 def _verdict(case: Case, got: dict[tuple[str, str], list[Cell]]) -> tuple[str, str]:
@@ -395,11 +405,149 @@ def run_model(case: Case) -> Result:
         for part in PARTS
     }
     res = Result("clean", answered=dict(answered))
+    res.identity = _identity(case, base["deck"] + base["companion"])
     if opened:
         res.status, res.detail = "asks", "+".join(sorted(opened))
         return res
     res.verdict, res.detail = _verdict(case, got)
+    res.bytes, res.bytes_detail = _byte_verdict(case, out.halves)
     return res
+
+
+def _identity(case: Case, base: list[BaseMember]) -> str:
+    """Design note §6.3: merge the base state with itself and render it."""
+    preambles: dict[tuple[str, str], tuple[str, ...] | None] = {}
+    inputs: dict[str, list[SideCell]] = {lang: [] for lang in SIDES}
+    for lang in SIDES:
+        for part in PARTS:
+            text = case.base[_slot(lang, part)]
+            if text is None:
+                preambles[(lang, part)] = None
+                continue
+            pre, cells = read_file(text, lang, part, case.token)
+            preambles[(lang, part)] = pre
+            inputs[lang].extend(cells)
+    out = merge(
+        base,
+        [cell_of(c) for c in inputs["de"]],
+        [cell_of(c) for c in inputs["en"]],
+        lambda _q: None,
+    )
+    if out.opened:
+        return "fails:asks"
+
+    def no_text(_source: SideCell, _lang: str) -> str:
+        raise RenderError("the identity pass asked for a translation")
+
+    try:
+        files = render(out.halves, preambles, inputs, no_text, case.token)
+    except RenderError:
+        return "fails:render_error"
+    for lang in SIDES:
+        for part in PARTS:
+            if files[(lang, part)] != case.base[_slot(lang, part)]:
+                return f"fails:{lang}-{part}"
+    return "holds"
+
+
+def _translator(case: Case):
+    """The translator's text from the next in-sync state: the cell with the
+    same id on the target half, else the parser's member of the same key."""
+    parsed = parse_bundle(*case.next[:2], *case.next[2:], comment_token=case.token).deck
+    by_id: dict[tuple[str, str], SideCell] = {}
+    for m in parsed.members() if parsed is not None else []:
+        for lang in SIDES:
+            sc = m.side(lang)
+            if sc is not None:
+                by_id[(lang, m.key.render())] = sc
+                if sc.slide_id is not None:
+                    by_id.setdefault((lang, "sid:" + sc.slide_id.rstrip("!")), sc)
+
+    def translate(source: SideCell, lang: str) -> str:
+        sid = source.slide_id.rstrip("!") if source.slide_id else None
+        got = by_id.get((lang, "sid:" + sid)) if sid else None
+        if got is None:
+            raise RenderError(f"no text for {sid or source.cell_type} on {lang}")
+        return got.decision_body
+
+    return translate
+
+
+def _masked(
+    text: str | None, lang: str, part: str, token: str, *, separators: bool = True
+) -> list[str] | None:
+    """A file's lines with each localized cell's text masked: its header
+    and (with ``separators``) its trailing blank lines stay (a ``j2`` macro's
+    header is its text)."""
+    if text is None:
+        return None
+    preamble, cells = read_file(text, lang, part, token)
+    out = list(preamble)
+    for sc in cells:
+        if not is_localized(sc):
+            out.extend(sc.lines)
+            continue
+        body = list(sc.lines[1:])
+        trailing = 0
+        while body and body[-1] == "":
+            body.pop()
+            trailing += 1
+        out.append("<macro>" if sc.is_macro else sc.header)
+        out.append("<text>")
+        out.extend([""] * trailing if separators else ["<sep>"])
+    return out
+
+
+def _byte_verdict(case: Case, halves: dict[str, list[Cell]]) -> tuple[str, str]:
+    """Render the model's result and judge it against the next in-sync state
+    byte by byte: the leader's files unchanged, the follower's equal to the
+    next state's, localized text masked (the text layer's, not the core's)."""
+    preambles = {}
+    inputs: dict[str, list[SideCell]] = {lang: [] for lang in SIDES}
+    for lang in SIDES:
+        for part in PARTS:
+            text = case.now(lang, part)
+            if text is None:
+                preambles[(lang, part)] = None
+                continue
+            pre, cells = read_file(text, lang, part, case.token)
+            preambles[(lang, part)] = pre
+            inputs[lang].extend(cells)
+    try:
+        files = render(halves, preambles, inputs, _translator(case), case.token)
+    except RenderError as exc:
+        return "render_error", str(exc)[:200]
+    lead, follow = case.leader, other(case.leader)
+    for part in PARTS:
+        if files[(lead, part)] != case.now(lead, part):
+            return "leader_changed", part
+    for part in PARTS:
+        have = _masked(files[(follow, part)], follow, part, case.token)
+        want = _masked(case.expected(follow, part), follow, part, case.token)
+        if have != want:
+            loose = [
+                _masked(t, follow, part, case.token, separators=False)
+                for t in (files[(follow, part)], case.expected(follow, part))
+            ]
+            if loose[0] == loose[1]:
+                # Only the blank lines after localized cells differ: the
+                # author re-spaced the leader's cells and their twins. Whose
+                # job that is (the text layer's ``translate_edit``) is
+                # phase B's question; counted apart, not hidden.
+                return "localized_separator", f"{part}: {_first_line_difference(have, want)}"
+            return "differs", f"{part}: {_first_line_difference(have, want)}"
+    return "match", ""
+
+
+def _first_line_difference(have: list[str] | None, want: list[str] | None) -> str:
+    if have is None or want is None:
+        return f"file {'absent' if have is None else 'present'}, want the other"
+    for i, (h, w) in enumerate(zip(have, want, strict=False)):
+        if h != w:
+            at = next((k for k, (a, b) in enumerate(zip(h, w, strict=False)) if a != b), 0)
+            at = max(0, min(at, len(h), len(w)) - 20)
+            return f"line {i + 1}: got {h[at : at + 70]!r} want {w[at : at + 70]!r}"
+    return f"{len(have)} lines, want {len(want)}"
 
 
 def _apply(de_path: Path, en_path: Path, decisions: dict[str, doc_apply.Decision]):
@@ -533,11 +681,11 @@ def run_engine(case: Case) -> Result:
         return done("livelock")
 
 
-def run_case(case: Case) -> dict:
+def run_case(case: Case, model_only: bool = False) -> dict:
     return {
         "id": case.id,
         "model": asdict(run_model(case)),
-        "engine": asdict(run_engine(case)),
+        "engine": asdict(Result("skipped") if model_only else run_engine(case)),
     }
 
 
@@ -563,7 +711,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     for k, v in sorted(stats.items()):
         print(f"  {v:6d}  {k}")
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(run_case, cases, chunksize=4))
+        work = partial(run_case, model_only=args.model_only)
+        results = list(pool.map(work, cases, chunksize=4))
     Path(args.out).write_text(
         json.dumps({"repo": Path(args.repo).name, "stats": stats, "results": results}, indent=1),
         encoding="utf-8",
@@ -587,6 +736,19 @@ def summarize(results: list[dict], show: int) -> None:
     print("\nengine  |  model")
     for k, v in pair.most_common():
         print(f"  {v:6d}  {k}")
+    identity = Counter(r["model"].get("identity") or "-" for r in results)
+    print("\nmodel, identity law on the base state:")
+    for k, v in identity.most_common():
+        print(f"  {v:6d}  {k}")
+    rendered = Counter(r["model"].get("bytes") or "-" for r in results)
+    print("\nmodel, rendered files (localized text masked):")
+    for k, v in rendered.most_common():
+        print(f"  {v:6d}  {k}")
+    if show:
+        off = [r for r in results if r["model"].get("bytes") not in ("match", "", None)]
+        print(f"\nfirst {min(show, len(off))} replays whose rendered files differ:")
+        for r in off[:show]:
+            print(f"  {r['id']}\n    {r['model']['bytes']}: {r['model']['bytes_detail']}")
     if show:
         bad = [
             r
@@ -630,6 +792,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--since", default="2026-05-30")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument(
+        "--model-only",
+        action="store_true",
+        help="skip the engine (fast; engine rows read 'skipped')",
+    )
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("summary")
     p.add_argument("out")
