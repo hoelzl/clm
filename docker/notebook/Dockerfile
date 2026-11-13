@@ -3,11 +3,16 @@
 # Notebook Processor Worker - Multi-variant build
 #
 # This Dockerfile supports two variants:
-#   - lite: Smaller image using python:3.12-slim base (multi-arch: amd64, arm64)
+#   - lite: Smaller image on a plain Ubuntu base (multi-arch: amd64, arm64)
 #   - full: ML/GPU stack. On amd64 this uses an nvidia/cuda base (CUDA/PyTorch,
-#     GPU-accelerated). On arm64 (e.g. Apple Silicon) there is no CUDA base, so
-#     it reuses the python:3.12-slim base and installs the CPU PyTorch wheels;
+#     GPU-accelerated). On arm64 (e.g. Apple Silicon) the full variant stays
+#     CPU-only: it reuses the lite base and installs the CPU PyTorch wheels;
 #     GPU-only packages with no aarch64 wheel (e.g. fastembed-gpu) are skipped.
+#
+# Every variant sits on the SAME Ubuntu release (#1228). That release's system
+# g++ is the C++ standard library of both the xeus-cpp kernel and the C++ code
+# export, so the base image decides which C++23 library features a deck can
+# use -- see "C++ toolchain" in docker/README.md before changing it.
 #
 # Build lite version (cross-platform, no GPU):
 #   docker build --build-arg VARIANT=lite -t docker.io/mhoelzl/clm-notebook-processor:lite .
@@ -32,14 +37,19 @@ ARG TARGETARCH
 # BASE IMAGES - Different base for each variant
 #=============================================================================
 
-# Lite base: Python slim (multi-arch: amd64, arm64)
+# Lite base: plain Ubuntu (multi-arch: amd64, arm64)
 # Suitable for macOS (Apple Silicon), Linux, Windows without GPU
-FROM python:3.12-slim AS base-lite
+# Python is not taken from the base image: micromamba installs it in the
+# common stage, for every variant.
+FROM ubuntu:26.04 AS base-lite
 
 WORKDIR /app
 
 # Environment variables for lite
 ENV DEBIAN_FRONTEND=noninteractive
+# A bare Ubuntu image has no locale set (POSIX); the kernels and the JVM
+# should read and write UTF-8 regardless.
+ENV LANG=C.UTF-8
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV PYTHONPATH=/app
 ENV DOTNET_ROOT=/root/.dotnet
@@ -50,11 +60,14 @@ ENV MAMBA_ROOT_PREFIX=/opt/conda
 RUN mkdir -p /root/.jupyter /root/course
 
 # Install system dependencies for lite
-# Note: software-properties-common is not needed on Debian (no PPA support)
 # Apt cache mounts carry explicit per-image ids (#1042): without id= BuildKit
 # keys the cache on the target path, so with sharing=locked every apt step of
-# every clm image on the daemon queued behind one lock. Lite (Debian) and full
-# (Ubuntu) get separate ids: their package lists and .debs are not interchangeable.
+# every clm image on the daemon queued behind one lock. Lite and full get
+# separate ids: the full base adds NVIDIA's apt repository, so their package
+# lists are not interchangeable.
+#
+# Java is pinned to 21, the release both previous bases shipped as
+# default-jdk; Ubuntu 26.04's default-jdk is 25.
 RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-notebook-lite,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,id=clm-apt-lists-notebook-lite,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -64,29 +77,36 @@ RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-notebook-lite,shar
         ca-certificates \
         curl \
         wget \
-        default-jdk \
-        default-jre \
+        openjdk-21-jdk \
         dbus \
         graphviz \
         unzip \
         git \
+        # g++ doubles as the C++ standard library of the xeus-cpp kernel: the
+        # kernel takes its libstdc++ headers from the `c++` on PATH.
         build-essential \
         # Builds the C++ code export (the generated CMake projects under
         # Slides/Cpp/*) with build-essential's g++; see docker/README.md.
         cmake \
-        # Required for .NET on Debian
+        # Required for .NET
         libicu-dev
 
 # Full base (amd64): NVIDIA CUDA (with GPU support).
 # Note: Python will be installed via micromamba in the common stage.
 # nvidia/cuda publishes no arm64 manifest, so this stage is amd64-only; the
 # arm64 full variant is routed to base-full-arm64 below.
-FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04 AS base-full-amd64
+#
+# The Ubuntu release must match base-lite. nvidia/cuda publishes Ubuntu 26.04
+# images for CUDA 13 only (as of 2026-11), which is what moved this variant to
+# CUDA 13 (#1228);
+# the PyTorch wheel index in packages-full follows the CUDA major version.
+FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu26.04 AS base-full-amd64
 
 WORKDIR /app
 
 # Environment variables for full
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV PYTHONPATH=/app
 ENV DOTNET_ROOT=/root/.dotnet
@@ -107,24 +127,25 @@ RUN --mount=type=cache,target=/var/cache/apt,id=clm-apt-cache-notebook-full,shar
         curl \
         wget \
         software-properties-common \
-        default-jdk \
-        default-jre \
+        # Same Java, compiler and CMake as the lite base above.
+        openjdk-21-jdk \
         dbus \
         graphviz \
         unzip \
         git \
         build-essential \
-        # Builds the C++ code export (see the lite base above).
-        cmake
+        cmake \
+        # Required for .NET (named explicitly: nothing else in this list is
+        # guaranteed to pull ICU in).
+        libicu-dev
 
-# Full base (arm64): there is no nvidia/cuda arm64 image. For Apple Silicon
-# (and other arm64 hosts) the full variant reuses the multi-arch base-lite
-# (python:3.12-slim + its apt stack); the ML stack is added in packages-full
-# using CPU PyTorch wheels. This keeps a single, known-good arm64 base and
-# avoids duplicating the base-lite apt layer.
+# Full base (arm64): CPU-only. For Apple Silicon (and other arm64 hosts) the
+# full variant reuses the multi-arch base-lite (Ubuntu + its apt stack); the ML
+# stack is added in packages-full using CPU PyTorch wheels. This keeps a
+# single, known-good arm64 base and avoids duplicating the base-lite apt layer.
 FROM base-lite AS base-full-arm64
 
-# Select the full base by build platform: amd64 -> CUDA, arm64 -> python slim.
+# Select the full base by build platform: amd64 -> CUDA, arm64 -> lite base.
 # TARGETARCH is declared at global scope (see top of file).
 FROM base-full-${TARGETARCH} AS base-full
 
@@ -224,19 +245,29 @@ RUN set -eu && \
 # xeus-cpp cannot be installed via pip, so we use micromamba for it
 # We also install Python here to have a clean, managed environment
 #
-# The libstdcxx-devel sysroot package name encodes the target arch
-# (libstdcxx-devel_linux-64 for x86_64, libstdcxx-devel_linux-aarch64 for
-# arm64); install the one matching TARGETARCH. xeus-cpp / xtensor /
-# xtensor-blas are arch-neutral names that conda resolves per-platform.
+# The kernel stack is pinned (#1228): xeus-cpp and CppInterOp decide which
+# clang the kernel embeds (CppInterOp 1.9.0 is built against clang 21 only),
+# and an unpinned install changed it silently on every image rebuild. Bump
+# deliberately, then run `clm kernel-triage` against the new image.
+#
+# No conda libstdc++ headers are installed on purpose. The kernel does not
+# look for them: it asks the `c++` on PATH -- the system g++ from
+# build-essential -- for its include paths, so the notebook and the code
+# export see one and the same standard library. A conda `libstdcxx-devel`
+# next to it was dead weight that only obscured which library is in use.
+# Pinned by tests/infrastructure/workers/test_docker_image_cpp_toolchain.py.
+#
+# The specs are quoted: an unquoted `pkg>=1.0` is a shell redirection into a
+# file named `=1.0`, which drops the constraint.
+ARG XEUS_CPP_VERSION=0.10.0
+ARG CPPINTEROP_VERSION=1.9.0
 RUN set -eu && \
-    if [ "${TARGETARCH}" = "arm64" ]; then LIBSTDCXX_DEVEL="libstdcxx-devel_linux-aarch64"; \
-    else LIBSTDCXX_DEVEL="libstdcxx-devel_linux-64"; fi && \
     /usr/local/bin/micromamba install -y -n base -c conda-forge \
-        python=3.12 \
-        xeus-cpp>=0.8 \
-        xtensor>=0.25 \
-        xtensor-blas>=0.21 \
-        "${LIBSTDCXX_DEVEL}" && \
+        'python=3.12' \
+        "xeus-cpp=${XEUS_CPP_VERSION}" \
+        "cppinterop=${CPPINTEROP_VERSION}" \
+        'xtensor>=0.25' \
+        'xtensor-blas>=0.21' && \
     /usr/local/bin/micromamba clean -a -y
 
 # Set up PATH to use micromamba's Python
@@ -389,7 +420,8 @@ FROM packages-lite AS packages-full
 ARG TARGETARCH
 
 # Step 1: PyTorch ecosystem (large downloads, needs longer timeout).
-# On amd64 we pull CUDA 12.6 wheels from the PyTorch index (GPU-accelerated).
+# On amd64 we pull CUDA 13.0 wheels from the PyTorch index (GPU-accelerated);
+# the index must match the CUDA major version of base-full-amd64.
 # On arm64 there is no CUDA wheel, so we install the CPU wheels from PyPI
 # (torch 2.8+ publishes aarch64 manylinux wheels). The PyTorch index carries
 # no upload dates, so the resolution cutoff is lifted for this one step
@@ -402,7 +434,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
             'torchvision>=0.21.0' \
             'torchaudio>=2.8.0'; \
     else \
-        env -u UV_EXCLUDE_NEWER UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu126 \
+        env -u UV_EXCLUDE_NEWER UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu130 \
             'torch>=2.8.0' \
             'torchvision>=0.21.0' \
             'torchaudio>=2.8.0'; \

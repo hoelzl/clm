@@ -2,6 +2,38 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Notebook worker images: Ubuntu 26.04, g++ 15, CUDA 13 (#1228, {version})
+
+**Image change, no spec change.** Both notebook worker image variants now sit
+on Ubuntu 26.04: `lite` on `ubuntu:26.04` (was `python:3.12-slim`, Debian),
+`full` on `nvidia/cuda:13.3.1-cudnn-runtime-ubuntu26.04` (was CUDA 12.6 on
+Ubuntu 24.04). Python still comes from micromamba (3.12), Java stays at 21.
+
+What changes for a course repository that builds with `--workers docker`:
+
+- **C++ courses.** The system g++ is 15 in both variants (was 14 in `lite`,
+  13 in `full`). It is the standard library of the xeus-cpp kernel *and* of
+  the compiler that builds the code export, so both now provide the C++23
+  library: `<print>`, `std::ranges::to`, `<generator>`, `<flat_map>` (not
+  `<mdspan>`). CLM still runs every C++ deck in the `xcpp20` kernel and still
+  writes `CMAKE_CXX_STANDARD 20`; a per-course C++23 switch is a separate
+  change. Existing decks are compiled against newer headers, so rebuild the
+  course and run its compile gate once, and run `clm kernel-triage` to see
+  whether `evaluate="no"` workarounds can be lifted. The kernel itself
+  (xeus-cpp 0.10.0, clang 21) is unchanged and now pinned.
+- **The `full` image and GPUs.** PyTorch comes from the CUDA 13.0 wheel index
+  (`cu130`). `clm build --workers docker` does not pass GPUs to its workers,
+  so builds are unaffected; a container you start yourself with `--gpus` now
+  needs a host NVIDIA driver that supports CUDA 13.3. If the course venv used
+  for Direct-mode builds pins a CUDA 12 index, move it along to keep the two
+  environments in step.
+- **Images derived from a worker image** (`FROM mhoelzl/clm-notebook-processor:…`)
+  now build on Ubuntu, not Debian: check `apt-get install` package names, and
+  note that `default-jdk` there would be Java 25.
+- **Caches.** Executed-notebook caches are keyed by the image *reference*. A
+  versioned tag (`:{version}-lite`) invalidates them; a re-pulled mutable tag
+  (`:lite`, `:full`) does not — pass `--ignore-cache` once in that case.
+
 ## Slide-text tools read `# %%magic` as part of the current cell (#1168, {version})
 
 **Behavior change, build output unchanged.** The build always kept a commented

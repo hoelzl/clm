@@ -108,7 +108,7 @@ The notebook processor has **two variants** to support different use cases:
 - `docker.io/mhoelzl/clm-notebook-processor:latest` (default)
 - `docker.io/mhoelzl/clm-notebook-processor:lite`
 
-**Base Image:** `python:3.12-slim` (multi-arch: amd64, arm64)
+**Base Image:** `ubuntu:26.04` (multi-arch: amd64, arm64)
 
 **Build:**
 ```bash
@@ -142,8 +142,12 @@ courses on Apple Silicon (arm64, CPU-only).
 - `docker.io/mhoelzl/clm-notebook-processor:full`
 
 **Base Image:**
-- amd64: `nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04` (CUDA, GPU)
-- arm64: `python:3.12-slim` (no CUDA base image exists for arm64; CPU PyTorch)
+- amd64: `nvidia/cuda:13.3.1-cudnn-runtime-ubuntu26.04` (CUDA 13, GPU)
+- arm64: `ubuntu:26.04`, the lite base (CPU PyTorch)
+
+Both variants must stay on the same Ubuntu release: its system g++ is the C++
+standard library of the xeus-cpp kernel and of the code-export compile (see
+"C++ toolchain" in `docker/README.md`).
 
 **Build:**
 ```bash
@@ -159,9 +163,11 @@ docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-pro
 
 **What's Included:**
 - Everything in lite, plus:
-- PyTorch 2.8+ (CUDA 12.6 wheels on amd64; CPU wheels on arm64)
+- PyTorch 2.8+ (CUDA 13.0 wheels on amd64; CPU wheels on arm64)
 - FastAI, numba, skorch
-- GPU acceleration on amd64
+- GPU acceleration on amd64 when the container is started with GPUs (the
+  host then needs an NVIDIA driver that supports CUDA 13.3; CLM's Docker
+  worker mode does not pass GPUs to its workers)
 
 **What's NOT included on arm64:**
 - `fastembed-gpu` (no aarch64 `onnxruntime-gpu` wheel)
@@ -175,13 +181,15 @@ docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-pro
 **External Dependencies:**
 - .NET SDK 10.0 (C# and F# kernels)
 - Deno (TypeScript/JavaScript kernel)
-- Java JDK (Java kernel)
+- Java JDK 21 (Java kernel)
 - IJava 1.3.0 (Java Jupyter kernel)
-- micromamba + xeus-cpp (C++ kernel)
+- micromamba + xeus-cpp (C++ kernel; xeus-cpp and CppInterOp are pinned)
+- System g++ 15 and CMake (the kernel's C++ standard library, and the
+  compiler of the C++ code export)
 
 **Jupyter Kernels:**
 - Python 3.12
-- C++ (xeus-cpp)
+- C++ (xeus-cpp: `xcpp17`, `xcpp20`, `xcpp23`)
 - C# and F# (.NET Interactive)
 - Java (IJava)
 - TypeScript/JavaScript (Deno)
@@ -259,9 +267,9 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,id=conda-pkgs,sharing=locked \
 ```
 
 Every apt cache mount must set an explicit `id=` unique to its image and base
-distro (the notebook image uses `notebook-lite` for its Debian stage and
-`notebook-full` for its Ubuntu/CUDA stage, whose package lists and `.deb`s are
-not interchangeable). Without `id=`, BuildKit keys the cache on the target
+base (the notebook image uses `notebook-lite` for its plain-Ubuntu stage and
+`notebook-full` for its CUDA stage, which adds NVIDIA's apt repository, so the
+package lists are not interchangeable). Without `id=`, BuildKit keys the cache on the target
 path, so every image shares one cache, and `sharing=locked` then serializes
 every apt step of every concurrent build on the daemon behind a single lock
 (#1042). `sharing=locked` stays: apt cannot tolerate two writers on one cache.
@@ -341,17 +349,20 @@ docker buildx version  # Verify BuildKit is available
 **Common Issues:**
 
 1. **CUDA/PyTorch compatibility (full variant, amd64 only):**
-   - Verify CUDA 12.6 is supported by PyTorch version
-   - Check PyTorch index URL: `https://download.pytorch.org/whl/cu126`
-   - On arm64 there is no CUDA: the full variant installs CPU PyTorch from PyPI
+   - Verify CUDA 13.0 is supported by PyTorch version
+   - Check PyTorch index URL: `https://download.pytorch.org/whl/cu130`
+   - On arm64 the full variant is CPU-only: it installs CPU PyTorch from PyPI
 
 2. **xeus-cpp installation:**
    - Requires micromamba (not available via pip)
    - Ensure conda-forge channel is accessible
+   - `XEUS_CPP_VERSION` / `CPPINTEROP_VERSION` are pinned build args; an
+     unsolvable environment after a conda-forge change means the pair needs a
+     deliberate bump (then run `clm kernel-triage` against the new image)
 
 3. **.NET SDK installation:**
-   - Full variant uses Ubuntu PPA
-   - Lite variant uses Microsoft's Debian package
+   - Both variants use Microsoft's `dotnet-install.sh` (retried; see the
+     Dockerfile) and need ICU (`libicu-dev`) from apt
 
 4. **ARM64 / Apple Silicon builds:**
    - All three images now build on linux/arm64.
@@ -426,7 +437,7 @@ docker buildx build \
 
 **Note:** All three images build on both linux/amd64 and linux/arm64. The
 notebook `full` variant is GPU-accelerated on amd64 (CUDA/PyTorch) and
-CPU-only on arm64 (no CUDA base image exists for arm64).
+CPU-only on arm64.
 
 ### Custom Base Images
 
@@ -434,12 +445,14 @@ To use a different CUDA version for the full notebook variant:
 
 1. Change base image in `docker/notebook/Dockerfile`:
    ```dockerfile
-   FROM nvidia/cuda:12.6.0-cudnn9-runtime-ubuntu22.04 AS base-full
+   FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu26.04 AS base-full-amd64
    ```
+   Keep its Ubuntu release equal to the lite base's (`FROM ubuntu:26.04`):
+   the release's g++ is the C++ library of the kernel and the code export.
 
 2. Update PyTorch index URL to match CUDA version:
    ```bash
-   --extra-index-url https://download.pytorch.org/whl/cu126
+   --extra-index-url https://download.pytorch.org/whl/cu130
    ```
 
 3. Verify PyTorch compatibility at: https://pytorch.org/get-started/locally/

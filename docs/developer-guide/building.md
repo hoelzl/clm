@@ -210,7 +210,7 @@ via pip). This step is not cache-mounted:
 
 ```dockerfile
 RUN /usr/local/bin/micromamba install -y -n base -c conda-forge \
-    python=3.12 xeus-cpp>=0.8 ... && \
+    'python=3.12' "xeus-cpp=${XEUS_CPP_VERSION}" ... && \
     /usr/local/bin/micromamba clean -a -y
 ```
 
