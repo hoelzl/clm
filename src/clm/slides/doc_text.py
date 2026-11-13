@@ -11,10 +11,12 @@ module decides what the core leaves open, on the core's result:
   (``confirm``), a member with no recorded text ``verify_cold``
   (``confirm``). A localized cell new on one half is the core's
   ``translate_new``, a fork the core's ``fork``; neither is asked here;
-- **the owner** (``for_slide``) of a localized cell, merged 3-way like
-  tags: one half changed it, take it; both changed it differently,
-  ``conflict_owner`` (``de``, ``en``). The ``vo_anchor`` attribute places
-  narration among that half's own cells and stays each half's own. A
+- **the owner attributes** (``for_slide``, ``vo_anchor``) of a localized
+  cell, merged 3-way like tags: one half changed it, take it; both changed
+  it differently, ``conflict_owner`` (``de``, ``en``). The exception is a
+  fingerprint anchor (``vo_anchor="fp:…"``) the halves recorded differently
+  (it fingerprints a localized cell in each language): a new fingerprint, or
+  dropping it, stays on its half. A
   ``for_slide`` that names no id of the merged deck is ``broken_owner``
   (held), as today; a stale ``vo_anchor`` is ``clm validate``'s, since
   placing narration falls back from it;
@@ -302,37 +304,60 @@ def _owners(
 ) -> dict[str, Owners] | None:
     """Each half's owners after the merge (``None``: held).
 
-    ``for_slide`` names the owning slide on both halves and is merged 3-way:
-    a value one half changed reaches the other. ``vo_anchor`` places the
-    narration among that half's own cells (``fp:`` fingerprints the cell
-    before it in that half's language) and stays each half's own, as it does
-    in today's engine, where it is part of a localized cell's content and a
-    rewritten twin keeps its own header."""
+    Merged 3-way per attribute: a value one half changed reaches the other.
+    Except where the halves already recorded different values, which a
+    fingerprint anchor (``vo_anchor="fp:…"``) does when the cell before the
+    narration is localized (it fingerprints that cell's bytes in each
+    language). Then a half that moves to another fingerprint, or drops its
+    anchor, keeps that to itself; only a value that names the same thing on
+    both halves (an ``id:`` or ``tm:`` anchor, ``for_slide``) reaches the
+    other half. A fingerprint of a shared cell is the same on both halves
+    and propagates like any value."""
     now = {lang: owners_of(sc) for lang in SIDES if (sc := present[lang].get(sid)) is not None}
     if len(now) == 1:
         return dict(now)
-    values = {lang: now[lang][0] for lang in SIDES}
-    base = {
-        lang: entry.owners[0] for lang in SIDES if (entry := recorded.get((lang, sid))) is not None
-    }
-    moved = [lang for lang in SIDES if lang in base and values[lang] != base[lang]]
-    if values["de"] == values["en"] or len(base) < 2 or not moved:
-        return {lang: now[lang] for lang in SIDES}
-    if len(moved) == 1:
-        taken = values[moved[0]]
-    else:
-        answer = ask(
-            TextRow(
-                "conflict_owner",
-                handle,
-                None,
-                f"for_slide: de {values['de']!r}, en {values['en']!r}",
+    out: dict[str, list[str | None]] = {lang: [] for lang in SIDES}
+    for i in range(2):
+        values = {lang: now[lang][i] for lang in SIDES}
+        base = {
+            lang: entry.owners[i]
+            for lang in SIDES
+            if (entry := recorded.get((lang, sid))) is not None
+        }
+        moved = [lang for lang in SIDES if lang in base and values[lang] != base[lang]]
+        own = values["de"] == values["en"] or len(base) < 2 or not moved
+        if (
+            not own
+            and base["de"] != base["en"]
+            and all(values[lang] is None or _per_half(values[lang]) for lang in moved)
+        ):
+            own = True
+        if own:
+            for lang in SIDES:
+                out[lang].append(values[lang])
+            continue
+        if len(moved) == 1:
+            taken = values[moved[0]]
+        else:
+            answer = ask(
+                TextRow(
+                    "conflict_owner",
+                    handle,
+                    None,
+                    f"{('for_slide', 'vo_anchor')[i]}: de {values['de']!r}, en {values['en']!r}",
+                )
             )
-        )
-        if answer is None:
-            return None
-        taken = values[answer]
-    return {lang: (taken, now[lang][1]) for lang in SIDES}
+            if answer is None:
+                return None
+            taken = values[answer]
+        for lang in SIDES:
+            out[lang].append(taken)
+    return {lang: (v[0], v[1]) for lang, v in out.items()}
+
+
+def _per_half(value: str | None) -> bool:
+    """A fingerprint anchor: language-specific by construction."""
+    return value is not None and value.startswith("fp:")
 
 
 def _preamble(

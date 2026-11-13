@@ -619,10 +619,11 @@ def _follower_edits(
             continue
         if _attributes(before.header) == _attributes(sc.header):
             out.append(f"format:{sid}")
-        elif owners_of(sc) != owners_of(before) and plan.owners.get(
-            (follow, str(sid))
-        ) == owners_of(before):
-            out.append(f"owner:{sid}")
+        else:
+            kept = plan.owners.get((follow, str(sid)))
+            then, now = owners_of(before), owners_of(sc)
+            if kept is not None and any(now[i] != then[i] and kept[i] == then[i] for i in range(2)):
+                out.append(f"owner:{sid}")
     for part in PARTS:
         key = (follow, part)
         before, after = base_preambles.get(key), next_preambles.get(key)

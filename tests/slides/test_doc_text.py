@@ -265,15 +265,13 @@ def test_an_owner_the_halves_recorded_differently_is_each_half_s_own() -> None:
     assert files is not None and files[("en", "deck")] == en_base
 
 
-def test_a_vo_anchor_changed_on_one_half_stays_on_that_half() -> None:
-    # vo_anchor places narration among that half's own cells: an id anchor,
-    # a fingerprint, or none, each half keeps its own (as today's engine)
+def test_a_fingerprint_anchor_replaced_by_an_id_anchor_on_one_half_reaches_the_other() -> None:
     de_base = DE.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"')
-    en_base = EN.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"')
-    for de in (de_base.replace("fp:aaaa#0", "id:intro#0"), DE):
-        plan, files = _run(de, en_base, base=(de_base, en_base))
-        assert plan.asked == [] and plan.held == []
-        assert files is not None and files[("en", "deck")] == en_base
+    en_base = EN.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:bbbb#0"')
+    de = de_base.replace("fp:aaaa#0", "id:intro#0")
+    _, files = _run(de, en_base, base=(de_base, en_base))
+    assert files is not None
+    assert files[("en", "deck")] == en_base.replace("fp:bbbb#0", "id:intro#0")
 
 
 def test_a_fingerprint_anchor_dropped_on_one_half_stays_on_the_other() -> None:
@@ -281,6 +279,15 @@ def test_a_fingerprint_anchor_dropped_on_one_half_stays_on_the_other() -> None:
     en_base = EN.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:bbbb#0"')
     _, files = _run(DE, en_base, base=(de_base, en_base))
     assert files is not None and files[("en", "deck")] == en_base
+
+
+def test_a_fingerprint_anchor_gained_where_the_halves_agreed_reaches_the_other() -> None:
+    de = DE.replace('for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"')
+    _, files = _run(de, EN)
+    assert files is not None
+    assert files[("en", "deck")] == EN.replace(
+        'for_slide="intro"', 'for_slide="intro" vo_anchor="fp:aaaa#0"'
+    )
 
 
 def test_rendered_keep_twin_leaves_the_twin_s_bytes() -> None:
@@ -299,11 +306,11 @@ def test_rendered_an_owner_changed_on_one_half_reaches_the_other() -> None:
 
 
 def test_rendered_an_owner_gained_on_one_half_is_appended_on_the_other() -> None:
-    de = DE.replace('slide_id="more"', 'slide_id="more" for_slide="intro"')
+    de = DE.replace('slide_id="more"', 'slide_id="more" vo_anchor="id:intro#0"')
     _, files = _run(de, EN)
     assert files is not None
     assert files[("en", "deck")] == EN.replace(
-        'slide_id="more"', 'slide_id="more" for_slide="intro"'
+        'slide_id="more"', 'slide_id="more" vo_anchor="id:intro#0"'
     )
 
 
