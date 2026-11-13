@@ -126,6 +126,7 @@ __all__ = [
     "parse_decisions",
     "VerifyGate",
     "header_with_slide_id_of",
+    "body_lines",
     "twin_lines",
 ]
 
@@ -560,6 +561,14 @@ def twin_lines(source: SideCell, target: Lang, body: str, comment_token: str) ->
     header = swap_lang(source.header, target) if source.lang_attr else source.header
     template = evolve(source, lines=(header, *source.lines[1:]))
     return _replacement_lines(template, body, comment_token, bare_ok=False)
+
+
+def body_lines(cell: SideCell, body: str, comment_token: str) -> tuple[str, ...]:
+    """``cell`` with ``body`` as its text: its own header and separator (a
+    ``j2`` macro takes the body as its line). What a ``translate_edit``
+    ``body`` answer writes; the sequence core's renderer rewrites a twin with
+    it too. Raises ``_ItemError`` on a body the guards refuse."""
+    return _replacement_lines(cell, body, comment_token)
 
 
 def _replacement_lines(
