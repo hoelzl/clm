@@ -262,6 +262,69 @@ jobs:
       run: |
         uv run --no-sync pytest -v tests/mcp tests/cli/test_export_agent_guide.py --timeout=300
 
+  sync-probe:
+    # The brute-force sync probe (scripts/sync_probe.py, ~68,000 generated
+    # deck shapes) runs here rather than in PR CI: one engine takes ~6 minutes
+    # on a hosted runner, so the positional gate (two runs) ~13, on top of a
+    # full dependency install. Nightly it guards what PRs do not:
+    #
+    # - sequence: the sequence core (CLM_SYNC_CORE=sequence, phase C of
+    #   docs/claude/design/sync-sequence-core.md) converges on EVERY case.
+    #   Any case that stops or fails silently fails the night.
+    # - positional: the default engine is no worse on any case than at the
+    #   latest release tag (`gate`, which probes both trees, so ~2x).
+    #
+    # A failure here is NOT a flake: the probe is deterministic. Reproduce
+    # with the command from the failing step and the case ids it prints.
+    name: Sync probe (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [sequence, positional]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        lfs: false
+        # `gate` archives the release tag's src/, so it needs tags + history.
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        # The full job's extra set: the probe imports the test harness
+        # (tests/slides), which expects the same environment.
+        uv sync --locked --python 3.12 --no-default-groups \
+          --extra all-workers --extra docker --extra watch --extra summarize \
+          --extra recordings --extra slides \
+          --extra mcp --extra replay --extra dev --extra tui --extra web
+
+    - name: Probe the sequence core (every case must converge)
+      if: matrix.engine == 'sequence'
+      run: |
+        uv run --no-sync python scripts/sync_probe.py run probe-sequence.json \
+          --engine sequence --workers 4 --require-converged
+
+    - name: Gate the positional engine against the latest release
+      if: matrix.engine == 'positional'
+      run: |
+        base="$(git describe --tags --abbrev=0 --match 'v*')"
+        echo "base: $base"
+        uv run --no-sync python scripts/sync_probe.py gate --base "$base" \
+          --engine positional --workers 4 --show 5
+
   docker-promotion-tracker:
     name: Track Docker job stability
     runs-on: ubuntu-latest
@@ -289,7 +352,7 @@ jobs:
 
   report-failure:
     name: Report failure
-    needs: [full, docker, mcp-forward-compat]
+    needs: [full, docker, mcp-forward-compat, sync-probe]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -313,3 +376,7 @@ jobs:
             The exception is the `mcp-forward-compat` job, which installs the
             newest `mcp` 2.x past the supply-chain pin on purpose (#914): a
             failure there that repeats is a real SDK break, not a flake.
+            The `sync-probe` jobs are deterministic: a failure there is a sync
+            engine regression on master (the sequence core failed to converge
+            on a probe case, or the positional engine got worse than at the
+            latest release tag); the step log lists the cases.
