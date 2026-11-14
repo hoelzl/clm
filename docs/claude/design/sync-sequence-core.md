@@ -510,7 +510,10 @@ and has an exit gate. The v3 cutover followed the same pattern (v3 design §11).
   - **Worse than positional:** no case on any of the three. On the probe, the
     sequence core is better in 17,840 cases.
   - **In CI:** the laws and the sweep run on both engines (slow tier); the
-    probe still runs by hand (`scripts/sync_probe.py run --engine sequence`).
+    probe runs nightly since 2026-11-14 (`nightly.yml`, job `sync-probe`):
+    the sequence core must converge on every case (`run --engine sequence
+    --require-converged`), and the positional engine must be no worse than
+    at the latest release tag (`gate --engine positional`).
   - **The probe found a protocol gap,** not a core defect: chained questions
     (§7 as built). The first run left 400 cases stalled behind `identify`,
     all converged once the harness answered with `apply --dry-run`'s rows.

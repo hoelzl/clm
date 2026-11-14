@@ -3,8 +3,8 @@
 The probe (``tests/slides/sync_probe.py``) drives ``report -> apply`` through
 the real pre-write verify over about 68,000 deck shapes (``sync_probe.py``,
 ``sync_probe_ext.py`` and ``sync_probe_cross.py``), wider than the
-ratcheted sweep in ``tests/slides/sync_sweep.py``. Too slow for CI, so it is
-run by hand before merging a sync-engine change:
+ratcheted sweep in ``tests/slides/sync_sweep.py``. Too slow for PR CI, so it
+runs nightly and by hand before merging a sync-engine change:
 
     python scripts/sync_probe.py gate [--base origin/master] [--workers 12]
 
@@ -23,10 +23,17 @@ the PR.
 The other subcommands:
 
     python scripts/sync_probe.py run OUT.json [--families a,b] [--workers N]
+                                 [--engine E] [--require-converged]
     python scripts/sync_probe.py compare BASE.json NEW.json [--show N]
 
 ``run`` uses whichever ``clm`` is importable (prepend another ``src/`` to
-PYTHONPATH to probe it).
+PYTHONPATH to probe it). ``--require-converged`` makes it exit 1 unless every
+case converged: the sequence core's bar since phase C. ``gate --engine``
+probes both trees on the named engine (the base ref must have it).
+
+The nightly workflow runs both (``.github/workflows/nightly.yml``, job
+``sync-probe``): the sequence core with ``--require-converged``, and the
+positional engine gated against the latest release tag.
 """
 
 from __future__ import annotations
@@ -78,7 +85,20 @@ def _work(case: object) -> tuple[str, str, str, str, list, dict, float]:
         return case.id, case.family, "harness_exception", repr(exc)[:300], [], {}, time.time() - t
 
 
-def run(out: Path, families: list[str], workers: int, engine: str = "positional") -> int:
+def unconverged(results: dict[str, dict]) -> Counter:
+    """Count the cases that did not converge, by family and outcome."""
+    return Counter(
+        (v["family"], v["status"]) for v in results.values() if rank(v["status"]) > 0
+    )
+
+
+def run(
+    out: Path,
+    families: list[str],
+    workers: int,
+    engine: str = "positional",
+    require_converged: bool = False,
+) -> int:
     print("engine:", engine_file(), engine, flush=True)
     cases: list = []
     for name in families:
@@ -105,6 +125,13 @@ def run(out: Path, families: list[str], workers: int, engine: str = "positional"
     )
     counts = Counter(v["status"] for v in results.values())
     print(f"{len(results)} cases in {time.time() - t0:.0f}s: {dict(counts)}")
+    if require_converged:
+        missed = unconverged(results)
+        if missed:
+            print(f"\n## {sum(missed.values())} cases did not converge")
+            for (fam, status), n in sorted(missed.items()):
+                print(f"{fam}: {status}: {n}")
+            return 1
     return 0
 
 
@@ -148,7 +175,14 @@ def compare(base_path: Path, new_path: Path, show: int, allow_visible: bool) -> 
     return 0
 
 
-def gate(base_ref: str, workers: int, show: int, allow_visible: bool, keep: Path | None) -> int:
+def gate(
+    base_ref: str,
+    workers: int,
+    show: int,
+    allow_visible: bool,
+    keep: Path | None,
+    engine: str = "positional",
+) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         archive = tmpdir / "base.tar"
@@ -162,7 +196,7 @@ def gate(base_ref: str, workers: int, show: int, allow_visible: bool, keep: Path
         out_dir = keep or tmpdir
         base_json, new_json = out_dir / "probe_base.json", out_dir / "probe_new.json"
         script = str(Path(__file__).resolve())
-        families = ["--workers", str(workers)]
+        families = ["--workers", str(workers), "--engine", engine]
         base_env = dict(os.environ)
         base_env["PYTHONPATH"] = os.pathsep.join(
             [str(tmpdir / "base" / "src"), base_env.get("PYTHONPATH", "")]
@@ -191,12 +225,16 @@ def main() -> int:
         default="positional",
         help="the engine to drive (phase C of the sequence core: compare both)",
     )
+    p_run.add_argument(
+        "--require-converged", action="store_true", help="exit 1 unless every case converged"
+    )
     p_cmp = sub.add_parser("compare")
     p_cmp.add_argument("base", type=Path)
     p_cmp.add_argument("new", type=Path)
     p_gate = sub.add_parser("gate")
     p_gate.add_argument("--base", default="origin/master")
     p_gate.add_argument("--workers", type=int, default=6)
+    p_gate.add_argument("--engine", choices=sorted(ENGINES), default="positional")
     p_gate.add_argument(
         "--keep", type=Path, default=None, help="directory to keep both runs' JSON in"
     )
@@ -207,10 +245,12 @@ def main() -> int:
         )
     args = parser.parse_args()
     if args.command == "run":
-        return run(args.out, args.families.split(","), args.workers, args.engine)
+        return run(
+            args.out, args.families.split(","), args.workers, args.engine, args.require_converged
+        )
     if args.command == "compare":
         return compare(args.base, args.new, args.show, args.allow_visible)
-    return gate(args.base, args.workers, args.show, args.allow_visible, args.keep)
+    return gate(args.base, args.workers, args.show, args.allow_visible, args.keep, args.engine)
 
 
 if __name__ == "__main__":
