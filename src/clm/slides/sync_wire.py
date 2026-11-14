@@ -49,6 +49,7 @@ from __future__ import annotations
 __all__ = [
     "ACCEPTED_DECISION_SCHEMAS",
     "REQUIRE_REPORT_ID",
+    "SEQUENCE_WIRE_SCHEMA",
     "WIRE_SCHEMA",
 ]
 
@@ -60,6 +61,13 @@ WIRE_SCHEMA = 5
 #: refused. Schema 4 and 5 decision documents are byte-identical (5 is
 #: report-side additive), so both stay accepted indefinitely.
 ACCEPTED_DECISION_SCHEMAS = (4, 5)
+
+#: The version the sequence core's ``report`` / ``apply`` announce
+#: (``CLM_SYNC_CORE=sequence``, phase C of
+#: ``docs/claude/design/sync-sequence-core.md``): its handles and rows differ
+#: from schema 5's (§7). Its ``apply`` reads documents of this schema only,
+#: and the positional engine refuses them.
+SEQUENCE_WIRE_SCHEMA = 6
 
 #: The Q2 tightening, flipped in the release after 1.24.0 (see the module doc):
 #: a decision document must carry the ``report_id`` it answers.

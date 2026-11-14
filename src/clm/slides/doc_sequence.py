@@ -18,7 +18,12 @@ voiceover companion), in file order. An entry is what the core compares:
 * ``tags`` — sorted; the core merges tags as an aspect of their own;
 * ``de`` / ``en`` — the content per half: every byte of the cell except the
   ``slide_id`` and ``tags`` attributes, as a fingerprint
-  (:func:`sequence_fingerprint`).
+  (:func:`sequence_fingerprint`);
+* ``texts`` — for a localized cell, what the text layer of the sequence core
+  compares per half (:class:`TextRecord`: the text without the owner
+  attributes, as a fingerprint, its trailing blank lines, and the owner
+  attributes). Not part of the entry's equality: it is derived from the same
+  bytes as ``de`` / ``en``, and a ledger written before phase C has none.
 
 A sequence is only recorded from a deck **in sync**
 (:func:`deck_sequence` says why not, otherwise): the bundle parses with no
@@ -38,7 +43,7 @@ import hashlib
 import re
 from collections.abc import Callable
 
-from attrs import frozen
+from attrs import field, frozen
 
 from clm.slides.bilingual_doc import BilingualDeck, SideCell
 from clm.slides.doc_lenses import bare_slide_id
@@ -46,10 +51,15 @@ from clm.slides.doc_lenses import bare_slide_id
 __all__ = [
     "FILES",
     "SequenceEntry",
+    "TextRecord",
     "canonical",
     "deck_sequence",
     "is_localized",
     "sequence_fingerprint",
+    "separator_of",
+    "text_fingerprint",
+    "text_of",
+    "text_record",
 ]
 
 #: The parts of a deck bundle, in the order the sequence lists them.
@@ -57,6 +67,7 @@ FILES = ("deck", "companion")
 
 _ID_ATTR_RE = re.compile(r'\s*slide_id="[^"]*"')
 _TAGS_ATTR_RE = re.compile(r"\s*tags=\[[^\]]*\]")
+_OWNER_ATTRS_RE = re.compile(r'\s*(?:for_slide|vo_anchor)="[^"]*"')
 
 
 def canonical(cell: SideCell) -> str:
@@ -70,6 +81,49 @@ def canonical(cell: SideCell) -> str:
 def sequence_fingerprint(cell: SideCell) -> str:
     """The fingerprint of :func:`canonical`, as the ledger records it."""
     return hashlib.sha256(canonical(cell).encode("utf-8")).hexdigest()
+
+
+def text_of(cell: SideCell) -> str:
+    """What the text layer compares for a localized cell: :func:`canonical`
+    without the owner attributes (``for_slide``, ``vo_anchor``), which are
+    merged on their own."""
+    content = canonical(cell)
+    header, sep, rest = content.partition("\n")
+    return _OWNER_ATTRS_RE.sub("", header) + sep + rest
+
+
+def text_fingerprint(cell: SideCell) -> str:
+    """The fingerprint of :func:`text_of`, as the ledger records it."""
+    return hashlib.sha256(text_of(cell).encode("utf-8")).hexdigest()
+
+
+def separator_of(lines: tuple[str, ...] | list[str]) -> int:
+    """The number of blank lines a cell's ``lines`` end in (the header,
+    ``lines[0]``, never counts)."""
+    n = 0
+    for line in reversed(lines[1:]):
+        if line != "":
+            break
+        n += 1
+    return n
+
+
+@frozen
+class TextRecord:
+    """A localized cell's recorded state on one half, as the text layer
+    reads it: ``text`` is :func:`text_fingerprint`, ``separator`` the
+    trailing blank lines, ``for_slide`` / ``vo_anchor`` verbatim."""
+
+    text: str
+    separator: int
+    for_slide: str | None
+    vo_anchor: str | None
+
+
+def text_record(cell: SideCell) -> TextRecord:
+    return TextRecord(
+        text_fingerprint(cell), separator_of(cell.lines), cell.for_slide, cell.vo_anchor
+    )
 
 
 def is_localized(cell: SideCell) -> bool:
@@ -89,6 +143,8 @@ class SequenceEntry:
     tags: tuple[str, ...]
     de: str
     en: str
+    #: ``(de, en)`` text records of a localized entry, ``None`` when not known
+    texts: tuple[TextRecord, TextRecord] | None = field(default=None, eq=False)
 
 
 def deck_sequence(
@@ -135,6 +191,7 @@ def deck_sequence(
                     tags=tuple(sorted(set(de.tags))),
                     de=content(de),
                     en=content(en),
+                    texts=(text_record(de), text_record(en)) if is_localized(de) else None,
                 )
             )
     if any(m.de is None and m.en is None for m in members):  # pragma: no cover - parser invariant

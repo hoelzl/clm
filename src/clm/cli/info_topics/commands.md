@@ -6114,6 +6114,7 @@ Create and manage ZIP archives of course output.
 | `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) |
 | `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls (default: 3) |
 | `CLM_LLM__TEMPERATURE` | LLM sampling temperature (default: 0.3) |
+| `CLM_SYNC_CORE` | Preview: `sequence` runs `clm slides sync report` / `apply` on the new sequence core (schema-6 envelope; see `clm info sync-agents`). Unset or `positional`: the default engine. |
 | `CLM_SYNC_PROVIDER` | Default edit-judge backend for `clm slides sync`: `openrouter` (default) or `local`. Overridden by `--provider`. |
 | `CLM_SYNC__SHARED_DIVERGENCE` | How `clm slides sync` handles a language-neutral code cell edited *differently* on both decks: `auto-heal` (default) propagates the winning side (keyed direction, else newer file) and warns; `error` surfaces it and writes nothing so you resolve it by hand. |
 | `OPENROUTER_API_KEY` | OpenRouter API key for `clm slides sync` (edit judge + new-slide translation); falls back to `OPENAI_API_KEY`. |

@@ -4,7 +4,8 @@
 2026-11-13 (the go of `docs/claude/sync-structural-core-investigation.md`
 §9); this note is the design of step 5. The maintainer answered the
 decisions of §11 the same day, each as recommended. Phases A and B are
-done (§9); phase C is next.
+done (§9). Phase C's code is in (`CLM_SYNC_CORE=sequence`, §9), and its
+dogfood period is next.
 **Author**: Claude (Opus 5.5), at the maintainer's request
 **Builds on**: `docs/claude/sync-structural-core-investigation.md` (the
 finding, the prototype, its laws and the shadow on real history),
@@ -340,6 +341,31 @@ see what `apply` will do. These are now derived from the merge result
 (propagate, copy, mirror tags, move, remove, and so on), not executed one at a
 time.
 
+**As built (phase C, `clm.slides.doc_pass`, `clm info sync-agents`).**
+- **Handles** as above, plus `preamble:<file>` for a preamble row and
+  `order` for `order_decision`. The title macro is `id:title`.
+- **Answers** per row, where the core offers less than this section planned:
+  - `unify` takes `accept` (the unifying half's content); the core has no
+    `de` / `en` / `body` choice;
+  - `remove_localized_side` takes `remove`;
+  - `conflict_copies` takes `de`, `en` or `distinct`.
+- **Manual rows.** `broken_owner` and `pending_divergence` are rows no answer
+  resolves (`resolution: manual`).
+- **Mechanical rows** (the report's `changes`): `mirror` (content, tags, id
+  or file), `copy`, `remove`, `mirror_order`, `mirror_owner`,
+  `propagate_preamble` and `record_preamble`, each naming the half it writes.
+- **`identify` is listed whole.** The core stops at the first open
+  `identify`, since what follows rests on its answer. The report re-runs it
+  with each open one read as `removed` (which takes no candidate from the
+  next), so all of them appear at once. An answer names its half with
+  `side` when the same handle is asked on both.
+- **Chained questions.** Some questions only appear once the questions before
+  them are answered. `apply --dry-run --decisions` lists what is still open
+  given the answers; the same document grows until nothing is open (its
+  `report_id` holds while nothing is written). The probe found this
+  protocol gap: without it, an `identify` followed by a `conflict_shared`
+  never converged.
+
 ### 7.3 Versioning
 
 The report's `schema` goes from 5 to 6 at the switch-over (phase D), because
@@ -375,6 +401,51 @@ core takes the current halves as the base when they are in sync
 a deck it cannot parse: `sync report` names the deck and says to finish the
 pending items with the old engine (phases C and D) or to `record` once the
 halves agree.
+
+**As built (phase C).** The rule above was not enough. No deck of either
+course repository records a sequence yet, because none has been recorded since
+step 4. So two changes:
+- **The base, when the ledger has no sequence:**
+  - the current halves when they are in sync;
+  - else the deck as committed at `HEAD` when that is in sync, so a deck
+    edited out of sync can still be synced on the new core;
+  - else the deck is refused.
+- **Trust comes from the positional ledger.** "In sync" only says the halves
+  agree on structure, not that a translation was verified. The positional
+  member entries carry that (§2): a localized cell whose body fingerprint
+  matches its member entry counts as recorded as it is; one whose body
+  differs counts as edited (so a pending translation is still asked); one
+  with no entry counts as never verified (`verify_cold`). Bodies, not whole
+  cells, because the positional engine reports decks clean whose owner
+  attributes moved since the record.
+
+**A ledger without text records.** A sequence recorded before phase C has
+no text records (§8.1). The text layer then counts a half whose cell is
+unchanged as recorded exactly, and a changed one as an edit of its text.
+
+**Companions in different orders are refused.** On four PythonCourses decks
+the two voiceover companions list their narration cells in different orders.
+The positional engine attaches narration by `for_slide` and accepts this.
+The sequence core keeps a companion's cells in one order on both halves, so
+it refuses such a deck and says to reorder one companion.
+
+### 8.3 Text records (phase C)
+
+The text layer needs, per localized cell and half, what §5 compares:
+- the text without the owner attributes;
+- the trailing blank lines;
+- the owner attributes.
+
+The recorded sequence's content fingerprints cover all three together. So
+each localized sequence entry also records them, as a `texts` line beside
+the cells:
+`<index> <text-fp> <blank lines> <for_slide> <vo_anchor>`, per half.
+
+They are written wherever the sequence is, by either engine, and the
+positional engine ignores them. `apply` on the new core records a settled
+pass as a full snapshot (`record_deck_snapshot`, provenance `apply`):
+member entries, order scopes, sequence and text records. Per O5, the
+positional entries stay.
 
 ---
 

@@ -473,9 +473,17 @@ def sync_report_cmd(
     Exit 1 means "work pending", not failure. Agent loop + JSON reference:
     `clm info sync-agents`.
     """
+    from clm.cli.commands.slides.sync_seq import run_report_seq, sequence_core_selected
     from clm.cli.commands.slides.sync_v3 import run_report_v3
 
     de_path, en_path = _resolve_verb_scope(de_path, en_path)
+    if sequence_core_selected():
+        if since_spec is not None:
+            raise click.UsageError(
+                "--since is not available with CLM_SYNC_CORE=sequence (unset it for the "
+                "forensic view of the positional engine)"
+            )
+        sys.exit(run_report_seq(de_path, en_path, as_json=as_json))
     since_ref = _resolve_since_ref(since_spec, de_path)
     sys.exit(run_report_v3(de_path, en_path, as_json=as_json, since_ref=since_ref))
 
@@ -649,10 +657,22 @@ def sync_apply_cmd(
     `clm slides sync verify`. Exit 0 all-applied / 1 residue / 2 error.
     Decision-document shape and body format: `clm info sync-agents`.
     """
+    from clm.cli.commands.slides.sync_seq import run_apply_seq, sequence_core_selected
     from clm.cli.commands.slides.sync_v3 import run_apply_v3
 
     if not de_path.is_dir():
         de_path, en_path = _resolve_verb_scope(de_path, en_path)
+    if sequence_core_selected():
+        sys.exit(
+            run_apply_seq(
+                de_path,
+                en_path,
+                decisions_spec=decisions_spec,
+                members=members,
+                dry_run=dry_run,
+                as_json=as_json,
+            )
+        )
     sys.exit(
         run_apply_v3(
             de_path,

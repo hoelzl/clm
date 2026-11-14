@@ -51,3 +51,20 @@ def test_baseline_names_only_real_cases() -> None:
     and drift silently."""
     ids = {case.id for deck_cases in _BY_DECK.values() for case in deck_cases}
     assert set(_BASELINE) <= ids, sorted(set(_BASELINE) - ids)[:10]
+
+
+@pytest.mark.parametrize(
+    "deck", [pytest.param(deck, id=" ".join(deck) or "empty") for deck in sorted(_BY_DECK)]
+)
+def test_laws_hold_on_the_sequence_core(deck: Word) -> None:
+    """Phase C of ``docs/claude/design/sync-sequence-core.md``: the sequence
+    core's pass (``CLM_SYNC_CORE=sequence``) satisfies every law on every
+    case of the ratchet, so it has no baseline."""
+    from tests.slides.sync_laws_sequence import run as run_sequence
+
+    broken = [
+        f"{case.id}: {got}"
+        for case in _BY_DECK[deck]
+        if (got := check(case, run_sequence)) != HOLDS
+    ]
+    assert not broken, "\n".join(broken[:20])

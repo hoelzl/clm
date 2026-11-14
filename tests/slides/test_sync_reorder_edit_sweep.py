@@ -44,3 +44,17 @@ def test_baseline_names_only_real_cases() -> None:
     and drift silently."""
     ids = {c.id for domain in ("four", "five") for c in cases(domain)}
     assert set(_BASELINE) <= ids, sorted(set(_BASELINE) - ids)[:10]
+
+
+@pytest.mark.parametrize(
+    "case", [pytest.param(c, id=c.id) for domain in ("four", "five") for c in cases(domain)]
+)
+def test_reorder_edit_case_on_the_sequence_core(case: Case) -> None:
+    """Phase C of ``docs/claude/design/sync-sequence-core.md``: every case
+    converges on the sequence core's pass, so it has no baseline. Where both
+    readings of the files differ it asks ``identify``, which the sweep
+    answers as a careful agent would (``sync_engines.answer_identify``)."""
+    from tests.slides.sync_engines import SEQUENCE
+
+    status, passes = run_case(case, engine=SEQUENCE)
+    assert status == "converged", (status, passes)

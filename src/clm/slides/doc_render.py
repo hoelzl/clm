@@ -61,8 +61,8 @@ from clm.slides.bilingual_doc import Lang, SideCell
 from clm.slides.doc_apply import body_lines, header_with_slide_id_of, twin_lines
 from clm.slides.doc_core import PARTS, SIDES, Cell
 from clm.slides.doc_lenses import bare_slide_id
-from clm.slides.doc_sequence import canonical
-from clm.slides.doc_text import Owners, TextPlan, cell_key, owners_of, separator_of
+from clm.slides.doc_sequence import canonical, separator_of
+from clm.slides.doc_text import Owners, TextPlan, cell_key, owners_of
 from clm.slides.doc_write import DeckWriteError
 from clm.slides.sync_writeback import set_header_tags
 
@@ -89,6 +89,7 @@ def render(
     translate: Translator,
     comment_token: str,
     text: TextPlan | None = None,
+    content: Callable[[SideCell], str] = canonical,
 ) -> dict[FileKey, str | None]:
     """The text of every file after a pass.
 
@@ -98,6 +99,9 @@ def render(
     a shared cell's content can be found in the half that has it; ``text``
     the text layer's plan (``None``: localized text, owners and preambles
     stay as each half has them). A plan with held rows must not be rendered.
+    ``content`` is what the core compared as a cell's content (the cells'
+    ``body``): :func:`~clm.slides.doc_sequence.canonical`, or its
+    fingerprint against a recorded sequence.
     """
     if text is not None and text.held:
         raise RenderError(f"the text layer holds the deck: {text.held[0].kind}")
@@ -105,7 +109,7 @@ def render(
     by_id: dict[str, list[SideCell]] = {}
     for lang in SIDES:
         for sc in inputs.get(lang, ()):
-            by_content.setdefault(canonical(sc), []).append(sc)
+            by_content.setdefault(content(sc), []).append(sc)
             sid = bare_slide_id(sc.slide_id)
             if sid is not None:
                 by_id.setdefault(sid, []).append(sc)
@@ -167,7 +171,7 @@ def render(
                     raise RenderError(f"{cell.sid}: {exc}") from exc
                 count = text.separators.get(key, separator_of(own.lines))
                 return with_aspects(lang, _with_separator(lines, count), own, own, cell)
-            if cell.localized or cell.body == canonical(own):
+            if cell.localized or cell.body == content(own):
                 return with_aspects(lang, own.lines, own, own, cell)
             source = next(iter(by_content.get(cell.body, ())), None)
             if source is None:

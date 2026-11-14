@@ -403,7 +403,9 @@ class DecisionDocument:
     schema: int | None = None
 
 
-def load_decision_document(text: str) -> tuple[DecisionDocument, list[str]]:
+def load_decision_document(
+    text: str, accepted: tuple[int, ...] = ACCEPTED_DECISION_SCHEMAS
+) -> tuple[DecisionDocument, list[str]]:
     """Decode a decision document's answers *and* its envelope from JSON text.
 
     The envelope is validated here rather than at the CLI so every consumer
@@ -432,11 +434,11 @@ def load_decision_document(text: str) -> tuple[DecisionDocument, list[str]]:
         if raw_schema is not None:
             if not isinstance(raw_schema, int) or isinstance(raw_schema, bool):
                 errors.append("'schema' must be an integer")
-            elif raw_schema not in ACCEPTED_DECISION_SCHEMAS:
-                accepted = ", ".join(str(s) for s in ACCEPTED_DECISION_SCHEMAS)
+            elif raw_schema not in accepted:
+                readable = ", ".join(str(s) for s in accepted)
                 errors.append(
                     f"decision document announces schema {raw_schema}; this clm "
-                    f"reads {accepted} (see `clm info sync-agents`)"
+                    f"reads {readable} here (see `clm info sync-agents`)"
                 )
             else:
                 schema = raw_schema

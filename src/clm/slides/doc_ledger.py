@@ -45,7 +45,7 @@ from attrs import define, evolve, field, frozen
 
 from clm.slides.bilingual_doc import BilingualDeck, Lang
 from clm.slides.doc_identity import DeckBaseline, MemberBaseline, baseline_from_deck
-from clm.slides.doc_sequence import SequenceEntry, deck_sequence
+from clm.slides.doc_sequence import SequenceEntry, TextRecord, deck_sequence
 
 __all__ = [
     "LEDGER_FILENAME",
@@ -314,6 +314,72 @@ def _sequence_entry_to_line(entry: SequenceEntry) -> str:
     return f"{entry.file} {entry.kind} {content} {entry.sid if entry.sid is not None else '-'}"
 
 
+# The text records of the localized cells (phase C of the sequence core), one
+# line per cell, after the cells:
+#
+#   <index> <de-text-fp> <de-blank-lines> <de-for_slide> <de-vo_anchor> <en-...>
+#
+# ``<index>`` is the cell's place in ``cells``; an owner attribute is ``-``
+# when absent. A cell whose owners these fields cannot carry has no line, and
+# a ledger written before phase C has none: the text layer then reads what it
+# can from the content fingerprints.
+
+
+def _text_field(value: str | None) -> str | None:
+    if value is None:
+        return "-"
+    if not value or value == "-" or any(c.isspace() for c in value):
+        return None
+    return value
+
+
+def _text_line(index: int, texts: tuple[TextRecord, TextRecord]) -> str | None:
+    fields = [str(index)]
+    for record in texts:
+        owners = [_text_field(record.for_slide), _text_field(record.vo_anchor)]
+        if None in owners or _text_field(record.text) in (None, "-"):
+            return None
+        fields += [record.text, str(record.separator), *(o for o in owners if o is not None)]
+    return " ".join(fields)
+
+
+def _texts_to_json(sequence: list[SequenceEntry]) -> list[str]:
+    return [
+        line
+        for i, e in enumerate(sequence)
+        if e.texts is not None and (line := _text_line(i, e.texts)) is not None
+    ]
+
+
+def _with_texts(sequence: list[SequenceEntry], rec: object) -> list[SequenceEntry]:
+    """``sequence`` with the text records of ``rec`` (malformed lines are
+    skipped: that cell's text is then not known, never wrong)."""
+    if not isinstance(rec, list):
+        return sequence
+    out = list(sequence)
+    for line in rec:
+        fields = line.split(" ") if isinstance(line, str) else []
+        if len(fields) != 9 or not fields[0].isdigit() or int(fields[0]) >= len(out):
+            continue
+        records = []
+        for at in (1, 5):
+            text, sep, for_slide, vo_anchor = fields[at : at + 4]
+            if not sep.isdigit():
+                break
+            records.append(
+                TextRecord(
+                    text,
+                    int(sep),
+                    None if for_slide == "-" else for_slide,
+                    None if vo_anchor == "-" else vo_anchor,
+                )
+            )
+        index = int(fields[0])
+        if len(records) == 2 and out[index].localized:
+            out[index] = evolve(out[index], texts=(records[0], records[1]))
+    return out
+
+
 def _sequence_from_json(rec: object) -> list[SequenceEntry] | None:
     """A recorded sequence, or ``None`` when absent, of another version, or
     malformed (fail-safe: the next clean pass records it again)."""
@@ -348,7 +414,7 @@ def _sequence_from_json(rec: object) -> list[SequenceEntry] | None:
                 en=en,
             )
         )
-    return out
+    return _with_texts(out, rec.get("texts"))
 
 
 def _deck_to_json(deck: DeckLedger) -> dict[str, object]:
@@ -358,6 +424,7 @@ def _deck_to_json(deck: DeckLedger) -> dict[str, object]:
             "sequence": {
                 "version": SEQUENCE_VERSION,
                 "cells": [_sequence_entry_to_line(e) for e in deck.sequence],
+                **({"texts": texts} if (texts := _texts_to_json(deck.sequence)) else {}),
             }
         }
         if deck.sequence is not None
