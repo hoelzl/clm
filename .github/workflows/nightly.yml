@@ -305,7 +305,10 @@ jobs:
       run: |
         # The full job's extra set: the probe imports the test harness
         # (tests/slides), which expects the same environment.
-        uv sync --locked --python 3.12 --no-default-groups \n          --extra all-workers --extra docker --extra watch --extra summarize \n          --extra recordings --extra slides \n          --extra mcp --extra replay --extra dev --extra tui --extra web
+        uv sync --locked --python 3.12 --no-default-groups \
+          --extra all-workers --extra docker --extra watch --extra summarize \
+          --extra recordings --extra slides \
+          --extra mcp --extra replay --extra dev --extra tui --extra web
 
     - name: Probe the sequence core (every case must converge)
       if: matrix.engine == 'sequence'
