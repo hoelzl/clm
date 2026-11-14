@@ -9,6 +9,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.40.0] - 2026-11-14
+
+### Added
+
+- **`clm validate` reports two more xeus-cpp kernel pitfalls in C++ decks
+  (#1228).** New `code_export` findings: a **warning** for output the notebook
+  never displays — anything a cell writes to C `stderr`
+  (`std::print(stderr, ...)`, `std::println(stderr, ...)`, `fprintf(stderr,
+  ...)`, `fputs(..., stderr)`, `perror`) or to `std::clog`; `std::cerr` is
+  displayed — and a **warning** for a lambda written anywhere inside a
+  top-level `for` or `switch` statement, which kills the kernel under `xcpp20`
+  and `xcpp23` alike (also when it is bound to a name inside the loop). A
+  lambda passed inline in a top-level call or expression statement, or below
+  `do` / `try`, runs or kills the kernel depending on the function called,
+  the C++ standard, the standard library version and earlier cells; such
+  statements are listed as **information**, so that the author of a deck whose
+  kernel dies finds the candidates. Lambdas in declarations, in `std::cout <<`
+  statements, below `if` / `while` and in function bodies ran in every
+  configuration measured and are not reported.
+
+- **`clm validate` warns when a C++ cell's notebook output is reordered
+  (#1228).** In a notebook cell the xeus-cpp kernel displays everything
+  written through `std::cout` (`SHOW` / `CLM_DISPLAY` included) before
+  everything written through C stdio (`std::print`, `std::println`, `printf`,
+  `puts`), whatever the order in the code, while the exported program prints
+  in program order. The `code_export` checks now flag the shapes the notebook
+  gets wrong: a C-stdio write before a `std::cout` write, both in one loop,
+  and both in one function or lambda. `std::cout` output followed by
+  `std::println` output is displayed correctly and stays silent, as does
+  `std::println(std::cout, ...)`. One warning per cell; `start` and `del`
+  cells are not checked.
+
+- **`CLM_SYNC_CORE=sequence` (preview)** runs `clm slides sync report` and
+  `apply` on the sequence core, a replacement for the engine's structural half
+  (design note `docs/claude/design/sync-sequence-core.md`, phase C). It aligns
+  each half to the cell sequence the ledger records instead of pairing cells by
+  position, and renders both halves from one merged result. Its report is a
+  schema-6 envelope with new handles (`seq:<n>`, `new:<lang>:<file>:<n>`) and
+  one new question, `identify`. `apply` settles the whole deck or writes
+  nothing. Off by default; `record` and `verify` are unchanged. Details:
+  `clm info sync-agents`.
+- The ledger's recorded cell sequence now also carries, per localized cell, the
+  fingerprint of its text, its trailing blank lines and its `for_slide` /
+  `vo_anchor` values (`texts`), which the sequence core's text layer compares.
+  The default engine ignores them; a section gains them the next time its
+  sequence is recorded.
+
+- `scripts/install_global_clm.py` reinstalls this checkout as the global
+  editable `clm` uv tool only when nothing holds the old tool environment.
+  It lists processes running from it (e.g. agents' `clm mcp` servers) and,
+  on Windows, probes the environment with a rename. This avoids the
+  half-installed tool that `uv tool install --force` leaves behind when a
+  file in the environment is still in use. `--check` runs only the checks.
+
+### Changed
+
+- **The sync ledger records each deck's cell sequence.** A deck section in `.clm/sync-ledger.json` gains an optional `sequence`: the cells of the deck and its voiceover companion as both halves last agreed on them, one line per cell. `clm slides sync record` and an `apply` pass that leaves nothing open write it, and only when the halves are in sync. No verb reads it yet: it is the base for the replacement structural core (`docs/claude/sync-structural-core-investigation.md`). Expect a one-time diff in every ledger on its first clean pass after the upgrade (about 11% more ledger bytes in the course repositories); an older clm drops the field on save. In a merge conflict, take either side or delete `sequence`. (#1234)
+
 ## [1.39.0] - 2026-11-13
 
 ### Added

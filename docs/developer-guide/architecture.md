@@ -1,6 +1,6 @@
 # CLM Architecture
 
-This document describes the current architecture of the CLM system (v1.39.0).
+This document describes the current architecture of the CLM system (v1.40.0).
 
 The layering described here is **enforced, not aspirational**: since the #802
 re-layering (2026-08-06, PRs #804–#813) the import graph matches this document,
@@ -764,4 +764,4 @@ honest — record a deviation when one appears, update it when an item lands):
 ---
 
 **Last Updated**: 2026-08-07
-**Version**: 1.39.0
+**Version**: 1.40.0
