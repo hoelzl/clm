@@ -264,8 +264,9 @@ jobs:
 
   sync-probe:
     # The brute-force sync probe (scripts/sync_probe.py, ~68,000 generated
-    # deck shapes) is far too slow for PR CI: one engine takes ~12 minutes on
-    # 12 cores, so ~50 on a 4-core runner. Nightly it guards what PRs cannot:
+    # deck shapes) runs here rather than in PR CI: one engine takes ~6 minutes
+    # on a hosted runner, so the positional gate (two runs) ~13, on top of a
+    # full dependency install. Nightly it guards what PRs do not:
     #
     # - sequence: the sequence core (CLM_SYNC_CORE=sequence, phase C of
     #   docs/claude/design/sync-sequence-core.md) converges on EVERY case.
@@ -277,7 +278,7 @@ jobs:
     # with the command from the failing step and the case ids it prints.
     name: Sync probe (${{ matrix.engine }})
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
