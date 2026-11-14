@@ -81,9 +81,9 @@ def _render(bundle: LoadedBundle, result: doc_pass.Pass) -> list[str]:
 def _pairs(
     de_path: Path, en_path: Path | None
 ) -> tuple[list[tuple[Path, Path | None]], list[Path]]:
-    from clm.cli.commands.slides.sync_v3 import _scope_pairs
+    from clm.cli.commands.slides.sync_v3 import scope_pairs
 
-    return _scope_pairs(de_path, en_path)
+    return scope_pairs(de_path, en_path)
 
 
 def run_report_seq(de_path: Path, en_path: Path | None, *, as_json: bool) -> int:
@@ -271,6 +271,6 @@ def _refuse(problems: list[str], as_json: bool) -> int:
 
 
 def _head_commit(path: Path) -> str | None:
-    from clm.cli.commands.slides.sync_v3 import _head_commit as head
+    from clm.cli.commands.slides.sync_v3 import head_commit as head
 
     return head(path)

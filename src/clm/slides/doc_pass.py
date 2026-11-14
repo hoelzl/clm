@@ -684,7 +684,7 @@ def _changes(
         if m.sid is not None:
             return f"id:{m.sid}"
         lang = next(s for s in SIDES if m.pos[s] is not None)
-        return handle_of_cell(inputs[lang][doc_core._idx(m.pos[lang])])
+        return handle_of_cell(inputs[lang][_index(m.pos[lang])])
 
     for m in out.members:
         if m.alive:
@@ -732,7 +732,7 @@ def _changes(
     for lang in SIDES:
         for part in PARTS:
             now = [
-                doc_core._idx(m.pos[lang])
+                _index(m.pos[lang])
                 for i, m in enumerate(out.sequence)
                 if m.pos[lang] is not None and out.halves[lang][i].part == part
             ]
@@ -795,3 +795,9 @@ def land(
         raise RenderError("the written files no longer parse")
     record_deck_snapshot(ledger, deck_key, after.outcome.deck, provenance="apply", commit=commit)
     return written
+
+
+def _index(i: int | None) -> int:
+    """A position the core settled (never ``None`` where it is read)."""
+    assert i is not None
+    return i

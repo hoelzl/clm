@@ -249,3 +249,14 @@ def test_rename_id_keeps_a_sequence_recorded_from_an_older_state() -> None:
     assert target.sequence is not None
     assert target.sequence[0].sid == "welcome"  # the id moves
     assert target.sequence[1] == deck_sequence(older)[1]  # type: ignore[index]  # the edit is not re-fingerprinted
+
+
+def test_halves_with_different_preambles_still_have_a_sequence() -> None:
+    """A preamble is no cell: a translated README keeps all its text there,
+    and the sequence core merges preambles on their own."""
+    de = "# Eine Einleitung, die vor allen Zellen steht.\n\n" + deck("de", "x = 1")
+    en = "# An introduction before every cell.\n\n" + deck("en", "x = 1")
+    outcome = parsed(de, en)
+    assert outcome is not None
+    assert [o.kind for o in outcome.observations] == ["preamble_divergence"]
+    assert isinstance(deck_sequence(outcome), list)

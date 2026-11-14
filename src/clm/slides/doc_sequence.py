@@ -27,7 +27,8 @@ voiceover companion), in file order. An entry is what the core compares:
 
 A sequence is only recorded from a deck **in sync**
 (:func:`deck_sequence` says why not, otherwise): the bundle parses with no
-refusal and no observation, every member has both halves in the same file, the
+refusal and no observation about its cells (differing preambles are no such
+observation), every member has both halves in the same file, the
 halves hold each file's cells in one order, a cell's tags agree, and a shared
 cell's content is the same on both halves. A recorded sequence is therefore
 always a state both halves agreed on, which is what a 3-way merge needs as its
@@ -132,6 +133,13 @@ def is_localized(cell: SideCell) -> bool:
     return cell.lang_attr is not None or cell.cell_type == "j2"
 
 
+#: Parse observations that say nothing about the cells: the preambles are
+#: not part of the sequence (the sequence core's text layer merges them), so
+#: a deck whose halves hold different preambles, a translated README for one,
+#: still has a sequence.
+_NOT_STRUCTURAL = frozenset({"preamble_divergence"})
+
+
 @frozen
 class SequenceEntry:
     """One recorded cell (see the module docstring)."""
@@ -159,8 +167,9 @@ def deck_sequence(
     """
     if deck is None:
         return "refused"
-    if deck.observations:
-        return "observation:" + deck.observations[0].kind
+    structural = [o for o in deck.observations if o.kind not in _NOT_STRUCTURAL]
+    if structural:
+        return "observation:" + structural[0].kind
     out: list[SequenceEntry] = []
     members = list(deck.members())
     for file in FILES:

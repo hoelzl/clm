@@ -496,6 +496,42 @@ and has an exit gate. The v3 cutover followed the same pattern (v3 design §11).
   them, and the maintainer's own course work done with the switch for two
   weeks or 50 sync passes, whichever comes later (decision O4), counting
   manual fall-backs as the v3 dogfood week did.
+  **Code in 2026-11-14** (`clm.slides.doc_pass`,
+  `clm.cli.commands.slides.sync_seq`; as built: §7, §8.2, §8.3). The
+  harnesses drive either engine through `tests/slides/sync_engines.py`.
+  Against the positional engine:
+
+  | check | positional | sequence |
+  |---|---|---|
+  | laws, `ci` scope (4,767 cases) | 2,658 violations (the ratchet's baseline) | all hold |
+  | sweep (2,112 cases) | 2,096 converge | all converge |
+  | probe (67,871 cases) | 50,031 converge, 1,208 silent failures | all converge (3,135 answer `identify`) |
+
+  - **Worse than positional:** no case on any of the three. On the probe, the
+    sequence core is better in 17,840 cases.
+  - **In CI:** the laws and the sweep run on both engines (slow tier); the
+    probe still runs by hand (`scripts/sync_probe.py run --engine sequence`).
+  - **The probe found a protocol gap,** not a core defect: chained questions
+    (§7 as built). The first run left 400 cases stalled behind `identify`,
+    all converged once the harness answered with `apply --dry-run`'s rows.
+
+  A read-only `report` on every deck of both course repositories (none has a
+  recorded sequence yet):
+
+  | | PythonCourses (708) | CppCourses (366) |
+  |---|---|---|
+  | clean on both engines | 683 | 342 |
+  | pending on both | 1 | 12 |
+  | pending on positional, clean here (record-only rows: identical edits on both halves) | 0 | 11 |
+  | refused here, pending on positional (out of sync now and at `HEAD`: finish with positional, D4) | 14 | 1 |
+  | refused by the parser on both | 6 | 0 |
+  | refused here, clean on positional (companions in different orders, §8.2) | 4 | 0 |
+
+  A translated README had no sequence at all: its text is all preamble, and
+  `deck_sequence` refused any parse observation. Differing preambles no
+  longer count, since the text layer merges preambles on its own.
+
+  Next: the dogfood period.
 - **Phase D — the default flips.** Finish the decks still pending (D4); wire
   schema 6; info topics, changelog, the `migration.md` entry. The old engine
   stays selectable with `CLM_SYNC_CORE=positional` for one release.

@@ -54,7 +54,7 @@ def _echo_json(payload: dict) -> None:
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def _scope_pairs(
+def scope_pairs(
     de_path: Path, en_path: Path | None
 ) -> tuple[list[tuple[Path, Path | None]], list[Path]]:
     """DECK|DIR scope → the bundles to visit plus any unpaired solo halves.
@@ -175,7 +175,7 @@ def run_report_v3(
         ]
     ] = []
     errors: list[str] = []
-    pairs, solos = _scope_pairs(de_path, en_path)
+    pairs, solos = scope_pairs(de_path, en_path)
     _warn_solos(solos)
     for de, en in pairs:
         try:
@@ -355,7 +355,7 @@ def run_apply_v3(
         decision_rows=decision_rows,
         only_members=set(members) if members else None,
         dry_run=dry_run,
-        commit=_head_commit(bundle.de_path),
+        commit=head_commit(bundle.de_path),
         verify_gate=verify_gate,
     )
     verify_violations = [v.message for v in outcome.verify_violations]
@@ -521,7 +521,7 @@ def _report_id_errors(bundle: LoadedBundle, document: doc_apply.DecisionDocument
     ]
 
 
-def _head_commit(path: Path) -> str | None:
+def head_commit(path: Path) -> str | None:
     """Best-effort git provenance for ledger records (never fails a write)."""
     try:
         from clm.core.git_info import get_git_info
@@ -563,7 +563,7 @@ def run_record_v3(
     rows: list[dict] = []
     refused = 0
     errors = 0
-    pairs, solos = _scope_pairs(de_path, en_path)
+    pairs, solos = scope_pairs(de_path, en_path)
     _warn_solos(solos)
     for de, en in pairs:
         row = _record_one(
@@ -697,7 +697,7 @@ def _record_one(
         deck_key,
         bundle.outcome.deck,
         provenance=provenance,
-        commit=_head_commit(bundle.de_path),
+        commit=head_commit(bundle.de_path),
         member_keys=set(members) if members else None,
         deliberate_provenance=provenance_explicit,
     )
