@@ -5,7 +5,9 @@
 go/no-go before the engine is switched over. On 2026-11-13 the maintainer
 moved the shadow run ahead of the ledger change, and on the shadow's
 results gave the go for the switch-over. Steps 1 to 4 have landed (§2.5,
-§4.6, §4.9, §2.6, §9). D5 is open.
+§4.6, §4.9, §2.6, §9). Step 5, the switch-over, is designed and tracked in
+`docs/claude/design/sync-sequence-core.md` (its §9: phases A and B done,
+phase C's code in PR #1246, the dogfood period next). D5 is open.
 **Date**: 2026-11-10, shadow run and ledger sequence added 2026-11-13
 **Author**: Claude (Fable 5.2), at the maintainer's request
 **Measured against**: master `2e011286` (clm 1.38.0)
@@ -994,6 +996,7 @@ a fast drive for the engine runs. The result files are not committed.
 | `scripts/sync_model.py` | the prototype's old name, now a re-export of `clm.slides.doc_core` |
 | `src/clm/slides/doc_text.py` | the text layer (design note phase B, §2.7), with `tests/slides/test_doc_text.py` |
 | `src/clm/slides/doc_render.py` | the renderer (design note phase B, §2.7), with `tests/slides/test_doc_render.py` |
+| `src/clm/slides/doc_pass.py` | one pass of the sequence core behind `CLM_SYNC_CORE=sequence` (design note phase C, PR #1246), with `tests/slides/test_doc_pass.py` |
 | `scripts/sync_model_probe.py` | scores it on the probe and compares two runs |
 | `scripts/sync_model_laws.py` | the exhaustive law check |
 | `scripts/sync_model_passes.py` | the laws across passes with questions left open (§4.6) |
