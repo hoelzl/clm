@@ -930,6 +930,19 @@ class TestSyncReport:
         }
         assert actions == {("translate_edit", "de_to_en")}
 
+    async def test_the_sequence_core_switch_reaches_the_tool(self, tmp_path, monkeypatch):
+        """``CLM_SYNC_CORE=sequence`` (phase C of the sequence core) runs the
+        tool on the same pass as ``clm slides sync report``."""
+        monkeypatch.setenv("CLM_SYNC_CORE", "sequence")
+        de_path, en_path = self._pair(tmp_path)
+        self._record(de_path, en_path)
+        de_path.write_text(self._DE.replace("# Hallo", "# Neues Hallo"), encoding="utf-8")
+        data = json.loads(await handle_sync_report(str(de_path), tmp_path))
+        assert (data["schema"], data["engine"]) == (6, "sequence")
+        assert [(i["action"], i["key"], i["side"]) for i in data["items"]] == [
+            ("translate_edit", "id:s1", "de")
+        ]
+
     async def test_stem_relative_path_resolution(self, tmp_path):
         self._pair(tmp_path)
         # The bilingual STEM (no .de/.en tag), passed relative — both halves derive.

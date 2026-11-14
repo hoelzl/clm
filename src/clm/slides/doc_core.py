@@ -354,6 +354,9 @@ class Outcome:
     #: docstring).
     halves: dict[str, list[Cell]] = field(default_factory=dict)
     record: list[BaseMember] = field(default_factory=list)
+    #: Every member the pass knew, removed ones included (empty when an
+    #: ``identify`` question stayed open): what a report names its rows by.
+    members: list[Member] = field(default_factory=list)
 
     def labels(self) -> list[str]:
         return [
@@ -604,6 +607,7 @@ def merge(
                         open_cells.remove(got)
 
     members, loose = _members(base, cells, of, twins, claimed, evidence)
+    out.members = members
 
     recorded = [m for m in members if m.base_idx is not None]
 

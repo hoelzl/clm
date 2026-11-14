@@ -1033,6 +1033,61 @@ mechanical records). If the cell really was stamped-and-edited (the same cell,
 now carrying an id), do NOT answer `treat_as_new` — stamp the twin cell with
 the same `slide_id` by hand (the halves then pair id-keyed) and re-`report`.
 
+## Preview: the sequence core (`CLM_SYNC_CORE=sequence`)
+
+A replacement for the engine's structural half is in its trial period. It is
+**off by default**; everything above describes the default engine. With
+`CLM_SYNC_CORE=sequence` set, `report` and `apply` run the new core, and so
+does the MCP tool `slides_sync_report` (one pair entry, schema 6). `record`
+and `verify` are unchanged. Only use it when the maintainer has
+asked you to. What differs for an agent:
+
+- **Envelope**: `schema: 6`, `engine: "sequence"`, always with a `pairs`
+  list (even for one deck). Each pair has `items` (questions), `changes`
+  (what `apply` does on its own) and its own `report_id`.
+- **Handles**: `id:<sid>` (`id:title` for the title macro), `seq:<n>` (the
+  n-th cell of the recorded sequence, for an un-id'd recorded cell),
+  `new:<lang>:<file>:<n>` (the n-th cell of that file on that half, for a cell
+  the record does not know), `preamble:<file>`, and `order`. `seq:` and `new:`
+  handles mean nothing against another report: copy the pair's `report_id`
+  into the document, as always.
+- **Questions and answers**:
+
+  | action | answers |
+  |---|---|
+  | `translate_new`, `fork` | `body` (the twin's text, in the `body` field) |
+  | `translate_edit` | `body` (with the text), `keep_twin` |
+  | `verify_translation`, `verify_cold` | `confirm` |
+  | `conflict_shared`, `conflict_tags`, `conflict_part`, `conflict_owner`, `conflict_preamble`, `order_decision` | `de`, `en` |
+  | `conflict_copies` | `de`, `en`, `distinct` (each half edited a different one of several identical cells) |
+  | `remove_vs_edit` | `remove`, `keep` |
+  | `remove_localized_side` | `remove` |
+  | `unify` | `accept` |
+  | `identify` | one of the candidate `new:` handles it lists, or `removed` |
+
+  `identify` asks which cell on one half is the recorded cell `seq:<n>`
+  (`side` names the half). It comes up when that half edited several un-id'd
+  cells of one kind and the other half changed them too. The report lists
+  every `identify` question at once; answer them all in one document, and
+  put `"side"` in an answer when the same handle is asked on both halves.
+  `broken_owner` and `pending_divergence` are `manual` rows: edit the files.
+- **Some questions only appear after others are answered** (what the core
+  asks after `identify` rests on its answer). `apply --dry-run --decisions
+  FILE --json` lists the questions still open given your answers (each row
+  carries its `answer`, `null` while open). Add answers for those to the same
+  document (its `report_id` stays valid while nothing is written) and run it
+  again; `apply` without `--dry-run` does the same and writes once nothing
+  is open.
+- **Apply settles the whole deck or nothing.** With every question answered,
+  it writes both halves and records the deck (exit 0). With any question
+  open it writes nothing (exit 1). A decision document must announce
+  `"schema": 6` or no schema; schema 4/5 documents are refused, and the
+  default engine refuses schema 6. `--member` and `report --since` are not
+  available.
+- **Exit 2 with "a defect of the sequence core"** means the new core produced
+  halves that are not in sync and wrote nothing. Report it to the
+  maintainer, then unset `CLM_SYNC_CORE` and sync with the default engine.
+
 ## The forensic window — `report --since`
 
 `clm slides sync report DECK --since "2 days ago"` (or `--since REF`) diffs

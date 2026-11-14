@@ -44,6 +44,7 @@ from clm.slides import doc_apply, doc_ledger
 from clm.slides.doc_lenses import load_bundle
 from clm.slides.sync_diff import diff_outcome
 from clm.slides.sync_verify import apply_verify_gate
+from tests.slides.sync_engines import POSITIONAL, Engine, answer_identify
 
 MAX_PASSES = 6
 
@@ -254,6 +255,12 @@ def _check(
     return "misplaced", f"got={seq} exp={exp}"
 
 
+def _shown(name: str, edits: frozenset[str]) -> str:
+    """A code or markdown cell's body as a file shows it (stripped)."""
+    body = edited_body(name) if name in edits else base_body(name)
+    return body if kind(name) == "code" else f"#\n{body}"
+
+
 def _group_of(order) -> dict[str, str]:
     cur, out = "", {}
     for n in order:
@@ -264,7 +271,8 @@ def _group_of(order) -> dict[str, str]:
     return {n: g for n, g in out.items() if n in order and kind(n) != "slide"}
 
 
-def run_case(case: Case) -> Result:
+def run_case(case: Case, engine: Engine = POSITIONAL) -> Result:
+    """One case on ``engine`` (``sync_engines``: positional or sequence)."""
     res = Result(status="?")
     with tempfile.TemporaryDirectory() as tmp:
         de_path = Path(tmp) / "slides_t.de.py"
@@ -280,25 +288,47 @@ def run_case(case: Case) -> Result:
             new = cum | frozenset(rnd.edits)
             de_edits = new if rnd.edit_side == "de" else cum
             en_edits = new if rnd.edit_side == "en" else cum
+            base_texts = {
+                lang: path.read_text(encoding="utf-8")
+                for lang, path in (("de", de_path), ("en", en_path))
+            }
+            side_edits = {"de": de_edits, "en": en_edits}
+
+            def now_of(body: str, side: str, was=cum, edits=side_edits) -> str:
+                """What ``side`` made of the recorded cell ``body``."""
+                for name in {*rnd.de_order, *rnd.en_order, *prev_names}:
+                    if kind(name) not in ("code", "md") or _shown(name, was) != body:
+                        continue
+                    return _shown(name, edits[side])
+                return body
+
             de_path.write_text(deck_text("de", rnd.de_order, de_edits), encoding="utf-8")
             en_path.write_text(deck_text("en", rnd.en_order, en_edits), encoding="utf-8")
             cum = new
             prev = case.base if ri == 0 else case.rounds[ri - 1].expected
+            prev_names = set(prev)
             removed = set(prev) - set(rnd.expected)
             regrouped = _group_of(prev) != _group_of(rnd.expected)
             status = None
             withheld = False
             asked = False
+            carry: dict = {}  # answers kept while nothing was written
             for _ in range(MAX_PASSES):
-                _, diff = _diff(de_path, en_path)
-                if diff.is_clean:
+                report = engine.report(de_path, en_path, carry)
+                if report.error is not None:
+                    status = "apply_error"
+                    res.detail = report.error[:300]
+                    break
+                if report.clean:
                     status, detail = _check(de_path, en_path, rnd, cum, asked)
                     res.detail = detail
                     break
-                res.passes.append([(i.key, i.action) for i in diff.items])
-                decisions = {}
-                for item in diff.items:
-                    answers = doc_apply.item_answers(item)
+                res.passes.append([(i.key, i.action) for i in report.items])
+                decisions = dict(carry)
+                for item in report.items:
+                    if item.answered:
+                        continue
+                    answers = item.answers
                     choice = None
                     if item.action in _ORDER_Q:
                         choice = rnd.intent
@@ -309,6 +339,12 @@ def run_case(case: Case) -> Result:
                         item.action in _REMOVE_Q and (removed or regrouped) and "remove" in answers
                     ):
                         choice = "remove"
+                    elif item.action == "identify":
+                        res.questions["identify"] = res.questions.get("identify", 0) + 1
+                        decisions[f"{item.key}@{item.side}"] = answer_identify(
+                            item, base_texts, {"de": de_path, "en": en_path}, now_of
+                        )
+                        continue
                     elif (
                         item.action in ("verify_cold", "verify_translation")
                         and "confirm" in answers
@@ -317,7 +353,7 @@ def run_case(case: Case) -> Result:
                     if choice is not None:
                         res.questions[item.action] = res.questions.get(item.action, 0) + 1
                         decisions[item.key] = doc_apply.Decision(key=item.key, choice=choice)
-                    elif doc_apply.decision_vocabulary(item.action) and not answers:
+                    elif item.manual:
                         status = "manual_stall"
                         res.detail = f"{item.action} {item.key}"
                         break
@@ -328,16 +364,17 @@ def run_case(case: Case) -> Result:
                 if status:
                     break
                 try:
-                    outcome = _apply(de_path, en_path, decisions)
+                    applied = engine.apply(de_path, en_path, decisions)
                 except Exception as exc:  # noqa: BLE001
                     status = "apply_exception"
                     res.detail = repr(exc)[:300]
                     break
-                if outcome.error is not None:
+                if applied.error is not None:
                     status = "apply_error"
-                    res.detail = str(outcome.error)[:300]
+                    res.detail = str(applied.error)[:300]
                     break
-                withheld = bool(outcome.to_payload().get("verify_withheld"))
+                carry = {} if applied.wrote else decisions
+                withheld = applied.withheld
             if status is None:
                 status = "livelock_withheld" if withheld else "livelock_stalled"
             if status != "converged":

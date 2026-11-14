@@ -21,7 +21,9 @@ from pathlib import Path
 
 from tests.slides import sync_probe as sp
 from tests.slides import sync_probe_ext as spx
+from tests.slides.sync_engines import POSITIONAL, Engine, answer_identify
 from tests.slides.sync_probe import OTHER, Result, kind
+from tests.slides.sync_probe_ext import _now_of
 
 SUFFIX = spx.SUFFIX
 
@@ -100,7 +102,7 @@ def _slide_body(name, lang):
     return f"#\n# - {name.upper()} {lang}"
 
 
-def run_case3(case: C3) -> Result:
+def run_case3(case: C3, engine: Engine = POSITIONAL) -> Result:
     res = Result(status="?")
     with tempfile.TemporaryDirectory() as tmp:
         de_path = Path(tmp) / "slides_t.de.py"
@@ -115,8 +117,13 @@ def run_case3(case: C3) -> Result:
         for ri, rnd in enumerate(case.rounds):
             res.round = ri
             res.passes = []
+            base_texts = {
+                lang: path.read_text(encoding="utf-8")
+                for lang, path in (("de", de_path), ("en", en_path))
+            }
             de_b = spx._bodies(cur, rnd.de_edits, "de")
             en_b = spx._bodies(cur, rnd.en_edits, "en")
+            now_of = _now_of(cur, {"de": de_b, "en": en_b})
             de_path.write_text(spx._deck("de", rnd.de_order, de_b), encoding="utf-8")
             en_path.write_text(spx._deck("en", rnd.en_order, en_b), encoding="utf-8")
             final = dict(cur)
@@ -131,16 +138,29 @@ def run_case3(case: C3) -> Result:
             status = None
             withheld = False
             asked = False
+            carry: dict = {}  # answers kept while nothing was written
             for _ in range(sp.MAX_PASSES):
-                _, diff = sp._diff(de_path, en_path)
-                if diff.is_clean:
+                report = engine.report(de_path, en_path, carry)
+                if report.error is not None:
+                    status = "apply_error"
+                    res.detail = report.error[:300]
+                    break
+                if report.clean:
                     status, detail = _check3(de_path, en_path, rnd, final, asked)
                     res.detail = detail
                     break
-                res.passes.append([(i.key, i.action) for i in diff.items])
-                decisions = {}
-                for item in diff.items:
-                    answers = sp.doc_apply.item_answers(item)
+                res.passes.append([(i.key, i.action) for i in report.items])
+                decisions = dict(carry)
+                for item in report.items:
+                    if item.answered:
+                        continue
+                    answers = item.answers
+                    if item.action == "identify":
+                        res.questions["identify"] = res.questions.get("identify", 0) + 1
+                        decisions[f"{item.key}@{item.side}"] = answer_identify(
+                            item, base_texts, {"de": de_path, "en": en_path}, now_of
+                        )
+                        continue
                     choice = None
                     body = None
                     if item.action in sp._ORDER_Q:
@@ -173,7 +193,7 @@ def run_case3(case: C3) -> Result:
                     elif choice is not None:
                         res.questions[item.action] = res.questions.get(item.action, 0) + 1
                         decisions[item.key] = sp.doc_apply.Decision(key=item.key, choice=choice)
-                    elif sp.doc_apply.decision_vocabulary(item.action) and not answers:
+                    elif item.manual:
                         status = "manual_stall"
                         res.detail = f"{item.action} {item.key}"
                         break
@@ -184,16 +204,17 @@ def run_case3(case: C3) -> Result:
                 if status:
                     break
                 try:
-                    outcome = sp._apply(de_path, en_path, decisions)
+                    applied = engine.apply(de_path, en_path, decisions)
                 except Exception as exc:  # noqa: BLE001
                     status = "apply_exception"
                     res.detail = repr(exc)[:300]
                     break
-                if outcome.error is not None:
+                if applied.error is not None:
                     status = "apply_error"
-                    res.detail = str(outcome.error)[:300]
+                    res.detail = str(applied.error)[:300]
                     break
-                withheld = bool(outcome.to_payload().get("verify_withheld"))
+                carry = {} if applied.wrote else decisions
+                withheld = applied.withheld
             if status is None:
                 status = "livelock_withheld" if withheld else "livelock_stalled"
             if status != "converged":

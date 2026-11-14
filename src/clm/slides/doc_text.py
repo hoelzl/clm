@@ -41,7 +41,6 @@ the core: :attr:`TextPlan.held` is then non-empty and nothing may be written.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from attrs import define, field, frozen
@@ -50,7 +49,7 @@ from clm.core.slide_text.pairing import HEADER_MACRO_RE
 from clm.slides.bilingual_doc import SideCell
 from clm.slides.doc_core import PARTS, SIDES, Cell
 from clm.slides.doc_lenses import bare_slide_id
-from clm.slides.doc_sequence import canonical, is_localized
+from clm.slides.doc_sequence import is_localized, separator_of, text_of
 
 __all__ = [
     "Owners",
@@ -72,29 +71,6 @@ FileKey = tuple[str, str]
 
 #: ``(for_slide, vo_anchor)`` of a cell, verbatim.
 Owners = tuple[str | None, str | None]
-
-_OWNER_ATTRS_RE = re.compile(r'\s*(?:for_slide|vo_anchor)="[^"]*"')
-
-
-def text_of(cell: SideCell) -> str:
-    """What the text layer compares for a localized cell: its content as the
-    core reads it (:func:`clm.slides.doc_sequence.canonical`: every byte but
-    the id and the tags) without the owner attributes, which are merged on
-    their own."""
-    content = canonical(cell)
-    header, sep, rest = content.partition("\n")
-    return _OWNER_ATTRS_RE.sub("", header) + sep + rest
-
-
-def separator_of(lines: Sequence[str]) -> int:
-    """The number of blank lines a cell's ``lines`` end in (the header,
-    ``lines[0]``, never counts)."""
-    n = 0
-    for line in reversed(lines[1:]):
-        if line != "":
-            break
-        n += 1
-    return n
 
 
 def text_key(cell: SideCell) -> str | None:
@@ -125,10 +101,15 @@ def owners_of(cell: SideCell) -> Owners:
 
 @frozen
 class Recorded:
-    """A localized cell's recorded state on one half."""
+    """A localized cell's recorded state on one half. ``text`` is what
+    :func:`plan_text`'s ``text_view`` gives for the recorded cell (its
+    :func:`text_of` by default, a fingerprint of it from the ledger);
+    ``separator`` its trailing blank lines (``None``: count them in
+    ``text``)."""
 
     text: str
     owners: Owners
+    separator: int | None = None
 
 
 def recorded_by_half(
@@ -205,14 +186,22 @@ def plan_text(
     halves: Mapping[str, Sequence[Cell]],
     recorded: Mapping[tuple[str, str], Recorded],
     preambles: Mapping[FileKey, tuple[str, ...] | None],
-    base_preambles: Mapping[FileKey, tuple[str, ...] | None],
+    base_preambles: Mapping[FileKey, object | None],
     judge: Judge,
+    *,
+    text_view: Callable[[SideCell], str] = text_of,
+    preamble_view: Callable[[tuple[str, ...]], object] | None = None,
 ) -> TextPlan:
     """The text layer over the core's merged ``halves`` (``Outcome.halves``).
 
     ``recorded`` is the recorded state of the localized cells
     (:func:`recorded_by_half`), ``preambles`` / ``base_preambles`` each
     file's preamble now and as recorded (``None``: no such file).
+
+    What is recorded may be a view of the bytes rather than the bytes (the
+    ledger keeps fingerprints): ``text_view`` maps a cell to what
+    ``Recorded.text`` holds, ``preamble_view`` a preamble's lines to what
+    ``base_preambles`` holds (``None``: the lines themselves).
     """
     plan = TextPlan()
 
@@ -245,7 +234,7 @@ def plan_text(
     order = {sid: None for lang in SIDES for sid in present[lang]}
     for sid in order:
         handle = f"id:{sid}"
-        _text(plan, ask, sid, handle, own, recorded)
+        _text(plan, ask, sid, handle, own, recorded, text_view)
         merged = _owners(ask, sid, handle, present, recorded)
         if merged is None:
             continue
@@ -261,7 +250,7 @@ def plan_text(
             )
 
     for part in PARTS:
-        _preamble(plan, ask, part, preambles, base_preambles)
+        _preamble(plan, ask, part, preambles, base_preambles, preamble_view)
     return plan
 
 
@@ -272,6 +261,7 @@ def _text(
     handle: str,
     own: Mapping[str, Mapping[str, SideCell]],
     recorded: Mapping[tuple[str, str], Recorded],
+    text_view: Callable[[SideCell], str],
 ) -> None:
     cells = {lang: own[lang].get(sid) for lang in SIDES}
     if any(c is None for c in cells.values()):
@@ -280,7 +270,7 @@ def _text(
     if any(e is None for e in entries.values()):
         ask(TextRow("verify_cold", handle, None, "no recorded text"))
         return
-    moved = [lang for lang in SIDES if text_of(_cell(cells[lang])) != _entry(entries[lang]).text]
+    moved = [lang for lang in SIDES if text_view(_cell(cells[lang])) != _entry(entries[lang]).text]
     if not moved:
         return
     if len(moved) == 2:
@@ -291,7 +281,11 @@ def _text(
         source = _cell(cells[lead])
         plan.retext[(_other(lead), sid)] = source
         now = separator_of(source.lines)
-        if now != separator_of(_entry(entries[lead]).text.split("\n")):
+        entry = _entry(entries[lead])
+        was = entry.separator
+        if was is None:
+            was = separator_of(entry.text.split("\n"))
+        if now != was:
             plan.separators[(_other(lead), sid)] = now
 
 
@@ -365,7 +359,8 @@ def _preamble(
     ask: Callable[[TextRow], str | None],
     part: str,
     preambles: Mapping[FileKey, tuple[str, ...] | None],
-    base_preambles: Mapping[FileKey, tuple[str, ...] | None],
+    base_preambles: Mapping[FileKey, object | None],
+    view: Callable[[tuple[str, ...]], object] | None,
 ) -> None:
     now = {lang: preambles.get((lang, part)) for lang in SIDES}
     base = {lang: base_preambles.get((lang, part)) for lang in SIDES}
@@ -373,7 +368,8 @@ def _preamble(
         return  # a file one half lacks: the renderer gives it the twin's
     if base["de"] is None and base["en"] is None:
         return  # both files are new: each keeps its own
-    moved = [lang for lang in SIDES if base[lang] is not None and now[lang] != base[lang]]
+    seen = {lang: view(_lines(now[lang])) if view else now[lang] for lang in SIDES}
+    moved = [lang for lang in SIDES if base[lang] is not None and seen[lang] != base[lang]]
     handle = f"preamble:{part}"
     if not moved:
         return

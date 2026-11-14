@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from tests.slides import sync_probe, sync_probe_cross, sync_probe_ext  # noqa: E402
+from tests.slides.sync_engines import ENGINES  # noqa: E402
 from tests.slides.sync_probe import SILENT, engine_file, rank  # noqa: E402
 
 #: Every family: the base probe's and the extended ones (#1144 review), and
@@ -54,21 +55,31 @@ from tests.slides.sync_probe import SILENT, engine_file, rank  # noqa: E402
 FAMILIES = {**sync_probe.FAMILIES, **sync_probe_ext.FAMILIES, **sync_probe_cross.FAMILIES}
 
 
+#: The engine a worker drives (``--engine``; set by the pool initializer).
+_ENGINE = "positional"
+
+
+def _init(engine: str) -> None:
+    global _ENGINE
+    _ENGINE = engine
+
+
 def _work(case: object) -> tuple[str, str, str, str, list, dict, float]:
     t = time.time()
+    engine = ENGINES[_ENGINE]
     try:
         r = (
-            sync_probe_cross.run_case3(case)
+            sync_probe_cross.run_case3(case, engine)
             if isinstance(case, sync_probe_cross.C3)
-            else sync_probe_ext.run_any(case)
+            else sync_probe_ext.run_any(case, engine)
         )
         return case.id, case.family, r.status, r.detail, r.passes, r.questions, time.time() - t
     except Exception as exc:  # noqa: BLE001 - a crash is an outcome to report
         return case.id, case.family, "harness_exception", repr(exc)[:300], [], {}, time.time() - t
 
 
-def run(out: Path, families: list[str], workers: int) -> int:
-    print("engine:", engine_file(), flush=True)
+def run(out: Path, families: list[str], workers: int, engine: str = "positional") -> int:
+    print("engine:", engine_file(), engine, flush=True)
     cases: list = []
     for name in families:
         found = list(dict.fromkeys(FAMILIES[name]()))
@@ -76,7 +87,7 @@ def run(out: Path, families: list[str], workers: int) -> int:
         cases.extend(found)
     t0 = time.time()
     results: dict[str, dict] = {}
-    with Pool(workers) as pool:
+    with Pool(workers, initializer=_init, initargs=(engine,)) as pool:
         for cid, fam, status, detail, passes, questions, dt in pool.imap_unordered(
             _work, cases, chunksize=8
         ):
@@ -88,7 +99,10 @@ def run(out: Path, families: list[str], workers: int) -> int:
                 "questions": questions,
                 "t": round(dt, 3),
             }
-    out.write_text(json.dumps({"engine": engine_file(), "results": results}), encoding="utf-8")
+    out.write_text(
+        json.dumps({"engine": f"{engine_file()} ({engine})", "results": results}),
+        encoding="utf-8",
+    )
     counts = Counter(v["status"] for v in results.values())
     print(f"{len(results)} cases in {time.time() - t0:.0f}s: {dict(counts)}")
     return 0
@@ -171,6 +185,12 @@ def main() -> int:
     p_run.add_argument("out", type=Path)
     p_run.add_argument("--families", default=",".join(FAMILIES))
     p_run.add_argument("--workers", type=int, default=6)
+    p_run.add_argument(
+        "--engine",
+        choices=sorted(ENGINES),
+        default="positional",
+        help="the engine to drive (phase C of the sequence core: compare both)",
+    )
     p_cmp = sub.add_parser("compare")
     p_cmp.add_argument("base", type=Path)
     p_cmp.add_argument("new", type=Path)
@@ -187,7 +207,7 @@ def main() -> int:
         )
     args = parser.parse_args()
     if args.command == "run":
-        return run(args.out, args.families.split(","), args.workers)
+        return run(args.out, args.families.split(","), args.workers, args.engine)
     if args.command == "compare":
         return compare(args.base, args.new, args.show, args.allow_visible)
     return gate(args.base, args.workers, args.show, args.allow_visible, args.keep)

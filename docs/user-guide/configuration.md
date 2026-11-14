@@ -403,6 +403,12 @@ never auto-healed. `clm slides translate` (the whole-deck bootstrap)
 authenticates with `OPENROUTER_API_KEY` (or `OPENAI_API_KEY`), picked up from
 a project `.env` automatically (pass `--no-env-file` to skip).
 
+`CLM_SYNC_CORE=sequence` is the one sync variable that is read: it runs
+`report` and `apply` on the sequence core, a replacement for the engine's
+structural half that is in its trial period (design:
+`docs/claude/design/sync-sequence-core.md`, phase C). Unset or `positional`
+keeps the default engine. Agent-facing details: `clm info sync-agents`.
+
 ### Performance
 
 | Variable | Description | Default |

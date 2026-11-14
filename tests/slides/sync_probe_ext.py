@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.slides import sync_probe as sp
+from tests.slides.sync_engines import POSITIONAL, Engine, answer_identify
 from tests.slides.sync_probe import OTHER, Case, Result, Round, kind, run_case, wrap
 
 # ---------------------------------------------------------------------------
@@ -123,7 +124,7 @@ def _check2(de_path, en_path, rnd: Round2, final: dict[str, str], asked: bool):
     return "misplaced", f"got={seq} exp={exp}"
 
 
-def run_case2(case: Case2) -> Result:
+def run_case2(case: Case2, engine: Engine = POSITIONAL) -> Result:
     res = Result(status="?")
     with tempfile.TemporaryDirectory() as tmp:
         de_path = Path(tmp) / "slides_t.de.py"
@@ -138,8 +139,13 @@ def run_case2(case: Case2) -> Result:
         for ri, rnd in enumerate(case.rounds):
             res.round = ri
             res.passes = []
+            base_texts = {
+                lang: path.read_text(encoding="utf-8")
+                for lang, path in (("de", de_path), ("en", en_path))
+            }
             de_b = _bodies(cur, rnd.de_edits, "de")
             en_b = _bodies(cur, rnd.en_edits, "en")
+            now_of = _now_of(cur, {"de": de_b, "en": en_b})
             de_path.write_text(_deck("de", rnd.de_order, de_b), encoding="utf-8")
             en_path.write_text(_deck("en", rnd.en_order, en_b), encoding="utf-8")
             final = dict(cur)
@@ -156,16 +162,29 @@ def run_case2(case: Case2) -> Result:
             status = None
             withheld = False
             asked = False
+            carry: dict = {}  # answers kept while nothing was written
             for _ in range(sp.MAX_PASSES):
-                _, diff = sp._diff(de_path, en_path)
-                if diff.is_clean:
+                report = engine.report(de_path, en_path, carry)
+                if report.error is not None:
+                    status = "apply_error"
+                    res.detail = report.error[:300]
+                    break
+                if report.clean:
                     status, detail = _check2(de_path, en_path, rnd, final, asked)
                     res.detail = detail
                     break
-                res.passes.append([(i.key, i.action) for i in diff.items])
-                decisions = {}
-                for item in diff.items:
-                    answers = sp.doc_apply.item_answers(item)
+                res.passes.append([(i.key, i.action) for i in report.items])
+                decisions = dict(carry)
+                for item in report.items:
+                    if item.answered:
+                        continue
+                    answers = item.answers
+                    if item.action == "identify":
+                        res.questions["identify"] = res.questions.get("identify", 0) + 1
+                        decisions[f"{item.key}@{item.side}"] = answer_identify(
+                            item, base_texts, {"de": de_path, "en": en_path}, now_of
+                        )
+                        continue
                     choice = None
                     if item.action in sp._ORDER_Q:
                         choice = rnd.intent
@@ -188,7 +207,7 @@ def run_case2(case: Case2) -> Result:
                     if choice is not None:
                         res.questions[item.action] = res.questions.get(item.action, 0) + 1
                         decisions[item.key] = sp.doc_apply.Decision(key=item.key, choice=choice)
-                    elif sp.doc_apply.decision_vocabulary(item.action) and not answers:
+                    elif item.manual:
                         status = "manual_stall"
                         res.detail = f"{item.action} {item.key}"
                         break
@@ -199,16 +218,17 @@ def run_case2(case: Case2) -> Result:
                 if status:
                     break
                 try:
-                    outcome = sp._apply(de_path, en_path, decisions)
+                    applied = engine.apply(de_path, en_path, decisions)
                 except Exception as exc:  # noqa: BLE001
                     status = "apply_exception"
                     res.detail = repr(exc)[:300]
                     break
-                if outcome.error is not None:
+                if applied.error is not None:
                     status = "apply_error"
-                    res.detail = str(outcome.error)[:300]
+                    res.detail = str(applied.error)[:300]
                     break
-                withheld = bool(outcome.to_payload().get("verify_withheld"))
+                carry = {} if applied.wrote else decisions
+                withheld = applied.withheld
             if status is None:
                 status = "livelock_withheld" if withheld else "livelock_stalled"
             if status != "converged":
@@ -219,8 +239,23 @@ def run_case2(case: Case2) -> Result:
         return res
 
 
-def run_any(case) -> Result:
-    return run_case2(case) if isinstance(case, Case2) else run_case(case)
+def run_any(case, engine: Engine = POSITIONAL) -> Result:
+    return run_case2(case, engine) if isinstance(case, Case2) else run_case(case, engine)
+
+
+def _now_of(cur: dict[str, str], side_bodies: dict[str, dict[str, str]]):
+    """``identify``'s oracle: what a half made of a recorded cell's body."""
+
+    def shown(name: str, body: str) -> str:
+        return body if kind(name) == "code" else f"#\n{body}"
+
+    def now_of(body: str, side: str) -> str:
+        for name, was in cur.items():
+            if shown(name, was) == body:
+                return shown(name, side_bodies[side][name])
+        return body
+
+    return now_of
 
 
 # ---------------------------------------------------------------------------

@@ -859,6 +859,23 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         bundle = _load_bundle(de_path, en_path)
     except DocLensError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
+    from clm.slides import doc_ledger, doc_pass
+
+    try:
+        sequence = doc_pass.selected()
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+    if sequence:  # phase C of the sequence core: CLM_SYNC_CORE=sequence
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(bundle.de_path))
+        result = doc_pass.run_pass(
+            bundle, ledger.decks.get(doc_ledger.deck_key_for(bundle.de_path))
+        )
+        payload = {
+            "schema": 6,
+            "engine": "sequence",
+            **doc_pass.pair_payload(bundle, ledger, result),
+        }
+        return json.dumps(payload, indent=2)
     diff = _diff_bundle(bundle)
     payload = _pair_payload(bundle, diff, base_diffs=_recover_base_diffs(bundle, diff))
     return json.dumps(payload, indent=2)

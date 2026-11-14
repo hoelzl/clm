@@ -51,6 +51,7 @@ from clm.slides import doc_apply, doc_ledger
 from clm.slides.doc_lenses import load_bundle
 from clm.slides.sync_diff import diff_outcome
 from clm.slides.sync_verify import apply_verify_gate
+from tests.slides.sync_engines import POSITIONAL, Engine, answer_identify
 
 BASELINE_PATH = Path(__file__).with_name("sync_sweep_baseline.json")
 MAX_PASSES = 6
@@ -170,9 +171,12 @@ def _final_order(text: str, bodies: dict[str, str]) -> tuple[str, ...]:
 Tracer = Callable[[int, list[tuple[str, str]], dict, str, str], None]
 
 
-def run_case(case: Case, trace: Tracer | None = None) -> tuple[str, list[list[tuple[str, str]]]]:
+def run_case(
+    case: Case, trace: Tracer | None = None, engine: Engine = POSITIONAL
+) -> tuple[str, list[list[tuple[str, str]]]]:
     """``(status, passes)``: ``converged`` or a failure kind, plus each
-    pass's framed ``(key, action)`` rows."""
+    pass's framed ``(key, action)`` rows. ``engine`` is the engine under
+    test (``sync_engines``)."""
     base, code = DOMAINS[case.domain]
     edited = _edited(code, case.edits)
     passes: list[list[tuple[str, str]]] = []
@@ -180,16 +184,27 @@ def run_case(case: Case, trace: Tracer | None = None) -> tuple[str, list[list[tu
     with tempfile.TemporaryDirectory() as tmp:
         de_path = Path(tmp) / "slides_t.de.py"
         en_path = Path(tmp) / "slides_t.en.py"
-        de_path.write_text(_text("de", base, code), encoding="utf-8")
-        en_path.write_text(_text("en", base, code), encoding="utf-8")
+        base_texts = {lang: _text(lang, base, code) for lang in ("de", "en")}
+        de_path.write_text(base_texts["de"], encoding="utf-8")
+        en_path.write_text(base_texts["en"], encoding="utf-8")
         _record(de_path, en_path)
+
+        def now_of(body: str, side: str) -> str:
+            """What ``side`` made of the recorded code body ``body``."""
+            if side != case.edit_side:
+                return body
+            return next((edited[n] for n, b in code.items() if b == body), body)
+
         en_code = edited if case.edit_side == "en" else code
         en_path.write_text(_text("en", case.order, en_code), encoding="utf-8")
         if case.edit_side == "de":
             de_path.write_text(_text("de", base, edited), encoding="utf-8")
+        carry: dict[str, doc_apply.Decision] = {}  # answers kept while nothing was written
         for _ in range(MAX_PASSES):
-            _, diff = _diff(de_path, en_path)
-            if diff.is_clean:
+            report = engine.report(de_path, en_path, carry)
+            if report.error is not None:
+                return "apply_error", passes
+            if report.clean:
                 for path in (de_path, en_path):
                     text = path.read_text(encoding="utf-8")
                     if any(text.count(f"\n{body}\n") != 1 for body in edited.values()):
@@ -197,24 +212,30 @@ def run_case(case: Case, trace: Tracer | None = None) -> tuple[str, list[list[tu
                     if _final_order(text, edited) != case.order:
                         return "misplaced", passes
                 return "converged", passes
-            passes.append([(i.key, i.action) for i in diff.items])
-            decisions: dict[str, doc_apply.Decision] = {}
-            for item in diff.items:
+            passes.append([(i.key, i.action) for i in report.items])
+            decisions: dict[str, doc_apply.Decision] = dict(carry)
+            for item in report.items:
+                if item.answered:
+                    continue
                 choice = _ANSWERS.get(item.action, case.edit_side)
                 if item.action in _ANSWERS or item.action == "conflict_shared":
                     decisions[item.key] = doc_apply.Decision(key=item.key, choice=choice)
-                elif doc_apply.item_answers(item):
+                elif item.action == "identify":
+                    decisions[f"{item.key}@{item.side}"] = answer_identify(
+                        item, base_texts, {"de": de_path, "en": en_path}, now_of
+                    )
+                elif item.answers:
                     return "unanswered_question", passes
-            outcome = _apply(de_path, en_path, decisions)
-            if outcome.error is not None:
+            applied = engine.apply(de_path, en_path, decisions)
+            if applied.error is not None:
                 return "apply_error", passes
-            payload = outcome.to_payload()
-            withheld = bool(payload.get("verify_withheld"))
+            carry = {} if applied.wrote else decisions
+            withheld = applied.withheld
             if trace is not None:
                 trace(
                     len(passes) - 1,
                     passes[-1],
-                    payload,
+                    applied.payload,
                     de_path.read_text(encoding="utf-8"),
                     en_path.read_text(encoding="utf-8"),
                 )

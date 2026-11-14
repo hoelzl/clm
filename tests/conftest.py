@@ -246,6 +246,24 @@ def _isolate_db_path_env():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_sync_core_env():
+    """Clear ``CLM_SYNC_CORE`` for the duration of every test.
+
+    The switch of the sequence core's phase C
+    (``docs/claude/design/sync-sequence-core.md``): a maintainer dogfooding
+    it keeps ``CLM_SYNC_CORE=sequence`` in their shell, which would route
+    every positional-engine CLI test through the other engine. Same reasoning
+    as ``_isolate_db_path_env``; the sequence CLI tests set it in their body.
+    """
+    saved = os.environ.pop("CLM_SYNC_CORE", None)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            os.environ["CLM_SYNC_CORE"] = saved
+
+
+@pytest.fixture(autouse=True)
 def _reset_effective_worker_identities():
     """Keep the #744 image-identity registry hermetic per test.
 
