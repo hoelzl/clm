@@ -59,53 +59,62 @@ This file keeps only the conversational position.
   #1227.
 - S23 fourth part (2026-11-13/14): PR #1234 (step 4, the ledger's cell
   sequence), #1237 (the design note), #1239 (O1 to O5), #1242 (phase A, the
-  core as `clm.slides.doc_core`), #1243 and #1244 (phase B, renderer and text
-  layer, byte-exact on real history). PR #1246 (phase C code,
-  `CLM_SYNC_CORE=sequence`) was open with auto-merge armed and CI running when
-  this was saved; check `gh pr view 1246 --json state`.
+  core as `clm.slides.doc_core`), #1243 and #1244 (phase B), #1246 (phase C,
+  `CLM_SYNC_CORE=sequence`, opt-in), save #1247.
+- S23 fifth part (2026-11-14): **clm 1.40.0** (PR #1248, released by the
+  workflow; the owner's global `clm` is on it) and the **nightly
+  `sync-probe` job** (PR #1249): the sequence core with
+  `--require-converged`, the positional engine gated against the latest
+  release tag. Measured on a hosted runner: about 6 minutes per engine (all
+  67,871 cases converged in 315 s; positional vs v1.40.0: 0 better, 0 worse).
+- Course repos, same day (owner-reviewed, no auto-merge): the hand repair of
+  every deck the checks flagged (PythonCourses #424, CppCourses #234), the
+  pending work after it (PythonCourses #425,
+  CppCourses #235), the `ws_` decks deleted or
+  moved into opt-in topics with a `stack_sk` starter kit (CppCourses #236),
+  the `functions_very_short` solution cell made per-language
+  (PythonCourses #426), stale planning docs archived (CppCourses #237), the
+  greeting's spelling (PythonCourses #427, CppCourses #238, CSharpCourses #12)
+  and deck titles restored to "Herzlich Willkommen" (PythonCourses #428,
+  CppCourses #239). All merged.
 
-## Where phase C stands (after the owner's last message, solo work)
+## Settled in the fifth part
 
-- `report` / `apply` / the MCP report tool run the sequence core when
-  `CLM_SYNC_CORE=sequence` is set. Results against the positional engine:
-  laws (CI scope) all hold against 2,658 violations; sweep 2,112/2,112 against
-  2,096; probe 67,871/67,871 against 50,031 (1,208 silent failures); no case
-  worse. Numbers and the repo check are in the design note's §9.
-- Found on the way, all fixed in #1246 and written up in the design note
-  (§7 and §8.2 "as built"):
-  - no course deck has a recorded sequence yet, so a deck without one takes
-    its current halves, else its `HEAD` commit, as the base;
-  - "in sync" said nothing about translations: trust now comes from the
-    positional ledger's member body fingerprints (the first version silently
-    blessed a pending translation);
-  - questions after `identify` were invisible to `report`: `apply --dry-run
-    --decisions` lists them (400 probe cases had stalled);
-  - a translated README never had a sequence (differing preambles counted
-    as out of sync).
-- The agent's closing report to the owner described this and asked nothing;
-  the owner's next message was this save.
+- **The four companion-order decks** (module_410) were fixed by hand: one DE
+  narration cell was out of place in each; the DE companion now follows EN.
+  No core change. (The owner asked "Can we fix the decks by hand?")
+- **No clm issue for `ws_` files** (agent recommendation, owner followed it by
+  having the decks deleted or moved into topics).
+- **The probe runs nightly, not on PRs** (owner: "A nightly job sounds right,
+  it is much too slow for CI"). That rested on the agent's estimate of 35 to
+  70 minutes; the measured runtime is about 6 minutes per engine, so a
+  path-filtered PR job is feasible. The agent offered it; not answered.
+- **Greeting spelling:** running text says "herzlich willkommen" / "a very
+  warm welcome" (owner: "Please fix the spelling"); deck titles and headings
+  keep "Herzlich Willkommen", because the title names the generated notebook
+  and a case-only rename trips case-insensitive checkouts. The owner's reason
+  ("we generally use title case in German headers") did not hold up: the
+  German deck titles follow ordinary German capitalisation.
 
 ## Open
 
 - **The dogfood period** (O4): the owner's course work with
-  `CLM_SYNC_CORE=sequence`, two weeks or 50 sync passes. It has not started.
-  Before it, 15 course decks that are out of sync now and at `HEAD` need
-  finishing with the positional engine (D4).
-- **Four PythonCourses decks whose companions list narration in different
-  orders** are refused by the sequence core (clean on the positional engine).
-  The agent left the choice to the owner: reorder one companion by hand once,
-  or change the core's order rule for companions (a core change, through the
-  four checks). Not answered.
+  `CLM_SYNC_CORE=sequence`, two weeks or 50 sync passes, whichever comes
+  later. Unblocked: 1.40.0 is installed, and every deck (707 PythonCourses,
+  364 CppCourses) reports clean on both engines, which also meets phase D's
+  precondition (D4).
+- **A path-filtered PR probe job:** offered, not answered.
 - **Phase D** (the default flips, schema 6 wired, info topics and migration)
   and **phase E** (deletion) follow the dogfood period.
 - **D5** (Lean): no decision needed before the core is in production.
 
-The next conversational boundary is the owner starting (or reporting from)
-the dogfood period, or answering the companion-order choice.
+The next conversational boundary is the owner reporting from the dogfood
+period.
 
 Also open, unrelated to sync: `scripts/clean_transcript.py` cleans
-`api-request-blob` rows as dialogue (#1219). Saves of this Claude Code session
-filter a temporary copy first (the register says how).
+`api-request-blob` rows as dialogue (#1219), and a queued subagent
+hand-back (a `queue-operation` record) as an owner message. Saves of this
+session filter a temporary copy first (the register says how).
 
 ## Known weak points
 
@@ -137,6 +146,14 @@ filter a temporary copy first (the register says how).
   the repo check showed it, and trust was added. The first trust check
   compared whole-cell fingerprints and flagged decks the positional engine
   calls clean; bodies are what it trusts.
+
+- S23 fifth part: the agent claimed CppCourses' `generate_xml_specs.py` and
+  `analyze_course.py` still existed; both were removed in June. It first left
+  "Herzlich Willkommen" alone as house style, then lowercased it everywhere,
+  titles included, until a side agent flagged the notebook rename. Its probe
+  runtime estimate (35 to 70 minutes) was about ten times too high. In a
+  status reply it misstated O4 as "whichever comes first"; the decision is
+  "whichever comes later".
 
 ## Not in the transcript
 
