@@ -205,6 +205,14 @@ only take of a part with later parts is refused. Rules and rationale:
 a real stop-retake-invalidate run through `RecordingSession`
 (`TestSession.test_real_retake_then_invalidate_restores_ledger_state_and_files`).
 
+The dashboard's Restore (#1196) moves ledger entries the same way
+(`ledger.restore_part`: active → `superseded`, the restored stamp → `parts`,
+same ack rule; a take missing from `superseded` is rebuilt from the state
+file). `invalidate` keeps preferring the state's last-demoted take over the
+newest stamp: `superseded` is stored sorted, so the ledger alone cannot tell
+which take a retake replaced after a sequence of Restores. Pinned by
+`tests/recordings/test_restore_ledger.py`, including the web route.
+
 ### 4.5 The manifest digest, demoted
 
 The build-output digest stays available as the secondary

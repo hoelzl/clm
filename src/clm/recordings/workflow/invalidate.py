@@ -467,19 +467,14 @@ def _fallback_from_state(
     if not earlier:
         return None
     recorded_at, commit, dirty = max(earlier, key=lambda t: t[0])
-    members = None
-    if commit and req.deck_path is not None:
-        members = rl.deck_members_at_ref(req.deck_path, commit, req.lang)
-    members = members or {}
-    return rl.LedgerPart(
-        part=req.part,
-        recorded_at=recorded_at,
+    return rl.part_from_take(
+        req.deck_path,
         course_id=req.course_id,
+        part=req.part,
         lang=req.lang,
-        anchor=rl.anchor_for(commit, dirty),
-        members=members,
-        order=rl.id_order(members),
-        evidence="anchor",
+        recorded_at=recorded_at,
+        commit=commit,
+        dirty=dirty,
     )
 
 

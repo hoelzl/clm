@@ -101,7 +101,11 @@ course at that commit; the members are the deck's fingerprints there.
 - **`superseded`** (optional, since {version}) holds the takes retakes
   replaced, as full part entries, the newest 5 per `(course_id, part, lang)`:
   what `invalidate` restores. They are never read as recordings. Older takes
-  stay in git.
+  stay in git. The dashboard's **Restore** swaps entries between `parts` and
+  `superseded` too, so after a Restore `parts` names the restored take and
+  `report` judges its drift; an `ack` given after the replaced take was
+  recorded is dropped, as with `invalidate`. A take the ledger no longer holds
+  is rebuilt from the state file (`evidence: anchor`).
 - **`invalidated`** (optional, since {version}) is the audit trail of takes
   taken back: `{"course_id", "part", "lang", "recorded_at", "at", "note"}`,
   without fingerprints. `seed-ledger` will not write such a take back.
