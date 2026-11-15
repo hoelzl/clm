@@ -1,4 +1,4 @@
-"""Read-only build-cache inspection commands (issue #328).
+"""Build-cache inspection and repair commands (issues #328, #1245).
 
 ``clm cache explain`` shows, for one slide source file, the exact cache-key
 components a build would compute, the resulting hashes, and the hit/miss
@@ -7,15 +7,19 @@ why" is answerable in seconds. Issue #321 took an hour to diagnose because
 replayed output is freshly timestamped and nothing showed what the cache
 key did (and did not) cover.
 
-Everything here is read-only: cache databases are opened in SQLite ``ro``
-mode and no output directories are created.
+``explain`` is read-only: cache databases are opened in SQLite ``ro`` mode
+and no output directories are created. ``forget`` is the one writer: it
+deletes the cached rows of the files it is given, so the next build
+regenerates them.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 import sqlite3
+import sys
 from base64 import b64decode
 from pathlib import Path
 from typing import Any
@@ -496,3 +500,185 @@ def _print_human(
             )
         click.echo(f"    verdict             {artifact['verdict']}")
         click.echo("")
+
+
+# ---------------------------------------------------------------------------
+# clm cache forget (issue #1245)
+# ---------------------------------------------------------------------------
+
+#: (table, path column) of every cache-db table keyed by a source file.
+_SOURCE_KEYED_TABLES = (
+    ("processed_files", "file_path"),
+    ("processing_issues", "file_path"),
+    ("executed_notebooks", "input_file"),
+)
+
+
+def _normalize_key(key: str) -> str:
+    """Compare paths case- and separator-insensitively on Windows only."""
+    if sys.platform == "win32":
+        return key.replace("/", "\\").lower()
+    return key
+
+
+def _column_expr(column: str) -> str:
+    """SQL expression applying :func:`_normalize_key` to a path column."""
+    if sys.platform == "win32":
+        return f"lower(replace({column}, '/', '\\'))"
+    return column
+
+
+def _path_keys(path: Path) -> set[str]:
+    """The spellings a cache row may use for ``path`` (absolute, resolved)."""
+    return {_normalize_key(str(path.absolute())), _normalize_key(str(path.resolve()))}
+
+
+def _output_files_of(blobs: list[tuple[bytes]]) -> set[str]:
+    """Output paths recorded in pickled ``processed_files`` results.
+
+    The job-level cache (``results_cache``) is keyed by *output* file, so
+    forgetting a source must find the outputs it produced. A row that no
+    longer unpickles (a result class that changed shape) is skipped.
+    """
+    outputs = set()
+    for (blob,) in blobs:
+        try:
+            result = pickle.loads(blob)
+        except Exception:
+            continue
+        output_file = getattr(result, "output_file", None)
+        if output_file:
+            outputs.add(str(output_file))
+    return outputs
+
+
+def _count_and_delete(
+    conn: sqlite3.Connection, table: str, column: str, keys: list[str], dry_run: bool
+) -> int:
+    """Count (and unless ``dry_run`` delete) rows whose path is in ``keys``."""
+    if not keys:
+        return 0
+    where = f"{_column_expr(column)} IN ({', '.join('?' for _ in keys)})"
+    try:
+        (count,) = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", keys).fetchone()
+        if count and not dry_run:
+            conn.execute(f"DELETE FROM {table} WHERE {where}", keys)
+    except sqlite3.OperationalError as e:
+        # Tables are created lazily by their writers: no table, no rows.
+        if "no such table" not in str(e):
+            raise
+        return 0
+    return int(count)
+
+
+def forget_cached_results(
+    paths: list[Path], cache_db: Path, jobs_db: Path, *, dry_run: bool = False
+) -> dict[str, Any]:
+    """Delete every cached row for ``paths`` from both cache databases.
+
+    Each path may be a source file (its rows in ``processed_files``,
+    ``processing_issues`` and ``executed_notebooks``, plus the
+    ``results_cache`` rows of the outputs it produced) or an output file
+    (its ``results_cache`` rows). All cached versions are removed. Output
+    files on disk are left alone; the next build regenerates them.
+
+    Returns a report with the number of rows matched per table (deleted
+    unless ``dry_run``) and the output files found for the sources.
+    """
+    keys = sorted({k for p in paths for k in _path_keys(p)})
+    counts: dict[str, int] = {}
+    outputs: set[str] = set()
+
+    if cache_db.exists():
+        conn = sqlite3.connect(cache_db, timeout=30)
+        try:
+            try:
+                blobs = conn.execute(
+                    f"SELECT result FROM processed_files WHERE "
+                    f"{_column_expr('file_path')} IN ({', '.join('?' for _ in keys)})",
+                    keys,
+                ).fetchall()
+                outputs = _output_files_of(blobs)
+            except sqlite3.OperationalError as e:
+                if "no such table" not in str(e):
+                    raise
+            for table, column in _SOURCE_KEYED_TABLES:
+                counts[table] = _count_and_delete(conn, table, column, keys, dry_run)
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        counts.update({table: 0 for table, _column in _SOURCE_KEYED_TABLES})
+
+    output_keys = sorted(set(keys) | {_normalize_key(o) for o in outputs})
+    if jobs_db.exists():
+        conn = sqlite3.connect(jobs_db, timeout=30)
+        try:
+            counts["results_cache"] = _count_and_delete(
+                conn, "results_cache", "output_file", output_keys, dry_run
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        counts["results_cache"] = 0
+
+    return {
+        "paths": [str(p.absolute()) for p in paths],
+        "cache_db": str(cache_db),
+        "cache_db_exists": cache_db.exists(),
+        "jobs_db": str(jobs_db),
+        "jobs_db_exists": jobs_db.exists(),
+        "dry_run": dry_run,
+        "rows": counts,
+        "output_files": sorted(outputs),
+    }
+
+
+@cache_group.command("forget")
+@click.argument("paths", nargs=-1, required=True, type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--dry-run", is_flag=True, help="Report the matching rows without deleting them.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@click.pass_context
+def forget_cmd(ctx, paths: tuple[Path, ...], dry_run: bool, as_json: bool):
+    """Drop every cached result for one or more files, forcing a rebuild.
+
+    Use this when a cached result is wrong, e.g. a partially rendered
+    diagram that every build keeps replaying (issue #1245). PATHS are
+    source files (a .drawio or PlantUML diagram, a slide deck) or generated
+    output files. All cached versions are removed from both cache
+    databases; output files on disk are left alone and are regenerated by
+    the next build.
+
+    Use the same --cache-db-path/--jobs-db-path as your builds. The caches
+    key on absolute paths, so run this in the checkout that ran the build.
+
+    \b
+    Examples:
+        clm cache forget slides/module_030_git/topic_400_git/img/merging.drawio
+        clm cache forget slides/.../slides_intro.py --dry-run
+    """
+    cache_db: Path = ctx.obj["CACHE_DB_PATH"]
+    jobs_db: Path = ctx.obj["JOBS_DB_PATH"]
+    report = forget_cached_results(list(paths), cache_db, jobs_db, dry_run=dry_run)
+
+    if as_json:
+        click.echo(json.dumps(report, indent=2))
+        return
+
+    for label, exists, db_path in (
+        ("cache db", report["cache_db_exists"], cache_db),
+        ("jobs db", report["jobs_db_exists"], jobs_db),
+    ):
+        if not exists:
+            click.echo(f"NOTE: {label} not found at {db_path}")
+    verb = "Would delete" if dry_run else "Deleted"
+    for table, count in report["rows"].items():
+        click.echo(f"{verb} {count:>4} row(s) from {table}")
+    for output in report["output_files"]:
+        click.echo(f"  output: {output}")
+    if not any(report["rows"].values()):
+        click.echo(
+            "Nothing cached for these paths. Check that --cache-db-path/--jobs-db-path "
+            "match your build and that this is the checkout that ran it."
+        )

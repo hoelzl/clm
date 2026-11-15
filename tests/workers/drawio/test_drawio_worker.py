@@ -157,8 +157,9 @@ class TestDrawioWorkerProcessJob:
 
                 await worker._process_job_async(job)
 
-                # Verify converter was called
-                mock_convert.assert_called_once()
+                # Verify converter was called: twice, because no output exists
+                # yet to confirm the first PNG render against (issue #1245)
+                assert mock_convert.call_count == 2
                 call_args = mock_convert.call_args
                 assert "test content" in str(call_args) or mock_convert.called
 

@@ -45,6 +45,118 @@ def _configure_logging() -> None:
     )
 
 
+#: Formats whose export is checked for reproducibility before it is cached
+#: (issue #1245). A Draw.io PNG export is byte-deterministic when it works,
+#: but under load Electron occasionally captures the page before every tile
+#: is painted: the export exits 0 with the right dimensions and parts of the
+#: diagram missing, and the cache then replays the broken image forever. PDF
+#: is excluded because it embeds a creation timestamp, so two good exports
+#: never match byte for byte.
+VERIFIED_FORMATS = frozenset({"png"})
+
+#: Renders attempted before giving up on a reproducible result.
+MAX_VERIFY_RENDERS = 3
+
+
+class NonReproducibleRenderError(RuntimeError):
+    """Every render of a diagram came out different; none is trustworthy."""
+
+
+def _read_reference(output_path: Path) -> bytes | None:
+    """The image currently at ``output_path``, or None when absent/empty.
+
+    For diagrams this is the ``img-generated/`` file the course repository
+    tracks, i.e. the last accepted render — a free reference to compare a
+    new render against. It may itself be a bad render; the verification in
+    :func:`_verified_render` does not trust it beyond "a match is enough".
+    """
+    try:
+        data = output_path.read_bytes()
+    except OSError:
+        return None
+    return data or None
+
+
+async def _render_once(drawio_content: str, output_format: str, correlation_id: str) -> bytes:
+    """Run one Draw.io export in a scratch directory and return its bytes."""
+    from tempfile import TemporaryDirectory
+
+    import aiofiles  # type: ignore[import-untyped]
+
+    from clm.workers.drawio.drawio_converter import convert_drawio
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_input = Path(tmp_dir) / "input.drawio"
+        tmp_output = Path(tmp_dir) / f"output.{output_format}"
+
+        async with aiofiles.open(tmp_input, "w", encoding="utf-8") as f:
+            await f.write(drawio_content)
+
+        # Create empty output file
+        async with aiofiles.open(tmp_output, "wb") as f:
+            await f.write(b"")
+
+        await convert_drawio(tmp_input, tmp_output, output_format, correlation_id)
+
+        async with aiofiles.open(tmp_output, "rb") as f:
+            result_bytes: bytes = await f.read()
+
+    if len(result_bytes) == 0:
+        raise ValueError("Conversion produced empty result")
+    return result_bytes
+
+
+async def _verified_render(
+    drawio_content: str,
+    output_format: str,
+    reference: bytes | None,
+    correlation_id: str,
+) -> bytes:
+    """Render until the result is confirmed by a second, identical image.
+
+    Accept a render when it equals ``reference`` (the image already on
+    disk: the common case for an unchanged diagram re-rendered after a
+    cache miss, costing one export) or when two renders agree (an edited
+    diagram or a new converter version: two exports). If
+    ``MAX_VERIFY_RENDERS`` renders all differ from each other, raise
+    instead of caching an image that may be partial.
+
+    Formats outside ``VERIFIED_FORMATS`` are rendered once, as before.
+    """
+    first = await _render_once(drawio_content, output_format, correlation_id)
+    if output_format not in VERIFIED_FORMATS:
+        return first
+    if reference is not None and first == reference:
+        logger.debug(f"{correlation_id}:Render matches the existing output; accepted")
+        return first
+
+    renders = [first]
+    while len(renders) < MAX_VERIFY_RENDERS:
+        attempt = len(renders) + 1
+        candidate = await _render_once(drawio_content, output_format, correlation_id)
+        if candidate in renders:
+            if len(renders) > 1:
+                logger.warning(
+                    f"{correlation_id}:Draw.io renders disagreed; render {attempt} "
+                    f"reproduced an earlier one and was accepted (issue #1245)"
+                )
+            return candidate
+        logger.warning(
+            f"{correlation_id}:Draw.io render {attempt} differs from the earlier "
+            f"render(s) ({', '.join(str(len(r)) for r in renders)} vs "
+            f"{len(candidate)} bytes); rendering again (issue #1245)"
+        )
+        renders.append(candidate)
+
+    raise NonReproducibleRenderError(
+        f"{correlation_id}:Draw.io produced {MAX_VERIFY_RENDERS} different images "
+        f"for the same diagram (sizes: {', '.join(str(len(r)) for r in renders)} "
+        f"bytes); refusing to cache a possibly partial render. The existing "
+        f"output was left unchanged. Re-run the build; if this persists, the "
+        f"converter is non-deterministic on this machine (issue #1245)."
+    )
+
+
 class DrawioWorker(Worker):
     """Worker that processes DrawIO conversion jobs from SQLite queue or REST API."""
 
@@ -166,37 +278,10 @@ class DrawioWorker(Worker):
 
             logger.info(f"Converting {input_path} to {output_format}")
 
-            # Import the conversion function
-            from tempfile import TemporaryDirectory
-
-            import aiofiles  # type: ignore[import-untyped]
-
-            from clm.workers.drawio.drawio_converter import convert_drawio
-
-            # Process in temporary directory
-            with TemporaryDirectory() as tmp_dir:
-                tmp_input = Path(tmp_dir) / "input.drawio"
-                tmp_output = Path(tmp_dir) / f"output.{output_format}"
-
-                # Write input
-                async with aiofiles.open(tmp_input, "w", encoding="utf-8") as f:
-                    await f.write(drawio_content)
-
-                # Create empty output file
-                async with aiofiles.open(tmp_output, "wb") as f:
-                    await f.write(b"")
-
-                # Convert
-                logger.debug(f"Converting {input_path.name} to {output_format}")
-                await convert_drawio(tmp_input, tmp_output, output_format, f"job-{job.id}")
-                logger.debug(f"Conversion complete for {input_path.name}")
-
-                # Read result
-                async with aiofiles.open(tmp_output, "rb") as f:
-                    result_bytes = await f.read()
-
-            if len(result_bytes) == 0:
-                raise ValueError("Conversion produced empty result")
+            reference_bytes = _read_reference(output_path)
+            result_bytes = await _verified_render(
+                drawio_content, output_format, reference_bytes, f"job-{job.id}"
+            )
 
             # Atomic, so a reader never sees a half-written image (#799 C11)
             digest = write_output_file(output_path, result_bytes)
