@@ -897,6 +897,11 @@ The answer echoes `lang`, `polish_level`, `source_fingerprint` (and
 `twin_fingerprint` when a twin was framed) and carries one
 `{"handle", "body"}` row per framed slide — full coverage, no extras; the
 body is plain text, one thought per line, never a cell delimiter line.
+The writer keeps the deck layout (since #1162): an indented line continues
+the bullet above it, an indented `- ` line is that bullet's child (one
+level), and every bullet is wrapped to the deck style (80 columns, hanging
+indent) -- so echoing a cell's existing wrapped, nested notes rewrites it
+byte-identically.
 `accept` reads `--lang` / `--polish-level` from that echo (an explicit
 contradicting flag is a rejection), re-checks the fingerprints against the
 live files, refuses

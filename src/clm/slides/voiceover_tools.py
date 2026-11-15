@@ -30,6 +30,7 @@ from clm.core.slide_text.anchor_primitives import (
 from clm.core.slide_text.anchor_primitives import (
     find_predecessor_index as _find_predecessor_index,
 )
+from clm.core.slide_text.bullet_wrap import format_narrative_body
 from clm.core.slide_text.pairing import TITLE_SLIDE_ID, is_title_macro_cell, order_split_pair
 from clm.core.slide_text.raw_cells import RawCell, reconstruct, split_cells
 from clm.core.slide_text.slide_parser import comment_token_for_path, parse_cell_header, parse_cells
@@ -1091,18 +1092,11 @@ def read_companion_baselines(
 
 
 def _format_companion_cell_body(text: str, comment_token: str = "#") -> list[str]:
-    """Format narrative text as comment-prefixed body lines for a companion cell."""
-    lines = text.strip().split("\n")
-    body: list[str] = [comment_token]
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            body.append(comment_token)
-        elif stripped.startswith("- ") or stripped.startswith("**["):
-            body.append(f"{comment_token} {stripped}")
-        else:
-            body.append(f"{comment_token} - {stripped}")
-    return body
+    """Format narrative text as comment-prefixed body lines for a companion cell.
+
+    Shares :func:`format_narrative_body` with the inline writer, so wrapped
+    continuations and nested bullets survive a rewrite (#1162)."""
+    return format_narrative_body(text, comment_token)
 
 
 def render_companion_update(
