@@ -1225,20 +1225,32 @@ def test_monitor_health_marks_stale_zero_cpu_docker_worker_hung(
 
 
 @pytest.mark.slow
-@pytest.mark.load_fragile
-def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
-    """Test that parallel startup is significantly faster than sequential would be."""
-    # Create configuration for 8 workers (enough to show speedup)
+def test_pool_manager_parallel_startup_overlaps(db_path, workspace_path):
+    """Worker startups run concurrently, not one after another.
+
+    Regression test for #1198. This used to assert a wall-clock bound
+    (``< 5s``) on a mocked startup, which measured 25 s under load. It now
+    asserts concurrency directly. Each mocked pre-registration blocks until
+    every expected startup is in flight at the same time, so a parallel
+    ``start_pools`` reaches full overlap however slow the machine is, and a
+    sequential one never gets past one in flight (it fails after a single
+    rendezvous timeout).
+    """
     configs = [
         WorkerConfig(worker_type="notebook", image="test:latest", count=5, execution_mode="docker"),
         WorkerConfig(worker_type="plantuml", image="test:latest", count=3, execution_mode="docker"),
     ]
+    total_workers = sum(c.count for c in configs)
+    max_startup_concurrency = 10
+    expected_overlap = min(total_workers, max_startup_concurrency)
+    # Generous, and only ever spent when startup is NOT parallel: a parallel
+    # startup is released the moment the last worker arrives.
+    rendezvous_timeout = 60.0
 
     with patch("docker.from_env") as mock_docker:
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
-        # Mock containers
         container_counter = [0]
 
         def create_container(*args, **kwargs):
@@ -1249,7 +1261,6 @@ def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
 
         mock_client.containers.run.side_effect = create_container
 
-        # Mock get to raise NotFound
         import docker.errors
 
         mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
@@ -1258,26 +1269,33 @@ def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
             db_path=db_path,
             workspace_path=workspace_path,
             worker_configs=configs,
-            max_startup_concurrency=10,
+            max_startup_concurrency=max_startup_concurrency,
         )
 
-        # Track pre-registration calls to verify all workers start
-        # With pre-registration, there's no registration wait - workers are
-        # created with status='created' and later activate themselves.
-        # The startup is now truly parallel with no blocking wait.
-        pre_registration_times = []
-        counter_lock = threading.Lock()
-        worker_id_counter = [1]
+        cond = threading.Condition()
+        in_flight = [0]
+        max_in_flight = [0]
+        calls = [0]
+        gave_up = [False]
 
         def mock_pre_register(worker_type, execution_mode):
             import uuid
 
-            start = time.time()
-            # Simulate a small delay for DB insert
-            time.sleep(0.05)
-            pre_registration_times.append(time.time() - start)
+            with cond:
+                calls[0] += 1
+                in_flight[0] += 1
+                max_in_flight[0] = max(max_in_flight[0], in_flight[0])
+                cond.notify_all()
+                released = cond.wait_for(
+                    lambda: max_in_flight[0] >= expected_overlap or gave_up[0],
+                    timeout=rendezvous_timeout,
+                )
+                if not released:
+                    # Not parallel: don't make every later worker wait too.
+                    gave_up[0] = True
+                    cond.notify_all()
+                in_flight[0] -= 1
 
-            with counter_lock:
                 container_id = f"{execution_mode}-{worker_type}-{uuid.uuid4().hex}"
                 conn = manager.job_queue._get_conn()
                 cursor = conn.execute(
@@ -1286,26 +1304,17 @@ def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
                     (worker_type, container_id, "idle", None),
                 )
                 worker_id = cursor.lastrowid
-                worker_id_counter[0] += 1
             return worker_id, container_id
 
         manager._pre_register_worker = mock_pre_register
 
-        # Measure startup time
-        start_time = time.time()
         manager.start_pools()
-        duration = time.time() - start_time
 
-        # Verify all workers started
-        total_workers = sum(c.count for c in configs)
-        assert len(pre_registration_times) == total_workers
-
-        # With pre-registration, startup should be very fast since there's no
-        # wait for worker self-registration. The main benefit is eliminating
-        # the 2-10 second wait that previously existed.
-        # With 8 workers and parallel execution, should complete in < 1s normally.
-        # Allow 5s under CI/parallel test load where CPU contention is high.
-        assert duration < 5.0, f"Parallel startup took {duration:.2f}s, expected < 5.0s"
+        assert calls[0] == total_workers
+        assert max_in_flight[0] == expected_overlap, (
+            f"Only {max_in_flight[0]} worker startup(s) overlapped; "
+            f"expected all {expected_overlap} to run concurrently"
+        )
 
 
 def test_pool_manager_concurrency_limit_enforced(db_path, workspace_path):
