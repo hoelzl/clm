@@ -914,7 +914,7 @@ class TestSyncReport:
             if i["action"] == "record_neutral":
                 assert i["answers"] == [] and i["resolution"] == "mechanical", i
                 continue
-            expected = ["confirm", "body"] if i["key"].startswith("id:") else ["confirm"]
+            expected = ["confirm", "body", "replace"] if i["key"].startswith("id:") else ["confirm"]
             assert i["answers"] == expected, i
 
     async def test_localized_edit_needs_model(self, tmp_path):

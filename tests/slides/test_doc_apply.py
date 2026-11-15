@@ -1025,7 +1025,7 @@ class TestColdBodyRecovery:
         deck.write_en(*EN_PARTS, _localized("s0-new", "en", "New"))
         _, diff = deck.diff()
         (item,) = diff.items
-        assert doc_apply.item_answers(item) == ("confirm", "body")
+        assert doc_apply.item_answers(item) == ("confirm", "body", "replace")
 
     def test_body_without_side_is_rejected(self, tmp_path: Path):
         deck = self._cold_member_with_stale_de(tmp_path)
@@ -1825,7 +1825,7 @@ class TestConfirmSharedDivergenceGuard:
         )
         _, diff = deck.diff()
         item = next(i for i in diff.items if i.key == "id:s0-vo")
-        assert doc_apply.item_answers(item) == ("body",)
+        assert doc_apply.item_answers(item) == ("body", "replace")
         assert doc_apply.item_resolution(item) == "decision"
 
     def test_diverged_shared_positional_pair_advertises_nothing(self, tmp_path: Path):
@@ -3800,7 +3800,7 @@ class TestBodyWriteNormalization:
     def test_neither_choice_nor_body_gets_a_plain_message(self):
         _, errors = doc_apply.load_decisions_text('{"decisions": [{"key": "id:x"}]}')
         assert len(errors) == 1
-        assert "supply either" in errors[0]
+        assert "supply a 'choice'" in errors[0]
         assert "never add" not in errors[0]
 
 

@@ -71,7 +71,7 @@ class TestSequenceCore:
         deck = payload["pairs"][0]
         assert payload["exit_code"] == 1 and payload["needs_model"] is True
         assert [(i["action"], i["key"], i["answers"]) for i in deck["items"]] == [
-            ("translate_edit", "id:s0-m", ["body", "keep_twin"])
+            ("translate_edit", "id:s0-m", ["body", "replace", "keep_twin"])
         ]
         assert [(c["action"], c["key"], c["side"]) for c in deck["changes"]] == [
             ("mirror", "seq:3", "en")

@@ -69,6 +69,7 @@ from clm.slides.doc_apply import (
     answer_templates,
     body_holds,
     body_lines,
+    resolve_replace,
     rewrite_refusal,
     twin_lines,
 )
@@ -153,7 +154,8 @@ CORE_ANSWERS: dict[str, tuple[str, ...]] = {
 
 #: The text layer's questions and their answers (``doc_text.ANSWERS``).
 TEXT_ANSWERS: dict[str, tuple[str, ...]] = {
-    "translate_edit": ("body", "keep_twin"),
+    #: ``replace`` (#1171) is a ``body`` given as edits of the twin's text
+    "translate_edit": ("body", "replace", "keep_twin"),
     "verify_translation": ("confirm",),
     "verify_cold": ("confirm",),
     "conflict_owner": ("de", "en"),
@@ -168,6 +170,8 @@ MODEL_ACTIONS = frozenset(
 
 #: Answers that carry text: the decision's ``body`` is the twin's text.
 _BODY_ANSWER = "body"
+#: A ``body`` given as ``(old, new)`` edits of the target cell (#1171).
+_REPLACE_ANSWER = "replace"
 
 #: A recorded text that matches no cell: the half's text counts as edited.
 _UNKNOWN_TEXT = "<not recorded>"
@@ -360,7 +364,14 @@ def run_pass(
     used: set[int] = set()
     asked: dict[str, list[str]] = {}  # handle -> "<action> (<answers>)" asked there
 
+    #: ``(action, key) -> index`` of the decision that answered the row
+    answered_by: dict[tuple[str, str], int] = {}
+    #: ``handle -> text`` a ``replace`` answer resolved to (#1171)
+    resolved: dict[str, str] = {}
+
     def fits(d: Decision, answers: tuple[str, ...]) -> str | None:
+        if d.replace is not None:
+            return _REPLACE_ANSWER if _REPLACE_ANSWER in answers else None
         if d.body is not None and _BODY_ANSWER in answers and d.choice in (None, _BODY_ANSWER):
             return _BODY_ANSWER
         if d.choice is not None and d.choice in answers and d.choice != _BODY_ANSWER:
@@ -384,6 +395,7 @@ def run_pass(
             got = fits(d, answers)
             if got is not None:
                 used.add(i)
+                answered_by[(action, key)] = i
                 return got
             if d.action == action:
                 used.add(i)
@@ -463,11 +475,19 @@ def run_pass(
     recorded = _recorded(sequence, out, inputs, trust)
     text_rows: list[Row] = []
 
+    own = own_cells(out.halves)
+
     def judge(row: TextRow) -> str | None:
         answers = TEXT_ANSWERS[row.kind]
         got = lookup(row.kind, row.handle, answers)
+        if got == _REPLACE_ANSWER:
+            d = decisions[answered_by[(row.kind, row.handle)]]
+            problem = _resolve(d, row, own, token, resolved)
+            if problem is not None:
+                result.rejected.append(Rejection(row.handle, row.kind, problem))
+                got = None
         text_rows.append(Row(row.kind, row.handle, row.side, row.detail, answers, got))
-        return got
+        return _BODY_ANSWER if got == _REPLACE_ANSWER else got
 
     plan = plan_text(
         out.halves,
@@ -505,6 +525,8 @@ def run_pass(
     # -- render and assert ---------------------------------------------------------
     def translate(source: SideCell, lang: str) -> str:
         key = handle_of_cell(source)
+        if key in resolved:
+            return resolved[key]
         for d in decisions:
             if d.key == key and d.body is not None:
                 return d.body
@@ -534,6 +556,39 @@ def run_pass(
         return result
     result.rendered = rendered
     return result
+
+
+def _resolve(
+    d: Decision,
+    row: TextRow,
+    own: Mapping[str, Mapping[str, SideCell]],
+    token: str,
+    resolved: dict[str, str],
+) -> str | None:
+    """Resolve the ``replace`` answer ``d`` of a ``translate_edit`` row into
+    the twin's text, stored in ``resolved``; or why it cannot be used. The
+    base is the twin as it is now (its ``decision_body``), the bytes the
+    report showed (#1171)."""
+    assert d.replace is not None
+    if d.side is not None:
+        return (
+            "'side' is not meaningful on a translate_edit replace answer — it edits "
+            "the twin of the edited half"
+        )
+    target = _target(row.side)
+    sid = row.handle[len("id:") :]
+    cell = own.get(target or "", {}).get(sid)
+    if target is None or cell is None:
+        return f"no {target} twin of {row.handle} to edit"
+    try:
+        text = resolve_replace(
+            cell.decision_body, d.replace, where=f"the {target} body of {row.handle}"
+        )
+        body_lines(cell, text, token)  # the renderer's guards, as a rejection here
+    except DeckWriteError as exc:
+        return str(exc)
+    resolved[row.handle] = text
+    return None
 
 
 def _rewrites(

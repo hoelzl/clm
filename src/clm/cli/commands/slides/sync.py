@@ -604,9 +604,11 @@ def sync_record_cmd(
     help=(
         "A JSON decision document answering framed report items per member "
         'handle (\'-\' reads stdin). Shape: {"decisions": [{"key": "id:intro", '
-        '"choice": "confirm"}, {"key": "id:x", "body": "..."}]}. A body is the '
+        '"choice": "confirm"}, {"key": "id:x", "body": "..."}, {"key": "id:y", '
+        '"replace": [["old", "new"]]}]}. A body is the '
         "cell text WITHOUT its '# %%' delimiter line, WITH the '# ' comment "
-        "prefixes. Invalid answers are rejected per item; valid ones land. "
+        "prefixes; a replace edits the target cell's text, each old matching "
+        "exactly once. Invalid answers are rejected per item; valid ones land. "
         "Reference: `clm info sync-agents`."
     ),
 )

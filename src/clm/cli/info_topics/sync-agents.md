@@ -545,7 +545,7 @@ not order-blind:
 One JSON document answers any subset of framed items. The top level always
 carries the `report_id` copied from the report envelope — a document without
 it is refused (exit 2, nothing written). A decision row takes exactly these
-fields: `key`, `action`, `choice` or `body`, and `side`. Any other field (a
+fields: `key`, `action`, one of `choice`, `body` or `replace`, and `side`. Any other field (a
 typo such as `sied` beside a valid answer) refuses the whole document with
 exit 2, naming the row and the field (CLM {version}, #1189); it used to be
 ignored, so the typo was invisible:
@@ -605,13 +605,35 @@ ignored, so the typo was invisible:
   `body` names its `side` like any other member; the row banks in the same
   apply (a header apply that stayed framed on the next report in clm ≤1.28
   was the deck-wide structural gate of #992, fixed in 1.29).
+- `replace` — a `body` given as edits (CLM {version}, #1171), for the
+  common case of a small change to an existing twin:
+  `{"key": "id:x", "replace": [["old", "new"], ...]}`. The pairs apply in
+  order to the target cell's current text — exactly the report's
+  `de_body`/`en_body` for that half, trailing blank lines removed, `# `
+  prefixes included, never the `# %%` line (for `id:title`, the macro
+  line). Each `old` must match **exactly once** in the text the previous
+  pair left (overlapping matches count; `old` may span lines). Offered where
+  `body` is: on `translate_edit` it edits the twin and takes no `side`; on
+  an id-keyed two-sided `verify_translation` / `verify_cold` it needs `side`.
+  Not on `conflict_shared`, `unify_choose_body`, `translate_new` or
+  `remove_localized_side` (no single cell to edit). A pair that matches 0 or
+  2+ times (`replace pair #1: 0 matches in the de body of id:x`), or edits
+  that change nothing (answer `keep_twin`), reject the whole row and write
+  none of it; other rows still land (on the sequence core an unusable answer
+  leaves its question open, so the deck is held). Shape errors (not a
+  non-empty list of `[old, new]` string pairs, an empty `old`, `old == new`,
+  `replace` beside `choice` or `body`) refuse the document (exit 2). The
+  result goes through every `body` guard (a `# %%` in `new` is rejected). A
+  `replace` on a member that frames nothing is `rejected` — a correction of
+  an unchanged half is `body` + `side`. One row still answers one handle:
+  there is no "apply these pairs everywhere".
 - `choice` — one of the item's `answers` (e.g. `confirm`, `de`, `en`,
   `keep_twin`). For a `translate_edit` whose edit left the twin a faithful
   rendering, `{"key": …, "choice": "keep_twin"}` records the new baseline and
   keeps the existing twin verbatim — no need to re-supply an unchanged body.
   On a `conflict_tags` item, `de`/`en` names the side whose **tag set** wins —
   only the tag line is mirrored; bodies stay untouched.
-- `side` — `"de"` or `"en"`, **only** alongside a `body`, where the row
+- `side` — `"de"` or `"en"`, **only** alongside a `body` (or `replace`), where the row
   cannot tell which half you corrected: a two-sided `verify_cold` or
   `verify_translation` item, or a member that frames no question at all.
   `{"key": "id:intro", "body": "# frische Übersetzung", "side": "de"}`
@@ -1099,7 +1121,7 @@ asked you to. What differs for an agent:
   | action | answers |
   |---|---|
   | `translate_new`, `fork` | `body` (the twin's text, in the `body` field) |
-  | `translate_edit` | `body` (with the text), `keep_twin` |
+  | `translate_edit` | `body` (with the text), `replace` (edits of the twin), `keep_twin` |
   | `verify_translation`, `verify_cold` | `confirm` |
   | `conflict_shared`, `conflict_tags`, `conflict_part`, `conflict_owner`, `conflict_preamble`, `order_decision` | `de`, `en` |
   | `conflict_copies` | `de`, `en`, `distinct` (each half edited a different one of several identical cells) |

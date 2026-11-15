@@ -127,10 +127,12 @@ __all__ = [
     "BODY_PLACEHOLDER",
     "DECISION_ROW_FIELDS",
     "REWRITE_SIDE",
+    "REPLACE_PLACEHOLDER",
     "SIDE_PLACEHOLDER",
     "VerifyGate",
     "answer_templates",
     "body_holds",
+    "resolve_replace",
     "rewrite_refusal",
     "header_with_slide_id_of",
     "body_lines",
@@ -157,10 +159,15 @@ def _other(lang: Lang) -> Lang:
 class Decision:
     """One agent answer to a framed item, keyed by the member handle.
 
-    ``side`` (``"de"`` / ``"en"``) is only meaningful alongside a ``body`` on a
-    two-sided ``verify_cold`` item: it names the stale twin to overwrite with
-    the supplied text. Every other framed action derives its target side from
-    the item itself, so ``side`` there is rejected as a mistake.
+    ``side`` (``"de"`` / ``"en"``) is only meaningful alongside a ``body`` or
+    ``replace`` on a two-sided ``verify_cold`` / ``verify_translation`` item
+    (or a ``body`` on a member that frames nothing, #1182): it names the half
+    to overwrite. Every other framed action derives its target side from the
+    item itself, so ``side`` there is rejected as a mistake.
+
+    ``replace`` (#1171) is a ``body`` given as edits: ``(old, new)`` pairs
+    applied in order to the target cell's current text, each ``old`` matching
+    exactly once (:func:`resolve_replace`).
     """
 
     key: str
@@ -174,20 +181,21 @@ class Decision:
     #: self-checking, since a row whose action matches no framed row on that
     #: member is reported instead of silently landing on the other one.
     action: str | None = None
+    replace: tuple[tuple[str, str], ...] | None = None
 
 
 #: Framed actions this executor can resolve from a decision, with the answer
 #: shapes each accepts. Everything else is agent-manual in Phase 3: edit the
 #: files, re-run ``report``, then ``record``.
 _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
-    "translate_edit": ("body", "keep_twin"),
+    "translate_edit": ("body", "replace", "keep_twin"),
     "translate_new": ("body",),
     #: ``body`` is symmetric with ``verify_cold``'s #572 recovery: both
     #: sides moved, the agent read them, and one is wrong — name it with
     #: ``side`` and supply the correction instead of hand-editing the file
     #: and then confirming (findings M7 / Q6a; the info topic promised it).
-    "verify_translation": ("confirm", "body"),
-    "verify_cold": ("confirm", "body"),
+    "verify_translation": ("confirm", "body", "replace"),
+    "verify_cold": ("confirm", "body", "replace"),
     "conflict_shared": ("de", "en", "body"),
     "pending_divergence": ("de", "en"),
     "remove_vs_edit": ("remove", "keep"),
@@ -233,16 +241,18 @@ def decision_vocabulary(action: str) -> tuple[str, ...]:
 
 
 #: The fields a decision row may carry; any other is a shape error (#1189).
-DECISION_ROW_FIELDS: tuple[str, ...] = ("key", "action", "choice", "body", "side")
+DECISION_ROW_FIELDS: tuple[str, ...] = ("key", "action", "choice", "body", "replace", "side")
 
 #: What a template row puts where the agent's text goes.
 BODY_PLACEHOLDER = "<the cell text, without its '# %%' line>"
+#: What a template ``replace`` row puts where the agent's edits go.
+REPLACE_PLACEHOLDER = [["<old text, matching exactly once>", "<new text>"]]
 #: What a template row puts where the agent names a half; not a valid value,
 #: so a template sent unedited is rejected instead of guessing a side.
 SIDE_PLACEHOLDER = "de|en"
 
 
-def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict[str, str]]:
+def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict[str, object]]:
     """One decision row per answer an item takes, ready to fill in (#1189).
 
     ``answers`` stays the vocabulary; this is the row shape each answer
@@ -251,11 +261,14 @@ def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict
     ``action``, which makes it self-checking. Placeholders mark what the
     agent fills in.
     """
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, object]] = []
     for answer in answers:
-        row = {"key": key, "action": action}
-        if answer == "body":
-            row["body"] = BODY_PLACEHOLDER
+        row: dict[str, object] = {"key": key, "action": action}
+        if answer in ("body", "replace"):
+            if answer == "body":
+                row["body"] = BODY_PLACEHOLDER
+            else:
+                row["replace"] = [list(pair) for pair in REPLACE_PLACEHOLDER]
             if action in _SIDE_BODY_ACTIONS:
                 row["side"] = SIDE_PLACEHOLDER
         else:
@@ -265,6 +278,16 @@ def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict
 
 
 def item_answers(item: DiffItem) -> tuple[str, ...]:
+    """:func:`_item_answers`, with ``replace`` dropped wherever ``body`` is:
+    a ``replace`` is a ``body`` given as edits (#1171), so it can never be
+    accepted where a ``body`` is not (the no-dead-answers rule)."""
+    answers = _item_answers(item)
+    if "body" not in answers:
+        return tuple(a for a in answers if a != "replace")
+    return answers
+
+
+def _item_answers(item: DiffItem) -> tuple[str, ...]:
     """The key-aware answer vocabulary the report advertises for one item.
 
     Identical to :func:`decision_vocabulary` except for ``verify_cold`` and
@@ -397,6 +420,16 @@ def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
         choice = row.get("choice")
         body = row.get("body")
         side = row.get("side")
+        replace, problem = _parse_replace(row.get("replace"))
+        if problem is not None:
+            errors.append(f"decision #{i} ({row['key']}): {problem}")
+            continue
+        if replace is not None and (choice is not None or body is not None):
+            errors.append(
+                f"decision #{i} ({row['key']}): 'replace' stands alone — give exactly "
+                "one of 'choice', 'body' or 'replace'"
+            )
+            continue
         if choice is not None and not isinstance(choice, str):
             errors.append(f"decision #{i} ({row['key']}): 'choice' must be a string")
             continue
@@ -410,17 +443,20 @@ def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
                 "never add choice: 'body' alongside it"
             )
             continue
-        if choice is None and body is None:
+        if choice is None and body is None and replace is None:
             errors.append(
-                f"decision #{i} ({row['key']}): supply either a 'choice' (one of "
-                "the item's advertised answers) or a 'body'"
+                f"decision #{i} ({row['key']}): supply a 'choice' (one of the "
+                "item's advertised answers), a 'body' or a 'replace'"
             )
             continue
         if side is not None and side not in ("de", "en"):
             errors.append(f"decision #{i} ({row['key']}): 'side' must be 'de' or 'en'")
             continue
-        if side is not None and body is None:
-            errors.append(f"decision #{i} ({row['key']}): 'side' only accompanies a 'body' answer")
+        if side is not None and body is None and replace is None:
+            errors.append(
+                f"decision #{i} ({row['key']}): 'side' only accompanies a 'body' or "
+                "'replace' answer"
+            )
             continue
         action = row.get("action")
         if action is not None and not isinstance(action, str):
@@ -435,8 +471,75 @@ def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
             )
             continue
         seen.add((row["key"], action))
-        out.append(Decision(key=row["key"], choice=choice, body=body, side=side, action=action))
+        out.append(
+            Decision(
+                key=row["key"],
+                choice=choice,
+                body=body,
+                side=side,
+                action=action,
+                replace=replace,
+            )
+        )
     return out, errors
+
+
+def _parse_replace(raw: object) -> tuple[tuple[tuple[str, str], ...] | None, str | None]:
+    """A ``replace`` field: its pairs, or why its shape is wrong (#1171)."""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, list) or not raw:
+        return None, "'replace' must be a non-empty list of [old, new] pairs"
+    pairs: list[tuple[str, str]] = []
+    for n, pair in enumerate(raw, start=1):
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or not all(isinstance(part, str) for part in pair)
+        ):
+            return None, f"replace pair #{n} must be a list of two strings, [old, new]"
+        old, new = pair
+        if not old:
+            return None, f"replace pair #{n}: 'old' is empty"
+        if old == new:
+            return None, f"replace pair #{n}: 'old' and 'new' are the same"
+        pairs.append((old, new))
+    return tuple(pairs), None
+
+
+def _occurrences(text: str, old: str) -> list[int]:
+    """Every start of ``old`` in ``text``, overlapping ones included."""
+    found: list[int] = []
+    at = text.find(old)
+    while at != -1:
+        found.append(at)
+        at = text.find(old, at + 1)
+    return found
+
+
+def resolve_replace(base: str, pairs: Sequence[tuple[str, str]], *, where: str) -> str:
+    """The text a ``replace`` answer asks for: ``pairs`` applied in order to
+    ``base`` (the target cell's ``decision_body``, trailing blank lines
+    removed), each ``old`` matching exactly once in the text the previous
+    pair left (#1171). ``where`` names the target in errors ("the de body of
+    id:x"). Raises :class:`_ItemError` on a pair that matches zero or several
+    times, or when the result changes nothing; the row then lands nothing.
+    """
+    text = base.rstrip("\n")
+    start = text
+    for n, (old, new) in enumerate(pairs, start=1):
+        found = _occurrences(text, old)
+        if len(found) != 1:
+            hint = " — extend `old` until it is unique" if found else ""
+            raise _ItemError(f"replace pair #{n}: {len(found)} matches in {where}{hint}")
+        at = found[0]
+        text = text[:at] + new + text[at + len(old) :]
+    if text == start:
+        raise _ItemError(
+            f"the replacements change nothing in {where} — answer keep_twin "
+            "(translate_edit) or confirm instead"
+        )
+    return text
 
 
 def load_decisions_text(text: str) -> tuple[dict[str, Decision], list[str]]:
@@ -2191,6 +2294,8 @@ def _execute_decision(
     ex: _Executor, item: DiffItem, decision: Decision, comment_token: str
 ) -> None:
     allowed = decision_vocabulary(item.action)
+    if decision.replace is not None:
+        decision = _resolved_replace(ex, item, decision, allowed)
     if not allowed:
         raise _ItemError(
             f"'{item.action}' takes no answer (resolution: manual) — read the "
@@ -2223,6 +2328,47 @@ def _execute_decision(
             f"choice {choice!r} is not valid for '{item.action}' (allowed: {', '.join(allowed)})"
         )
     _apply_choice_decision(ex, item, choice)
+
+
+def _resolved_replace(
+    ex: _Executor, item: DiffItem, decision: Decision, allowed: tuple[str, ...]
+) -> Decision:
+    """``decision`` with its ``replace`` resolved into a ``body`` against the
+    cell the body would overwrite (#1171)."""
+    assert decision.replace is not None
+    if "replace" not in allowed:
+        raise _ItemError(
+            f"'{item.action}' does not accept a replace answer "
+            f"(allowed: {', '.join(allowed) or 'none'})"
+        )
+    if item.action == "translate_edit":
+        if decision.side is not None:
+            raise _ItemError(
+                "'side' is not meaningful on a translate_edit replace answer — it "
+                "edits the twin of the edited half"
+            )
+        target = _decision_target_side(item)
+        _holder, cell = ex._locate_twin(item, target)
+    else:
+        if not item.key.startswith("id:"):
+            raise _ItemError(
+                f"a positional {item.action} member cannot take a replace answer — "
+                "mint a slide_id and re-report"
+            )
+        if decision.side is None:
+            raise _ItemError(
+                f"a {item.action} replace answer must name the 'side' it edits ('de' or 'en')"
+            )
+        target = decision.side  # type: ignore[assignment]
+        holder = ex._holder(item, target)
+        found = holder.side(target) if holder is not None else None
+        if found is None:
+            raise _ItemError(f"the {target} side of {item.key} is missing")
+        cell = found
+    body = resolve_replace(
+        cell.decision_body, decision.replace, where=f"the {target} body of {item.key}"
+    )
+    return evolve(decision, body=body, replace=None)
 
 
 #: Framed actions whose ``body`` answer targets a *named* side. Both are
@@ -2735,6 +2881,15 @@ def _unmatched_decision_result(
         member = deck.member_by_key(MemberKey.parse(row.key))
     except ValueError:
         member = None
+    if member is not None and row.replace is not None:
+        return ItemResult(
+            row.key,
+            row.action or "?",
+            "rejected",
+            "the member frames nothing in the current report, so there is no row "
+            "for this replace answer — a correction of an unchanged half is a "
+            "body + side answer",
+        )
     if member is not None and row.body is not None:
         # #1182: a body only "already holds" when the cell it names already
         # reads that way. Anything else is a rewrite this member cannot take.
@@ -3201,7 +3356,11 @@ def _execute_pass(
                             item.key,
                             item.action,
                             "applied",
-                            f"decision: {decision.choice or 'body'}",
+                            "decision: "
+                            + (
+                                decision.choice
+                                or ("replace" if decision.replace is not None else "body")
+                            ),
                         )
                     )
             else:
@@ -3707,7 +3866,7 @@ def apply_deck(
             for row in rows:
                 if row.choice is not None:
                     choices.setdefault(row.key, []).append(row.choice)
-                if row.body is not None:
+                if row.body is not None or row.replace is not None:
                     choices.setdefault(row.key, []).append("body")
             # The executor mutates a round's members in place: read each landed
             # row's cells from the pristine diff, as they were before the pass.

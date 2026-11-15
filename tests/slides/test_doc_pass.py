@@ -145,7 +145,7 @@ def test_an_answer_that_fits_no_row_is_rejected(deck: Deck) -> None:
     )
     assert result.held
     assert [(r.key, r.reason.split(":")[0]) for r in result.rejected] == [
-        ("id:intro", "translate_edit takes body, keep_twin (with `body`"),
+        ("id:intro", "translate_edit takes body, replace, keep_twin (with `body`"),
         ("seq:9", "no row of this pass has this handle"),
     ]
 
