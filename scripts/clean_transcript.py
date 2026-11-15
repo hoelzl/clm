@@ -24,7 +24,13 @@ What it keeps
 What it drops
 -------------
 - tool inputs and results (file contents are in Git; logs are reproducible)
-- harness metadata: file snapshots, permission modes, queue operations
+- harness metadata: file snapshots, permission modes, queue operations,
+  and ``api-request-blob`` rows (copies of what was sent to the model, which
+  repeat every turn and carry skill bodies without the ``isMeta`` flag)
+- subagent hand-backs (``<agent-message>``), reduced to a one-line stub
+- Hermes rows that compaction re-inserted, and Hermes harness notices stored
+  as user rows (delegation results, background-process notices, a preserved
+  task list); a skill invocation keeps a one-line stub
 - system reminders and task notifications, which are not conversation
 - injected prompt text and compaction summaries, which the harness stores as
   user turns although the owner never said them
@@ -68,6 +74,7 @@ incomplete. See .agents/skills/save-discussion/SKILL.md.
 from __future__ import annotations
 
 import argparse
+import bisect
 import datetime
 import functools
 import json
@@ -91,6 +98,36 @@ NOISE_TAGS = (
 # user's. `isMeta` carries injected prompt text, `isCompactSummary` the
 # summary written when context ran out.
 SYNTHETIC_FLAGS = ("isMeta", "isCompactSummary", "isVisibleInTranscriptOnly")
+
+# Claude Code record types that are never dialogue even though they carry a
+# `message` with a user/assistant role. An `api-request-blob` is a copy of a
+# request sent to the model: cleaning it duplicates every turn and leaks skill
+# bodies whose real rows are `isMeta` (#1219).
+HARNESS_RECORD_TYPES = frozenset({"api-request-blob"})
+
+# A message from another agent (a subagent's hand-back, delivered as an
+# enqueue queue operation). Model output, not the owner's words (#1219).
+AGENT_MESSAGE = re.compile(
+    r"<agent-message\b(?P<attrs>[^>]*)>(?P<body>.*?)(?:</agent-message>|\Z)", re.DOTALL
+)
+
+# Hermes user rows the harness authored. They arrive with role `user` but the
+# owner never said them (#1219). Matched on the row's opening.
+HERMES_HARNESS_OPENINGS = (
+    "[CONTEXT COMPACTION —",
+    "[ASYNC DELEGATION BATCH COMPLETE",
+    "[IMPORTANT: Background process ",
+    "[Your active task list was preserved across context compression]",
+)
+# Invoking a skill is the owner's act, so it keeps a one-line stub; the skill
+# body that follows is not theirs.
+HERMES_SKILL_INVOCATION = re.compile(
+    r'\A\[IMPORTANT: The user has invoked the "(?P<name>[^"]+)" skill'
+)
+
+# Rows that Hermes compaction re-inserts share one timestamp to within
+# microseconds. A repeat outside such a batch is a genuine repeat ("yes").
+HERMES_COPY_BATCH_SECONDS = 0.01
 
 # Tools whose result is genuinely part of the conversation rather than machinery.
 PRESERVE_RESULT = {"AskUserQuestion"}
@@ -246,6 +283,32 @@ def command_stub(text: str) -> str | None:
     return None
 
 
+def agent_message_stub(attrs: str, body: str) -> str:
+    """One line for a message another agent sent into the session."""
+    kind = "Subagent hand-back" if "[Subagent hand-back]" in body else "agent-message"
+    sender = re.search(r'from="([^"]*)"', attrs)
+    return f"[{kind}]" + (f" from {sender.group(1)}" if sender else "")
+
+
+def parse_timestamp(value: object) -> datetime.datetime | None:
+    """A record timestamp (ISO 8601 string or epoch seconds) as aware UTC."""
+    try:
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            return datetime.datetime.fromtimestamp(value, datetime.UTC)
+        if isinstance(value, str) and value:
+            parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.UTC)
+            return parsed.astimezone(datetime.UTC)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return None
+
+
+def format_utc(moment: datetime.datetime) -> str:
+    return moment.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def stub(name: str, inp: dict) -> str:
     """One line describing a tool call, enough to keep references coherent."""
 
@@ -276,7 +339,13 @@ def stub(name: str, inp: dict) -> str:
     return f"[{name}]"
 
 
-def convert(path: pathlib.Path) -> tuple[list[str], dict]:
+def convert(path: pathlib.Path) -> tuple[list[str], dict, datetime.datetime | None]:
+    """Clean a Claude Code session file.
+
+    Returns the output parts, the counters, and the newest timestamp among the
+    dialogue records read -- the transcript's "content through" boundary
+    (#1213). The file's mtime is not that: it moves without new dialogue.
+    """
     out: list[str] = []
     stats = {
         "user": 0,
@@ -289,6 +358,13 @@ def convert(path: pathlib.Path) -> tuple[list[str], dict]:
     pending: list[str] = []  # consecutive tool stubs, collapsed together
     preserve: set[str] = set()  # tool_use_ids whose result we keep
     last_role: str | None = None
+    latest: datetime.datetime | None = None
+
+    def note_time(rec: dict) -> None:
+        nonlocal latest
+        moment = parse_timestamp(rec.get("timestamp"))
+        if moment is not None and (latest is None or moment > latest):
+            latest = moment
 
     def flush_stubs() -> None:
         if pending:
@@ -311,6 +387,17 @@ def convert(path: pathlib.Path) -> tuple[list[str], dict]:
         if rec.get("type") == "queue-operation":
             if rec.get("operation") == "enqueue":
                 text = strip_noise(redact(rec.get("content") or ""))
+                # Another agent's message is not the owner's: stub it.
+                handbacks = [
+                    agent_message_stub(m.group("attrs"), m.group("body"))
+                    for m in AGENT_MESSAGE.finditer(text)
+                ]
+                if handbacks:
+                    for stub_line in handbacks:
+                        push_stub(stub_line)
+                        stats["stubs"] += 1
+                    note_time(rec)
+                    text = AGENT_MESSAGE.sub("", text).strip()
                 if text and not command_stub(text):
                     flush_stubs()
                     if last_role != "user":
@@ -319,7 +406,12 @@ def convert(path: pathlib.Path) -> tuple[list[str], dict]:
                     out.append(text)
                     stats["user"] += 1
                     stats["queued"] += 1
+                    note_time(rec)
                     continue
+            stats["dropped"] += 1
+            continue
+
+        if rec.get("type") in HARNESS_RECORD_TYPES:
             stats["dropped"] += 1
             continue
 
@@ -341,6 +433,7 @@ def convert(path: pathlib.Path) -> tuple[list[str], dict]:
         blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
         if not isinstance(blocks, list):
             continue
+        note_time(rec)
 
         for b in blocks:
             if not isinstance(b, dict):
@@ -377,7 +470,7 @@ def convert(path: pathlib.Path) -> tuple[list[str], dict]:
                     pending.append(f"    -> {strip_noise(redact(text))}")
 
     flush_stubs()
-    return out, stats
+    return out, stats, latest
 
 
 def hermes_tool_stub(call: dict) -> str:
@@ -407,8 +500,62 @@ def hermes_tool_stub(call: dict) -> str:
     return f"[{name}]" + (f" {detail}" if detail else "")
 
 
-def convert_hermes(session: dict) -> tuple[list[str], dict]:
-    """Convert one object emitted by ``hermes sessions export --format jsonl``."""
+def hermes_call_ids(calls: object) -> tuple[str, ...]:
+    if isinstance(calls, str):
+        try:
+            calls = json.loads(calls)
+        except json.JSONDecodeError:
+            return ()
+    if not isinstance(calls, list):
+        return ()
+    return tuple(str(c.get("id")) for c in calls if isinstance(c, dict))
+
+
+def hermes_compaction_copies(messages: list) -> set[int]:
+    """Indices of rows that Hermes compaction re-inserted (#1219).
+
+    A copy repeats an earlier row's role, content and tool-call ids (its call
+    arguments may be abridged, so they are not compared). Its timestamp is the
+    compaction time, shared with the rest of its batch; requiring that keeps a
+    genuine repeat -- the owner saying "yes" twice -- in the transcript. A row
+    without a timestamp cannot be placed in a batch and is judged on the match
+    alone.
+    """
+    stamps = sorted(
+        m["timestamp"]
+        for m in messages
+        if isinstance(m, dict) and isinstance(m.get("timestamp"), int | float)
+    )
+
+    def batched(stamp: object) -> bool:
+        if not isinstance(stamp, int | float):
+            return True
+        lo = bisect.bisect_left(stamps, stamp - HERMES_COPY_BATCH_SECONDS)
+        hi = bisect.bisect_right(stamps, stamp + HERMES_COPY_BATCH_SECONDS)
+        return hi - lo > 1
+
+    seen: set[tuple] = set()
+    copies: set[int] = set()
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get("role") not in ("user", "assistant"):
+            continue
+        content = message.get("content")
+        ids = hermes_call_ids(message.get("tool_calls"))
+        if not content and not ids:
+            continue
+        key = (message["role"], content if isinstance(content, str) else repr(content), ids)
+        if key in seen and batched(message.get("timestamp")):
+            copies.add(index)
+        seen.add(key)
+    return copies
+
+
+def convert_hermes(session: dict) -> tuple[list[str], dict, datetime.datetime | None]:
+    """Convert one object emitted by ``hermes sessions export --format jsonl``.
+
+    Also returns the newest user/assistant row timestamp (#1219), the
+    transcript's "content through" boundary.
+    """
     out: list[str] = []
     stats = {
         "user": 0,
@@ -417,12 +564,19 @@ def convert_hermes(session: dict) -> tuple[list[str], dict]:
         "dropped": 0,
         "synthetic": 0,
         "out_of_band": 0,
+        "copies": 0,
     }
     last_role: str | None = None
+    latest: datetime.datetime | None = None
+    messages = session.get("messages") or []
+    copies = hermes_compaction_copies(messages)
 
-    for message in session.get("messages") or []:
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
             stats["dropped"] += 1
+            continue
+        if index in copies:
+            stats["copies"] += 1
             continue
         if message.get("_compressed_summary"):
             stats["synthetic"] += 1
@@ -476,6 +630,10 @@ def convert_hermes(session: dict) -> tuple[list[str], dict]:
             stats["dropped"] += 1
             continue
 
+        moment = parse_timestamp(message.get("timestamp"))
+        if moment is not None and (latest is None or moment > latest):
+            latest = moment
+
         text = message.get("content")
         # Codex commentary can be public message items with empty content.
         # Never use reasoning_content/reasoning items as a dialogue fallback.
@@ -497,8 +655,14 @@ def convert_hermes(session: dict) -> tuple[list[str], dict]:
                     and isinstance(part.get("text"), str)
                 )
         text = strip_noise(redact(text)) if isinstance(text, str) else ""
-        if role == "user" and text.startswith("[CONTEXT COMPACTION —"):
+        if role == "user" and text.startswith(HERMES_HARNESS_OPENINGS):
             stats["synthetic"] += 1
+            text = ""
+        skill = HERMES_SKILL_INVOCATION.match(text) if role == "user" else None
+        if skill:
+            stats["synthetic"] += 1
+            out.append(f"> [skill] {skill.group('name')}")
+            stats["stubs"] += 1
             text = ""
 
         if text:
@@ -520,7 +684,7 @@ def convert_hermes(session: dict) -> tuple[list[str], dict]:
                 out.append("> " + "\n> ".join(lines))
                 stats["stubs"] += len(lines)
 
-    return out, stats
+    return out, stats, latest
 
 
 def main() -> int:
@@ -560,17 +724,31 @@ def main() -> int:
     except (OSError, json.JSONDecodeError):
         pass
 
+    # The boundary is the newest dialogue row's own time, in UTC (#1213,
+    # #1219). Fallbacks say what they are: a file's mtime moves without new
+    # dialogue, and a Hermes `started_at` is the session's start.
     if hermes_session is not None:
-        parts, stats = convert_hermes(hermes_session)
+        parts, stats, latest = convert_hermes(hermes_session)
         source_label = f"Hermes session {hermes_session.get('id', args.session.stem)}"
-        activity = hermes_session.get("last_activity_at") or hermes_session.get("started_at")
-        through = datetime.datetime.fromtimestamp(activity).strftime("%Y-%m-%d %H:%M")
+        if latest is not None:
+            through = format_utc(latest)
+        else:
+            activity = parse_timestamp(hermes_session.get("last_activity_at"))
+            started = parse_timestamp(hermes_session.get("started_at"))
+            if activity is not None:
+                through = f"{format_utc(activity)} (session last activity)"
+            elif started is not None:
+                through = f"{format_utc(started)} (session start; no row timestamps)"
+            else:
+                through = "unknown (no timestamps)"
     else:
-        parts, stats = convert(args.session)
+        parts, stats, latest = convert(args.session)
         source_label = args.session.name
-        through = datetime.datetime.fromtimestamp(args.session.stat().st_mtime).strftime(
-            "%Y-%m-%d %H:%M"
-        )
+        if latest is not None:
+            through = format_utc(latest)
+        else:
+            mtime = datetime.datetime.fromtimestamp(args.session.stat().st_mtime, datetime.UTC)
+            through = f"{format_utc(mtime)} (file time; no record timestamps)"
     body = "\n\n".join(parts).strip() + "\n"
 
     # A transcript is a snapshot: the session keeps growing after it is written,
@@ -620,6 +798,7 @@ def main() -> int:
         queued = (
             f", {stats['queued']} of the owner blocks typed mid-turn" if "queued" in stats else ""
         )
+        copies = f", {stats['copies']} compaction copies dropped" if stats.get("copies") else ""
         out_of_band = (
             f", {stats['out_of_band']} of the owner blocks delivered out-of-band"
             if "out_of_band" in stats
@@ -629,7 +808,7 @@ def main() -> int:
             f"  source {raw / 1e6:.2f} MB -> {len(text) / 1e6:.2f} MB "
             f"({raw / max(len(text), 1):.1f}:1)\n"
             f"  {stats['user']} owner blocks, {stats['assistant']} agent blocks, "
-            f"{stats['stubs']} tool stubs{queued}{out_of_band}, "
+            f"{stats['stubs']} tool stubs{queued}{out_of_band}{copies}, "
             f"{stats['dropped']} records dropped, "
             f"{stats['synthetic']} harness-authored turns dropped",
             file=sys.stderr,
