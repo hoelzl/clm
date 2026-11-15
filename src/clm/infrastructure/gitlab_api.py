@@ -1,7 +1,8 @@
 """Minimal GitLab REST helper for release provisioning (issue #294).
 
-CLM's only remote-API need today is sharing a per-cohort release repo into a
-GitLab access group (``clm release provision``), so this module deliberately
+CLM's remote-API needs are sharing a per-cohort release repo into a GitLab
+access group and pointing its ``default_branch`` at the pushed branch (both
+``clm release provision``, issues #294/#955), so this module deliberately
 implements exactly that — no project creation, no general client. Repos are
 still created the established way (push-to-create or the GitLab UI); the
 share is what used to be a manual, per-cohort UI step.
@@ -163,4 +164,66 @@ def share_project_with_group(
     raise GitLabApiError(
         f"Sharing {project_path!r} with {group_path!r} failed with HTTP "
         f"{share_response.status_code}: {detail}"
+    )
+
+
+# Where a human changes the setting when the token may not (issue #955).
+DEFAULT_BRANCH_SETTING = "Settings > Repository > Branch defaults > Default branch"
+
+
+def reconcile_default_branch(
+    base_url: str,
+    project_path: str,
+    branch: str,
+    token: str,
+) -> tuple[str, str | None]:
+    """Point the project's ``default_branch`` at *branch* (issue #955).
+
+    A freshly created GitLab project can advertise a default branch (often
+    ``main``) that the cohort repo never pushes — ``clm git init`` creates
+    ``master`` — so the web UI shows an empty project and a bare clone checks
+    out nothing. Returns ``(status, previous_default)`` where status is:
+
+    - ``"unchanged"``: the default branch already is *branch*;
+    - ``"updated"``: it was changed from ``previous_default`` to *branch*;
+    - ``"not-pushed"``: *branch* does not exist on the remote yet, so there is
+      nothing to point at (push first, then re-run).
+
+    Raises :class:`GitLabApiError` when the project cannot be read or the
+    update is refused (e.g. the token lacks Maintainer rights); the refusal
+    message names the project setting to change by hand.
+    """
+    project_url = f"{base_url}/api/v4/projects/{quote(project_path, safe='')}"
+    project_response = _request("GET", project_url, token)
+    if project_response.status_code == 404:
+        raise GitLabApiError(
+            f"Project {project_path!r} not found on {base_url} (or the token cannot see it)."
+        )
+    if project_response.status_code != 200:
+        raise GitLabApiError(
+            f"Reading project {project_path!r} failed with HTTP "
+            f"{project_response.status_code}: {_error_detail(project_response)}"
+        )
+    current = project_response.json().get("default_branch")
+    if current == branch:
+        return "unchanged", current
+
+    branch_url = f"{project_url}/repository/branches/{quote(branch, safe='')}"
+    branch_response = _request("GET", branch_url, token)
+    if branch_response.status_code == 404:
+        return "not-pushed", current
+    if branch_response.status_code != 200:
+        raise GitLabApiError(
+            f"Looking up branch {branch!r} of {project_path!r} failed with HTTP "
+            f"{branch_response.status_code}: {_error_detail(branch_response)}"
+        )
+
+    update_response = _request("PUT", project_url, token, data={"default_branch": branch})
+    if update_response.status_code == 200:
+        return "updated", current
+    raise GitLabApiError(
+        f"Could not set the default branch of {project_path!r} to {branch!r} "
+        f"(currently {current!r}): HTTP {update_response.status_code}: "
+        f"{_error_detail(update_response)}. Change it by hand in the project's "
+        f"{DEFAULT_BRANCH_SETTING} (needs Maintainer rights)."
     )

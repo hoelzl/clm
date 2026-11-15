@@ -263,8 +263,16 @@ clm release sync SPEC --channel NAME --push # first promotion, committed and pus
 ```
 
 or `release sync` first (no `--push`), then `git init --channel`, then
-`git push --channel`. A remote project's `default_branch` may still need
-reconciling after the first push (issue #955).
+`git push --channel`. A freshly created remote project may still advertise
+a `default_branch` (often `main`) that was never pushed — `clm git init`
+creates `master` — so the web UI looks empty and a bare `git clone` checks out
+nothing. `clm release provision` fixes that (CLM {version}+, issue #955): for
+every channel it provisions whose working tree has a committed branch, it
+points the GitLab project's `default_branch` at that branch once the branch
+is on the remote (`--dry-run` previews it). If the token may not change the
+setting (it needs Maintainer rights), or the branch is not pushed yet,
+provision prints a warning naming the setting — *Settings > Repository >
+Branch defaults > Default branch* — and still exits 0.
 
 Sync actions per topic:
 
