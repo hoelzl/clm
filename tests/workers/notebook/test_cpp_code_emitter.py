@@ -199,6 +199,70 @@ class TestBraceMemberInitializers:
             assert split_top_level(src) == [src]
 
 
+class TestBlockFollowedByExpressionCharacter:
+    """Regression tests for #1195: a block's ``}`` ends the item.
+
+    The mirror image of #1145: a ``}`` followed by an expression character
+    used to continue the item, so a statement such as ``++n;`` after a
+    function stayed attached to it instead of moving into the slide function.
+    Only expression braces (brace initializers, lambdas) and class bodies
+    continue into what follows.
+    """
+
+    @pytest.mark.parametrize(
+        "first",
+        [
+            "void f() { }",
+            "int f(int x) { return x; }",
+            "auto f() const -> int { return 1; }",
+            "auto f() -> std::map<int, int> { return {}; }",
+            "auto f() noexcept(true) { }",
+            "void S::f() const & { }",
+            "void S::f() override { }",
+            "template <typename T> void f(T) requires Small<T> { }",
+            "[[nodiscard]] int f() { return 1; }",
+            "int& operator[](int i) { return a[i]; }",
+            "bool operator<(const T& o) const { return false; }",
+            "T::T(int x) : a_{x} { }",
+            "T::T(int x) : a_(x) { }",
+            "T::T(int x) try : a_{x} { } catch (...) { }",
+            "if (c) { }",
+            "if (c) { } else { }",
+            "for (int v : vs) { }",
+            "while (c) { }",
+            "switch (x) { case 1: { } }",
+            "try { } catch (...) { }",
+            "{ int x; }",
+            "namespace ns { int a; }",
+        ],
+    )
+    @pytest.mark.parametrize("second", ["++n;", "--n;", "*p = 1;", "(void)x;", "!f();", "~T();"])
+    def test_statement_after_a_block_splits(self, first, second):
+        assert split_top_level(f"{first}\n{second}") == [first, second]
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "[](int x) { return x; }(5);",
+            "[](int x) { return x; }\n(5);",
+            "auto l = [](int x) mutable { return x; }\n(1);",
+            "auto l = [&]() -> int { return 1; }\n();",
+            "RequestBuilder{}\n    .setTimeout(10)\n    .send();",
+            "auto n = std::vector<int>{1, 2}\n.size();",
+            "g(x)->m = T{1}\n+ 2;",
+            "auto f = std::function<void(int)>{h}\n(1);",
+            "struct S { int a; } *p = nullptr;",
+            "struct S { int a; }\n*p = nullptr;",
+        ],
+    )
+    def test_expression_braces_and_class_bodies_continue(self, src):
+        assert split_top_level(src) == [src.strip()]
+
+    def test_statement_moves_into_the_slide_function(self):
+        items = classify_source("void f() { }\n++n;")
+        assert [i.category for i in items] == ["fn_def", "expr_stmt"]
+
+
 # ---------------------------------------------------------------------------
 # classify_source_spans
 # ---------------------------------------------------------------------------

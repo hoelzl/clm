@@ -283,6 +283,70 @@ def _is_brace_mem_initializer(src: str, start: int, open_brace: int) -> bool:
     return False
 
 
+# What may sit between a function's parameter list and its body:
+# cv/ref qualifiers, ``noexcept``, ``override``/``final``, a lambda's
+# ``mutable``, a function-try-block's ``try``, a trailing return type and a
+# trailing requires-clause. Deliberately excludes ``=``, ``.``, ``+``, ``?``
+# and friends, so an expression like ``g(x)->m = T{1}`` doesn't match.
+_BODY_TAIL = re.compile(
+    r"(?:\s*(?:(?:const|volatile|noexcept|override|final|mutable|constexpr|consteval|try)\b"
+    r"|&&?))*"
+    r"\s*(?:(?:->|\brequires\b)[\w\s:<>,*&|!]*)?"
+)
+_BLOCK_KEYWORD = re.compile(r"(?:^|[^\w])(?:else|do|try)$")
+_NAMESPACE_HEAD = re.compile(r"(?:inline\s+)?namespace\b")
+_OPERATOR_BEFORE_BRACKET = re.compile(r"\boperator\s*(?:new|delete)?\s*$")
+
+
+def _closes_block(src: str, start: int, open_brace: int) -> bool:
+    """Whether the brace group opened at ``open_brace`` is a block, not an expression.
+
+    A block is a function body (``f(int x) const -> int { }``, a
+    constructor body after a mem-initializer list), a control statement's
+    body (``if (c) { }``, ``else { }``, ``do { }``, ``try { }``), a namespace
+    body or a bare compound statement. Its closing ``}`` ends the item even
+    when the next line starts with an expression character — ``++n;``,
+    ``*p = 1;``, ``(void)x;`` (issue #1195). Brace initializers
+    (``T{1}.f()``), lambdas (``[](int x) { }(5)``) and class bodies (``struct
+    S { } *p;`` declares ``p``) are not blocks: what follows them continues
+    the item.
+    """
+    before = src[start:open_brace].strip()
+    if not before:
+        return True
+    if before[-1] == "}":
+        # Only a brace mem-initializer (``: a_{x} {``) puts a ``{`` right after
+        # a depth-0 ``}`` without ending the item first.
+        return True
+    if _BLOCK_KEYWORD.search(before) or _NAMESPACE_HEAD.match(before):
+        return True
+    depth = 0
+    last_close = -1
+    k = 0
+    while k < len(before):
+        c = before[k]
+        if c in "([{":
+            if c == "[" and depth == 0:
+                if before[k : k + 2] == "[[":
+                    # An attribute ``[[nodiscard]]``: skip to its ``]]``.
+                    end = before.find("]]", k + 2)
+                    if end < 0:
+                        return False
+                    k = end + 2
+                    continue
+                if not _OPERATOR_BEFORE_BRACKET.search(before[:k]):
+                    return False  # a lambda's capture list
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if c == ")" and depth == 0:
+                last_close = k
+        k += 1
+    if last_close < 0:
+        return False
+    return _BODY_TAIL.fullmatch(before[last_close + 1 :]) is not None
+
+
 def split_top_level_spans(src: str) -> list[tuple[int, int]]:
     """Like :func:`split_top_level`, but return ``(start, end)`` char spans.
 
@@ -321,7 +385,11 @@ def split_top_level_spans(src: str) -> list[tuple[int, int]]:
                     emit(i + 1)
                 else:
                     word = re.match(r"(else|while|catch)\b", src[j : j + 8])
-                    expr_continues = j < n and src[j] in _EXPR_CONTINUATION_CHARS
+                    expr_continues = (
+                        j < n
+                        and src[j] in _EXPR_CONTINUATION_CHARS
+                        and not _closes_block(src, start, open_brace)
+                    )
                     body_follows = (
                         j < n
                         and src[j] == "{"
