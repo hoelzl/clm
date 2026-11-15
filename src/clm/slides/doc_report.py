@@ -116,6 +116,9 @@ def item_payloads(
         # recovery is a claim about the recovered actions only.
         if recovered is not None and item.action in BASE_DIFF_ACTIONS:
             payload["base_ref"] = recovered.base_ref
+            if recovered.edit_committed is not None:
+                # #1191: an edit already in a commit vs one in the working tree
+                payload["edit_committed"] = recovered.edit_committed
             if recovered.de_diff is not None:
                 payload["de_diff"] = recovered.de_diff
             if recovered.en_diff is not None:

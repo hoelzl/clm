@@ -449,6 +449,65 @@ class TestBatchObservation:
         assert batch_observation(diff, recovered) is None
 
 
+class TestEditCommitted:
+    """#1191: an edit already committed vs one only in the working tree."""
+
+    def test_a_working_tree_edit_is_not_committed(self, tmp_path: Path):
+        repo, sha, base = _repo_at_base(tmp_path)
+        repo.write(DE0, _edit(EN0, "EN two"))
+        bundle, diff = _diff(repo, base)
+        entry = recover_base_diffs(bundle, diff)["id:m2"]
+        assert entry.base_ref == sha
+        assert entry.edit_committed is False
+
+    def test_a_committed_edit_is_committed(self, tmp_path: Path):
+        repo, sha, base = _repo_at_base(tmp_path)
+        repo.write(DE0, _edit(EN0, "EN two"))
+        repo.commit("en edit")
+        bundle, diff = _diff(repo, base)
+        entry = recover_base_diffs(bundle, diff)["id:m2"]
+        assert entry.base_ref == sha
+        assert entry.edit_committed is True
+
+    def test_a_later_commit_elsewhere_does_not_make_it_committed(self, tmp_path: Path):
+        """``base_ref != HEAD`` alone would say "committed" here: HEAD moved,
+        but not the bundle, and the edit is still only in the working tree."""
+        repo, sha, base = _repo_at_base(tmp_path)
+        (repo.root / "other.txt").write_text("x", encoding="utf-8")
+        head = repo.commit("unrelated")
+        repo.write(DE0, _edit(EN0, "EN two"))
+        bundle, diff = _diff(repo, base)
+        entry = recover_base_diffs(bundle, diff)["id:m2"]
+        assert entry.base_ref == sha != head
+        assert entry.edit_committed is False
+
+    def test_explicit_candidates_judge_against_the_bundle_at_head(self, tmp_path: Path):
+        repo, sha, base = _repo_at_base(tmp_path)
+        repo.write(DE0, _edit(EN0, "EN two"))
+        repo.commit("en edit")
+        bundle, diff = _diff(repo, base)
+        entry = recover_base_diffs(bundle, diff, candidates=[sha])["id:m2"]
+        assert entry.edit_committed is True
+
+    def test_the_payload_carries_it_only_beside_base_ref(self, tmp_path: Path):
+        from clm.slides.doc_report import pair_payload
+
+        repo, _sha, base = _repo_at_base(tmp_path)
+        repo.write(DE0, _edit(EN0, "EN two"))
+        repo.commit("en edit")
+        bundle, diff = _diff(repo, base)
+        payload = pair_payload(bundle, diff, base_diffs=recover_base_diffs(bundle, diff))
+        (row,) = [i for i in payload["items"] if i["key"] == "id:m2"]
+        assert row["edit_committed"] is True
+
+        plain = _Repo(tmp_path / "plain", git=False)
+        plain.write(DE0, _edit(EN0, "EN two"))
+        bundle, diff = _diff(plain, _snapshot(DE0, EN0))
+        payload = pair_payload(bundle, diff, base_diffs=recover_base_diffs(bundle, diff))
+        (row,) = [i for i in payload["items"] if i["key"] == "id:m2"]
+        assert "base_ref" not in row and "edit_committed" not in row
+
+
 class TestSurfaces:
     def test_the_json_payload_carries_the_fields_and_the_observation(self, tmp_path: Path):
         from clm.slides.doc_report import pair_payload

@@ -2702,6 +2702,8 @@ carry `base_ref` plus per-side `de_diff`/`en_diff` — unified hunks against
 the newest commit whose bytes match the ledger's recorded fingerprints — when
 that base is recoverable from git (capped walk; rows degrade to the plain
 shape when it is not). The text report prints the same hunks under each item.
+Beside `base_ref`, `edit_committed` (CLM {version}, #1191) is `true` when the
+edit is already committed and `false` when it is only in the working tree.
 Schema 4 added the deck's identity and a freshness token to
 every pair payload: `deck_key`, `ledger` (the trust store's path), and
 `report_id` — a hash of the bundle bytes plus this deck's ledger section.
