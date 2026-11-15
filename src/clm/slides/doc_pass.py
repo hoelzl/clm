@@ -66,6 +66,7 @@ from clm.slides.bilingual_doc import BilingualDeck, SideCell
 from clm.slides.doc_apply import (
     REWRITE_SIDE,
     Decision,
+    answer_templates,
     body_holds,
     body_lines,
     rewrite_refusal,
@@ -208,6 +209,9 @@ class Row:
             "answers": list(self.answers),
             "resolution": "manual" if self.manual else "decision" if self.answers else "mechanical",
         }
+        if self.is_question:
+            # #1189: the row shape each answer needs, ready to fill in
+            out["templates"] = answer_templates(self.key, self.action, self.answers)
         if self.is_question:
             out["needs"] = "model" if self.action in MODEL_ACTIONS else "agent"
             out["answer"] = self.answer

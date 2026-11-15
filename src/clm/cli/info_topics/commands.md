@@ -2795,8 +2795,11 @@ half since the last record travels with it, unless both halves moved the
 pool's cells (#1130) — or mint a `slide_id`
 on the cell and re-report, #906), and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
-on mechanical items (nothing to answer) — plus the full current cell bytes
-(`de` / `en`) so an agent can answer without re-reading files. A report whose
+on mechanical items (nothing to answer) — and a `templates` list with one
+ready-to-fill decision row per answer (`choice`, or `body` with a
+placeholder, plus `side` where the action needs it; CLM {version}, #1189),
+plus the full current cell bytes (`de` / `en`) so an agent can answer
+without re-reading files. A report whose
 **questions** are all `verify_cold` (a never-recorded deck) carries a
 top-level `hint` pointing at `sync record`, the wholesale seeding verb. The
 mechanical `record_neutral` rows beside them do not suppress it — branch on
@@ -2826,6 +2829,8 @@ id'd localized member that frames no item: that is the German-only fix, which
 writes the named half and records the member (a `rewrite_side` result row,
 CLM {version}, #1182). `side` is rejected on any other action, and a `body`
 without `side` on a member that frames nothing is rejected naming `side`.
+A row takes only `key`, `action`, `choice`/`body` and `side`: an unknown
+field refuses the document (exit 2, CLM {version}, #1189).
 Each answer is validated individually — a body smuggling a cell delimiter, a
 wrong choice, a `side` where it is meaningless, or a stale handle is rejected
 with a reason while the valid answers still land. A markdown `body` missing

@@ -139,6 +139,24 @@ An empty `answers` used to mean both the first and the third case, and this
 topic documented only the first — its own example filter script therefore
 misclassified every blocked item. `resolution` is the schema-4 discriminator.
 
+Each item also carries **`templates`** (CLM {version}, #1189): one decision
+row per entry of `answers`, in the same order, with the field that answer
+needs — `choice` for a word (`confirm`, `de`, `keep_twin`, …), `body` for
+text, plus `side` where the row cannot tell which half the text is for
+(`verify_cold`, `verify_translation`). Each names the item's `action`, so it
+is self-checking. Copy one into `decisions` and replace the placeholders:
+`body` holds `<the cell text, without its '# %%' line>` and `side` holds
+`de|en`, which is not a valid value, so a template sent unfilled is refused.
+
+```json
+"answers": ["confirm", "body"],
+"templates": [
+  {"key": "id:intro", "action": "verify_translation", "choice": "confirm"},
+  {"key": "id:intro", "action": "verify_translation",
+   "body": "<the cell text, without its '# %%' line>", "side": "de|en"}
+]
+```
+
 The `de`/`en` excerpts are the full cell bytes **including** the `# %%` header
 line; **`de_body`/`en_body`** are the same cells without it — which is exactly
 what a `body` answer must contain, so you can feed an excerpt straight back
@@ -526,7 +544,11 @@ not order-blind:
 
 One JSON document answers any subset of framed items. The top level always
 carries the `report_id` copied from the report envelope — a document without
-it is refused (exit 2, nothing written):
+it is refused (exit 2, nothing written). A decision row takes exactly these
+fields: `key`, `action`, `choice` or `body`, and `side`. Any other field (a
+typo such as `sied` beside a valid answer) refuses the whole document with
+exit 2, naming the row and the field (CLM {version}, #1189); it used to be
+ignored, so the typo was invisible:
 
 ```json
 {
