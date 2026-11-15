@@ -83,8 +83,10 @@ clm git init course.xml --channel jan      # create the 'jan' cohort repository
 `origin`. On a cohort that has never been synced it also creates the (empty)
 destination directory, so this step and the first `clm release sync --push`
 below work in either order (issue #868). If the remote project advertises a
-different default branch than the one pushed, fix that in the project settings
-after the first push (issue #955).
+different default branch than the one pushed, `clm release provision` (step
+below) points it at the pushed branch, or warns naming the GitLab setting
+(*Settings > Repository > Branch defaults > Default branch*) when the token may
+not change it (issue #955).
 
 ## 4. Release topics as their workshops wrap
 

@@ -432,6 +432,33 @@ def _actual_origin_url(repo: OutputRepo) -> str | None:
     return result.stdout.strip() or None
 
 
+def _local_branch(repo: OutputRepo) -> str | None:
+    """The branch checked out in the channel working tree, if it has commits.
+
+    Read-only and dry-run-independent, like :func:`_actual_origin_url`. An
+    unborn branch (``git init`` without a commit) or a detached HEAD yields
+    ``None``: there is nothing pushed for the remote default to point at.
+    """
+    if not repo.has_git:
+        return None
+    import subprocess
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(repo.path), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    if git("rev-parse", "--verify", "-q", "HEAD").returncode != 0:
+        return None
+    result = git("symbolic-ref", "--short", "-q", "HEAD")
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 @release_group.command("provision")
 @_SPEC_ARG
 @click.option(
@@ -459,14 +486,22 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
     about the half of the setup that fails for real. Channels without a
     parseable GitLab remote URL are skipped with a note, so the command is a
     safe no-op for non-GitLab hosts.
+
+    It also reconciles each provisioned project's ``default_branch`` with the
+    branch checked out in the channel working tree (issue #955): a fresh
+    GitLab project may advertise ``main`` while ``clm git init`` pushes
+    ``master``. When the token may not change it, a warning names the project
+    setting to change by hand; that warning does not fail the command.
     """
     from clm.cli.env_loading import load_env_files
     from clm.infrastructure.gitlab_api import (
+        DEFAULT_BRANCH_SETTING,
         TOKEN_ENV_VARS,
         GitLabApiError,
         gitlab_token,
         gitlab_token_var,
         parse_gitlab_remote,
+        reconcile_default_branch,
         share_project_with_group,
     )
 
@@ -492,6 +527,8 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
 
     work: list[tuple[str, str, str, str, str]] = []  # ref, base, project, group, access
     seen: dict[tuple[str, str, str], tuple[str, str]] = {}
+    # One default-branch reconcile per project (issue #955): ref, base, project, branch.
+    branch_work: dict[tuple[str, str], tuple[str, str, str, str]] = {}
     for block, ch in pairs:
         ref = release_channel_ref(block, ch)
         if not ch.share_with:
@@ -517,6 +554,9 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
             )
             continue
         base_url, project_path = remote
+        branch = _local_branch(repo) if repo is not None else None
+        if branch is not None:
+            branch_work.setdefault((base_url, project_path), (ref, base_url, project_path, branch))
         for share in ch.share_with:
             # One share per (project, group) — channels sharing a destination
             # would otherwise apply the same share once per stream.
@@ -541,6 +581,10 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         click.echo("[DRY RUN] Would apply the following group shares:")
         for ref, base_url, project_path, group, access in work:
             click.echo(f"  [{ref}] {base_url}/{project_path} -> {group} ({access})")
+        if branch_work:
+            click.echo("[DRY RUN] Would point each project's default branch at the pushed branch:")
+            for ref, base_url, project_path, branch in branch_work.values():
+                click.echo(f"  [{ref}] {base_url}/{project_path} default_branch -> {branch}")
         # Credential status, so the preview validates the whole setup and
         # not just channel/group resolution (issue #870). Exit code stays
         # 0: this is a plan check, and the line is what makes it honest.
@@ -575,6 +619,26 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
             click.echo(f"[{ref}] already shared with {group} — unchanged.")
         else:
             click.echo(f"[{ref}] shared {project_path} with {group} ({access}).")
+
+    # Default branch (issue #955): problems here are warnings, not errors —
+    # the shares above are what provision is for, and the fix is one click.
+    for ref, base_url, project_path, branch in branch_work.values():
+        try:
+            status, previous = reconcile_default_branch(base_url, project_path, branch, token)
+        except GitLabApiError as e:
+            click.echo(f"[{ref}] WARNING: default branch not reconciled: {e}", err=True)
+            continue
+        if status == "updated":
+            click.echo(
+                f"[{ref}] default branch of {project_path} set to {branch!r} (was {previous!r})."
+            )
+        elif status == "not-pushed":
+            click.echo(
+                f"[{ref}] WARNING: {project_path} default branch is {previous!r}, but "
+                f"{branch!r} is not on the remote yet. Push it (`clm git push --channel`) "
+                f"and re-run provision, or set {DEFAULT_BRANCH_SETTING} by hand.",
+                err=True,
+            )
 
     if errors:
         raise SystemExit(1)
