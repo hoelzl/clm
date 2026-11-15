@@ -124,8 +124,12 @@ __all__ = [
     "load_decision_document",
     "parse_decision_rows",
     "parse_decisions",
+    "BODY_PLACEHOLDER",
+    "DECISION_ROW_FIELDS",
     "REWRITE_SIDE",
+    "SIDE_PLACEHOLDER",
     "VerifyGate",
+    "answer_templates",
     "body_holds",
     "rewrite_refusal",
     "header_with_slide_id_of",
@@ -226,6 +230,38 @@ REWRITE_SIDE = "rewrite_side"
 def decision_vocabulary(action: str) -> tuple[str, ...]:
     """The answer shapes ``apply --decisions`` accepts for a framed action."""
     return _DECISION_VOCABULARY.get(action, ())
+
+
+#: The fields a decision row may carry; any other is a shape error (#1189).
+DECISION_ROW_FIELDS: tuple[str, ...] = ("key", "action", "choice", "body", "side")
+
+#: What a template row puts where the agent's text goes.
+BODY_PLACEHOLDER = "<the cell text, without its '# %%' line>"
+#: What a template row puts where the agent names a half; not a valid value,
+#: so a template sent unedited is rejected instead of guessing a side.
+SIDE_PLACEHOLDER = "de|en"
+
+
+def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict[str, str]]:
+    """One decision row per answer an item takes, ready to fill in (#1189).
+
+    ``answers`` stays the vocabulary; this is the row shape each answer
+    needs: ``choice`` for a word, ``body`` for text (plus ``side`` where the
+    row cannot tell which half the text is for). Each row names the
+    ``action``, which makes it self-checking. Placeholders mark what the
+    agent fills in.
+    """
+    rows: list[dict[str, str]] = []
+    for answer in answers:
+        row = {"key": key, "action": action}
+        if answer == "body":
+            row["body"] = BODY_PLACEHOLDER
+            if action in _SIDE_BODY_ACTIONS:
+                row["side"] = SIDE_PLACEHOLDER
+        else:
+            row["choice"] = answer
+        rows.append(row)
+    return rows
 
 
 def item_answers(item: DiffItem) -> tuple[str, ...]:
@@ -345,6 +381,18 @@ def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
     for i, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get("key"), str):
             errors.append(f"decision #{i}: needs a 'key' string (the member handle)")
+            continue
+        unknown = sorted(str(f) for f in row if f not in DECISION_ROW_FIELDS)
+        if unknown:
+            # #1189: an ignored field is an invisible typo beside a valid
+            # answer ("sied", "bdy"), or a field this engine does not know.
+            errors.append(
+                f"decision #{i} ({row['key']}): unknown field(s) "
+                + ", ".join(repr(f) for f in unknown)
+                + " — a decision row takes "
+                + ", ".join(repr(f) for f in DECISION_ROW_FIELDS)
+                + "; each item's `templates` in report --json shows the row each answer needs"
+            )
             continue
         choice = row.get("choice")
         body = row.get("body")

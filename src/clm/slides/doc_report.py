@@ -105,8 +105,11 @@ def item_payloads(
     items = []
     for item in diff.items:
         payload = item.payload()
-        payload["answers"] = list(doc_apply.item_answers(item))
+        answers = doc_apply.item_answers(item)
+        payload["answers"] = list(answers)
         payload["resolution"] = doc_apply.item_resolution(item)
+        # #1189: the row shape each answer needs, ready to fill in
+        payload["templates"] = doc_apply.answer_templates(item.key, item.action, answers)
         recovered = base_diffs.get(item.key) if base_diffs else None
         # The action guard matters: keys are shared across a member's aspect
         # rows (e.g. a conflict_tags beside a verify_translation), and the
