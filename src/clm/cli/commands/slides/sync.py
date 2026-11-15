@@ -603,7 +603,8 @@ def sync_record_cmd(
     metavar="FILE|-",
     help=(
         "A JSON decision document answering framed report items per member "
-        'handle (\'-\' reads stdin). Shape: {"decisions": [{"key": "id:intro", '
+        'handle (\'-\' reads stdin). Shape: {"report_id": "<from report --json>", '
+        '"decisions": [{"key": "id:intro", '
         '"choice": "confirm"}, {"key": "id:x", "body": "..."}, {"key": "id:y", '
         '"replace": [["old", "new"]]}]}. A body is the '
         "cell text WITHOUT its '# %%' delimiter line, WITH the '# ' comment "
