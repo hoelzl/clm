@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from attrs import define, evolve, field
 
-from clm.core.slide_text.bullet_wrap import wrap_bullet
+from clm.core.slide_text.bullet_wrap import render_narrative_bullets
 from clm.core.slide_text.raw_cells import is_cell_boundary
 from clm.slides.agent_task import VALIDATORS, AnswerRejected, envelope, freshness_mismatch
 from clm.slides.bilingual_doc import (
@@ -298,13 +298,8 @@ def _render_body(bullets: list[Bullet], comment_token: str) -> str:
     renders as ``#   - …`` with its continuation under *its* text. Only these
     rendered bullets are wrapped — cells the answer does not edit are never
     touched."""
-    top, top_cont = f"{comment_token} - ", f"{comment_token}   "
-    child, child_cont = f"{comment_token}   - ", f"{comment_token}     "
     lines = [comment_token]
-    for bullet in bullets:
-        lines.extend(wrap_bullet(bullet.text, top, top_cont))
-        for text in bullet.children:
-            lines.extend(wrap_bullet(text, child, child_cont))
+    lines.extend(render_narrative_bullets(((b.text, b.children) for b in bullets), comment_token))
     return "\n".join(lines)
 
 

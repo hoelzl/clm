@@ -17,14 +17,30 @@ The wrap is markdown-safe:
   blockquote ``>``, a setext/thematic-break run such as ``---``, a code
   fence, or an HTML tag) — such a token stays on the preceding line;
 * a bullet that already fits is returned byte-for-byte unchanged.
+
+:func:`render_narrative_bullets` renders a whole bullet list (one nesting
+level) in that style, and :func:`format_narrative_body` parses narrative
+text that may already carry the deck layout -- wrapped continuations and
+indented child bullets -- back into that list before rendering it, so every
+narrative-cell writer (``clm harvest accept``, ``update_narrative``, the
+companion writers) agrees on one model of a bullet (#1162).
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from functools import cache
 
-__all__ = ["NARRATIVE_WIDTH", "wrap_bullet"]
+__all__ = [
+    "NARRATIVE_WIDTH",
+    "NarrativeBullet",
+    "format_narrative_body",
+    "parse_narrative_text",
+    "render_narrative_bullets",
+    "wrap_bullet",
+]
 
 #: The column width the decks wrap narrative bullets at.
 NARRATIVE_WIDTH = 80
@@ -121,3 +137,97 @@ def wrap_bullet(
             current = cont_prefix + atom
     lines.append(current)
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Whole narrative bodies (#1162)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NarrativeBullet:
+    """One top-level narrative bullet and its (one nesting level) children."""
+
+    text: str
+    children: list[str] = field(default_factory=list)
+
+
+def render_narrative_bullets(
+    bullets: Iterable[tuple[str, Sequence[str]]], comment_token: str
+) -> list[str]:
+    """Render ``(text, children)`` bullets as wrapped comment lines.
+
+    A top-level bullet renders as ``<tok> - text`` with its continuation
+    under the text (``<tok>   ``); a child as ``<tok>   - text`` with its
+    continuation under *its* text (``<tok>     ``)."""
+    top, top_cont = f"{comment_token} - ", f"{comment_token}   "
+    child, child_cont = f"{comment_token}   - ", f"{comment_token}     "
+    lines: list[str] = []
+    for text, children in bullets:
+        lines.extend(wrap_bullet(text, top, top_cont))
+        for child_text in children:
+            lines.extend(wrap_bullet(child_text, child, child_cont))
+    return lines
+
+
+def _is_bullet(stripped: str) -> bool:
+    return stripped.startswith("- ")
+
+
+def parse_narrative_text(text: str) -> list[NarrativeBullet | str]:
+    """Parse narrative text (comment tokens already stripped) into bullets.
+
+    Items are :class:`NarrativeBullet` or a verbatim line (``""`` for a
+    blank line, or a ``**[`` marker line). The layout rules:
+
+    * an unindented line opens a new top-level bullet, whether or not it
+      starts with ``- `` (plain text keeps meaning "one thought per line");
+    * an indented ``- `` line under a bullet is a child of that bullet;
+    * any other indented line under a bullet continues the most recent
+      bullet or child (a wrapped line), joined with one space;
+    * a blank line or a ``**[`` line ends the current bullet, so an
+      indented line after it opens a new bullet.
+    """
+    items: list[NarrativeBullet | str] = []
+    current: NarrativeBullet | None = None
+    for raw in text.strip().split("\n"):
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            items.append("")
+            current = None
+            continue
+        if stripped.startswith("**["):
+            items.append(stripped)
+            current = None
+            continue
+        if line[0] in " \t" and current is not None:
+            if _is_bullet(stripped):
+                current.children.append(stripped[2:])
+            elif current.children:
+                current.children[-1] += " " + stripped
+            else:
+                current.text += " " + stripped
+            continue
+        current = NarrativeBullet(stripped[2:] if _is_bullet(stripped) else stripped)
+        items.append(current)
+    return items
+
+
+def format_narrative_body(text: str, comment_token: str = "#") -> list[str]:
+    """Narrative text -> the cell body lines in the deck style.
+
+    The body opens with a bare ``comment_token`` line (the blank comment
+    line after the header); bullets are wrapped via
+    :func:`render_narrative_bullets`, blank lines become a bare
+    ``comment_token`` and ``**[`` marker lines are kept verbatim. Text that
+    already carries the deck layout round-trips unchanged."""
+    body = [comment_token]
+    for item in parse_narrative_text(text):
+        if isinstance(item, NarrativeBullet):
+            body.extend(render_narrative_bullets([(item.text, item.children)], comment_token))
+        elif item:
+            body.append(f"{comment_token} {item}")
+        else:
+            body.append(comment_token)
+    return body

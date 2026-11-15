@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from clm.core.slide_text.bullet_wrap import format_narrative_body
 from clm.core.slide_text.slide_parser import Cell, parse_cells
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 
@@ -26,7 +27,10 @@ def format_narrative_cell(
     """Format text as a percent-format narrative cell.
 
     Args:
-        text: The narrative text (plain text, one thought per line).
+        text: The narrative text: plain text, one thought per line, or text
+            already in the deck layout (wrapped continuations, indented
+            child bullets), which is kept (#1162). Bullets are wrapped to
+            the deck style via :func:`format_narrative_body`.
         lang: Language code ("de" or "en").
         tag: Cell tag to use ("voiceover" or "notes").
         comment_token: The deck's line-comment token ("#" python/rust, "//" c-family).
@@ -35,16 +39,7 @@ def format_narrative_cell(
         Complete cell text including the header line.
     """
     header = f'{comment_token} %% [markdown] lang="{lang}" tags=["{tag}"]'
-    lines = text.strip().split("\n")
-    body_lines = [comment_token]  # blank comment line after header
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            body_lines.append(comment_token)
-        elif stripped.startswith("- ") or stripped.startswith("**["):
-            body_lines.append(f"{comment_token} {stripped}")
-        else:
-            body_lines.append(f"{comment_token} - {stripped}")
+    body_lines = format_narrative_body(text, comment_token)
     return header + "\n" + "\n".join(body_lines)
 
 
@@ -100,7 +95,15 @@ def update_narrative(
         if info["existing_notes_lines"]:
             # Replace existing narrative cell
             start_line, end_line = info["existing_notes_lines"]
-            lines[start_line:end_line] = notes_cell_text.split("\n")
+            # Keep the old range's trailing separator (the blank lines before
+            # the next cell, or the file's final newline), so re-rendering an
+            # unchanged cell is byte-identical (#1162).
+            old_lines = lines[start_line:end_line]
+            trailing = 0
+            while trailing < len(old_lines) and old_lines[-1 - trailing] == "":
+                trailing += 1
+            separator = old_lines[len(old_lines) - trailing :]
+            lines[start_line:end_line] = notes_cell_text.split("\n") + separator
         else:
             # Insert new narrative cell after the slide group
             insert_at = info["insert_after_line"]
