@@ -35,7 +35,8 @@ The optional deck-level ``ack`` block is reserved for the ``ack`` verb
 
 A take reaches the ledger by default when it stops, so a retake that replaces
 an entry keeps the replaced one in the deck-level ``superseded`` list, and
-``invalidate`` (#1093) can bring it back; ``invalidated`` is the audit trail of
+``invalidate`` (#1093) can bring it back, and the dashboard's Restore swaps
+entries between the two lists (#1196); ``invalidated`` is the audit trail of
 what was taken back. Both are optional and absent from the file while empty
 (design: ``docs/claude/design/recordings-rerecord-backlog.md`` §4.4).
 
@@ -91,9 +92,12 @@ __all__ = [
     "ledger_path_for",
     "load",
     "part_identity",
+    "part_from_take",
     "previous_take",
     "record_part",
     "rename_deck_key",
+    "RestoreOutcome",
+    "restore_part",
     "resolve_part_members",
     "resolve_part_order",
     "save",
@@ -814,6 +818,92 @@ def invalidate_part(
         was_active=True,
         ack_dropped=_settle_ack(entry, target, restored),
     )
+
+
+def part_from_take(
+    deck_path: Path | None,
+    *,
+    course_id: str,
+    part: int,
+    lang: str,
+    recorded_at: str,
+    commit: str | None,
+    dirty: bool,
+) -> LedgerPart:
+    """Rebuild the entry of a take the ledger no longer holds, from what the state file kept.
+
+    Ledgers written before ``superseded`` existed overwrote replaced takes, and
+    ``superseded`` keeps only :data:`MAX_SUPERSEDED_PER_PART` per identity. The
+    fingerprints come from the take's commit; without them the entry reads as
+    ``unverifiable`` in the report, which is the truth.
+    """
+    members = deck_members_at_ref(deck_path, commit, lang) if commit and deck_path else None
+    members = members or {}
+    return LedgerPart(
+        part=part,
+        recorded_at=recorded_at,
+        course_id=course_id,
+        lang=lang,
+        anchor=anchor_for(commit, dirty),
+        members=members,
+        order=id_order(members),
+        evidence="anchor",
+    )
+
+
+@frozen_dataclass
+class RestoreOutcome:
+    """What :func:`restore_part` did to a deck entry."""
+
+    restored: LedgerPart
+    #: The entry that stood for the part before, now in ``superseded``.
+    demoted: LedgerPart | None
+    ack_dropped: bool = False
+
+
+def restore_part(
+    entry: DeckEntry,
+    course_id: str,
+    part: int,
+    lang: str,
+    recorded_at: str,
+    *,
+    fallback: LedgerPart | None = None,
+) -> RestoreOutcome | None:
+    """Make the take stamped *recorded_at* the active entry: the dashboard's Restore (#1196).
+
+    The inverse of :func:`record_part`'s demotion: the active entry goes to
+    ``superseded`` and the superseded entry with that stamp comes back to
+    ``parts``. A take the ledger no longer holds comes back as *fallback*
+    (:func:`part_from_take`). Returns ``None``, changing nothing, when the take
+    already stands, or when the ledger has neither an entry for the part nor
+    the take in its history (a part the ledger never tracked stays untracked).
+
+    The ack follows :func:`invalidate_part`'s rule: an ack given after the
+    demoted take was recorded judged that take, so it goes; the restored
+    take's drift was never seen.
+    """
+    key = (course_id, part, lang)
+    active = next((p for p in entry.parts if part_identity(p) == key), None)
+    if active is not None and active.recorded_at == recorded_at:
+        return None
+    target = next(
+        (p for p in entry.superseded if part_identity(p) == key and p.recorded_at == recorded_at),
+        None,
+    )
+    if target is None:
+        if active is None or fallback is None:
+            return None
+        target = fallback
+    entry.superseded = [p for p in entry.superseded if p is not target]
+    entry.parts = [p for p in entry.parts if p is not active]
+    entry.parts.append(target)
+    ack_dropped = False
+    if active is not None:
+        entry.superseded.append(active)
+        _trim_superseded(entry, key)
+        ack_dropped = _settle_ack(entry, active, target)
+    return RestoreOutcome(restored=target, demoted=active, ack_dropped=ack_dropped)
 
 
 def _settle_ack(entry: DeckEntry, invalidated: LedgerPart, restored: LedgerPart | None) -> bool:

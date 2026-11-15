@@ -936,7 +936,8 @@ async def restore_take(
 
     Runs :meth:`RecordingSession.restore_take`, which performs the
     filesystem swap with planned-rename rollback and updates the
-    course-state index. The previously active take becomes a history
+    course-state index, and, when the deck resolves through the course,
+    the committed recordings ledger (#1196). The previously active take becomes a history
     entry under its existing take number, so a subsequent retake on the
     restored slot allocates a fresh take number rather than clobbering
     history.
@@ -954,6 +955,7 @@ async def restore_take(
     session = _get_session(request)
     lang = _get_lang(request)
     lecture_id = _resolve_lecture_id(section_name, deck_name)
+    provenance = _build_deck_provenance(request, section_name, deck_name, lang)
     try:
         session.restore_take(
             course_slug,
@@ -963,6 +965,7 @@ async def restore_take(
             part_number=part,
             lang=lang,
             lecture_id=lecture_id,
+            deck_path=provenance.deck_path if provenance is not None else None,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

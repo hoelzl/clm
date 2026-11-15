@@ -455,6 +455,13 @@ The command needs `--root` (or `recordings.root_dir` in the config) to find the
 files, and refuses while the dashboard is running on this machine or a
 processing job is running for the deck. Commit the ledger with the deck.
 
+The dashboard's **Restore** button (on a take in the take history) updates the
+ledger the same way: the restored take becomes the part's entry, the replaced
+one is kept among the replaced takes, and a deck `ack` given after the replaced
+take was recorded is dropped. The ledger is only updated when the dashboard runs
+with `--spec-file`, since that is how it finds the deck; commit the ledger
+afterwards.
+
 The ledger keeps the last five replaced takes per part. A ledger written before
 this feature has none, so the previous take is rebuilt from the local state file
 if this machine has it; otherwise the part reads as not recorded, and the

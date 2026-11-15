@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from clm.recordings.state import CourseRecordingState
+    from clm.recordings.state import CourseRecordingState, TakeRecord
 
     from .invalidate import InvalidateResult
     from .jobs import ProcessingJob
@@ -1237,8 +1237,15 @@ class RecordingSession:
         part_number: int = 0,
         lang: str = "en",
         lecture_id: str,
+        deck_path: Path | None = None,
     ) -> list[tuple[Path, Path]]:
         """Promote historical take *target_take* back to active and demote the current active.
+
+        With *deck_path* (the deck the provenance resolved), the committed
+        recordings ledger follows: the restored take becomes the part's entry
+        and the replaced one moves to ``superseded`` (#1196), as
+        :meth:`invalidate_take` does. Without it only the files and the state
+        change.
 
         Runs :func:`_swap_active_with_take` to perform the filesystem
         swap with planned-rename rollback, then mutates the resolved
@@ -1337,8 +1344,96 @@ class RecordingSession:
             raise
 
         self._persist_state(course_state)
+        if deck_path is not None:
+            self._restore_ledger_entry(
+                deck_path,
+                course_id=course_state.course_id,
+                part=state_part,
+                lang=lang,
+                take=target,
+            )
         self._notify_path_renames(renames)
         return renames
+
+    def _restore_ledger_entry(
+        self,
+        deck_path: Path,
+        *,
+        course_id: str,
+        part: int,
+        lang: str,
+        take: TakeRecord,
+    ) -> None:
+        """Make the committed ledger name the take Restore just made active (#1196).
+
+        Swaps the entries the way :func:`clm.recordings.ledger.restore_part`
+        describes; a take the ledger no longer holds is rebuilt from the state
+        file's record of it. Best-effort like :meth:`_record_ledger_entry`: the
+        files and the state already moved, so a ledger failure is logged, not
+        raised.
+        """
+        if not take.recorded_at:
+            logger.warning(
+                "Restored take {} of {} part {} has no recorded_at; ledger not updated",
+                take.take,
+                deck_path.name,
+                part,
+            )
+            return
+        try:
+            from clm.recordings import ledger as recordings_ledger
+
+            ledger_path = recordings_ledger.ledger_path_for(deck_path)
+            if not ledger_path.is_file():
+                return
+            ledger = recordings_ledger.load(ledger_path)
+            entry = ledger.decks.get(recordings_ledger.deck_key_for(deck_path))
+            if entry is None:
+                return
+            key = (course_id, part, lang)
+            in_history = any(
+                recordings_ledger.part_identity(p) == key and p.recorded_at == take.recorded_at
+                for p in entry.superseded
+            )
+            fallback = (
+                None
+                if in_history
+                else recordings_ledger.part_from_take(
+                    deck_path,
+                    course_id=course_id,
+                    part=part,
+                    lang=lang,
+                    recorded_at=take.recorded_at,
+                    commit=take.git_commit,
+                    dirty=take.git_dirty,
+                )
+            )
+            outcome = recordings_ledger.restore_part(
+                entry, course_id, part, lang, take.recorded_at, fallback=fallback
+            )
+            if outcome is None:
+                return
+            recordings_ledger.save(ledger, ledger_path)
+            logger.info(
+                "Restored ledger entry of {} part {} to the take of {} in {}{}",
+                deck_path.name,
+                part,
+                take.recorded_at,
+                ledger_path,
+                "; the deck's ack judged the replaced take and was dropped"
+                if outcome.ack_dropped
+                else "",
+            )
+            warning = recordings_ledger.ignored_ledger_warning(ledger_path)
+            if warning:
+                logger.warning(warning)
+        except Exception as exc:
+            logger.warning(
+                "Failed to update recordings ledger for {} part {} after Restore: {}",
+                deck_path.name,
+                part,
+                exc,
+            )
 
     def invalidate_take(
         self,
