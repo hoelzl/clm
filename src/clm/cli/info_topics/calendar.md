@@ -17,7 +17,7 @@ clm calendar push   <spec>   # Mirror the calendar into a Google calendar
 
 | Flag | Description |
 |---|---|
-| `--channel NAME` | Cohort channel name; resolves `release/<NAME>.calendar.toml` beside the channel ledger |
+| `--channel NAME` | Cohort channel (or cohort) name; resolves the calendar file beside the channel ledger — see "Which calendar file `--channel` finds" below |
 | `--calendar PATH` | Explicit path to the `.calendar.toml` file (overrides `--channel`) |
 | `--data-dir PATH` | Course data directory containing `slides/` (default: auto-detected) |
 
@@ -151,8 +151,33 @@ lookahead.
 
 ## Calendar file format
 
-Calendar files live at `release/<channel>.calendar.toml` alongside the channel
-ledger. They are hand-edited TOML; CLM never writes them.
+Calendar files live beside the channel ledgers (typically in `release/`).
+They are hand-edited TOML; CLM never writes them. A cohort has **one**
+calendar, shared by all of its channels (every release stream and language).
+
+### Which calendar file `--channel` finds
+
+`--channel NAME` resolves the channel in `<release-channels>`, then tries these
+files in the ledger's directory and uses the first that exists (CLM {version}+,
+issue #1205; before that only the first was tried):
+
+1. `<channel>.calendar.toml` — the per-channel name (e.g. `jan.calendar.toml`).
+2. `<cohort>.calendar.toml` — the **cohort stem** derived from the ledger file
+   name: the stream name is stripped as a prefix and the channel's `lang` as a
+   suffix. Ledger `release/materials-ml-2026-10-de.txt` in stream `materials`
+   with `lang="de"` → `release/ml-2026-10.calendar.toml`.
+3. The channel name without its `-<lang>` suffix (`2026-10-de` →
+   `2026-10.calendar.toml`).
+
+So in a bilingual cohort with channels `materials/2026-10-de`,
+`materials/2026-10-en`, `solutions/2026-10-de`, `solutions/2026-10-en` (ledgers
+`release/<stream>-ml-2026-10-<lang>.txt`), every channel finds the one file
+`release/ml-2026-10.calendar.toml`. The cohort stem itself is also accepted:
+`--channel ml-2026-10`. When none of the files exists, the error lists every
+path tried.
+
+If your ledgers do not follow the `<stream>-<cohort>-<lang>` naming, pass
+`--calendar PATH` explicitly (always works, and wins over `--channel`).
 
 ```toml
 # Required: first teaching date

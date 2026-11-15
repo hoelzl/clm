@@ -511,7 +511,7 @@ The target calendar id can be stored per cohort in the calendar TOML instead of
 passing `--calendar-id` on every push:
 
 ```toml
-# release/<channel>.calendar.toml
+# release/<cohort>.calendar.toml (shared by the cohort's channels)
 [google]
 calendar_id = "abc123…@group.calendar.google.com"
 ```

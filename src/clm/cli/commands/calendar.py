@@ -7,8 +7,9 @@ It emits a trainer-facing Markdown/CSV view or the student-facing ``.ics``
 feed; ``check``/``status``/``push`` consume the same calendar file.
 
 The calendar file is addressed either by ``--channel NAME`` (resolved beside the
-channel's ledger in the spec's ``<release-channels>``) or by an explicit
-``--calendar PATH``.
+channel's ledger in the spec's ``<release-channels>``, falling back to the
+cohort calendar shared by a cohort's language channels — see
+:func:`resolve_calendar_path`) or by an explicit ``--calendar PATH``.
 """
 
 from __future__ import annotations
@@ -44,7 +45,12 @@ from clm.cohort_calendar.render import (
 from clm.cohort_calendar.status import compute_status
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    ReleaseChannelSpec,
+    ReleaseChannelsSpec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +107,89 @@ def _resolve_buckets(
     return course, build_buckets(build_schedule(course, language))
 
 
+CALENDAR_SUFFIX = ".calendar.toml"
+
+
+def _strip_prefix(stem: str, prefix: str) -> str:
+    if prefix:
+        for sep in ("-", "_"):
+            if stem.startswith(prefix + sep) and len(stem) > len(prefix) + 1:
+                return stem[len(prefix) + 1 :]
+    return stem
+
+
+def _strip_suffix(stem: str, suffix: str) -> str:
+    if suffix:
+        for sep in ("-", "_"):
+            if stem.endswith(sep + suffix) and len(stem) > len(suffix) + 1:
+                return stem[: -(len(suffix) + 1)]
+    return stem
+
+
+def cohort_calendar_stems(block: ReleaseChannelsSpec, channel: ReleaseChannelSpec) -> list[str]:
+    """Calendar file stems for *channel*, most specific first (issue #1205).
+
+    1. The channel name (``2026-10-de``) — the original per-channel rule.
+    2. The cohort stem derived from the ledger file name: the ledger stem with
+       the stream name stripped as a prefix and the channel's ``lang`` stripped
+       as a suffix (``release/materials-ml-2026-10-de.txt`` in stream
+       ``materials`` with ``lang="de"`` → ``ml-2026-10``).
+    3. The channel name with its ``lang`` suffix stripped (``2026-10-de`` →
+       ``2026-10``).
+
+    Duplicates are dropped, so a single-language ``jan`` channel with ledger
+    ``release/jan.txt`` yields just ``["jan"]``.
+    """
+    ledger_stem = Path(channel.ledger).stem if channel.ledger else ""
+    cohort = _strip_suffix(_strip_prefix(ledger_stem, block.name), channel.lang)
+    stems = [channel.name, cohort, _strip_suffix(channel.name, channel.lang)]
+    return list(dict.fromkeys(s for s in stems if s))
+
+
+def _calendar_dir(course_root: Path, channel: ReleaseChannelSpec) -> Path:
+    return _abs_under(course_root, channel.ledger).parent
+
+
+def _first_existing_or_fail(candidates: list[Path], what: str) -> Path:
+    for path in candidates:
+        if path.is_file():
+            return path
+    tried = "\n".join(f"  - {p}" for p in candidates)
+    raise click.ClickException(
+        f"No calendar file found for {what}. Tried:\n{tried}\n"
+        "Create one of these, or pass --calendar PATH explicitly."
+    )
+
+
+def _resolve_cohort_ref(spec: CourseSpec, course_root: Path, ref: str) -> list[Path] | None:
+    """Candidate paths when *ref* names a cohort (a calendar stem), not a channel.
+
+    Returns ``None`` when no channel derives *ref* as one of its non-primary
+    calendar stems, so the caller can surface the original unknown-channel error.
+    """
+    paths: list[Path] = []
+    for block, channel in spec.iter_release_channels():
+        if ref in cohort_calendar_stems(block, channel)[1:]:
+            paths.append(_calendar_dir(course_root, channel) / f"{ref}{CALENDAR_SUFFIX}")
+    if not paths:
+        return None
+    return list(dict.fromkeys(paths))
+
+
 def resolve_calendar_path(spec_file: Path, channel_name: str, explicit: Path | None) -> Path:
     """Locate a cohort's calendar file: ``--calendar`` wins, else from the channel.
 
-    The conventional path lives beside the channel's ledger, named
-    ``<channel>.calendar.toml`` (e.g. ledger ``release/jan.txt`` →
-    ``release/jan.calendar.toml``).
+    The calendar lives beside the channel's ledger. The candidates, tried in
+    order (see :func:`cohort_calendar_stems`), are ``<channel>.calendar.toml``
+    (the original rule, kept first for backward compatibility), then the
+    cohort calendar shared by a cohort's language/stream channels — derived
+    from the ledger name (``release/materials-ml-2026-10-de.txt`` →
+    ``release/ml-2026-10.calendar.toml``) — then the channel name without its
+    language suffix. The first existing file wins; when none exists the error
+    lists every path tried (issue #1205).
+
+    *channel_name* may also be a cohort stem (``--channel ml-2026-10``) that is
+    not itself a channel name, as long as some channel derives it.
     """
     if explicit is not None:
         return explicit
@@ -118,16 +201,24 @@ def resolve_calendar_path(spec_file: Path, channel_name: str, explicit: Path | N
             f"{spec_file} has no <release-channels> block; pass --calendar PATH "
             "instead of --channel."
         )
-    try:
-        _block, channel = spec.resolve_release_channel(channel_name)
-    except CourseSpecError as e:
-        raise click.ClickException(str(e)) from None
     course_root, _ = resolve_course_paths(spec_file)
-    ledger = _abs_under(course_root, channel.ledger)
-    # The cohort has one timeline regardless of release stream, so the
-    # calendar file is keyed by the bare channel (cohort) name — the
-    # materials and solutions streams of one cohort share it (#291).
-    return ledger.parent / f"{channel.name}.calendar.toml"
+    try:
+        block, channel = spec.resolve_release_channel(channel_name)
+    except CourseSpecError as e:
+        cohort_paths = (
+            None if "/" in channel_name else _resolve_cohort_ref(spec, course_root, channel_name)
+        )
+        if cohort_paths is None:
+            raise click.ClickException(str(e)) from None
+        return _first_existing_or_fail(cohort_paths, f"cohort {channel_name!r}")
+    # The cohort has one timeline regardless of release stream or language,
+    # so the materials/solutions streams (#291) and the per-language channels
+    # (#1205) of one cohort share a calendar.
+    directory = _calendar_dir(course_root, channel)
+    candidates = [
+        directory / f"{stem}{CALENDAR_SUFFIX}" for stem in cohort_calendar_stems(block, channel)
+    ]
+    return _first_existing_or_fail(candidates, f"channel {channel_name!r}")
 
 
 @click.command("generate")
