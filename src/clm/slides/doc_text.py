@@ -57,6 +57,7 @@ __all__ = [
     "Recorded",
     "TextPlan",
     "TextRow",
+    "own_cells",
     "owners_of",
     "plan_text",
     "recorded_by_half",
@@ -97,6 +98,18 @@ def cell_key(cell: Cell) -> str | None:
 
 def owners_of(cell: SideCell) -> Owners:
     return (cell.for_slide, cell.vo_anchor)
+
+
+def own_cells(halves: Mapping[str, Sequence[Cell]]) -> dict[str, dict[str, SideCell]]:
+    """Each half's own localized cells after the merge, by text key
+    (``lang -> key -> cell``); a twin the pass builds is not one."""
+    own: dict[str, dict[str, SideCell]] = {lang: {} for lang in SIDES}
+    for lang in SIDES:
+        for cell in halves.get(lang, ()):
+            key = cell_key(cell)
+            if cell.localized and key is not None and isinstance(cell.mark, SideCell):
+                own[lang][key] = cell.mark
+    return own
 
 
 @frozen

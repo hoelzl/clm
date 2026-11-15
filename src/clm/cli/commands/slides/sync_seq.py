@@ -192,7 +192,9 @@ def run_apply_seq(
             recorded = doc_ledger.save(ledger, ledger_path)
     if result.refusal or result.error:
         code = EXIT_ERROR
-    elif result.held:
+    elif result.held or result.rejected:
+        # A rejected answer is work left undone even when the pass wrote the
+        # rest: exit 0 would tell the agent its fix landed (#1182).
         code = EXIT_WORK_PENDING
     else:
         code = EXIT_CLEAN

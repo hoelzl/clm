@@ -124,7 +124,10 @@ __all__ = [
     "load_decision_document",
     "parse_decision_rows",
     "parse_decisions",
+    "REWRITE_SIDE",
     "VerifyGate",
+    "body_holds",
+    "rewrite_refusal",
     "header_with_slide_id_of",
     "body_lines",
     "twin_lines",
@@ -208,7 +211,16 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     #: `mark_twin` writes the twin's `lang=` attribute — nothing else; the
     #: body adaptation stays the agent's, framed as translate_edit next pass.
     "fork_pending_twin": ("mark_twin",),
+    #: #1182: the German-only fix. A ``body`` + ``side`` answer on a localized
+    #: member that frames no row rewrites that side and records the member.
+    #: Never framed by the differ: :func:`_rewrite_rows` adds the row for an
+    #: answer that asks for it.
+    "rewrite_side": ("body",),
 }
+
+#: The row :func:`_rewrite_rows` adds for a ``body`` + ``side`` answer on a
+#: member that frames nothing (#1182).
+REWRITE_SIDE = "rewrite_side"
 
 
 def decision_vocabulary(action: str) -> tuple[str, ...]:
@@ -2168,23 +2180,23 @@ def _execute_decision(
 #: Framed actions whose ``body`` answer targets a *named* side. Both are
 #: two-sided review states — the agent read both halves and judged one of them
 #: wrong — so neither can derive its target from the item.
-_SIDE_BODY_ACTIONS = frozenset({"verify_cold", "verify_translation"})
+_SIDE_BODY_ACTIONS = frozenset({"verify_cold", "verify_translation", REWRITE_SIDE})
 
 
 def _apply_body_decision(
     ex: _Executor, item: DiffItem, body: str, *, side: str | None = None
 ) -> None:
     member = item.member
-    if item.action == "verify_translation":
-        # Both sides moved off base. `confirm` banks them as-is; a body says
+    if item.action in ("verify_translation", REWRITE_SIDE):
+        # Both sides moved off base (or, for ``rewrite_side``, neither did). `confirm` banks them as-is; a body says
         # "the named side is the wrong one" and replaces it in the same pass —
         # the review-after-translate case that otherwise costs an out-of-band
         # edit plus a second report (M7 / Q6a).
         if member is None or member.is_one_sided:
-            raise _ItemError("a verify_translation body answer needs a two-sided member")
+            raise _ItemError(f"a {item.action} body answer needs a two-sided member")
         if side is None:
             raise _ItemError(
-                "a verify_translation body answer must name the 'side' to "
+                f"a {item.action} body answer must name the 'side' to "
                 "overwrite ('de' or 'en') — both sides moved, so the engine "
                 "cannot tell which one you corrected"
             )
@@ -2609,6 +2621,7 @@ def _unmatched_decision_result(
     deck: BilingualDeck,
     diff: DeckDiff,
     preamble_frameable: frozenset[str],
+    comment_token: str = "#",
 ) -> ItemResult:
     """Classify a decision row that matched no item in the current diff.
 
@@ -2674,6 +2687,28 @@ def _unmatched_decision_result(
         member = deck.member_by_key(MemberKey.parse(row.key))
     except ValueError:
         member = None
+    if member is not None and row.body is not None:
+        # #1182: a body only "already holds" when the cell it names already
+        # reads that way. Anything else is a rewrite this member cannot take.
+        langs: tuple[Lang, ...] = (row.side,) if row.side in _SIDES else _SIDES
+        if any(
+            (cell := member.side(lang)) is not None and body_holds(cell, row.body, comment_token)
+            for lang in langs
+        ):
+            return ItemResult(
+                row.key,
+                row.action or "?",
+                "already_applied",
+                "the member frames nothing and its cell already reads as this body (nothing to do)",
+            )
+        return ItemResult(
+            row.key,
+            row.action or REWRITE_SIDE,
+            "rejected",
+            _rewrite_refusal(row, member)
+            or "the member frames nothing in the current report, and this body differs "
+            "from its cell — check the key and the action against `report --json`",
+        )
     if member is not None:
         return ItemResult(
             row.key,
@@ -2690,6 +2725,95 @@ def _unmatched_decision_result(
         "`report --json`, and note that a companion path and its deck are one "
         "deck with one ledger section",
     )
+
+
+def body_holds(cell: SideCell, body: str, comment_token: str) -> bool:
+    """Does ``cell`` already read as a ``body`` answer would write it?"""
+    if body.rstrip("\n") == cell.decision_body.rstrip("\n"):
+        return True
+    try:
+        return _replacement_lines(cell, body, comment_token) == cell.lines
+    except DeckWriteError:
+        return False
+
+
+def _rewrite_refusal(row: Decision, member: Member) -> str | None:
+    """Why ``row`` (a ``body`` on a member that frames no row) cannot rewrite
+    ``member``; ``None`` when it can (#1182)."""
+    return rewrite_refusal(
+        row, localized=member.langness == "localized", one_sided=member.is_one_sided
+    )
+
+
+def rewrite_refusal(row: Decision, *, localized: bool, one_sided: bool) -> str | None:
+    """Why ``row``, a ``body`` answer on a cell no question asks about, cannot
+    rewrite that cell; ``None`` when it can (#1182). Both engines use it."""
+    if row.side is None:
+        return (
+            "this member frames no row, so a body answer here rewrites one half "
+            "of it and must name that half with 'side' ('de' or 'en')"
+        )
+    if row.action not in (None, REWRITE_SIDE):
+        return None  # an answer to a row that is not there: the caller says so
+    if not localized:
+        return (
+            "a shared member is byte-identical on both halves: rewriting one half "
+            "would split it — edit the cell in one half and let sync propagate it"
+        )
+    if not row.key.startswith("id:"):
+        return (
+            "a body + side answer rewrites an id'd localized member; this handle has "
+            "no stable id — give the cell a slide_id and re-report"
+        )
+    if one_sided:
+        return "the member has only one half — its other half is a translate_new row"
+    return None
+
+
+def _rewrite_rows(
+    diff: DeckDiff, deck: BilingualDeck, rows: list[Decision], comment_token: str
+) -> DeckDiff:
+    """``diff`` plus a ``rewrite_side`` row for each ``body`` + ``side``
+    answer on an id'd localized member that frames no question (#1182).
+
+    The answer is the German-only fix: the agent read the unchanged pair,
+    judged one half wrong and supplies the correction, so the row writes
+    that half and records the member, as a ``verify_translation`` body
+    answer does. A body the cell already reads as is left to
+    :func:`_unmatched_decision_result` (``already_applied``).
+    """
+    framed = {item.key for item in diff.items if item.action in FRAMED_ACTIONS}
+    extra: list[DiffItem] = []
+    for row in rows:
+        if row.body is None or row.side not in _SIDES or row.key in framed:
+            continue
+        if row.action not in (None, REWRITE_SIDE):
+            continue
+        try:
+            member = deck.member_by_key(MemberKey.parse(row.key))
+        except ValueError:
+            continue
+        if member is None or _rewrite_refusal(row, member) is not None:
+            continue
+        side: Lang = row.side
+        cell = member.side(side)
+        if cell is None or body_holds(cell, row.body, comment_token):
+            continue
+        framed.add(row.key)
+        extra.append(
+            DiffItem(
+                key=row.key,
+                outcome="edit",
+                action=REWRITE_SIDE,
+                direction="none",
+                detail=f"body + side answer: rewrite the {side} half",
+                side=side,
+                member=member,
+            )
+        )
+    if not extra:
+        return diff
+    return evolve(diff, items=[*diff.items, *extra])
 
 
 def _match_decision(rows: list[Decision], item: DiffItem, matched: set[int]) -> Decision | None:
@@ -2941,15 +3065,16 @@ def _execute_pass(
             )
             continue
         decision = _match_decision(rows, item, matched)
-        if decision is not None:
+        if decision is not None and (item.action in FRAMED_ACTIONS or item.action == REWRITE_SIDE):
+            # Only a FRAMED row consumes an answer. A member can frame a
+            # mechanical row and a decision row under one handle (a
+            # co-emitted `mirror_tags` beside a `verify_cold`, say); the
+            # mechanical row executes on its own and must leave the answer
+            # for its sibling, or the sibling silently stays pending. An
+            # answer only a mechanical row matched is classified with the
+            # unmatched ones below, never silently dropped (#1182).
             seen_decisions.add(item.key)
-            if item.action in FRAMED_ACTIONS:
-                # Only a FRAMED row consumes an answer. A member can frame a
-                # mechanical row and a decision row under one handle (a
-                # co-emitted `mirror_tags` beside a `verify_cold`, say); the
-                # mechanical row executes on its own and must leave the answer
-                # for its sibling, or the sibling silently stays pending.
-                matched.add(id(decision))
+            matched.add(id(decision))
         executes = item.action in MECHANICAL_ACTIONS or decision is not None
         # #1051 B2: the structural verify over this deck's projected finals
         # failed on this row's slide group (or deck-wide) — none of the
@@ -3074,7 +3199,11 @@ def _execute_pass(
             outcome.results.append(ItemResult(item.key, item.action, result_status, str(exc)))
     for row in rows:
         if id(row) not in matched and row.key not in seen_decisions:
-            outcome.results.append(_unmatched_decision_result(row, deck, diff, preamble_frameable))
+            outcome.results.append(
+                _unmatched_decision_result(
+                    row, deck, diff, preamble_frameable, bundle.comment_token
+                )
+            )
     return _Pass(
         ex=ex,
         deck=deck,
@@ -3406,6 +3535,9 @@ def apply_deck(
     # when both are given.
     rows = list(decision_rows) if decision_rows is not None else list(decisions.values())
     _require_texts_gate(verify_gate)
+    # #1182: a ``body`` + ``side`` answer on a member that frames nothing is a
+    # row of its own, executed and recorded like any answered row.
+    diff = _rewrite_rows(diff, deck, rows, bundle.comment_token)
     # Each round executes over its own deep copy of the parsed deck and diff
     # (one copy keeps the diff items' member references pointing into that
     # deck): the executor mutates members in place, a round must not see an
