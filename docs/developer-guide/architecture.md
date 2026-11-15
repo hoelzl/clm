@@ -377,6 +377,14 @@ inject a `watch_runner` — the watchdog-based loop lives in the CLI.
 lazily through `_lazy_group.py` (`LazyGroup`), which keeps CLI startup fast —
 never re-add eager command imports.
 
+The root group (`_command_hints.py`, `CommandHintGroup`) adds cross-group
+hints to `No such command 'X'` (`clm course outline` → `Did you mean: clm
+export outline`, #1241). It reads the static index
+`src/clm/cli/_command_index.py`, so the error path imports no command
+module. **After adding, renaming, hiding or removing a command, regenerate
+it** with `python scripts/update_cli_command_index.py`;
+`tests/cli/test_command_hints.py` fails while it is stale.
+
 **Command module layout** (issue #310): the file layout under
 `src/clm/cli/commands/` mirrors the command tree, so finding a command's
 definition is mechanical:
