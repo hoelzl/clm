@@ -261,6 +261,214 @@ class TestCleanTranscript:
         assert "New" in output.read_text(encoding="utf-8")
 
 
+def content_through(text: str) -> str:
+    marker = "Content through "
+    start = text.index(marker) + len(marker)
+    return text[start : text.index(". Re-run", start)]
+
+
+class TestCleanTranscriptHarnessRows:
+    """Regression tests for #1219 (harness rows cleaned as dialogue)."""
+
+    def test_api_request_blob_rows_are_not_dialogue(self, tmp_path):
+        records = [
+            {"type": "user", "message": {"role": "user", "content": "Owner statement"}},
+            {
+                "type": "user",
+                "isMeta": True,
+                "message": {"role": "user", "content": "Base directory for this skill: X"},
+            },
+            {"type": "assistant", "message": {"role": "assistant", "content": "Agent reply"}},
+            # The request copy: same turns again, the skill body unflagged.
+            {
+                "type": "api-request-blob",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Owner statement"},
+                        {"type": "text", "text": "Base directory for this skill: X"},
+                    ],
+                },
+            },
+            {
+                "type": "api-request-blob",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Agent reply"}],
+                },
+            },
+        ]
+        result, text = run_cleaner(tmp_path, records)
+        assert result.returncode == 0, result.stderr
+        assert text.count("Owner statement") == 1
+        assert text.count("Agent reply") == 1
+        assert "Base directory for this skill" not in text
+
+    def test_subagent_hand_back_is_a_stub_not_an_owner_message(self, tmp_path):
+        handback = (
+            '<agent-message from="abf6bf67380dc3795">\n[Subagent hand-back] The text below '
+            "is the final report of a subagent.\n  Report body: PR #42 merged.\n</agent-message>"
+        )
+        records = [
+            {"type": "user", "message": {"role": "user", "content": "Please delegate it"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": "Delegated."}},
+            {"type": "queue-operation", "operation": "enqueue", "content": handback},
+            {"type": "assistant", "message": {"role": "assistant", "content": "It is merged."}},
+        ]
+        result, text = run_cleaner(tmp_path, records)
+        assert result.returncode == 0, result.stderr
+        assert "Report body" not in text
+        assert "> [Subagent hand-back] from abf6bf67380dc3795" in text
+        assert text.count("## Owner") == 1
+
+    def test_owner_text_typed_mid_turn_is_still_kept(self, tmp_path):
+        records = [
+            {"type": "queue-operation", "operation": "enqueue", "content": "Owner correction"},
+            {"type": "assistant", "message": {"role": "assistant", "content": "Noted."}},
+        ]
+        result, text = run_cleaner(tmp_path, records)
+        assert result.returncode == 0, result.stderr
+        assert text.index("## Owner") < text.index("Owner correction")
+
+    def hermes(self, messages, **extra):
+        return {"id": "20260726_191709_03773c", "messages": messages, **extra}
+
+    def test_hermes_compaction_copies_are_dropped_but_genuine_repeats_kept(self, tmp_path):
+        call = {"id": "call_1", "function": {"name": "read_file", "arguments": {"path": "a.md"}}}
+        abridged = {"id": "call_1", "function": {"name": "read_file", "arguments": {}}}
+        compaction = 1785096618.5383663
+        messages = [
+            {"role": "user", "content": "Please read #704", "timestamp": 1785086371.0},
+            {"role": "assistant", "content": "", "tool_calls": [call], "timestamp": 1785086383.0},
+            {"role": "tool", "content": "file text", "timestamp": 1785086384.0},
+            {"role": "assistant", "content": "Claimed #705.", "timestamp": 1785089049.0},
+            {"role": "user", "content": "yes", "timestamp": 1785089100.0},
+            {"role": "assistant", "content": "Working on it.", "timestamp": 1785089160.0},
+            {"role": "user", "content": "yes", "timestamp": 1785089200.0},  # genuine repeat
+            # Compaction re-inserts copies in one batch, call arguments abridged.
+            {"role": "user", "content": "Please read #704", "timestamp": compaction},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": json.dumps([abridged]),
+                "timestamp": compaction + 0.000001,
+            },
+            {"role": "assistant", "content": "Claimed #705.", "timestamp": compaction + 0.000003},
+            {"role": "user", "content": "Next step please", "timestamp": 1785097000.0},
+        ]
+        result, text = run_cleaner(tmp_path, [self.hermes(messages)])
+        assert result.returncode == 0, result.stderr
+        assert text.count("Please read #704") == 1
+        assert text.count("Claimed #705.") == 1
+        assert text.count("[read_file]") == 1
+        assert text.count("\nyes\n") == 2
+        assert "Next step please" in text
+
+    def test_hermes_harness_user_rows_are_dropped_and_skill_is_a_stub(self, tmp_path):
+        messages = [
+            {"role": "user", "content": "Owner opening", "timestamp": 1.0e9},
+            {
+                "role": "user",
+                "content": "[ASYNC DELEGATION BATCH COMPLETE — deleg_0a9589ea]\nSUBAGENT RESULT",
+            },
+            {
+                "role": "user",
+                "content": "[IMPORTANT: Background process proc_d7c080f9e260 completed normally "
+                "(exit code 0).\nCommand: PROCESS NOTICE",
+            },
+            {
+                "role": "user",
+                "content": "[Your active task list was preserved across context compression]\n"
+                "- [>] 5. TASK LIST",
+            },
+            {
+                "role": "user",
+                "content": '[IMPORTANT: The user has invoked the "next-issue" skill, indicating '
+                "they want you to follow its instructions. The full skill content is loaded "
+                "below.]\n\n---\nname: next-issue\nSKILL BODY",
+            },
+            {"role": "assistant", "content": "Agent reply"},
+        ]
+        result, text = run_cleaner(tmp_path, [self.hermes(messages)])
+        assert result.returncode == 0, result.stderr
+        for leaked in ("SUBAGENT RESULT", "PROCESS NOTICE", "TASK LIST", "SKILL BODY"):
+            assert leaked not in text
+        assert "> [skill] next-issue" in text
+        assert text.count("## Owner") == 1
+
+
+class TestCleanTranscriptBoundary:
+    """Regression tests for #1213 (Claude) and #1219 item 5 (Hermes)."""
+
+    def test_claude_boundary_is_the_last_dialogue_record_not_the_mtime(self, tmp_path):
+        import os
+
+        records = [
+            {
+                "type": "user",
+                "timestamp": "2026-10-09T06:20:00.000Z",
+                "message": {"role": "user", "content": "Owner statement"},
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-10-09T06:28:01.489Z",
+                "message": {"role": "assistant", "content": "Agent reply"},
+            },
+            # Later machinery is not dialogue and must not move the boundary.
+            {"type": "file-history-snapshot", "timestamp": "2026-10-29T22:42:00.000Z"},
+            {
+                "type": "api-request-blob",
+                "timestamp": "2026-10-29T22:42:00.000Z",
+                "message": {"role": "user", "content": "Owner statement"},
+            },
+        ]
+        source = tmp_path / "session.jsonl"
+        source.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        later = 1793000000  # 2026-10-26, after every record
+        os.utime(source, (later, later))
+        output = tmp_path / "cleaned.md"
+        result = subprocess.run(
+            [sys.executable, str(CLEAN), str(source), "-o", str(output)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        text = output.read_text(encoding="utf-8")
+        assert content_through(text) == "2026-10-09 06:28 UTC"
+        assert "content through 2026-10-09 06:28 UTC" in result.stdout
+
+    def test_claude_file_without_timestamps_falls_back_to_marked_file_time(self, tmp_path):
+        result, text = run_cleaner(tmp_path, [{"message": {"role": "user", "content": "Hi"}}])
+        assert result.returncode == 0, result.stderr
+        assert content_through(text).endswith("UTC (file time; no record timestamps)")
+
+    def test_hermes_boundary_is_the_newest_dialogue_row_in_utc(self, tmp_path):
+        session = {
+            "id": "20260726_191709_03773c",
+            "started_at": 1785086371.26,  # 2026-07-26 17:19 UTC
+            "last_activity_at": None,
+            "messages": [
+                {"role": "user", "content": "Owner opening", "timestamp": 1785086371.7},
+                {"role": "assistant", "content": "Last reply", "timestamp": 1785106592.9},
+                {"role": "tool", "content": "later tool output", "timestamp": 1785106600.0},
+            ],
+        }
+        result, text = run_cleaner(tmp_path, [session])
+        assert result.returncode == 0, result.stderr
+        assert content_through(text) == "2026-07-26 22:56 UTC"
+
+    def test_hermes_without_row_timestamps_says_which_fallback_it_used(self, tmp_path):
+        session = {
+            "id": "20260726_191709_03773c",
+            "started_at": 1785086371.26,
+            "last_activity_at": None,
+            "messages": [{"role": "user", "content": "Owner opening"}],
+        }
+        result, text = run_cleaner(tmp_path, [session])
+        assert result.returncode == 0, result.stderr
+        assert content_through(text) == "2026-07-26 17:19 UTC (session start; no row timestamps)"
+
+
 class TestStageHermesSession:
     def test_self_test_passes(self):
         stage = load("stage_hermes_session")
