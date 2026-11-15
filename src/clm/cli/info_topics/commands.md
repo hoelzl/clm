@@ -29,6 +29,12 @@ in CLM 1.8 and the remaining single-command groups (`topic`, `spec`,
 `authoring`) were merged into `course`/`slides` after 1.11 — see
 `clm info migration` for the full rename tables.
 
+A command name typed in the wrong group gets a hint (CLM {version}+): `clm
+course outline` and `clm outline` both fail with `No such command
+'outline'.` followed by `Did you mean: clm export outline` — every group
+holding a command of that name is listed, and near misses (`clm outlne`)
+are matched too. Follow the suggested path; don't invent an alias.
+
 ### The narration toolchain at a glance
 
 Slide narration (voiceover/notes text) has a lifecycle, and each stage has

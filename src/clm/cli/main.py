@@ -28,7 +28,7 @@ from pathlib import Path
 import click
 
 from clm.__version__ import __version__
-from clm.cli._lazy_group import LazyGroup
+from clm.cli._command_hints import CommandHintGroup
 from clm.cli._logging_bootstrap import install_bootstrap_console_handler
 
 # Console logging until a command configures its own (``setup_logging``).
@@ -40,7 +40,7 @@ _COMMANDS = "clm.cli.commands"
 
 
 @click.group(
-    cls=LazyGroup,
+    cls=CommandHintGroup,
     lazy_subcommands={
         # -------------------------------------------------------------
         # Top-level commands that stay flat: the everyday verbs.
