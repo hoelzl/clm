@@ -42,7 +42,7 @@ from __future__ import annotations
 import difflib
 from collections.abc import Sequence
 
-from attrs import frozen
+from attrs import evolve, frozen
 
 from clm.slides.bilingual_doc import Lang, Member, Observation
 from clm.slides.doc_identity import content_fingerprint, iter_with_groups
@@ -95,6 +95,12 @@ class MemberBaseDiff:
     base_ref: str  # full commit sha — `git show <sha>` works verbatim
     de_diff: str | None
     en_diff: str | None
+    #: #1191: the edit since the base is already committed — the bundle as
+    #: committed at ``HEAD`` no longer holds the base, which is the case
+    #: exactly when ``base_ref`` is not the newest commit that changed the
+    #: bundle. ``False``: the edit exists only in the working tree. ``None``:
+    #: not known (no change commit found).
+    edit_committed: bool | None = None
 
     def side_diff(self, lang: Lang) -> str | None:
         return self.de_diff if lang == "de" else self.en_diff
@@ -139,8 +145,13 @@ def recover_base_diffs(
             for sha in (resolve_commit(bundle.de_path, ref) for ref in candidates)
             if sha is not None
         ]
+        newest_changes = recent_change_refs(bundle.de_path, bundle.en_path, cap=1)
     else:
         refs = recent_change_refs(bundle.de_path, bundle.en_path, cap=cap)
+        newest_changes = refs[:1]
+    # Between two change commits the bundle's bytes do not change, so the
+    # bundle as committed at HEAD is the bundle at the newest change commit.
+    head_state = newest_changes[0] if newest_changes else None
     recovered: dict[str, MemberBaseDiff] = {}
     for ref in refs:
         if len(recovered) == len(targets):
@@ -159,7 +170,10 @@ def recover_base_diffs(
             member = _key_aware_match(key, matches)
             if member is None:
                 continue
-            recovered[key] = _member_base_diff(item, member, ref)
+            recovered[key] = evolve(
+                _member_base_diff(item, member, ref),
+                edit_committed=None if head_state is None else ref != head_state,
+            )
     return recovered
 
 

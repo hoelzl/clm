@@ -99,6 +99,13 @@ recorded fingerprints, and puts per-side unified diffs on the row:
 
 - **`base_ref`** — the full sha of the commit holding the recovered base
   (`git show <base_ref>` works verbatim);
+- **`edit_committed`** (CLM {version}, #1191) — `true` when the edit since
+  the base is already in a commit (the bundle as committed at `HEAD` no
+  longer holds the base), `false` when it exists only in the working tree.
+  It tells an old, committed-but-never-synced edit from the one you are
+  making now. Do not compare `base_ref` with `HEAD` yourself: a later commit
+  that did not touch the deck moves `HEAD` without committing the edit.
+  Present exactly when `base_ref` is;
 - **`de_diff` / `en_diff`** — unified hunks from the base cell to the current
   cell. **Read these instead of comparing the full `de`/`en` cells by eye.**
   An empty string means that side is byte-identical to its base (the unmoved
