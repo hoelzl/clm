@@ -589,11 +589,25 @@ it is refused (exit 2, nothing written):
   keeps the existing twin verbatim — no need to re-supply an unchanged body.
   On a `conflict_tags` item, `de`/`en` names the side whose **tag set** wins —
   only the tag line is mirrored; bodies stay untouched.
-- `side` — `"de"` or `"en"`, **only** alongside a `body` on a two-sided
-  `verify_cold` item: it names the stale twin to overwrite. `{"key":
-  "id:intro", "body": "# frische Übersetzung", "side": "de"}` replaces the DE
-  cell and records the fixed pair — cold recovery in one pass. Every other
-  action derives its target side itself, so a `side` there is rejected.
+- `side` — `"de"` or `"en"`, **only** alongside a `body`, where the row
+  cannot tell which half you corrected: a two-sided `verify_cold` or
+  `verify_translation` item, or a member that frames no question at all.
+  `{"key": "id:intro", "body": "# frische Übersetzung", "side": "de"}`
+  replaces the DE cell and records the fixed pair — cold recovery in one
+  pass. Every other action derives its target side itself, so a `side`
+  there is rejected.
+
+  **The German-only fix** (CLM {version}, #1182): to correct one half of an
+  id'd localized member whose pair is unchanged (no item frames it), answer
+  `body` + `side` on its handle. `apply` writes that half and records the
+  member — no hand edit, report and `keep_twin` round. Answering asserts the
+  other half is still a faithful rendering. The results list it as a
+  `rewrite_side` row (`applied`, `decision: body`). The body goes through the
+  same guards as any `body` answer (no `# %%` lines; a j2 macro such as
+  `id:title` takes its macro line). Without `side` the answer is
+  `rejected` naming `side`; on a shared cell, a handle with no id
+  (`pos:`/`seq:`), or a one-sided member it is `rejected` with the reason.
+  A body the named cell already reads as is `already_applied`.
 
 Feed it to `apply` (`-` reads stdin):
 
@@ -681,8 +695,10 @@ printed *before* the payload, so a merged stream still ends in valid JSON).
 `already_applied` is **not** a rejection: the member frames nothing now, so
 the state your answer asks for already holds — a sibling pass, an earlier
 apply, or the other CLI spelling of this deck got there first. It does not
-block exit 0. Only a handle naming **no member of this deck** is `rejected`
-as stale. `pending` = framed items
+block exit 0. A `body` answer is `already_applied` only when the cell it
+names already reads as that body; any other `body` on a member that frames
+nothing is the German-only fix above, or `rejected` (#1182). Only a handle
+naming **no member of this deck** is `rejected` as stale. `pending` = framed items
 you did not answer (exit 1, not an error). `deferred` = a record-only row
 whose ledger write was deferred because the member still carries an
 unresolved sibling item — nothing was banked; it re-frames on the next
@@ -1065,6 +1081,10 @@ asked you to. What differs for an agent:
   | `unify` | `accept` |
   | `identify` | one of the candidate `new:` handles it lists, or `removed` |
 
+  The German-only fix (`body` + `side` on an id'd localized cell no question
+  asks about, #1182) works here too: its row reads `rewrite_side` with
+  `answer: "body"`.
+
   `identify` asks which cell on one half is the recorded cell `seq:<n>`
   (`side` names the half). It comes up when that half edited several un-id'd
   cells of one kind and the other half changed them too. The report lists
@@ -1080,7 +1100,9 @@ asked you to. What differs for an agent:
   is open.
 - **Apply settles the whole deck or nothing.** With every question answered,
   it writes both halves and records the deck (exit 0). With any question
-  open it writes nothing (exit 1). A decision document must announce
+  open it writes nothing (exit 1). A `rejected` answer (listed under
+  `rejected`, echoed to stderr) also exits 1, even when the rest of the pass
+  was written (CLM {version}, #1182). A decision document must announce
   `"schema": 6` or no schema; schema 4/5 documents are refused, and the
   default engine refuses schema 6. `--member` and `report --since` are not
   available.

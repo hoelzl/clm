@@ -2811,9 +2811,13 @@ Writes, **per item**: every mechanical row executes deterministically; framed
 rows execute only with a valid decision from the `--decisions` JSON document
 (`{"decisions": [{"key": "id:…", "choice": "confirm"} | {"key": "id:…",
 "body": "…"}]}`, `-` reads stdin). A row may add `"side": "de"|"en"` **only**
-alongside a `body` on a two-sided `verify_cold` item — it names the stale twin
-to overwrite, turning cold recovery into one pass instead of hand-editing the
-file then `confirm`-ing (issue #572); `side` is rejected on any other action.
+alongside a `body` on a two-sided `verify_cold` or `verify_translation` item —
+it names the stale twin to overwrite, turning cold recovery into one pass
+instead of hand-editing the file then `confirm`-ing (issue #572) — or on an
+id'd localized member that frames no item: that is the German-only fix, which
+writes the named half and records the member (a `rewrite_side` result row,
+CLM {version}, #1182). `side` is rejected on any other action, and a `body`
+without `side` on a member that frames nothing is rejected naming `side`.
 Each answer is validated individually — a body smuggling a cell delimiter, a
 wrong choice, a `side` where it is meaningless, or a stale handle is rejected
 with a reason while the valid answers still land. A markdown `body` missing

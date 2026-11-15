@@ -63,7 +63,14 @@ from attrs import define, evolve, field, frozen
 
 from clm.slides import doc_core
 from clm.slides.bilingual_doc import BilingualDeck, SideCell
-from clm.slides.doc_apply import Decision
+from clm.slides.doc_apply import (
+    REWRITE_SIDE,
+    Decision,
+    body_holds,
+    body_lines,
+    rewrite_refusal,
+    twin_lines,
+)
 from clm.slides.doc_identity import lines_fingerprint
 from clm.slides.doc_ledger import DeckLedger, TopicLedger, record_deck_snapshot
 from clm.slides.doc_lenses import (
@@ -82,8 +89,17 @@ from clm.slides.doc_sequence import (
     sequence_fingerprint,
     text_fingerprint,
 )
-from clm.slides.doc_text import TITLE_ID, Recorded, TextRow, owners_of, plan_text, text_key
-from clm.slides.doc_write import write_changed_files
+from clm.slides.doc_text import (
+    TITLE_ID,
+    Recorded,
+    TextPlan,
+    TextRow,
+    own_cells,
+    owners_of,
+    plan_text,
+    text_key,
+)
+from clm.slides.doc_write import DeckWriteError, write_changed_files
 
 __all__ = [
     "CORE_ANSWERS",
@@ -464,15 +480,19 @@ def run_pass(
             result.rows.append(Row(row.kind, row.handle, row.side, row.detail, manual=True))
     for row in plan.mechanical:
         result.rows.append(Row(row.kind, row.handle, _target(row.side), row.detail))
+    result.rows.extend(_rewrites(decisions, used, asked, out.halves, plan, token, result))
     for i, d in enumerate(decisions):
         if i not in used:
             there = asked.get(d.key)
             reason = (
                 f"fits no row on this handle: {'; '.join(there)}"
                 if there
+                else _unasked_body(d, inputs, handle_of_cell, sequence, token)
+                if d.body is not None
                 else "no row of this pass has this handle"
             )
-            result.rejected.append(Rejection(d.key, d.action, reason))
+            if reason is not None:
+                result.rejected.append(Rejection(d.key, d.action, reason))
     if not out.opened:  # the core settled the structure: list what it changes
         result.rows.extend(_changes(out, inputs, handle_of_cell, sequence, plan.owners))
     if result.held or out.opened:
@@ -510,6 +530,91 @@ def run_pass(
         return result
     result.rendered = rendered
     return result
+
+
+def _rewrites(
+    decisions: Sequence[Decision],
+    used: set[int],
+    asked: Mapping[str, list[str]],
+    halves: Mapping[str, Sequence[doc_core.Cell]],
+    plan: TextPlan,
+    token: str,
+    result: Pass,
+) -> list[Row]:
+    """The ``rewrite_side`` rows: a ``body`` + ``side`` answer on an id'd
+    localized cell no question of the pass asks about rewrites that half
+    (#1182, the German-only fix). The renderer writes it like a
+    ``translate_edit`` twin, and the pass records the deck as usual. Each
+    such decision is marked used; one whose body the guards refuse is
+    rejected."""
+    rows: list[Row] = []
+    own = own_cells(halves)
+    for i, d in enumerate(decisions):
+        if i in used or d.body is None or d.side not in SIDES or d.key in asked:
+            continue
+        if d.action not in (None, REWRITE_SIDE) or not d.key.startswith("id:"):
+            continue
+        sid = d.key[len("id:") :]
+        side = d.side
+        target, source = own[side].get(sid), own[_target(side) or ""].get(sid)
+        if target is None or source is None:
+            continue
+        used.add(i)
+        if body_holds(target, d.body, token):
+            continue  # the cell already reads that way: nothing to do
+        try:
+            # the renderer's own writers, so a refused body is a rejection
+            # here rather than a renderer error later
+            if target.cell_type == "j2":
+                twin_lines(source, side, d.body, token)  # type: ignore[arg-type]
+            else:
+                body_lines(target, d.body, token)
+        except DeckWriteError as exc:
+            result.rejected.append(Rejection(d.key, REWRITE_SIDE, str(exc)))
+            continue
+        plan.retext[(side, sid)] = source
+        rows.append(
+            Row(
+                REWRITE_SIDE,
+                d.key,
+                side,
+                f"body + side answer: rewrite the {side} half",
+                (_BODY_ANSWER,),
+                _BODY_ANSWER,
+            )
+        )
+    return rows
+
+
+def _unasked_body(
+    d: Decision,
+    inputs: Mapping[str, Sequence[SideCell]],
+    handle_of_cell: Callable[[SideCell], str],
+    sequence: Sequence[SequenceEntry],
+    token: str,
+) -> str | None:
+    """Why a ``body`` answer on a handle no question asks about was not used
+    (``None``: it already holds, so it is no mistake)."""
+    cells = {
+        lang: sc for lang in SIDES for sc in inputs.get(lang, ()) if handle_of_cell(sc) == d.key
+    }
+    if not cells and d.key.startswith("seq:") and d.key[4:].isdigit():
+        n = int(d.key[4:])
+        if n < len(sequence):
+            return rewrite_refusal(d, localized=sequence[n].localized, one_sided=False) or (
+                "no row of this pass has this handle"
+            )
+    if not cells:
+        return "no row of this pass has this handle"
+    langs = [d.side] if d.side in SIDES else list(SIDES)
+    if any(lang in cells and body_holds(cells[lang], d.body or "", token) for lang in langs):
+        return None
+    refusal = rewrite_refusal(
+        d,
+        localized=any(is_localized(sc) for sc in cells.values()),
+        one_sided=len(cells) < 2,
+    )
+    return refusal or "no row of this pass has this handle"
 
 
 #: A base taken from files: its sequence, its preambles' fingerprints, and
