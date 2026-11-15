@@ -72,9 +72,17 @@ def test_backend_carries_segment_quality_metrics(mock_get_model, _audio, tmp_pat
     )
     # The worker hands the transcript to the parent as JSON: metrics survive.
     assert Transcript.from_dict(json.loads(json.dumps(tx.to_dict()))) == tx
-    # Decoder settings are out of scope for #1105 — unchanged.
+    # Decoder settings: faster-whisper's own defaults, now passed explicitly
+    # (configurable via CLM_WHISPER_*; see test_whisper_decode_options.py).
     _, kwargs = model.transcribe.call_args
-    assert kwargs == {"language": "en", "beam_size": 5, "vad_filter": True}
+    assert kwargs == {
+        "language": "en",
+        "beam_size": 5,
+        "vad_filter": True,
+        "condition_on_previous_text": True,
+        "no_speech_threshold": 0.6,
+        "compression_ratio_threshold": 2.4,
+    }
 
 
 def test_old_transcript_dicts_load_without_metrics():

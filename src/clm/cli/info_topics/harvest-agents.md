@@ -74,6 +74,14 @@ that introduced these flags carry no metrics, so only the
 `repeat_collapsed` / `trailing_phrase` flags appear for them;
 `--refresh-cache` re-runs ASR to record the metrics.
 
+Many loops can be prevented at decode time. Three faster-whisper decoder
+settings are read from the environment: `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT`
+(default `true`; `0` stops loops carrying over between windows),
+`CLM_WHISPER_NO_SPEECH_THRESHOLD` (default `0.6`) and
+`CLM_WHISPER_COMPRESSION_RATIO_THRESHOLD` (default `2.4`; `none` disables
+either threshold). Unset means faster-whisper's defaults. A non-default value
+is part of the transcript cache key, so the next run re-transcribes.
+
 ## task — the framed judgment
 
 A task document gives you: `instructions` (the curation rules), `inputs`

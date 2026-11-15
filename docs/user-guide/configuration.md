@@ -409,6 +409,26 @@ structural half that is in its trial period (design:
 `docs/claude/design/sync-sequence-core.md`, phase C). Unset or `positional`
 keeps the default engine. Agent-facing details: `clm info sync-agents`.
 
+### Speech Recognition (`clm harvest`, `clm voiceover`)
+
+The faster-whisper backend always runs with voice-activity detection
+(`vad_filter`) and beam size 5. Three decoder settings that guard against
+Whisper's repetition loops and silence hallucinations (#1105) can be tuned:
+
+| Variable | Description | Default |
+|---|---|---|
+| `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT` | Feed each 30-second window the previous window's text. `0`/`false` stops a repetition loop from carrying over from window to window (the usual cure for loops), at some cost in consistency of terms and punctuation across windows. | `true` |
+| `CLM_WHISPER_NO_SPEECH_THRESHOLD` | A window whose no-speech probability is above this, and whose average log-probability is below -1.0, is skipped as silence. Lower skips more. `none` disables the check. | `0.6` |
+| `CLM_WHISPER_COMPRESSION_RATIO_THRESHOLD` | A window whose text compresses better than this gzip ratio (repetitive text) is decoded again at a higher temperature. Lower catches loops earlier. `none` disables the check. | `2.4` |
+
+The defaults are faster-whisper's own, so an unset variable changes nothing.
+They have not yet been tuned against lecture recordings. If a transcript
+loops, try `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT=0` first. A non-default
+setting is part of the transcript and alignment cache keys, so changing it
+re-runs ASR once for each video; returning to the defaults hits the old
+entries again. The Cohere and Granite backends ignore these variables.
+Invalid values fail with an error that names the variable.
+
 ### Performance
 
 | Variable | Description | Default |

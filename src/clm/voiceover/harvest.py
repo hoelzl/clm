@@ -262,11 +262,22 @@ def alignment_cache_config(lang: str | None, *, multi_part: bool) -> dict[str, A
 
     It names the ASR clean-up version (#1105): an alignment computed from a
     differently cleaned transcript misses once and is recomputed (cheap),
-    while the expensive transcript cache entry is reused unchanged.
+    while the expensive transcript cache entry is reused unchanged. Non-default
+    faster-whisper decoder settings (``CLM_WHISPER_*``) are named too, since
+    they change the transcript; at the defaults the key is unchanged.
     """
     from clm.voiceover.asr_cleanup import ASR_CLEANUP_VERSION
+    from clm.voiceover.transcribe import WhisperDecodeOptions
 
-    return {"lang": lang, "multi_part": multi_part, "asr_cleanup": ASR_CLEANUP_VERSION}
+    cfg: dict[str, Any] = {
+        "lang": lang,
+        "multi_part": multi_part,
+        "asr_cleanup": ASR_CLEANUP_VERSION,
+    }
+    decode = WhisperDecodeOptions.from_env().non_defaults()
+    if decode:
+        cfg["asr_decode"] = decode
+    return cfg
 
 
 def segment_payload(segment) -> dict[str, Any]:
