@@ -1564,6 +1564,18 @@ class SqliteBackend(LocalOpsBackend):
 
             # Clean up cache database
             if self.db_manager:
+                # Its own line (#1090): on a multi-GB cache this step used to
+                # run for minutes after the summary with nothing on screen.
+                # The prunes are index-only now, but their first run on an
+                # existing cache builds those indexes with one full table
+                # scan each; warn about the wait only then.
+                if self.db_manager.prune_indexes_missing():
+                    self._show_progress(
+                        "Pruning old cache versions (one-time cache index build, "
+                        "may take a while on a large cache)..."
+                    )
+                else:
+                    self._show_progress("Pruning old cache versions...")
                 cache_cleanup = self.db_manager.cleanup_all(
                     retain_versions=retention_config.cache_versions_to_keep,
                     issues_days=retention_config.failed_jobs_retention_days,  # Same as failed jobs

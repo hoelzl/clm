@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 #: Anything else is from a version that stored pickles and is unreadable here.
 PAYLOAD_FORMAT = "nbformat-json"
 
+#: Covering index that keeps :meth:`ExecutedNotebookCache.prune_stale_hashes`
+#: off the blob pages (issue #1090). Created lazily by the prune itself.
+PRUNE_INDEX_NAME = "idx_executed_notebooks_prune"
+
 # Value for ``PRAGMA user_version`` marking that the legacy-payload migration
 # (the full-scan DELETE below) has already run for this database file.
 # 0/absent = unmigrated (may contain pickle-era rows); 1 = JSON-only.
@@ -503,19 +507,31 @@ class ExecutedNotebookCache:
                     list(valid_hashes),
                 )
         else:
-            # Keep only the most recent entry per (input_file, language, prog_lang)
+            # Keep only the most recent entry per (input_file, language, prog_lang).
+            # Issue #1090: as with ``processed_files``, the large
+            # ``executed_notebook`` BLOB precedes ``created_at`` in each row, so
+            # a table-backed window reads the whole cache file. This covering
+            # index (``id`` is the rowid) makes the window index-only. It is
+            # built once, on the first prune of an existing cache, inside the
+            # build-end cleanup phase, which shows a progress line.
+            cursor.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS {PRUNE_INDEX_NAME}
+                ON executed_notebooks (input_file, language, prog_lang, created_at)
+                """
+            )
             cursor.execute(
                 """
                 DELETE FROM executed_notebooks
-                WHERE id NOT IN (
+                WHERE id IN (
                     SELECT id FROM (
                         SELECT id, ROW_NUMBER() OVER (
                             PARTITION BY input_file, language, prog_lang
-                            ORDER BY created_at DESC
+                            ORDER BY created_at DESC, id DESC
                         ) as rn
                         FROM executed_notebooks
                     )
-                    WHERE rn = 1
+                    WHERE rn > 1
                 )
                 """
             )
