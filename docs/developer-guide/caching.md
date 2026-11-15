@@ -319,6 +319,13 @@ monitor` startup-time problem, not a correctness one.
 Build-end cleanup (`_perform_build_end_cleanup`) runs by default
 (`auto_cleanup_on_build_end = true`) and trims all three caches to
 `cache_versions_to_keep`. `clm db cleanup` applies the same policy on demand.
+The `processed_files` and `executed_notebooks` prunes must stay index-only
+(#1090). In both tables a large blob (`result`, `executed_notebook`) is stored
+before `created_at`, so any query that reads it from the table walks every
+blob's overflow chain, which means reading the whole multi-GB cache file. The
+covering indexes `idx_processed_files_prune` and
+`idx_executed_notebooks_prune` are created by the prunes themselves on their
+first run. `test_db_operations_prune.py` pins both query plans.
 
 ## Diagnosing cache behavior
 

@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Covering index that keeps :meth:`DatabaseManager.prune_old_versions` off the
+#: ``result`` blob pages (issue #1090). Created lazily by the prune itself.
+PRUNE_INDEX_NAME = "idx_processed_files_prune"
+
 
 class DatabaseManager:
     def __init__(self, db_path: str | Path, force_init: bool = False):
@@ -443,6 +447,28 @@ class DatabaseManager:
         )
         self._commit()
 
+    def prune_indexes_missing(self) -> bool:
+        """True if the build-end prunes will first build a covering index.
+
+        That one-time build scans the whole table, which on a multi-GB cache
+        takes a while (#1090). The backend uses this to warn only then.
+        """
+        from clm.infrastructure.database.executed_notebook_cache import (
+            PRUNE_INDEX_NAME as NB_PRUNE_INDEX_NAME,
+        )
+
+        assert self.conn is not None, "Database connection not initialized"
+        names = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE name IN (?, ?, 'executed_notebooks')",
+                (PRUNE_INDEX_NAME, NB_PRUNE_INDEX_NAME),
+            )
+        }
+        if PRUNE_INDEX_NAME not in names:
+            return True
+        return "executed_notebooks" in names and NB_PRUNE_INDEX_NAME not in names
+
     def prune_old_versions(self, retain_count: int = 1) -> int:
         """Remove old versions of processed files, keeping only the most recent.
 
@@ -457,20 +483,40 @@ class DatabaseManager:
         assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()
 
-        # Delete entries that are not in the top N per (file_path, output_metadata)
-        # This keeps only the most recent 'retain_count' entries for each combination
+        # Issue #1090: the window below needs file_path, output_metadata and
+        # created_at for every row. In the table, the large ``result`` BLOB
+        # sits *before* output_metadata and created_at, so a table scan walks
+        # every row's overflow-page chain: it reads the whole cache file. On a
+        # 7 GB cache that took minutes with no output. This covering index turns
+        # the scan into an index-only walk (``id`` is the rowid, which is
+        # always in the index). Building it on an existing large cache costs
+        # one table scan, once. It is created here rather than in ``init_db``
+        # so that one-time cost lands in the build-end cleanup phase, which
+        # tells the user it may take a while, not silently at build start.
+        cursor.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS {PRUNE_INDEX_NAME}
+            ON processed_files (file_path, output_metadata, created_at)
+            """
+        )
+
+        # Delete the rows ranked below the newest ``retain_count`` per
+        # (file_path, output_metadata). Selecting the few losers (``rn > ?``)
+        # instead of ``NOT IN`` over the full winner set keeps the temporary
+        # set small. ``id DESC`` breaks created_at ties (second resolution)
+        # in favour of the later insert.
         cursor.execute(
             """
             DELETE FROM processed_files
-            WHERE id NOT IN (
+            WHERE id IN (
                 SELECT id FROM (
                     SELECT id, ROW_NUMBER() OVER (
                         PARTITION BY file_path, output_metadata
-                        ORDER BY created_at DESC
+                        ORDER BY created_at DESC, id DESC
                     ) as rn
                     FROM processed_files
                 )
-                WHERE rn <= ?
+                WHERE rn > ?
             )
             """,
             (retain_count,),

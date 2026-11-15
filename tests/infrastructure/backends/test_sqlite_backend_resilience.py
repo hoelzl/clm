@@ -27,7 +27,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from attrs import frozen
@@ -483,6 +483,36 @@ async def test_build_end_cleanup_prunes_and_vacuums(temp_db, temp_workspace, tmp
     # The backend's real cache DB was used; the env/config decoy was never opened.
     assert cache_db.exists()
     assert not decoy.exists()
+
+
+@pytest.mark.asyncio
+async def test_build_end_cleanup_announces_cache_prune(temp_db, temp_workspace, tmp_path):
+    """#1090: the cache prune gets its own visible progress line, so a long
+    prune after the build summary does not read as a hang."""
+    reporter = MagicMock()
+    backend = _backend(temp_db, temp_workspace)
+    backend.build_reporter = reporter
+    backend.db_manager = DatabaseManager(tmp_path / "cache.db")
+    backend.db_manager.__enter__()
+
+    def shown() -> list[str]:
+        msgs = [c.args[0] for c in reporter.formatter.show_startup_message.call_args_list]
+        reporter.formatter.show_startup_message.reset_mock()
+        return [m for m in msgs if m.startswith("Pruning old cache versions")]
+
+    try:
+        # First run on a cache without the prune indexes: warn about the wait.
+        backend._perform_build_end_cleanup()
+        first = shown()
+        # Indexes exist now: a plain progress line, no "may take a while".
+        backend._perform_build_end_cleanup()
+        second = shown()
+    finally:
+        backend.db_manager.__exit__(None, None, None)
+        await backend.shutdown()
+
+    assert len(first) == 1 and "may take a while" in first[0], first
+    assert second == ["Pruning old cache versions..."], second
 
 
 @pytest.mark.asyncio
