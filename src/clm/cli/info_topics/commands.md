@@ -1078,7 +1078,7 @@ clm calendar generate [OPTIONS] SPEC_FILE
 
 | Option | Description |
 |--------|-------------|
-| `--channel NAME` | Cohort channel; resolves the calendar file as `<channel>.calendar.toml` beside the channel's ledger in `<release-channels>`. |
+| `--channel NAME` | Cohort channel; resolves the calendar file beside the channel's ledger in `<release-channels>`: the first existing of `<channel>.calendar.toml`, `<cohort>.calendar.toml` (the ledger stem minus the stream prefix and `-<lang>` suffix, e.g. `materials-ml-2026-10-de.txt` → `ml-2026-10`), and the channel name minus `-<lang>`; the error lists every path tried. The cohort stem itself (`--channel ml-2026-10`) is accepted too (CLM {version}+, issue #1205). See `clm info calendar`. |
 | `--calendar PATH` | Explicit calendar TOML (overrides `--channel`). |
 | `-L, --language`, `--lang [de\|en]` | Language for deck titles and weekday labels (default: `de`). |
 | `-f, --format [md\|csv\|ics]` | Output format (default: `md`). `ics` is the subscribable student feed. |
@@ -1110,7 +1110,9 @@ clm calendar generate course.xml --channel jan -o jan.ics -f ics
 ##### Cohort calendar file (`release/<channel>.calendar.toml`)
 
 A small, hand-edited TOML file holding only the *deltas* from the ideal plan.
-Lives beside the channel's release ledger; it is **not** part of the spec.
+Lives beside the channel's release ledger; it is **not** part of the spec. One
+file per cohort, shared by the cohort's streams and language channels (e.g.
+`release/ml-2026-10.calendar.toml` for `materials|solutions/2026-10-de|en`).
 
 ```toml
 start = 2026-03-02              # first teaching date (required)
