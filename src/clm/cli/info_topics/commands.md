@@ -2829,8 +2829,14 @@ id'd localized member that frames no item: that is the German-only fix, which
 writes the named half and records the member (a `rewrite_side` result row,
 CLM {version}, #1182). `side` is rejected on any other action, and a `body`
 without `side` on a member that frames nothing is rejected naming `side`.
-A row takes only `key`, `action`, `choice`/`body` and `side`: an unknown
-field refuses the document (exit 2, CLM {version}, #1189).
+A row takes only `key`, `action`, `choice`/`body`/`replace` and `side`: an
+unknown field refuses the document (exit 2, CLM {version}, #1189). A
+`replace` answer (`{"key": …, "replace": [["old", "new"], …]}`, CLM
+{version}, #1171) is a `body` given as edits of the target cell's current
+text: pairs apply in order, each `old` matching exactly once, else the row
+is rejected and writes nothing. It is offered wherever `body` is on
+`translate_edit` (no `side`) and id-keyed `verify_translation` /
+`verify_cold` (`side` required).
 Each answer is validated individually — a body smuggling a cell delimiter, a
 wrong choice, a `side` where it is meaningless, or a stale handle is rejected
 with a reason while the valid answers still land. A markdown `body` missing

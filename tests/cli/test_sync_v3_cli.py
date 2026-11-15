@@ -98,7 +98,7 @@ class TestSyncLoop:
             if i["action"] == "record_neutral":
                 assert i["answers"] == [] and i["resolution"] == "mechanical", i
                 continue
-            expected = ["confirm", "body"] if i["key"].startswith("id:") else ["confirm"]
+            expected = ["confirm", "body", "replace"] if i["key"].startswith("id:") else ["confirm"]
             assert i["answers"] == expected, i
         # An all-cold report is the seeding case — it says so.
         assert "sync record" in payload["hint"]
@@ -166,7 +166,7 @@ class TestSyncLoop:
         )
         s0m = next(i for i in report["items"] if i["key"] == "id:s0-m")
         assert s0m["action"] == "verify_cold"
-        assert s0m["answers"] == ["confirm", "body"]
+        assert s0m["answers"] == ["confirm", "body", "replace"]
 
         # Fix the stale DE twin inline; confirm the rest of the cold pairs.
         rows = []
@@ -721,7 +721,7 @@ class TestSanctionedFlows:
         )
         item = next(i for i in report["items"] if i["key"] == "id:s0-m")
         assert item["action"] == "verify_translation"
-        assert item["answers"] == ["confirm", "body"]
+        assert item["answers"] == ["confirm", "body", "replace"]
 
         applied = cli_runner.invoke(
             slides_sync_group,
@@ -838,7 +838,7 @@ class TestItemShape:
 
         # An id-keyed cold member is answerable.
         assert by_key["id:s0"]["resolution"] == "decision"
-        assert by_key["id:s0"]["answers"] == ["confirm", "body"]
+        assert by_key["id:s0"]["answers"] == ["confirm", "body", "replace"]
 
         # The DE-only positional cell can be neither confirmed (confirm
         # asserts both halves agree) nor mirrored (its ordinal aliases a

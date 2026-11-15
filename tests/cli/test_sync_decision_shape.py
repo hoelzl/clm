@@ -15,6 +15,7 @@ from click.testing import CliRunner
 from clm.cli.commands.slides.sync import slides_sync_group
 from clm.slides.doc_apply import (
     BODY_PLACEHOLDER,
+    REPLACE_PLACEHOLDER,
     SIDE_PLACEHOLDER,
     answer_templates,
     parse_decision_rows,
@@ -102,9 +103,14 @@ class TestTemplates:
         de, _en = edited
         _report_id, items = _report(runner, de, engine)
         (item,) = [i for i in items if i["key"] == "id:s0-m"]
-        assert item["answers"] == ["body", "keep_twin"]
+        assert item["answers"] == ["body", "replace", "keep_twin"]
         assert item["templates"] == [
             {"key": "id:s0-m", "action": "translate_edit", "body": BODY_PLACEHOLDER},
+            {
+                "key": "id:s0-m",
+                "action": "translate_edit",
+                "replace": [list(pair) for pair in REPLACE_PLACEHOLDER],
+            },
             {"key": "id:s0-m", "action": "translate_edit", "choice": "keep_twin"},
         ]
 
