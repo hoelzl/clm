@@ -125,8 +125,8 @@ for `verify_translation_batch`.** It fires when three or more such rows all
 diverge from the *same* recovered base — one editing session, most likely. If
 the hunks repeat one pattern (a rename, renumbering, a formatting sweep),
 judge the pattern once. It never changes what you answer: every row still
-takes its own explicit answer (`confirm`, or `body` + `side`); there is no
-batch answer, at any count.
+takes its own explicit answer (`{"choice": "confirm"}`, or a `body` with its
+`side`); there is no batch answer, at any count.
 
 Each item row carries `key` (the member handle), `outcome`, `action`,
 `direction` (`de_to_en` / `en_to_de` / `both` / `none`), `detail`, the full
@@ -146,6 +146,17 @@ An empty `answers` used to mean both the first and the third case, and this
 topic documented only the first — its own example filter script therefore
 misclassified every blocked item. `resolution` is the schema-4 discriminator.
 
+An entry of `answers` is a **value**, not a field name. How each one goes into
+a decision row (#1188):
+
+| entry of `answers` | decision row |
+|---|---|
+| `body` | `{"key": K, "body": "<cell text without its # %% line>"}`, plus `"side": "de"\|"en"` on `verify_cold` / `verify_translation` |
+| `replace` | `{"key": K, "replace": [["old", "new"], …]}`, plus `side` where `body` needs it |
+| any other (`confirm`, `keep_twin`, `de`, `en`, `remove`, `keep`, `mark_twin`, `treat_as_new`, …) | `{"key": K, "choice": "<the entry>"}` |
+
+`"action": "<the item's action>"` may be added to any row (see below).
+
 Each item also carries **`templates`** (CLM {version}, #1189): one decision
 row per entry of `answers`, in the same order, with the field that answer
 needs — `choice` for a word (`confirm`, `de`, `keep_twin`, …), `body` for
@@ -156,11 +167,13 @@ is self-checking. Copy one into `decisions` and replace the placeholders:
 `de|en`, which is not a valid value, so a template sent unfilled is refused.
 
 ```json
-"answers": ["confirm", "body"],
+"answers": ["confirm", "body", "replace"],
 "templates": [
   {"key": "id:intro", "action": "verify_translation", "choice": "confirm"},
   {"key": "id:intro", "action": "verify_translation",
-   "body": "<the cell text, without its '# %%' line>", "side": "de|en"}
+   "body": "<the cell text, without its '# %%' line>", "side": "de|en"},
+  {"key": "id:intro", "action": "verify_translation",
+   "replace": [["<old text, matching exactly once>", "<new text>"]], "side": "de|en"}
 ]
 ```
 
@@ -433,6 +446,41 @@ one side still at its recorded baseline):
 Do **not** stamp the id, add `lang=`, and rewrite the body in one pass: the
 differ can no longer prove the two cells are the same member, and the fork
 records as a fresh pair.
+
+### A deleted half of a localized cell — `remove_localized_side`
+
+When one half of a localized member is gone (its cell deleted, or its `lang`
+attribute stripped and the cell edited), the report frames
+`remove_localized_side` with `side` naming the half that is gone. It takes:
+
+- `{"choice": "remove"}` — the removal was meant: the surviving half is
+  removed too, and the member leaves the ledger;
+- `{"body": "…"}` — the removal was an accident: the gone half is
+  recreated from the surviving cell's header (its `lang` swapped) with your
+  text, in the mirrored position.
+
+A unify (making the cell shared) is not an answer here: make both halves
+the same shared cell in the files and re-report. On the sequence core the
+row takes `remove` only.
+
+### What sync compares: the title macro vs `# %%` header attributes
+
+Two different things live at the top of a cell, and sync treats them
+differently (#1188):
+
+- The deck's **title macro** (the `j2` line `{{ header_de("…") }}` /
+  `{{ header_en("…") }}`) is a **member**, `id:title`. Its text is compared
+  and asked like any localized cell (`translate_edit`, `verify_translation`,
+  `verify_cold`), and its answers are `body` / `replace` against the macro
+  line.
+- The **attributes on a `# %%` line** are not text. `slide_id`, `tags` and
+  the owner reference `for_slide` are merged between the halves (id stamps,
+  tag rows, owner rows), and `lang` marks a cell as localized. Every other
+  attribute, **`vo_anchor` among them**, is not synced by the default engine
+  (#1180): a `vo_anchor` changed on one half is not mirrored, and a body
+  answer keeps the target cell's own header line. Change such an attribute
+  on both halves yourself. (The sequence core merges `vo_anchor` like
+  `for_slide`, except that an `fp:` anchor stays per half.)
 
 ## Tag parity (tags are language-independent)
 
@@ -1243,9 +1291,11 @@ rejected decisions; the sessions that improvised did not):
   `body`/`keep_twin` — a `confirm` on it is rejected. Branch on each item's
   `answers` list.
 - **Always `--dry-run` first** on a nontrivial decision document; it
-  validates every answer without writing. It does not run the structural
-  verify gate (that happens after the write), so a clean dry run is not a
-  promise that the pass will record.
+  validates every answer and runs the pre-write structural verify over the
+  projected files without writing, so it shows what a real pass would
+  withhold. It cannot run the post-write gate, which decides what the
+  ledger records, so a clean dry run is not a promise that every landed row
+  will record.
 - **Many `translate_new` bodies at once** (e.g. a whole deck authored in one
   language): answering each in JSON works but is heavy. The sanctioned bulk
   alternative is `clm slides translate task DECK.en.py` — frame the whole-deck

@@ -2822,8 +2822,12 @@ clm slides sync apply DECK [--decisions FILE|-] [--member KEY]... [--dry-run]
 
 Writes, **per item**: every mechanical row executes deterministically; framed
 rows execute only with a valid decision from the `--decisions` JSON document
-(`{"decisions": [{"key": "id:…", "choice": "confirm"} | {"key": "id:…",
-"body": "…"}]}`, `-` reads stdin). A row may add `"side": "de"|"en"` **only**
+(`{"report_id": "…", "decisions": [{"key": "id:…", "choice": "confirm"} |
+{"key": "id:…", "body": "…"}]}`, `-` reads stdin; the `report_id` from
+`report --json` is required — a document without it is refused with exit
+2). A `remove_localized_side` row (one half of a localized cell was deleted)
+takes `choice: "remove"` (remove the other half too) or a `body` (recreate
+the deleted half with that text). A row may add `"side": "de"|"en"` **only**
 alongside a `body` on a two-sided `verify_cold` or `verify_translation` item —
 it names the stale twin to overwrite, turning cold recovery into one pass
 instead of hand-editing the file then `confirm`-ing (issue #572) — or on an
