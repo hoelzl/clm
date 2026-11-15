@@ -176,12 +176,27 @@ class TranscribeConfig:
     deliberately *not* part of this key: the cache stores the raw ASR output
     and every reader cleans it, so changing the clean-up never re-runs ASR.
     Its version is part of the *alignment* cache config instead.
+
+    ``decode`` holds the faster-whisper decoder settings that differ from
+    the defaults (#1105), as sorted ``(name, value)`` pairs. It is left out
+    of :meth:`as_dict` when empty, so a default run matches transcripts
+    cached before the settings existed.
     """
 
     backend: str
     model: str
     language: str | None
     device_class: str
+    decode: tuple[tuple[str, Any], ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """The config stored with (and compared against) a cache entry."""
+        d = asdict(self)
+        if self.decode:
+            d["decode"] = dict(self.decode)
+        else:
+            del d["decode"]
+        return d
 
     @classmethod
     def normalize_device(cls, device: str) -> str:
@@ -331,7 +346,7 @@ class TranscriptsCache(_JsonCache):
         entry = self._load(video.hash)
         if entry is None:
             return None
-        if not self._config_matches(entry, asdict(cfg)):
+        if not self._config_matches(entry, cfg.as_dict()):
             return None
         artifact = entry.get("artifact")
         if not isinstance(artifact, dict):
@@ -347,7 +362,7 @@ class TranscriptsCache(_JsonCache):
             "version": 1,
             "kind": "transcript",
             "video": asdict(video),
-            "config": asdict(cfg),
+            "config": cfg.as_dict(),
             "artifact": self._encoder(transcript),
         }
         self._store(video.hash, payload)
@@ -764,6 +779,16 @@ def _legacy_cache(cache_cls, primary_root: Path, base_dir: str | Path | None):
     return cache_cls(root)
 
 
+def decode_cache_key(backend_name: str) -> tuple[tuple[str, Any], ...]:
+    """The non-default faster-whisper decoder settings (#1105) a transcript
+    depends on, as sorted pairs; ``()`` for other backends and defaults."""
+    if backend_name != "faster-whisper":
+        return ()
+    from clm.voiceover.transcribe import WhisperDecodeOptions
+
+    return tuple(sorted(WhisperDecodeOptions.from_env().non_defaults().items()))
+
+
 def cached_transcribe(
     video_path: str | Path,
     *,
@@ -786,6 +811,7 @@ def cached_transcribe(
         model=model_size,
         language=language,
         device_class=TranscribeConfig.normalize_device(device),
+        decode=decode_cache_key(backend_name),
     )
 
     if not policy.enabled:

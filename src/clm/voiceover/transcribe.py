@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
 import wave
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     import numpy as np
@@ -125,6 +127,101 @@ class Transcript:
         )
 
 
+#: Environment variables that tune faster-whisper's decoder (#1105).
+ENV_CONDITION_ON_PREVIOUS_TEXT = "CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT"
+ENV_NO_SPEECH_THRESHOLD = "CLM_WHISPER_NO_SPEECH_THRESHOLD"
+ENV_COMPRESSION_RATIO_THRESHOLD = "CLM_WHISPER_COMPRESSION_RATIO_THRESHOLD"
+
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+@dataclass(frozen=True)
+class WhisperDecodeOptions:
+    """faster-whisper decoder settings that guard against hallucinations (#1105).
+
+    The defaults are faster-whisper's own, so an unconfigured run decodes
+    exactly as before and keeps its cached transcripts. They are known
+    mitigations for Whisper's repetition loops and silence hallucinations:
+
+    * ``condition_on_previous_text`` -- feed the previous window's text to
+      the next one. ``False`` stops a loop from propagating from window to
+      window (the usual cure for repetition loops) at some cost in
+      cross-window consistency of terms and punctuation.
+    * ``no_speech_threshold`` -- a window whose no-speech probability is
+      above this (and whose average log-probability is below -1.0) is
+      treated as silence and skipped. Lower skips more.
+    * ``compression_ratio_threshold`` -- a window whose text compresses
+      better than this (gzip ratio, i.e. it is repetitive) is re-decoded at
+      a higher temperature. Lower catches loops earlier.
+
+    ``None`` disables a threshold check. Which values suit lecture
+    recordings has not been measured yet, so the defaults stay conservative;
+    tune them through the ``CLM_WHISPER_*`` variables (:meth:`from_env`).
+    """
+
+    condition_on_previous_text: bool = True
+    no_speech_threshold: float | None = 0.6
+    compression_ratio_threshold: float | None = 2.4
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> WhisperDecodeOptions:
+        """Read the options from ``CLM_WHISPER_*``; unset or empty keeps a default.
+
+        Raises:
+            ValueError: if a variable is set to something unparseable.
+        """
+        env = os.environ if environ is None else environ
+        default = cls()
+
+        def flag(name: str, fallback: bool) -> bool:
+            raw = env.get(name, "").strip().lower()
+            if not raw:
+                return fallback
+            if raw in _TRUE:
+                return True
+            if raw in _FALSE:
+                return False
+            raise ValueError(f"{name} must be a boolean (1/0, true/false), got {raw!r}")
+
+        def threshold(name: str, fallback: float | None) -> float | None:
+            raw = env.get(name, "").strip()
+            if not raw:
+                return fallback
+            if raw.lower() == "none":
+                return None
+            try:
+                return float(raw)
+            except ValueError:
+                raise ValueError(f"{name} must be a number or 'none', got {raw!r}") from None
+
+        return cls(
+            condition_on_previous_text=flag(
+                ENV_CONDITION_ON_PREVIOUS_TEXT, default.condition_on_previous_text
+            ),
+            no_speech_threshold=threshold(ENV_NO_SPEECH_THRESHOLD, default.no_speech_threshold),
+            compression_ratio_threshold=threshold(
+                ENV_COMPRESSION_RATIO_THRESHOLD, default.compression_ratio_threshold
+            ),
+        )
+
+    def transcribe_kwargs(self) -> dict[str, Any]:
+        """The keyword arguments for ``WhisperModel.transcribe``."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    def non_defaults(self) -> dict[str, Any]:
+        """The settings that differ from the defaults (``{}`` when none do).
+
+        Cache configs carry only these, so a default run keeps the keys of
+        transcripts and alignments cached before the options existed."""
+        default = WhisperDecodeOptions()
+        return {
+            f.name: getattr(self, f.name)
+            for f in fields(self)
+            if getattr(self, f.name) != getattr(default, f.name)
+        }
+
+
 class TranscriptionBackend(Protocol):
     """Protocol for transcription backends.
 
@@ -160,6 +257,7 @@ class FasterWhisperBackend:
         model_size: str = "large-v3",
         device: str = "auto",
         compute_type: str = "default",
+        decode_options: WhisperDecodeOptions | None = None,
     ):
         """Initialize the faster-whisper backend.
 
@@ -169,10 +267,14 @@ class FasterWhisperBackend:
             device: Device to use: "auto" (default), "cpu", or "cuda".
             compute_type: Compute type: "default", "int8", "float16", etc.
                 "default" selects automatically based on device.
+            decode_options: Decoder settings (#1105). ``None`` reads them
+                from the ``CLM_WHISPER_*`` environment variables at
+                transcription time (the subprocess worker inherits them).
         """
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.decode_options = decode_options
         self._model = None
 
     def _get_model(self):
@@ -210,9 +312,12 @@ class FasterWhisperBackend:
         Returns:
             Transcript with timestamped segments.
         """
+        decode = self.decode_options or WhisperDecodeOptions.from_env()
         model = self._get_model()
 
         logger.info("Transcribing %s (language=%s)...", audio_path.name, language or "auto")
+        if decode.non_defaults():
+            logger.info("Whisper decoder settings: %s", decode.non_defaults())
 
         # Hand faster-whisper decoded samples, never a path: given a path it
         # decodes with PyAV, and its av.open(metadata_errors=...) call crashes
@@ -224,6 +329,7 @@ class FasterWhisperBackend:
             language=language,
             beam_size=5,
             vad_filter=True,
+            **decode.transcribe_kwargs(),
         )
 
         segments: list[TranscriptSegment] = []
