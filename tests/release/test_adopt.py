@@ -664,5 +664,7 @@ def test_userless_scp_url_matches_other_spellings():
     assert normalize_remote_url("gitlab.example.com:courses/py-de.git") == normalize_remote_url(
         "https://gitlab.example.com/courses/py-de"
     )
-    # A Windows drive letter is not an scp host.
-    assert normalize_remote_url(r"C:\repos\py-de.git").startswith("c:/")
+    # A Windows drive letter is not an scp host: the drive survives as part
+    # of a local path (absolute on Windows, cwd-relative elsewhere) instead
+    # of turning into the scp key "c/repos/py-de".
+    assert normalize_remote_url(r"C:\repos\py-de.git").endswith("c:/repos/py-de")
