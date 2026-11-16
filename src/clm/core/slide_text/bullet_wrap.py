@@ -24,6 +24,9 @@ text that may already carry the deck layout -- wrapped continuations and
 indented child bullets -- back into that list before rendering it, so every
 narrative-cell writer (``clm harvest accept``, ``update_narrative``, the
 companion writers) agrees on one model of a bullet (#1162).
+:func:`narrative_prompt_text` renders the same model as *logical* bullets --
+one line per bullet, children indented, continuations unwrapped -- for the
+narration the LLM prompts carry (#1280).
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ __all__ = [
     "NARRATIVE_WIDTH",
     "NarrativeBullet",
     "format_narrative_body",
+    "narrative_prompt_text",
     "parse_narrative_text",
     "render_narrative_bullets",
     "wrap_bullet",
@@ -231,3 +235,25 @@ def format_narrative_body(text: str, comment_token: str = "#") -> list[str]:
         else:
             body.append(comment_token)
     return body
+
+
+def narrative_prompt_text(text: str) -> str:
+    """Narrative text -> logical bullets, the form narration takes in an LLM prompt.
+
+    ``text`` is narrative text with the comment tokens stripped but the
+    indentation kept (the input :func:`parse_narrative_text` reads). The
+    result has one line per bullet -- ``- text`` for a top-level bullet,
+    ``  - text`` for a child -- with wrapped continuations joined onto
+    their bullet, so the model sees the nesting but none of the
+    80-column layout breaks; the writers re-wrap its answer. Markdown is
+    kept verbatim, ``**[`` marker lines are kept, and runs of blank lines
+    collapse to one (#1280).
+    """
+    lines: list[str] = []
+    for item in parse_narrative_text(text):
+        if isinstance(item, NarrativeBullet):
+            lines.append(f"- {item.text}")
+            lines.extend(f"  - {child}" for child in item.children)
+        elif item or (lines and lines[-1]):
+            lines.append(item)
+    return "\n".join(lines).strip()

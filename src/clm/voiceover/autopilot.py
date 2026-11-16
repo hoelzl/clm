@@ -575,12 +575,15 @@ def _warn_propagation_overreach(results: list) -> None:
 
 
 def _extract_baseline(slide_group, tag: str) -> str:
-    """Extract existing voiceover/notes text for the given tag from a slide group."""
+    """Extract existing voiceover/notes text for the given tag from a slide group.
+
+    Returned as logical bullets (``Cell.narrative_text``) -- the form the
+    merge/propagate prompts carry (#1280)."""
     parts = []
     for cell in slide_group.notes_cells:
         # Only include cells matching the target tag
         if tag in cell.metadata.tags:
-            text = cell.text_content()
+            text = cell.narrative_text()
             if text:
                 parts.append(text)
     return "\n".join(parts)

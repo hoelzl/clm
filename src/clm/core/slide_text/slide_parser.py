@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.core.slide_text.bullet_wrap import narrative_prompt_text
 from clm.core.utils.prog_lang_utils import comment_token_for_path
 
 
@@ -98,6 +99,18 @@ class Cell:
             return _strip_markdown(self.content, self.comment_token)
         return _strip_code_comments(self.content, self.comment_token)
 
+    def narrative_text(self) -> str:
+        """The cell's narration as logical bullets, for LLM prompts (#1280).
+
+        Unlike :meth:`text_content` (flat plain text, for OCR matching) this
+        keeps the bullet structure: one line per bullet, child bullets
+        indented under their parent, wrapped continuations unwrapped, and
+        markdown verbatim. See
+        :func:`~clm.core.slide_text.bullet_wrap.narrative_prompt_text`."""
+        return narrative_prompt_text(
+            _strip_comment_token_keep_indent(self.content, self.comment_token)
+        )
+
 
 @dataclass
 class SlideGroup:
@@ -128,10 +141,13 @@ class SlideGroup:
 
     @property
     def notes_text(self) -> str:
-        """Existing speaker notes text, if any."""
+        """Existing speaker notes text, if any, as logical bullets (#1280).
+
+        This is the narration the LLM prompts carry, so it keeps the bullet
+        structure (see :meth:`Cell.narrative_text`)."""
         parts = []
         for cell in self.notes_cells:
-            text = cell.text_content()
+            text = cell.narrative_text()
             if text:
                 parts.append(text)
         return "\n".join(parts)
@@ -396,6 +412,21 @@ def _strip_comment_prefix(line: str, comment_token: str) -> str:
     if line.startswith(comment_token):
         line = line[len(comment_token) :]
     return line.lstrip(" ")
+
+
+def _strip_comment_token_keep_indent(content: str, comment_token: str) -> str:
+    """Remove the comment token and the one space after it from each line,
+    keeping any further indentation -- the input
+    :func:`~clm.core.slide_text.bullet_wrap.parse_narrative_text` reads, where
+    an indented line continues or nests under the bullet above."""
+    out = []
+    for line in content.split("\n"):
+        if line.startswith(comment_token):
+            line = line[len(comment_token) :]
+            if line.startswith(" "):
+                line = line[1:]
+        out.append(line)
+    return "\n".join(out)
 
 
 def _strip_markdown(content: str, comment_token: str = "#") -> str:
