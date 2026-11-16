@@ -118,6 +118,8 @@ _TRAILING_EXACT = frozenset(
 _TRAILING_CONTAINS = re.compile(
     r"link in the description|subscribe|thanks for watching|thank you for watching"
     r"|fürs zuschauen|untertitel|amara org"
+    # German broadcast-subtitle credit, e.g. "ARD Text im Auftrag von Funk" (#1105).
+    r"|\bard text\b|im auftrag von funk"
 )
 
 

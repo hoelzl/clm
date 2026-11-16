@@ -271,10 +271,12 @@ repetition and trailing-phrase flags apply to them.
 
 The decoder settings that guard against repetition loops and silence
 hallucinations (`condition_on_previous_text`, `no_speech_threshold`,
-`compression_ratio_threshold`) default to faster-whisper's own values and
-can be tuned with the `CLM_WHISPER_*` environment variables: see
-"Speech Recognition" in [configuration.md](configuration.md). A loop that
-persists is usually cured by `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT=0`.
+`compression_ratio_threshold`) can be tuned with the `CLM_WHISPER_*`
+environment variables: see "Speech Recognition" in
+[configuration.md](configuration.md). Conditioning on the previous text is
+off by default, which prevents most repetition loops; a transcript cached
+before that default changed may still loop, and `--refresh-cache`
+transcribes it again.
 
 ```bash
 pip install "coding-academy-lecture-manager[voiceover]"

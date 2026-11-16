@@ -42,11 +42,17 @@ def _clean_whisper_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_defaults_are_faster_whispers_own() -> None:
+def test_defaults_are_faster_whispers_own_except_conditioning() -> None:
+    """#1105's A/B run made ``condition_on_previous_text=False`` clm's
+    default; the thresholds stay faster-whisper's own."""
     faster_whisper = pytest.importorskip("faster_whisper")
     params = inspect.signature(faster_whisper.WhisperModel.transcribe).parameters
     for name, value in WhisperDecodeOptions().transcribe_kwargs().items():
-        assert params[name].default == value, name
+        if name == "condition_on_previous_text":
+            assert params[name].default is True
+            assert value is False
+        else:
+            assert params[name].default == value, name
 
 
 def test_from_env_unset_is_default() -> None:
@@ -57,18 +63,18 @@ def test_from_env_unset_is_default() -> None:
 def test_from_env_parses_all_three() -> None:
     opts = WhisperDecodeOptions.from_env(
         {
-            ENV_CONDITION_ON_PREVIOUS_TEXT: "false",
+            ENV_CONDITION_ON_PREVIOUS_TEXT: "true",
             ENV_NO_SPEECH_THRESHOLD: "0.45",
             ENV_COMPRESSION_RATIO_THRESHOLD: "none",
         }
     )
     assert opts == WhisperDecodeOptions(
-        condition_on_previous_text=False,
+        condition_on_previous_text=True,
         no_speech_threshold=0.45,
         compression_ratio_threshold=None,
     )
     assert opts.non_defaults() == {
-        "condition_on_previous_text": False,
+        "condition_on_previous_text": True,
         "no_speech_threshold": 0.45,
         "compression_ratio_threshold": None,
     }
@@ -109,7 +115,7 @@ def test_default_settings_reach_model(mock_get_model, _audio, tmp_path: Path) ->
         "language": "de",
         "beam_size": 5,
         "vad_filter": True,
-        "condition_on_previous_text": True,
+        "condition_on_previous_text": False,
         "no_speech_threshold": 0.6,
         "compression_ratio_threshold": 2.4,
     }
@@ -122,13 +128,13 @@ def test_env_settings_reach_model(
 ) -> None:
     """The subprocess worker builds the backend without options: it must
     pick the settings up from the inherited environment."""
-    monkeypatch.setenv(ENV_CONDITION_ON_PREVIOUS_TEXT, "0")
+    monkeypatch.setenv(ENV_CONDITION_ON_PREVIOUS_TEXT, "1")
     monkeypatch.setenv(ENV_NO_SPEECH_THRESHOLD, "0.5")
     monkeypatch.setenv(ENV_COMPRESSION_RATIO_THRESHOLD, "2.0")
     model = mock_get_model.return_value = _model()
     FasterWhisperBackend(model_size="tiny").transcribe(tmp_path / "a.wav", language="de")
     _, kwargs = model.transcribe.call_args
-    assert kwargs["condition_on_previous_text"] is False
+    assert kwargs["condition_on_previous_text"] is True
     assert kwargs["no_speech_threshold"] == 0.5
     assert kwargs["compression_ratio_threshold"] == 2.0
     assert kwargs["vad_filter"] is True
@@ -190,7 +196,7 @@ def test_non_default_settings_miss_the_transcript_cache(
 
     assert run()[1] is False
     assert run()[1] is True  # default settings: cached
-    monkeypatch.setenv(ENV_CONDITION_ON_PREVIOUS_TEXT, "false")
+    monkeypatch.setenv(ENV_CONDITION_ON_PREVIOUS_TEXT, "true")
     assert run()[1] is False  # different decode: re-transcribed
     assert run()[1] is True
     assert len(calls) == 2
@@ -199,9 +205,9 @@ def test_non_default_settings_miss_the_transcript_cache(
 def test_other_backends_ignore_the_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     from clm.voiceover.cache import decode_cache_key
 
-    monkeypatch.setenv(ENV_CONDITION_ON_PREVIOUS_TEXT, "false")
+    monkeypatch.setenv(ENV_CONDITION_ON_PREVIOUS_TEXT, "true")
     assert decode_cache_key("cohere") == ()
-    assert decode_cache_key("faster-whisper") == (("condition_on_previous_text", False),)
+    assert decode_cache_key("faster-whisper") == (("condition_on_previous_text", True),)
 
 
 def test_alignment_config_names_non_default_settings_only(

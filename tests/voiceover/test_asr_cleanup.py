@@ -195,9 +195,15 @@ class TestFlags:
             _seg(1.0, 2.0, "Thanks for watching!"),
             _seg(2.0, 3.0, "Check the link in the description."),
             _seg(3.0, 4.0, "Untertitel im Auftrag des ZDF, 2017"),
+            _seg(4.0, 5.0, "ARD Text im Auftrag von Funk"),
         )
         flags = [s.flags for s in clean_transcript(tx).segments]
-        assert flags == [(), ("trailing_phrase",), ("trailing_phrase",), ("trailing_phrase",)]
+        assert flags == [(), *[("trailing_phrase",)] * 4]
+
+    def test_ard_text_needs_a_word_boundary(self):
+        """A final "Standard Text" is speech, not the ARD subtitle credit."""
+        tx = _tx(_seg(0.0, 1.0, "Intro."), _seg(1.0, 2.0, "Das ist der Standard Text."))
+        assert [s.flags for s in clean_transcript(tx).segments] == [(), ()]
 
     def test_marker_word_inside_long_final_speech_is_not_flagged(self):
         """Review finding: a whole-video segment mentioning "subscribe" is
