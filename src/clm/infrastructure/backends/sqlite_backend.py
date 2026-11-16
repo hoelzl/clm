@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from attrs import define, field
 
-from clm.core.backend import JobsPendingTimeoutError
+from clm.core.backend import JobsPendingTimeoutError, SubmissionDiscardedError
 from clm.core.build_profiling import now as profiler_now
 from clm.core.build_profiling import profiler
 from clm.core.messaging.base_classes import Payload
@@ -317,6 +317,16 @@ class SqliteBackend(LocalOpsBackend):
     # in memory at once. Created lazily on the event loop.
     _submission_semaphore: "asyncio.Semaphore | None" = field(init=False, default=None)
 
+    # Submission epoch (issue #1270). Every submission captures the epoch when
+    # it starts; ``discard_pending_submissions`` bumps it when a stage aborts,
+    # and the submit thread drops any submission whose epoch is stale before
+    # it reaches the jobs DB. The shield in ``_execute_operation_impl`` keeps
+    # an already-queued submission running after its caller is cancelled, so
+    # without this check jobs kept being INSERTed after the build aborted.
+    # Plain int: reads/writes are atomic under the GIL, and the submit thread
+    # only reads it.
+    _submission_epoch: int = field(init=False, default=0)
+
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
         # Database should already be initialized, but ensure it exists
@@ -373,6 +383,17 @@ class SqliteBackend(LocalOpsBackend):
                 cache_hit = await self._execute_operation_impl(operation, payload)
             finally:
                 profiler.record_execute_op(profiler_now() - start, cache_hit)
+
+    def discard_pending_submissions(self) -> None:
+        """Drop every submission that has not INSERTed its job yet (#1270).
+
+        Called when a stage fails and the build aborts. Submissions queued on
+        (or running in) the submit thread finish without enqueueing a job, so
+        no worker job is created after the abort is decided. Submissions that
+        start after this call use the new epoch and run normally.
+        """
+        self._submission_epoch += 1
+        logger.debug("Discarding pending job submissions (stage aborted)")
 
     def _ensure_submission_semaphore(self) -> asyncio.Semaphore:
         """Lazily create the per-operation concurrency gate on the event loop.
@@ -560,14 +581,20 @@ class SqliteBackend(LocalOpsBackend):
         # thread-safe (the DB result-cache replay above, db_manager.get_result,
         # stays on the loop for the same reason).
         _offload_t0 = profiler_now() if profiler.enabled else 0.0
+        submission_epoch = self._submission_epoch
+
+        def _submit_unless_discarded() -> tuple[str, int | None]:
+            # Runs on the submit thread, possibly long after it was queued:
+            # a stage that aborted meanwhile must not get new jobs (#1270).
+            if submission_epoch != self._submission_epoch:
+                return ("discarded", None)
+            return self._submit_job_blocking(
+                payload, job_type, force_execution, submission_epoch=submission_epoch
+            )
 
         async def _submit_and_track() -> tuple[str, int | None]:
             outcome_, job_id_ = await asyncio.get_running_loop().run_in_executor(
-                self._ensure_submit_executor(),
-                self._submit_job_blocking,
-                payload,
-                job_type,
-                force_execution,
+                self._ensure_submit_executor(), _submit_unless_discarded
             )
             # Register the job INSIDE this shielded coroutine, so a
             # cancellation of the caller (e.g. a sibling submission op raising
@@ -605,6 +632,16 @@ class SqliteBackend(LocalOpsBackend):
         outcome, job_id = await asyncio.shield(submit_task)
         if profiler.enabled:
             profiler.record_submit_offload(profiler_now() - _offload_t0)
+
+        if outcome == "discarded":
+            # The stage aborted before this submission reached the jobs DB
+            # (#1270); nothing was enqueued. Raise rather than return: a
+            # caller that was not cancelled must not treat the dropped job as
+            # a produced output.
+            logger.debug(f"Discarded job submission for {payload.input_file} (stage aborted)")
+            raise SubmissionDiscardedError(
+                f"Job submission for {payload.input_file} discarded: the build stage aborted"
+            )
 
         if outcome == "jobcache_hit":
             # Stored output is already on disk (results_cache hit). Replay its
@@ -712,7 +749,12 @@ class SqliteBackend(LocalOpsBackend):
         }
 
     def _submit_job_blocking(
-        self, payload: Payload, job_type: str, force_execution: bool = False
+        self,
+        payload: Payload,
+        job_type: str,
+        force_execution: bool = False,
+        *,
+        submission_epoch: int | None = None,
     ) -> tuple[str, int | None]:
         """Synchronous job-submission tail, run off the event loop.
 
@@ -727,6 +769,13 @@ class SqliteBackend(LocalOpsBackend):
         ``executed_notebooks`` (Recording/Speaker HTML with a cold execution
         cache); without it the job cache would short-circuit the very run the
         guard forced and leave the execution cache cold (issue #579).
+
+        ``submission_epoch`` is the epoch the submission started in. When
+        :meth:`discard_pending_submissions` has bumped it since (the stage
+        aborted), the job is not INSERTed and ``("discarded", None)`` is
+        returned (issue #1270). The check sits right before the INSERT
+        because the worker-availability wait above it can block for seconds.
+        ``None`` skips the check.
 
         Runs on a :attr:`_submit_executor` thread, so it must touch ONLY
         thread-safe resources: ``JobQueue`` keeps a per-thread SQLite connection
@@ -775,6 +824,8 @@ class SqliteBackend(LocalOpsBackend):
         # (the file_event_handler), not here.
         payload_dict = payload.model_dump(mode="json")
         correlation_id = getattr(payload, "correlation_id", None)
+        if submission_epoch is not None and submission_epoch != self._submission_epoch:
+            return ("discarded", None)
         job_id = self.job_queue.add_job(
             job_type=job_type,
             input_file=str(payload.input_file),

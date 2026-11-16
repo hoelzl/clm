@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from clm.build.output_formatter import OutputFormatter
+from clm.core.backend import SourceFileVanishedError, SubmissionDiscardedError
 from clm.core.build_data_classes import (
     BuildError,
     BuildSummary,
@@ -19,6 +20,32 @@ from clm.core.build_data_classes import (
 
 if TYPE_CHECKING:
     from clm.core.output_write_registry import OutputWriteRegistry
+
+
+def _vanished_source_files(exc: BaseException) -> list[SourceFileVanishedError] | None:
+    """Return the vanished-source errors if they alone caused ``exc`` (#1270).
+
+    Unwraps (nested) exception groups. Cancellations and discarded
+    submissions are collateral of the stage tearing down and are ignored. Returns ``None`` when
+    any other failure is involved, or when there is no vanished file at all.
+    """
+    import asyncio
+    import builtins
+
+    group_type = getattr(builtins, "BaseExceptionGroup", None)
+    vanished: list[SourceFileVanishedError] = []
+
+    def visit(e: BaseException) -> bool:
+        if group_type is not None and isinstance(e, group_type):
+            return all(visit(sub) for sub in e.exceptions)
+        if isinstance(e, SourceFileVanishedError):
+            vanished.append(e)
+            return True
+        return isinstance(e, (asyncio.CancelledError, SubmissionDiscardedError))
+
+    if not visit(exc) or not vanished:
+        return None
+    return vanished
 
 
 class BuildReporter:
@@ -340,6 +367,39 @@ class BuildReporter:
         group_type = getattr(builtins, "BaseExceptionGroup", None)
         if group_type is not None and isinstance(exc, group_type):
             messages.extend(f"{type(sub).__name__}: {sub}" for sub in exc.exceptions[:5])
+
+        # A course source file that vanished mid-build (deleted or moved
+        # after the course was loaded) is the author's problem, not clm's:
+        # classify the abort as a user error naming the file (#1270). Only
+        # when *every* failure is such a vanished file — a real
+        # infrastructure failure next to it keeps the infrastructure label.
+        # The category stays ``build_aborted``: the JSON report and the
+        # sweep/exit logic key on the abort, not on the error type.
+        vanished = _vanished_source_files(exc)
+        if vanished:
+            missing = sorted({str(e.filename) for e in vanished if e.filename})
+            shown = ", ".join(missing[:5]) + (", ..." if len(missing) > 5 else "")
+            self.errors.append(
+                BuildError(
+                    error_type="user",
+                    category="build_aborted",
+                    severity="fatal",
+                    file_path=missing[0] if missing else "",
+                    message=(
+                        f"Source file(s) disappeared during the build: {shown}"
+                        if missing
+                        else "\n".join(messages)
+                    ),
+                    actionable_guidance=(
+                        "A course file was deleted or moved after the build "
+                        "loaded the course. Restore it, or remove the "
+                        "references to it, then rebuild. The output tree is "
+                        "incomplete."
+                    ),
+                )
+            )
+            return
+
         self.errors.append(
             BuildError(
                 error_type="infrastructure",

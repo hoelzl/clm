@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from collections import defaultdict
+from collections.abc import Coroutine
 
 # TaskGroup is available in Python 3.11+
 if sys.version_info >= (3, 11):
@@ -32,17 +33,17 @@ else:
 
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from attrs import Factory, define, field
 
-from clm.core.backend import Backend
+from clm.core.backend import Backend, SourceFileVanishedError
 from clm.core.course_file import CourseFile
 from clm.core.course_spec import CourseSpec, SectionSelection
 from clm.core.dir_group import DirGroup
 from clm.core.execution_dependencies import ExecutionDependencyResolver
 from clm.core.image_registry import ImageRegistry
-from clm.core.operation import NoOperation
+from clm.core.operation import NoOperation, Operation
 from clm.core.output_target import OutputTarget
 from clm.core.section import Section
 from clm.core.topic import ResolvedInclude, Topic
@@ -67,6 +68,65 @@ if TYPE_CHECKING:
     from clm.core.topic_resolver import TopicMatch
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_submission_and_wait(
+    backend: Backend, submit_jobs: Coroutine[Any, Any, None], all_submitted: asyncio.Event
+) -> None:
+    """Run a stage's job submission concurrently with its completion polling.
+
+    When either side fails (an operation raised, e.g. its input file vanished,
+    or the wait gave up) the stage ``TaskGroup`` cancels the rest, and the
+    build aborts. Submissions already handed to the backend survive that
+    cancellation on purpose (they are shielded, issue #617), so the backend
+    is told to discard them before they enqueue worker jobs: once the abort
+    is decided, no new job may be submitted (issue #1270).
+    """
+    try:
+        async with TaskGroup() as outer_tg:
+            outer_tg.create_task(submit_jobs)
+            outer_tg.create_task(backend.wait_for_completion(all_submitted))
+    except BaseException:
+        backend.discard_pending_submissions()
+        raise
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+async def _execute_stage_operation(op: Operation, backend: Backend, course_root: Path) -> None:
+    """Execute one stage operation; on failure, stop the stage's submissions.
+
+    Any exception an operation raises aborts its stage (the ``TaskGroup``
+    cancels the siblings). The backend is told to discard in-flight
+    submissions right here, at the first failure, not only after the
+    ``TaskGroup`` has finished tearing down (issue #1270).
+
+    A ``FileNotFoundError`` for a file under the course root means a course
+    file was enumerated at load time and deleted or moved since — a content
+    problem, re-raised as :class:`SourceFileVanishedError` so the abort is
+    reported as a user error. Missing files outside the course (e.g. clm's
+    own templates) stay plain errors: they may well be clm bugs.
+    """
+    try:
+        await op.execute(backend)
+    except FileNotFoundError as e:
+        backend.discard_pending_submissions()
+        if (
+            not isinstance(e, SourceFileVanishedError)
+            and e.filename
+            and _is_within(Path(e.filename), course_root)
+        ):
+            raise SourceFileVanishedError.from_os_error(e) from e
+        raise
+    except Exception:
+        backend.discard_pending_submissions()
+        raise
+
 
 #: Directory name for the build-internal intermediates of implicit cache-producer
 #: executions (issue #890). Dot-prefixed so it is unmistakably build state, and
@@ -731,13 +791,11 @@ class Course(NotebookMixin):
                     )
                     if not isinstance(op, NoOperation):
                         logger.debug(f"Processing file {file.path} for target '{target.name}'")
-                        tg.create_task(op.execute(backend))
+                        tg.create_task(_execute_stage_operation(op, backend, self.course_root))
                         num_operations += 1
             all_submitted.set()
 
-        async with TaskGroup() as outer_tg:
-            outer_tg.create_task(submit_jobs())
-            outer_tg.create_task(backend.wait_for_completion(all_submitted))
+        await _run_submission_and_wait(backend, submit_jobs(), all_submitted)
 
         return num_operations
 
@@ -886,12 +944,10 @@ class Course(NotebookMixin):
                             kinds=sorted(notebook_trees),
                             config=config,
                         )
-                        tg.create_task(op.execute(backend))
+                        tg.create_task(_execute_stage_operation(op, backend, self.course_root))
             all_submitted.set()
 
-        async with TaskGroup() as outer_tg:
-            outer_tg.create_task(submit_jobs())
-            outer_tg.create_task(backend.wait_for_completion(all_submitted))
+        await _run_submission_and_wait(backend, submit_jobs(), all_submitted)
 
     async def process_dir_group_for_targets(self, backend: Backend):
         """Process directory groups for all targets.
