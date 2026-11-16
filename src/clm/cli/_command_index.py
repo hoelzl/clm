@@ -9,6 +9,7 @@ COMMAND_PATHS: tuple[tuple[str, ...], ...] = (
     ("build",),
     ("cache",),
     ("cache", "explain"),
+    ("cache", "forget"),
     ("calendar",),
     ("calendar", "check"),
     ("calendar", "generate"),
