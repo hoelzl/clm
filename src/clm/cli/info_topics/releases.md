@@ -118,6 +118,12 @@ renamed on the channel's next sync — no manual migration.
 Once a `topic_id` appears in `frozen`, subsequent syncs skip it — students keep
 exactly what they were given. Only `--refreeze` overrides this.
 
+A record written by `clm release adopt` has `source_commit` set to
+`published:<sha>` (the destination repo's HEAD, or `published:unknown`), a
+`topic_digest` computed from the destination's bytes, and
+`"differs_from_build": true` when those bytes differ from the build it was
+compared against. A later `--refreeze` replaces the record with an ordinary one.
+
 ## `clm release` commands
 
 ### Addressing one or many channels
@@ -375,7 +381,93 @@ How the pieces interact:
 To migrate a running cohort, point the solutions channels' `path` at the
 existing materials working trees: students keep their remotes, the materials
 stream adopts the legacy `.clm-released.json` on its next sync, and the
-standalone solutions repos simply stop receiving syncs.
+standalone solutions repos simply stop receiving syncs. A cohort that was
+published by **pushing an output target's repo** (no release channel yet)
+migrates with `clm release adopt` instead — see the next section.
+
+### `clm release adopt` — migrating a push-published course
+
+`release sync` assumes it is the first writer into a destination: a released
+topic that is not frozen yet is *copied from the current build*. Pointed at a
+repo students already work in, the first sync would replace what they have
+with today's build. `adopt` freezes what the destination **already holds**,
+without copying:
+
+```
+clm release adopt SPEC --channel NAME (TOPIC_ID... | --section SEL... | --all-present)
+                  [--dry-run] [--json] [--deliver-missing] [--keep-output-remote]
+```
+
+For each selected topic it compares the destination with the current build's
+provenance manifest (language-restricted and re-rooted for the channel's
+`lang`, exactly like `sync`), file by file:
+
+| File | Meaning |
+|---|---|
+| `same` | destination bytes equal the build's `content_hash` |
+| `differs` | present, but different — students keep their bytes |
+| `missing` | not in the destination (often a renumbered deck: students have the old name) |
+
+| Topic action | When | Effect |
+|---|---|---|
+| `adopt` | no file missing | frozen as the destination has it: `source_commit: "published:<dest HEAD>"`, digest from the destination's bytes, `differs_from_build` when any file differs; appended to the ledger |
+| `refuse-missing` | some file missing | neither added nor frozen (default) |
+| `skip-frozen` | already frozen for this stream | nothing |
+| `skip-unbuilt` / `skip-failed` | the build has no files for it / it failed in the build | nothing |
+
+- **Bookkeeping only.** Adopt never copies, deletes or modifies destination
+  content. It writes the stream's `.clm-released.<stream>.json`, appends the
+  adopted topics to the channel ledger, and sets `skeleton_frozen: true`
+  **without copying the skeleton**: skeleton files the destination lacks are
+  listed and reach students only via `sync --refreeze-skeleton PATTERN` or
+  `<evergreen>`. The one exception is `--deliver-missing`, which copies **only
+  the missing files** of a topic (never overwriting) and then freezes it.
+  A run that adopts nothing (and finds nothing frozen before) records
+  nothing at all — no frozen manifest, no skeleton freeze, remotes untouched.
+- **An explicit selection is required.** TOPIC_IDs, `--section` (the `release
+  section` selector grammar), or `--all-present` (every topic with at least
+  one built file in the destination; topics it holds none of stay for the
+  normal `add` + `sync` flow). With none, it is a usage error — adopting
+  freezes for good.
+- **Cuts the old push path.** Adopt removes the `origin` remote of every
+  output-target working tree whose origin (fetch or push URL) is this
+  channel's origin (the channel clone's actual origin, or its derived /
+  `repo=` URL; https, ssh and scp-like spellings compare equal), printing the
+  URL and the `git remote add` command that restores it. `--keep-output-remote`
+  keeps it; `--dry-run` only reports. Independently, `clm git push`, `clm git
+  sync` and `clm git init` in output-target mode refuse to push to, or add, a
+  remote that is a release channel's origin; `--allow-channel-remote`
+  overrides.
+- `--dry-run --json` emits one document per channel; each `rows` entry has
+  `action`, the `same` / `differs` / `missing` counts and the paths. The
+  `differs` rows are the "what would a rebuild change for students" report.
+- Shared destinations work as for `sync`: each stream adopts into its own
+  frozen manifest.
+
+**Migration procedure** (e.g. a `shared` target whose `output/shared/<course>-de`
+was pushed to students):
+
+1. Optionally make the published state and the build agree first: build, and
+   push the target one last time the old way. Adopt then reports `differs: 0`.
+   Without this step adopt still works; the `differs` rows tell you what
+   students won't receive.
+2. Add `<release-channels source-target="shared">` with one channel per
+   language. Each channel's `path` is a **fresh clone location outside the
+   output target** (`clm build` owns its output tree), and its `repo="…"`
+   attribute names the existing remote.
+3. `clm git init SPEC --channel NAME` clones the existing remote (or clone it
+   by hand).
+4. Drop or change the target's `<remote-path>` in the spec, so `clm git init`
+   does not wire the output tree to the cohort repo again. (`adopt` removes the
+   output tree's `origin` itself.)
+5. `clm release adopt SPEC --channel NAME --all-present --dry-run`, review,
+   then run it without `--dry-run`.
+6. `clm git sync SPEC --channel NAME -m "Adopt published content"` publishes
+   only the new `.clm-released.<stream>.json`; students pull exactly one new
+   file.
+
+From then on the normal flow applies: `release add` / `section` + `sync` for
+new topics, `--refreeze` for deliberate corrections.
 
 ### `clm release provision`
 
@@ -410,6 +502,11 @@ are visited once per repo, not once per channel.
 | `clm git reset SPEC [--channel NAME]` | Hard-reset to remote tracking branch (discards local changes) |
 
 `clm git sync --amend` implies `--force-with-lease` (required for amended commits).
+
+In output-target mode, `init`, `push` and `sync` refuse a remote that is a
+release channel's origin (the channel's actual origin or its derived / `repo=`
+URL): after `clm release adopt` that repository is the frozen cohort state.
+Pass `--allow-channel-remote` to override.
 
 ## Standard workflow
 

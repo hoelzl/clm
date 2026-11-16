@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,8 +23,14 @@ from attrs import frozen
 
 from clm.cli.commands.git import (
     OutputRepo,
+    all_output_target_repos,
     commit_and_push_repo,
     find_release_channel_repos,
+    normalize_remote_url,
+    porcelain_changes,
+    read_origin_url,
+    release_channel_origins,
+    transport_safety_config_args,
 )
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import (
@@ -43,6 +50,14 @@ from clm.core.provenance_manifest import (
     manifest_files_by_topic,
     manifest_files_in,
     restrict_manifest_to_language,
+)
+from clm.release.adopt import (
+    PUBLISHED_PREFIX,
+    REFUSE_MISSING,
+    AdoptPlan,
+    apply_adopt,
+    plan_adopt,
+    topics_present,
 )
 from clm.release.frozen_manifest import FROZEN_FILENAME, load_frozen_manifest
 from clm.release.ledger import Ledger, partition_known
@@ -720,6 +735,49 @@ def _section_label(section: SectionSpec) -> str:
     return section.name.en or section.name.de
 
 
+def _section_topic_ids(
+    spec_file: Path, selectors: tuple[str, ...], *, err: bool = False
+) -> list[str]:
+    """Expand section *selectors* to their topic ids (``release section`` grammar).
+
+    Parses keeping disabled sections so the selector indices line up with the
+    authoring order (see CourseSpec.resolve_section_selectors). Disabled
+    sections never land in resolved_indices — they are collected separately
+    into skipped_disabled and reported — so the result holds only enabled
+    sections' topics, in spec order. *err* routes the report lines to stderr
+    (``--json`` callers).
+    """
+    try:
+        spec = CourseSpec.from_file(spec_file, keep_disabled=True)
+        selection = spec.resolve_section_selectors(list(selectors))
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
+
+    for label in selection.skipped_disabled:
+        click.echo(f"Warning: skipping disabled section '{label}' (enabled=\"false\").", err=err)
+
+    topic_ids: list[str] = []
+    seen: set[str] = set()
+    selected_labels: list[str] = []
+    for idx in selection.resolved_indices:
+        section = spec.sections[idx]
+        selected_labels.append(_section_label(section))
+        for topic in section.topics:
+            if topic.id not in seen:
+                seen.add(topic.id)
+                topic_ids.append(topic.id)
+
+    if not topic_ids:
+        raise click.ClickException("The selected section(s) declare no topics; nothing to release.")
+
+    click.echo(
+        f"Selected {len(selected_labels)} of {len(spec.sections)} section(s): "
+        + ", ".join(selected_labels),
+        err=err,
+    )
+    return topic_ids
+
+
 @release_group.command("week")
 @_SPEC_ARG
 @click.argument("selectors", nargs=-1, required=True)
@@ -753,40 +811,7 @@ def week_cmd(
     silently shifting which topics get released.
     """
     targets = _ledger_targets(spec_file, channels, all_channels, ledger_path)
-
-    # Parse keeping disabled sections so the selector indices line up with the
-    # authoring order (see CourseSpec.resolve_section_selectors). Disabled
-    # sections never land in resolved_indices — they are collected separately
-    # into skipped_disabled — so expanding resolved_indices to topics yields
-    # only enabled sections' topics.
-    try:
-        spec = CourseSpec.from_file(spec_file, keep_disabled=True)
-        selection = spec.resolve_section_selectors(list(selectors))
-    except CourseSpecError as e:
-        raise click.ClickException(str(e)) from None
-
-    for label in selection.skipped_disabled:
-        click.echo(f"Warning: skipping disabled section '{label}' (enabled=\"false\").")
-
-    topic_ids: list[str] = []
-    seen: set[str] = set()
-    selected_labels: list[str] = []
-    for idx in selection.resolved_indices:
-        section = spec.sections[idx]
-        selected_labels.append(_section_label(section))
-        for topic in section.topics:
-            if topic.id not in seen:
-                seen.add(topic.id)
-                topic_ids.append(topic.id)
-
-    if not topic_ids:
-        raise click.ClickException("The selected section(s) declare no topics; nothing to release.")
-
-    click.echo(
-        f"Selected {len(selected_labels)} of {len(spec.sections)} section(s): "
-        + ", ".join(selected_labels)
-    )
-
+    topic_ids = _section_topic_ids(spec_file, selectors)
     for label, target_ledger in targets:
         prefix = f"[{label}] " if label and len(targets) > 1 else ""
         _append_to_ledger(target_ledger, topic_ids, prefix)
@@ -1196,6 +1221,46 @@ def _missing_manifest_message(source_path: Path, spec_file: Path | None) -> str:
     )
 
 
+def _load_channel_manifest(
+    spec_file: Path | None, source_path: Path, effective_lang: str
+) -> tuple[dict, Path]:
+    """The source build's manifest as the channel sees it, and its file root.
+
+    Language scoping (issue #293): with *effective_lang* the manifest is
+    restricted to that language and both it and the returned source root are
+    re-rooted at the language directory, so manifest paths are
+    destination-relative.
+    """
+    manifest_path = find_spec_manifest(
+        source_path, spec_file.name if spec_file is not None else None
+    )
+    if manifest_path is None:
+        raise click.ClickException(_missing_manifest_message(source_path, spec_file))
+    manifest = load_manifest(manifest_path)
+    if not effective_lang:
+        return manifest, source_path
+    if spec_file is None:
+        raise click.ClickException(
+            "--language requires the SPEC_FILE argument (it resolves the "
+            "language directory name from the spec)."
+        )
+    lang_dir = str(CourseSpec.from_file(spec_file).output_dir_name[effective_lang])
+    lang_root = source_path / lang_dir
+    if not lang_root.is_dir():
+        raise click.ClickException(
+            f"Language root not found: {lang_root}. Build the source target "
+            f"for language {effective_lang!r} first."
+        )
+    manifest = restrict_manifest_to_language(manifest, effective_lang, lang_dir)
+    if not manifest["files"]:
+        raise click.ClickException(
+            f"The provenance manifest records no {effective_lang!r} files under "
+            f"{lang_dir!r}; nothing could ever be promoted. Was the source "
+            f"built without that language?"
+        )
+    return manifest, lang_root
+
+
 def _sync_one_channel(
     *,
     spec_file: Path | None,
@@ -1236,37 +1301,8 @@ def _sync_one_channel(
     if not source_path.is_dir():
         raise click.ClickException(f"Source output root not found: {source_path}")
 
-    manifest_path = find_spec_manifest(
-        source_path, spec_file.name if spec_file is not None else None
-    )
-    if manifest_path is None:
-        raise click.ClickException(_missing_manifest_message(source_path, spec_file))
-    manifest = load_manifest(manifest_path)
-
-    # Language scoping (issue #293): restrict the manifest to one language and
-    # re-root both it and the copy source at the language directory.
     effective_lang = language or channel_lang
-    if effective_lang:
-        if spec_file is None:
-            raise click.ClickException(
-                "--language requires the SPEC_FILE argument (it resolves the "
-                "language directory name from the spec)."
-            )
-        lang_dir = str(CourseSpec.from_file(spec_file).output_dir_name[effective_lang])
-        lang_root = source_path / lang_dir
-        if not lang_root.is_dir():
-            raise click.ClickException(
-                f"Language root not found: {lang_root}. Build the source target "
-                f"for language {effective_lang!r} first."
-            )
-        manifest = restrict_manifest_to_language(manifest, effective_lang, lang_dir)
-        if not manifest["files"]:
-            raise click.ClickException(
-                f"The provenance manifest records no {effective_lang!r} files under "
-                f"{lang_dir!r}; nothing could ever be promoted. Was the source "
-                f"built without that language?"
-            )
-        source_path = lang_root
+    manifest, source_path = _load_channel_manifest(spec_file, source_path, effective_lang)
 
     # Shared-destination preflight (issue #325): when another stream releases
     # into this destination, their built topic outputs must be disjoint.
@@ -1510,3 +1546,442 @@ def _print_plan(
         up_to_date = sum(1 for e in plan.evergreen if e.action != REFRESH)
         if up_to_date:
             click.echo(f"  evergreen: {up_to_date} file(s) up-to-date")
+
+
+# ---------------------------------------------------------------------------
+# clm release adopt (issue #1140)
+# ---------------------------------------------------------------------------
+
+
+def _git_read(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """A git call that runs even under ``clm git``'s dry-run ContextVar."""
+    return subprocess.run(
+        ["git", *transport_safety_config_args(), "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _published_commit(dest: Path) -> str:
+    """``published:<HEAD sha>`` of the destination repo, or ``published:unknown``.
+
+    Only the destination's *own* repository counts (``dest/.git``): a
+    destination directory nested inside another repo must not borrow that
+    repo's HEAD.
+    """
+    if not (dest / ".git").exists():
+        return f"{PUBLISHED_PREFIX}unknown"
+    result = _git_read(dest, "rev-parse", "--verify", "-q", "HEAD")
+    sha = result.stdout.strip() if result.returncode == 0 else ""
+    return f"{PUBLISHED_PREFIX}{sha or 'unknown'}"
+
+
+def _dest_dirty_paths(dest: Path) -> list[str]:
+    """Uncommitted paths in the destination, ignoring the frozen manifests."""
+    if not (dest / ".git").exists():
+        return []
+    paths = [change["path"] for change in porcelain_changes(dest)]
+    return [p for p in paths if not p.startswith(".clm-released")]
+
+
+def _matching_output_remotes(
+    spec_file: Path, channel_ref: str, dest: Path
+) -> list[tuple[OutputRepo, str]]:
+    """Output-target working trees whose ``origin`` is this channel's origin (D6a)."""
+    origins = release_channel_origins(spec_file, channel_ref)
+    if not origins:
+        return []
+    matches: list[tuple[OutputRepo, str]] = []
+    for repo in all_output_target_repos(spec_file):
+        if repo.path.resolve() == dest.resolve():
+            continue
+        # Either the fetch URL or a separate pushurl hitting the channel counts.
+        for url in dict.fromkeys(
+            u for u in (read_origin_url(repo.path), read_origin_url(repo.path, push=True)) if u
+        ):
+            if normalize_remote_url(url, base=repo.path) in origins:
+                matches.append((repo, read_origin_url(repo.path) or url))
+                break
+    return matches
+
+
+def _restore_remote_command(repo: OutputRepo, url: str) -> str:
+    return f'git -C "{repo.path}" remote add origin "{url}"'
+
+
+@release_group.command("adopt")
+@_SPEC_ARG
+@click.argument("topic_ids", nargs=-1)
+@_CHANNEL_OPT
+@_ALL_CHANNELS_OPT
+@click.option(
+    "--section",
+    "sections",
+    multiple=True,
+    help="Adopt every topic of the selected section(s); same selector grammar "
+    "as `clm release section` (id:/idx:/name: or a bare index/name). Repeatable.",
+)
+@click.option(
+    "--all-present",
+    is_flag=True,
+    help="Adopt every topic with at least one built file present in the "
+    "destination. Topics it holds none of are left for the normal add + sync flow.",
+)
+@click.option(
+    "--deliver-missing",
+    is_flag=True,
+    help="For a topic with files missing in the destination, copy ONLY the "
+    "missing files from the current build (never overwriting), then freeze it. "
+    "Default: such a topic is refused (often a renumbered deck).",
+)
+@click.option(
+    "--keep-output-remote",
+    is_flag=True,
+    help="Do not remove the 'origin' remote of output-target working trees "
+    "that point at this channel's origin (they stay refused by `clm git push`).",
+)
+@click.option("--dry-run", is_flag=True, help="Print the plan; record nothing.")
+@_JSON_OPT
+def adopt_cmd(
+    spec_file: Path,
+    topic_ids: tuple[str, ...],
+    channels: tuple[str, ...],
+    all_channels: bool,
+    sections: tuple[str, ...],
+    all_present: bool,
+    deliver_missing: bool,
+    keep_output_remote: bool,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    """Freeze topics a cohort ALREADY HAS, without copying (issue #1140).
+
+    For courses that used to publish by pushing an output target's repo:
+    the channel's destination must be a clone of that published repository.
+    Each selected topic is compared, file by file, with the current build's
+    (language-restricted) provenance manifest -- ``same`` / ``differs`` /
+    ``missing`` -- and frozen as the destination has it: its digest is
+    computed from the destination's bytes, ``source_commit`` is
+    ``published:<destination HEAD>``, and differing files are kept (the
+    record carries ``differs_from_build``). A topic with missing files is
+    refused unless ``--deliver-missing``. Adopted topics are appended to the
+    channel ledger and the skeleton is marked frozen without copying.
+
+    Adopt never copies, deletes or modifies destination content (except the
+    missing files ``--deliver-missing`` copies); it writes the stream's
+    ``.clm-released.<stream>.json``. It also removes the ``origin`` remote of
+    any output-target working tree whose origin is this channel's origin, so
+    the old push path cannot overwrite the frozen repo; the restore command
+    is printed. ``--keep-output-remote`` keeps it; ``--dry-run`` only reports.
+
+    Choose what to adopt explicitly -- TOPIC_IDS, ``--section``, or
+    ``--all-present``; there is no default, because adopting freezes a topic
+    for good. ``--json`` emits one document per channel with a row per topic
+    (action plus same/differs/missing counts and paths).
+    """
+    if not topic_ids and not sections and not all_present:
+        raise click.UsageError(
+            "Choose what to adopt: TOPIC_IDS, --section SEL, or --all-present. "
+            "Adopting freezes topics for good, so there is no default."
+        )
+    if all_present and (topic_ids or sections):
+        raise click.UsageError(
+            "--all-present selects every present topic; drop TOPIC_IDS/--section."
+        )
+    if not channels and not all_channels:
+        raise click.UsageError("Pass --channel NAME (or --all-channels).")
+
+    explicit: list[str] = []
+    if topic_ids:
+        known, unknown = partition_known(topic_ids, _spec_topic_ids(spec_file))
+        if unknown:
+            raise click.ClickException(
+                "Unknown topic id(s) not declared in the spec: " + ", ".join(unknown)
+            )
+        explicit.extend(known)
+    if sections:
+        explicit.extend(_section_topic_ids(spec_file, sections, err=as_json))
+    explicit = list(dict.fromkeys(explicit))
+
+    resolved_channels = _resolve_channels(spec_file, channels, all_channels)
+    docs: list[dict[str, object]] = []
+    for index, resolved in enumerate(resolved_channels):
+        if len(resolved_channels) > 1 and not as_json:
+            if index:
+                click.echo()
+            click.echo(f"=== {resolved.name} ===")
+        docs.append(
+            _adopt_one_channel(
+                spec_file=spec_file,
+                resolved=resolved,
+                explicit=explicit,
+                all_present=all_present,
+                deliver_missing=deliver_missing,
+                keep_output_remote=keep_output_remote,
+                dry_run=dry_run,
+                as_json=as_json,
+            )
+        )
+    if as_json:
+        _echo_json(docs)
+    errors = [
+        str(e)
+        for doc in docs
+        if isinstance(doc.get("remote_errors"), list)
+        for e in doc["remote_errors"]  # type: ignore[attr-defined]
+    ]
+    if errors:
+        click.echo(
+            "Error: could not remove the output-target origin remote(s): " + "; ".join(errors),
+            err=True,
+        )
+        raise SystemExit(1)
+
+
+def _adopt_one_channel(
+    *,
+    spec_file: Path,
+    resolved: _ResolvedChannel,
+    explicit: list[str],
+    all_present: bool,
+    deliver_missing: bool,
+    keep_output_remote: bool,
+    dry_run: bool,
+    as_json: bool,
+) -> dict[str, object]:
+    """Adopt into one channel; returns its ``--json`` document."""
+
+    def out(message: str = "") -> None:
+        # Report lines; with --json stdout carries the array alone.
+        click.echo(message, err=as_json)
+
+    name = resolved.name
+    dest = resolved.dest
+    if resolved.source is None:
+        raise click.ClickException(
+            f"Channel '{name}': its source-target is not an <output-target> of the spec."
+        )
+    if not dest.is_dir():
+        raise click.ClickException(
+            f"Destination {dest} does not exist. Adopt records what a published "
+            f"repository already holds: clone it there first (`clm git init "
+            f"{spec_file} --channel {name}` restores it from the channel's remote)."
+        )
+    manifest, source_root = _load_channel_manifest(spec_file, resolved.source, resolved.lang)
+    if deliver_missing:
+        # Only --deliver-missing writes topic files, so only then can a
+        # stream sharing this destination be clobbered (issue #325).
+        _check_shared_destination_overlap(spec_file, name, dest, manifest, notes_to_stderr=as_json)
+
+    loaded = load_frozen_manifest(dest, stream=resolved.stream, channel=name)
+    frozen = loaded.manifest
+    if loaded.ignored_legacy_channel is not None:
+        out(
+            f"Note: leaving the legacy {FROZEN_FILENAME} alone — it records "
+            f"channel '{loaded.ignored_legacy_channel}', not '{name}'."
+        )
+
+    if all_present:
+        present = set(topics_present(manifest, dest))
+        selected = [tid for tid in _spec_topic_ids(spec_file) if tid in present]
+    else:
+        selected = explicit
+
+    plan = plan_adopt(
+        manifest=manifest,
+        topic_ids=selected,
+        frozen=frozen,
+        dest_root=dest,
+        deliver_missing=deliver_missing,
+    )
+    source_commit = _published_commit(dest)
+    dirty = _dest_dirty_paths(dest)
+    remotes = _matching_output_remotes(spec_file, name, dest)
+
+    rows: list[dict[str, object]] = [
+        {
+            "kind": "topic",
+            "action": t.action,
+            "topic_id": t.topic_id,
+            "file_count": len(t.files),
+            "same": len(t.same),
+            "differs": len(t.differs),
+            "missing": len(t.missing),
+            "differs_paths": list(t.differs),
+            "missing_paths": list(t.missing),
+            "deliver_paths": list(t.to_deliver),
+        }
+        for t in plan.topics
+    ]
+    if keep_output_remote:
+        remote_action = "keep"
+    else:
+        remote_action = "would-remove" if dry_run else "removed"
+    doc: dict[str, object] = {
+        "channel": name,
+        "stream": resolved.stream,
+        "source": str(source_root),
+        "dest": str(dest),
+        "language": resolved.lang,
+        "dry_run": dry_run,
+        "source_commit": source_commit,
+        "dest_dirty": dirty,
+        "skeleton": {
+            "already_frozen": plan.skeleton_already_frozen,
+            "missing_count": len(plan.skeleton_missing),
+            "missing": list(plan.skeleton_missing),
+        },
+        "rows": rows,
+        "output_remotes": [
+            {
+                "target": repo.display_name,
+                "path": str(repo.path),
+                "url": url,
+                "action": remote_action,
+                "restore": _restore_remote_command(repo, url),
+            }
+            for repo, url in remotes
+        ],
+    }
+
+    if not as_json:
+        _print_adopt_plan(plan, name, dest, source_commit)
+    if dirty:
+        click.echo(
+            f"Warning: the destination has {len(dirty)} uncommitted change(s); adopt "
+            f"records the working-tree bytes while source_commit names HEAD.",
+            err=True,
+        )
+    refused = [t.topic_id for t in plan.topics if t.action == REFUSE_MISSING]
+    if refused:
+        out(
+            f"Note: {len(refused)} topic(s) refused because files are missing in the "
+            f"destination (often a renumbered deck: students have the old name). "
+            f"Review the paths above; --deliver-missing copies only the missing "
+            f"files and never overwrites."
+        )
+
+    if dry_run:
+        for repo, url in remotes:
+            fate = "kept (--keep-output-remote)" if keep_output_remote else "would be removed"
+            out(
+                f"Output remote: {repo.display_name} ({repo.path}) has origin {url}, "
+                f"this channel's origin -- {fate}."
+            )
+        out("Dry run: nothing recorded.")
+        return doc
+
+    if not plan.adopted and not frozen.frozen:
+        # Nothing adopted and nothing adopted before: record nothing. Freezing
+        # the skeleton (or cutting the push path) for a channel that holds no
+        # frozen topic would silently starve a later add + sync of the
+        # skeleton -- typically the destination is the wrong clone, or every
+        # topic still needs --deliver-missing.
+        out(
+            "Nothing adopted: no frozen manifest written, skeleton not frozen, "
+            "output remotes left alone."
+        )
+        doc["result"] = {
+            "adopted_topics": [],
+            "differs_topics": [],
+            "refused_topics": refused,
+            "delivered_files": [],
+            "skeleton_frozen_now": False,
+            "ledger_added": [],
+            "frozen_manifest": None,
+        }
+        return doc
+
+    result = apply_adopt(
+        plan=plan,
+        manifest=manifest,
+        source_root=source_root,
+        dest_root=dest,
+        frozen=frozen,
+        source_commit=source_commit,
+        copied_at=datetime.now(timezone.utc).isoformat(),
+    )
+    frozen.save(loaded.path)
+    if loaded.adopted_legacy is not None:
+        loaded.adopted_legacy.unlink(missing_ok=True)
+        out(f"Migrated the legacy {FROZEN_FILENAME} to {loaded.path.name} (issue #325).")
+    # Every selected topic that is frozen for this stream belongs in the
+    # ledger -- including skip-frozen ones, so a run interrupted between the
+    # freeze and the ledger write is repaired by simply re-running it.
+    ledger = Ledger.load(resolved.ledger)
+    added = ledger.add([tid for tid in selected if frozen.is_frozen(tid)])
+    if added:
+        ledger.save(resolved.ledger)
+
+    remote_errors: list[str] = []
+    for repo, url in remotes:
+        if keep_output_remote:
+            click.echo(
+                f"Warning: kept origin {url} of output target {repo.display_name} "
+                f"({repo.path}); `clm git push` refuses to push it to this channel's "
+                f"origin.",
+                err=True,
+            )
+            continue
+        removed = _git_read(repo.path, "remote", "remove", "origin")
+        if removed.returncode != 0:
+            remote_errors.append(f"{repo.path}: {removed.stderr.strip()}")
+            continue
+        out(
+            f"Removed origin {url} from output target {repo.display_name} ({repo.path}) "
+            f"so the old push path cannot overwrite the frozen repo. Restore with:"
+        )
+        out(f"    {_restore_remote_command(repo, url)}")
+
+    doc["result"] = {
+        "adopted_topics": list(result.adopted_topics),
+        "differs_topics": list(result.differs_topics),
+        "refused_topics": refused,
+        "delivered_files": list(result.delivered_files),
+        "skeleton_frozen_now": result.skeleton_frozen_now,
+        "ledger_added": added,
+        "frozen_manifest": str(loaded.path),
+    }
+    out(
+        f"Adopted {len(result.adopted_topics)} topic(s) "
+        f"({len(result.differs_topics)} differ from the build), refused {len(refused)}, "
+        f"delivered {len(result.delivered_files)} file(s); wrote {loaded.path.name}."
+    )
+    if added:
+        out(f"Ledger {resolved.ledger}: appended {len(added)} topic(s).")
+    out(
+        f"Publish the freeze record: clm git sync {spec_file} --channel {name} "
+        f'-m "Adopt published content into release channel"'
+    )
+    if remote_errors:
+        # Reported after every channel ran and the JSON was emitted: the
+        # freeze above is already on disk and must not go unreported.
+        doc["remote_errors"] = remote_errors
+    return doc
+
+
+def _print_adopt_plan(plan: AdoptPlan, name: str, dest: Path, source_commit: str) -> None:
+    click.echo(f"Channel '{name}': adopting from {dest} ({source_commit})")
+    for t in plan.topics:
+        if t.files:
+            counts = f"{len(t.same)} same, {len(t.differs)} differs, {len(t.missing)} missing"
+            click.echo(f"  {t.action:<15} {t.topic_id} ({counts})")
+        else:
+            click.echo(f"  {t.action:<15} {t.topic_id}")
+        for rel in t.differs:
+            click.echo(f"      differs: {rel}")
+        deliver = set(t.to_deliver)
+        for rel in t.missing:
+            click.echo(f"      {'deliver' if rel in deliver else 'missing'}: {rel}")
+    if plan.skeleton_already_frozen:
+        click.echo("  skeleton: already frozen")
+    else:
+        click.echo("  skeleton: frozen without copying")
+    if plan.skeleton_missing:
+        click.echo(
+            f"  skeleton files missing in the destination ({len(plan.skeleton_missing)}) -- "
+            f"not delivered; send one later with `release sync --refreeze-skeleton PATTERN`:"
+        )
+        for rel in plan.skeleton_missing:
+            click.echo(f"      {rel}")

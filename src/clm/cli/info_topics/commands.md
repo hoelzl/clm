@@ -4437,6 +4437,15 @@ commit-and-push-everything command. It degrades cleanly to the plain
 output-target set on a course that declares no `<release-channels>`, and is
 mutually exclusive with `--target`/`--channel`/`--all-channels`.
 
+**Channel-origin guard (CLM {version}+, issue #1140).** In output-target mode
+(including the output targets of `--all`), `git init`, `git push` and `git sync`
+refuse a remote that is a release channel's origin — the channel working tree's
+actual `origin`, or its derived / `repo=` URL — and exit 1: after `clm release
+adopt` that repository is the frozen cohort state, and pushing the output tree
+there would deliver the unfrozen build over it. `init` refuses only when it
+would *add or clone* that remote. `--allow-channel-remote` overrides. A course
+without `<release-channels>` is unaffected.
+
 ### `clm release`
 
 Per-topic solution release to student cohorts (issue #208). After a topic's
@@ -4461,6 +4470,7 @@ channel name keeps working when it is unique across streams.
 | `release section SPEC_FILE SELECTORS… --channel NAME` | Alias of `release week` with identical behaviour (since {version}, #1009): sections are weeks by the schedule's convention, not by structure (see `clm info calendar`, "Sections, weeks and teaching days"). Both spellings are kept; neither is deprecated. |
 | `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. `--json` emits one array with a row per channel (CLM {version}+, issue #967): `channel`, `stream`, `ledger`, `dest`, `topics_total`, `released`, `pending`, `frozen`, `awaiting_sync`, `skeleton_frozen`, `frozen_manifest` — the frozen half is `null` without a destination. |
 | `release sync SPEC_FILE --channel NAME` | Promote released-but-not-frozen topics from the built source into the cohort repo and freeze them. `--dry-run --json` emits the promotion plan as rows (see below). |
+| `release adopt SPEC_FILE --channel NAME (TOPIC_IDS… \| --section SEL… \| --all-present)` | **Freeze topics a cohort already has, without copying** (CLM {version}+, issue #1140) — the migration path for a course that published by pushing an output target's repo. Compares each selected topic's files in the channel destination (a clone of the published repo) with the current build's language-restricted manifest (`same` / `differs` / `missing`) and freezes it as the destination has it: digest from the destination's bytes, `source_commit: "published:<dest HEAD>"`, `differs_from_build` when any file differs; appends adopted topics to the ledger and sets `skeleton_frozen` without copying. A topic with missing files is `refuse-missing` unless `--deliver-missing` (copies only the missing files, never overwrites). An explicit selection is required (no selector = usage error). Also removes the `origin` remote of output-target working trees that point at the channel's origin and prints the restore command (`--keep-output-remote` keeps it). `--dry-run` records nothing; `--json` emits one document per channel with `rows` (`action` `adopt` / `refuse-missing` / `skip-frozen` / `skip-unbuilt` / `skip-failed`, `same`/`differs`/`missing` counts and paths), `skeleton`, `output_remotes`, `source_commit`, and on a real run `result`. Procedure: `clm info releases`. |
 | `release provision SPEC_FILE [--channel NAME]` | Apply the spec's `<share-with>` declarations: share each channel repo into its GitLab access group(s) via the API (issue #294). Idempotent; needs `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN` with `api` scope — exported, or in the project's `.env` (found by walking up from the spec file, as `clm build` does; an exported value wins) — and repos must already exist on the remote. `--dry-run` previews the shares **and ends with a `credentials:` line** saying which token variable is set or `MISSING — the real run will fail` (exit code stays 0; issue #870). Channels without a parseable GitLab remote are skipped with a note. It also points each provisioned project's `default_branch` at the branch checked out (and committed) in the channel working tree, once that branch is on the remote; when the token may not change it, or the branch is not pushed yet, a warning names *Settings > Repository > Branch defaults > Default branch* and the exit code is unaffected (CLM {version}+, issue #955). |
 
 A channel can be addressed two ways: `--channel NAME` (resolves the ledger, the
@@ -4553,6 +4563,12 @@ clm release channels course.xml                            # list the channel ad
 clm release add course.xml deep_dive --channel 'materials/*'    # both materials channels
 clm release add course.xml deep_dive --all-channels        # every channel, every stream
 clm release sync course.xml --all-channels --push          # promote + push them all
+
+# Migrating a push-published course (issue #1140): freeze what students already have.
+clm git init course.xml --channel de                       # clone the published remote
+clm release adopt course.xml --channel de --all-present --dry-run   # review same/differs/missing
+clm release adopt course.xml --channel de --all-present    # record; cuts the output tree's origin
+clm git sync course.xml --channel de -m "Adopt published content"   # ships one new file
 ```
 
 ### `clm jobs`

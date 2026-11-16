@@ -1,6 +1,6 @@
 # Release Adopt: migrating push-published courses to release channels
 
-**Status**: Design accepted 2026-11-16 (D1–D7 as recommended, D6 extended), not implemented
+**Status**: Implemented 2026-11-16 (`clm release adopt`, issue #1140); design accepted 2026-11-16 (D1–D7 as recommended, D6 extended)
 **Issue**: #1140
 **Branch**: `claude/design-1140-release-adopt`
 
@@ -180,3 +180,41 @@ course (`code/external`, the build files) belongs to no topic.
   the override flag works.
 - `clm info releases` and `clm info commands` get the command and the
   migration procedure (the info-topics maintenance rule).
+
+## Implementation notes (2026-11-16)
+
+Shipped as `clm release adopt` (`src/clm/release/adopt.py`, CLI in
+`src/clm/cli/commands/release.py`; the D6b guard is `ChannelRemoteGuard` in
+`src/clm/cli/commands/git.py`). Every claim below is executed by
+`tests/release/test_adopt.py`. Where the code went past or beside the text
+above:
+
+- **Two extra topic actions.** `skip-unbuilt` (an explicitly selected topic
+  with no files in the build manifest: nothing to compare) and `skip-failed`
+  (the topic is in the manifest's `failed_topics`, #295). Neither is frozen.
+- **`differs_from_build` lives in the frozen record**, written only when
+  true, so ordinary sync records keep their shape
+  (`TestAdopt::test_records_digest_commit_and_skeleton`).
+- **D6b covers `clm git sync` too**, since it pushes, and the output targets
+  of `--all`. A channel's own working tree is never refused, nor an output
+  target whose path *is* a channel path. `init` refuses only when it would
+  add or clone the remote (`TestChannelRemoteGuard`). Refusals exit 1.
+- **Remote comparison** normalizes https / ssh / scp-like spellings to
+  `host/path` and resolves local paths (`normalize_remote_url`,
+  `TestNormalizeRemoteUrl`).
+- **`--all-present`** selects topics with at least one built file in the
+  destination, in spec order: a partly present topic shows up as
+  `refuse-missing`, an entirely absent one is left for `add` + `sync`.
+- **Multi-channel selection** (`--channel` globs, `--all-channels`) works as
+  for `sync`.
+- **The shared-destination overlap preflight** runs only with
+  `--deliver-missing`, the only mode that writes topic files.
+- **A run that adopts nothing** (and finds nothing frozen already) writes
+  nothing: no frozen manifest, no `skeleton_frozen`, no remote removal. A
+  premature `skeleton_frozen` would starve a later `add` + `sync` of the
+  skeleton (`TestReviewFollowUps::test_nothing_adopted_records_nothing`).
+- The ledger gets every selected topic that is frozen for the stream, so a
+  re-run repairs an interrupted freeze-then-ledger write.
+- D6a and D6b also match `remote.origin.pushurl`, the URL a push really uses.
+- A destination with uncommitted changes gets a warning: the digest covers
+  the working tree while `source_commit` names HEAD.
