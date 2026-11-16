@@ -65,9 +65,12 @@ There is no handover.
 - **Agent-run PRs:** #1253–#1265, #1267–#1269, #1271, #1279, #1281.
 - **#1281** fixed master. #1241 (the static command index) and #1251
   (`cache forget`) were merged without seeing each other, which is a
-  semantic merge conflict. The cause is commented on tracker issue #1272.
+  semantic merge conflict. The cause is commented on tracker issue #1272,
+  which the owner had closed once master CI was green again.
 - **Worktrees:** all of this session's worktrees and the four empty
   leftover directories were removed at the owner's request.
+- **The save:** S25 was saved in #1282 and extended once, after #1272
+  was closed.
 
 ## Open
 
@@ -75,7 +78,6 @@ There is no handover.
   defects).
 - #1280: narration given to the model as logical bullets.
 - #1270: the build-abort follow-ups to #1090.
-- #1272: the tracker issue should close once master CI is green again.
 - From the triage, the issues that need design are unchanged. They are
   listed in the transcript under "Needs design first".
 
