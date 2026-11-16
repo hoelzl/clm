@@ -74,9 +74,9 @@ async def test_submission_runs_off_the_event_loop_thread(backend):
     seen: dict[str, threading.Thread] = {}
     real = SqliteBackend._submit_job_blocking
 
-    def spy(self, payload, job_type, force_execution=False):
+    def spy(self, payload, job_type, force_execution=False, **kwargs):
         seen["thread"] = threading.current_thread()
-        return real(self, payload, job_type, force_execution)
+        return real(self, payload, job_type, force_execution, **kwargs)
 
     try:
         with patch.object(SqliteBackend, "_submit_job_blocking", spy):
@@ -151,7 +151,7 @@ async def test_abandoned_shielded_submission_exception_is_retrieved(backend, cap
 
     release = threading.Event()
 
-    def failing_submit(self, payload, job_type, force_execution=False):
+    def failing_submit(self, payload, job_type, force_execution=False, **kwargs):
         release.wait(5)
         raise RuntimeError("submit exploded after the caller was cancelled")
 
@@ -190,7 +190,7 @@ async def test_submission_exception_still_propagates_to_caller(backend):
     """Retrieving the exception in the done-callback must not swallow it on
     the normal (non-cancelled) path — the caller still sees the raise."""
 
-    def failing_submit(self, payload, job_type, force_execution=False):
+    def failing_submit(self, payload, job_type, force_execution=False, **kwargs):
         raise RuntimeError("submit exploded")
 
     try:

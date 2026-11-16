@@ -1284,8 +1284,15 @@ class WorkerPoolManager:
         except Exception as e:
             logger.error(f"Error restarting worker {worker_id}: {e}", exc_info=True)
 
-    def stop_pools(self):
-        """Stop all worker pools gracefully."""
+    def stop_pools(self) -> int:
+        """Stop all worker pools gracefully.
+
+        Returns the number of workers that stopped cleanly. The stop summary
+        is the caller's to log (the lifecycle manager's ``pool_stopped``
+        event); this method logs its own count at INFO only when some
+        workers did not stop, so a build's teardown shows one stop line
+        instead of two (issue #1270).
+        """
         global _atexit_cleanup_disabled
 
         logger.info("Stopping worker pools")
@@ -1304,8 +1311,10 @@ class WorkerPoolManager:
 
         # Stop all workers
         total_stopped = 0
+        total_workers = 0
         for worker_type, workers in self.workers.items():
             logger.info(f"Stopping {len(workers)} {worker_type} workers")
+            total_workers += len(workers)
 
             for worker_info in workers:
                 try:
@@ -1339,7 +1348,11 @@ class WorkerPoolManager:
         # Stop the Worker API server if running
         self._stop_worker_api_server()
 
-        logger.info(f"Stopped {total_stopped} workers")
+        if total_stopped == total_workers:
+            logger.debug(f"Stopped {total_stopped} workers")
+        else:
+            logger.info(f"Stopped {total_stopped} of {total_workers} workers")
+        return total_stopped
 
     def _log_unhealthy_docker_worker_output(self, worker_info: dict) -> None:
         """Log a Docker worker's container output if it never served the build.
@@ -1602,5 +1615,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
-        manager.stop_pools()
-        logger.info("Stopped.")
+        stopped = manager.stop_pools()
+        logger.info(f"Stopped {stopped} worker(s).")

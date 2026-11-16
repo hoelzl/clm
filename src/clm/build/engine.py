@@ -991,6 +991,19 @@ def start_managed_workers(lifecycle_manager, worker_config) -> list:
     return started_workers
 
 
+def stop_build_workers(lifecycle_manager, started_workers: list) -> list[dict]:
+    """Stop the workers this build started; return the orphaned jobs.
+
+    The lifecycle manager logs the one stop summary (its ``pool_stopped``
+    event). Do not log a count here afterwards: ``started_workers`` is the
+    lifecycle manager's own list and ``stop_managed_workers`` clears it
+    (issue #1270).
+    """
+    logger.info("Stopping managed workers...")
+    orphaned_jobs: list[dict] = lifecycle_manager.stop_managed_workers(started_workers)
+    return orphaned_jobs
+
+
 def _report_duplicate_file_warnings(course: Course, build_reporter: BuildReporter) -> None:
     """Check for duplicate output files and report warnings."""
     from clm.core.build_data_classes import BuildWarning
@@ -2297,10 +2310,8 @@ async def _run_build_impl(
     finally:
         if started_workers and worker_config.auto_stop:
             output_formatter.show_startup_message("Stopping workers...")
-            logger.info("Stopping managed workers...")
             try:
-                orphaned_jobs = lifecycle_manager.stop_managed_workers(started_workers)
-                logger.info(f"Stopped {len(started_workers)} worker(s)")
+                orphaned_jobs = stop_build_workers(lifecycle_manager, started_workers)
                 # Orphans are discovered only after the pool stops — i.e. after
                 # finish_build already rendered the summary. Fold them into the
                 # summary here so they still drive the exit policy instead of

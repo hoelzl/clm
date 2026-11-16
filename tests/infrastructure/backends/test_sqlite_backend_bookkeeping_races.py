@@ -227,8 +227,8 @@ async def test_instant_completion_is_counted_by_progress_tracker(temp_db, temp_w
     assert backend.progress_tracker is not None
     real_submit = SqliteBackend._submit_job_blocking
 
-    def instant_worker(self, payload, job_type, force_execution=False):
-        outcome, job_id = real_submit(self, payload, job_type, force_execution)
+    def instant_worker(self, payload, job_type, force_execution=False, **kwargs):
+        outcome, job_id = real_submit(self, payload, job_type, force_execution, **kwargs)
         # Simulate a worker that claims and finishes the job before the
         # event loop ever sees it.
         assert self.job_queue is not None

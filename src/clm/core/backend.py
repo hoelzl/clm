@@ -38,6 +38,40 @@ class JobsPendingTimeoutError(TimeoutError):
         self.pending_jobs: list[dict] = pending_jobs or []
 
 
+class SourceFileVanishedError(FileNotFoundError):
+    """A course source file disappeared after the course was loaded (#1270).
+
+    Raised while an operation reads its inputs (e.g. a notebook's slide file
+    or a topic supporting file shipped in the payload) when the file was
+    enumerated at course-load time but has since been deleted or moved —
+    typically an author or an agent editing the course while the build runs.
+    That is a content problem, not an infrastructure failure: the build
+    reporter classifies an abort caused only by these as a *user* error.
+
+    Subclasses :class:`FileNotFoundError` (and keeps its ``errno`` /
+    ``filename``) so existing ``except FileNotFoundError`` handlers still
+    catch it.
+    """
+
+    @classmethod
+    def from_os_error(cls, exc: OSError) -> "SourceFileVanishedError":
+        if exc.errno is not None:
+            return cls(exc.errno, exc.strerror, exc.filename)
+        return cls(str(exc))
+
+
+class SubmissionDiscardedError(RuntimeError):
+    """A job submission was dropped because its build stage aborted (#1270).
+
+    Raised by :meth:`Backend.execute_operation` for a submission that was in
+    flight when :meth:`Backend.discard_pending_submissions` was called. Its
+    caller has normally been cancelled already; raising (rather than
+    returning as if the job ran) makes sure a caller that was not cancelled
+    never mistakes the dropped job for a produced output. Collateral of the
+    abort, never its cause.
+    """
+
+
 @define
 class Backend(AbstractAsyncContextManager):
     output_write_registry: OutputWriteRegistry = field(factory=OutputWriteRegistry)
@@ -75,6 +109,18 @@ class Backend(AbstractAsyncContextManager):
 
     @abstractmethod
     async def delete_file(self, path: Path) -> None: ...
+
+    def discard_pending_submissions(self) -> None:
+        """Drop every job submission that has not reached the queue yet.
+
+        Called when a stage has failed and the build is aborting (#1270):
+        operations already in flight must not enqueue new worker jobs after
+        the abort is decided. Submissions started *after* this call proceed
+        normally, so a long-lived backend (watch mode) keeps working.
+
+        The default does nothing (backends without deferred submission).
+        """
+        return None
 
     async def cancel_jobs_for_file(self, file_path: Path) -> int:
         """Cancel all pending jobs for a given input file.
