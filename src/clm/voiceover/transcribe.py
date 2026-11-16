@@ -140,9 +140,12 @@ _FALSE = frozenset({"0", "false", "no", "off"})
 class WhisperDecodeOptions:
     """faster-whisper decoder settings that guard against hallucinations (#1105).
 
-    The defaults are faster-whisper's own, so an unconfigured run decodes
-    exactly as before and keeps its cached transcripts. They are known
-    mitigations for Whisper's repetition loops and silence hallucinations:
+    They are known mitigations for Whisper's repetition loops and silence
+    hallucinations. The defaults are faster-whisper's own except
+    ``condition_on_previous_text``, which defaults to ``False``: an A/B run on
+    four lecture recordings (two German, two English; #1105) showed the
+    faster-whisper default looping, inventing clauses and emitting outro
+    hallucinations that ``False`` avoided, at a lower word error rate.
 
     * ``condition_on_previous_text`` -- feed the previous window's text to
       the next one. ``False`` stops a loop from propagating from window to
@@ -155,12 +158,17 @@ class WhisperDecodeOptions:
       better than this (gzip ratio, i.e. it is repetitive) is re-decoded at
       a higher temperature. Lower catches loops earlier.
 
-    ``None`` disables a threshold check. Which values suit lecture
-    recordings has not been measured yet, so the defaults stay conservative;
-    tune them through the ``CLM_WHISPER_*`` variables (:meth:`from_env`).
+    ``None`` disables a threshold check. Tune the settings through the
+    ``CLM_WHISPER_*`` variables (:meth:`from_env`).
+
+    Cache keys carry only :meth:`non_defaults`, so flipping
+    ``condition_on_previous_text`` kept the ``{}`` key: transcripts cached
+    before the flip (decoded with ``True``) are still served, and only new
+    or ``--refresh-cache`` runs decode with ``False``. That trade was chosen
+    deliberately over re-transcribing every video once.
     """
 
-    condition_on_previous_text: bool = True
+    condition_on_previous_text: bool = False
     no_speech_threshold: float | None = 0.6
     compression_ratio_threshold: float | None = 2.4
 

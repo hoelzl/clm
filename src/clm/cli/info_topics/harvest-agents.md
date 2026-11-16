@@ -76,11 +76,13 @@ that introduced these flags carry no metrics, so only the
 
 Many loops can be prevented at decode time. Three faster-whisper decoder
 settings are read from the environment: `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT`
-(default `true`; `0` stops loops carrying over between windows),
+(default `false` since #1105, which stops loops carrying over between
+windows; `1` restores faster-whisper's own behaviour),
 `CLM_WHISPER_NO_SPEECH_THRESHOLD` (default `0.6`) and
 `CLM_WHISPER_COMPRESSION_RATIO_THRESHOLD` (default `2.4`; `none` disables
-either threshold). Unset means faster-whisper's defaults. A non-default value
-is part of the transcript cache key, so the next run re-transcribes.
+either threshold). A non-default value is part of the transcript cache key,
+so the next run re-transcribes. Transcripts cached before the default changed
+were decoded with `true` and are still served; `--refresh-cache` redoes one.
 
 ## task — the framed judgment
 
