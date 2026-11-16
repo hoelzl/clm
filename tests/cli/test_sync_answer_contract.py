@@ -192,3 +192,20 @@ class TestBodyWithSideOnAnUnchangedTwin:
         assert "# korrigiert" in de.read_text("utf-8")
         assert 'tags=["alt"]' in en.read_text("utf-8")
         assert _is_clean(runner, de)
+
+
+class TestSideBesideAChoice:
+    """#1266: the parser lets ``side`` accompany a ``choice`` (the sequence
+    core's per-half ``identify`` rows need it); on any other row the executor
+    rejects that one row instead of silently ignoring the side."""
+
+    def test_is_rejected_on_a_row_that_is_not_asked_per_half(
+        self, runner: CliRunner, pair: tuple[Path, Path], engine: str
+    ) -> None:
+        de, en = pair
+        de.write_text(DE.replace("# DE Text", "# DE Text neu"), "utf-8")
+        result = _apply(runner, de, engine, {"key": "id:s0-m", "choice": "keep_twin", "side": "de"})
+        assert result.exit_code == 1, result.output + _stderr(result)
+        (reason,) = _rejections(result, engine)
+        assert "'side'" in reason and "choice" in reason
+        assert en.read_text("utf-8") == EN

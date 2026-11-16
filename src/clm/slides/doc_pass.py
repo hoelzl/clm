@@ -215,7 +215,13 @@ class Row:
         }
         if self.is_question:
             # #1189: the row shape each answer needs, ready to fill in
-            out["templates"] = answer_templates(self.key, self.action, self.answers)
+            out["templates"] = answer_templates(
+                self.key,
+                self.action,
+                self.answers,
+                # #1266: an identify row is asked per half; its answer names it
+                side=self.side if self.action == "identify" else None,
+            )
         if self.is_question:
             out["needs"] = "model" if self.action in MODEL_ACTIONS else "agent"
             out["answer"] = self.answer
@@ -392,6 +398,10 @@ def run_pass(
                 continue
             if side is not None and d.side not in (None, side):
                 continue
+            if side is None and d.side is not None and d.choice is not None:
+                # #1266: a 'side' beside a 'choice' answers one half's
+                # identify row only; left unused, it is rejected below.
+                continue
             got = fits(d, answers)
             if got is not None:
                 used.add(i)
@@ -509,7 +519,10 @@ def run_pass(
         if i not in used:
             there = asked.get(d.key)
             reason = (
-                f"fits no row on this handle: {'; '.join(there)}"
+                "'side' beside a 'choice' only answers an identify row (one per "
+                "half); drop 'side' to answer " + "; ".join(there)
+                if there and d.side is not None and d.choice is not None
+                else f"fits no row on this handle: {'; '.join(there)}"
                 if there
                 else _unasked_body(d, inputs, handle_of_cell, sequence, token)
                 if d.body is not None

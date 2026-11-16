@@ -252,7 +252,9 @@ REPLACE_PLACEHOLDER = [["<old text, matching exactly once>", "<new text>"]]
 SIDE_PLACEHOLDER = "de|en"
 
 
-def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict[str, object]]:
+def answer_templates(
+    key: str, action: str, answers: Sequence[str], *, side: str | None = None
+) -> list[dict[str, object]]:
     """One decision row per answer an item takes, ready to fill in (#1189).
 
     ``answers`` stays the vocabulary; this is the row shape each answer
@@ -273,6 +275,9 @@ def answer_templates(key: str, action: str, answers: Sequence[str]) -> list[dict
                 row["side"] = SIDE_PLACEHOLDER
         else:
             row["choice"] = answer
+            if side is not None:
+                # #1266: a row asked per half (identify) names its half
+                row["side"] = side
         rows.append(row)
     return rows
 
@@ -400,7 +405,7 @@ def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
             "see `clm info sync-agents`"
         ]
     out: list[Decision] = []
-    seen: set[tuple[str, str | None]] = set()
+    seen: set[tuple[str, str | None, str | None]] = set()
     for i, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get("key"), str):
             errors.append(f"decision #{i}: needs a 'key' string (the member handle)")
@@ -452,25 +457,24 @@ def parse_decision_rows(payload: object) -> tuple[list[Decision], list[str]]:
         if side is not None and side not in ("de", "en"):
             errors.append(f"decision #{i} ({row['key']}): 'side' must be 'de' or 'en'")
             continue
-        if side is not None and body is None and replace is None:
-            errors.append(
-                f"decision #{i} ({row['key']}): 'side' only accompanies a 'body' or "
-                "'replace' answer"
-            )
-            continue
+        # #1266: 'side' may also accompany a 'choice' — the sequence core asks
+        # an identify row once per half, and the answer names its half. Where
+        # a side is not meaningful, the executor (not the parser, which cannot
+        # see the row) rejects that one row.
         action = row.get("action")
         if action is not None and not isinstance(action, str):
             errors.append(f"decision #{i} ({row['key']}): 'action' must be a string")
             continue
-        if (row["key"], action) in seen:
+        if (row["key"], action, side) in seen:
             errors.append(
                 f"decision #{i} ({row['key']}): duplicate key"
                 + (f" for action '{action}'" if action else "")
+                + (f" on side '{side}'" if side else "")
                 + " — one answer per framed row; to answer two rows on one "
                 "member, give each row the item's 'action'"
             )
             continue
-        seen.add((row["key"], action))
+        seen.add((row["key"], action, side))
         out.append(
             Decision(
                 key=row["key"],
@@ -2323,6 +2327,14 @@ def _execute_decision(
         _apply_body_decision(ex, item, decision.body, side=decision.side)
         return
     choice = decision.choice or ""
+    if decision.side is not None:
+        # #1266: the parser lets 'side' beside a 'choice' through for the
+        # sequence core's per-half identify rows; no positional row takes it.
+        raise _ItemError(
+            f"'side' is not meaningful beside a choice on '{item.action}' — it "
+            "accompanies a 'body' or 'replace' answer (or, on the sequence core, "
+            "an identify answer)"
+        )
     if choice not in allowed:
         raise _ItemError(
             f"choice {choice!r} is not valid for '{item.action}' (allowed: {', '.join(allowed)})"

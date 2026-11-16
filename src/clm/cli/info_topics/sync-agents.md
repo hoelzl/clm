@@ -154,6 +154,7 @@ a decision row (#1188):
 | `body` | `{"key": K, "body": "<cell text without its # %% line>"}`, plus `"side": "de"\|"en"` on `verify_cold` / `verify_translation` |
 | `replace` | `{"key": K, "replace": [["old", "new"], …]}`, plus `side` where `body` needs it |
 | any other (`confirm`, `keep_twin`, `de`, `en`, `remove`, `keep`, `mark_twin`, `treat_as_new`, …) | `{"key": K, "choice": "<the entry>"}` |
+| a candidate handle or `removed` on a sequence-core `identify` row | `{"key": K, "choice": "<the entry>", "side": "<the row's side>"}` |
 
 `"action": "<the item's action>"` may be added to any row (see below).
 
@@ -161,7 +162,9 @@ Each item also carries **`templates`** (CLM {version}, #1189): one decision
 row per entry of `answers`, in the same order, with the field that answer
 needs — `choice` for a word (`confirm`, `de`, `keep_twin`, …), `body` for
 text, plus `side` where the row cannot tell which half the text is for
-(`verify_cold`, `verify_translation`). Each names the item's `action`, so it
+(`verify_cold`, `verify_translation`). A sequence-core `identify` row's
+templates carry its `side` already filled in, because that row is asked once
+per half (CLM {version}, #1266). Each names the item's `action`, so it
 is self-checking. Copy one into `decisions` and replace the placeholders:
 `body` holds `<the cell text, without its '# %%' line>` and `side` holds
 `de|en`, which is not a valid value, so a template sent unfilled is refused.
@@ -600,7 +603,10 @@ not order-blind:
 One JSON document answers any subset of framed items. The top level always
 carries the `report_id` copied from the report envelope — a document without
 it is refused (exit 2, nothing written). A decision row takes exactly these
-fields: `key`, `action`, one of `choice`, `body` or `replace`, and `side`. Any other field (a
+fields: `key`, `action`, one of `choice`, `body` or `replace`, and `side`.
+`side` beside a `choice` is meaningful only on a sequence-core `identify`
+row; on any other row that one row is rejected (CLM {version}, #1266; before,
+the parser refused the whole document). Any other field (a
 typo such as `sied` beside a valid answer) refuses the whole document with
 exit 2, naming the row and the field (CLM {version}, #1189); it used to be
 ignored, so the typo was invisible:
@@ -1193,7 +1199,10 @@ asked you to. What differs for an agent:
   (`side` names the half). It comes up when that half edited several un-id'd
   cells of one kind and the other half changed them too. The report lists
   every `identify` question at once; answer them all in one document, and
-  put `"side"` in an answer when the same handle is asked on both halves.
+  give each answer the row's `"side"` (its templates already carry it): the
+  same handle is often asked on both halves, and a row only takes the answer
+  for its own half. Two answers for one handle on the same side are a
+  duplicate (exit 2).
   `broken_owner` and `pending_divergence` are `manual` rows: edit the files.
 - **Some questions only appear after others are answered** (what the core
   asks after `identify` rests on its answer). `apply --dry-run --decisions
