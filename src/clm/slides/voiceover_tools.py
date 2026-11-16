@@ -1064,14 +1064,17 @@ def read_companion_baselines(
 
     Reads every narrative cell with ``for_slide`` set, matching ``lang``
     and carrying ``tag``. The body of each matching cell is returned as
-    plain text (comment prefixes stripped). Cells without ``for_slide``
+    logical bullets (``Cell.narrative_text``: one line per bullet, children
+    indented, continuations unwrapped) -- the form the merge prompts carry
+    (#1280). The file is parsed with its own comment token, so a ``//``
+    companion is read too. Cells without ``for_slide``
     are skipped; unmatched or missing companion files yield an empty map.
     """
     if not companion.exists():
         return {}
 
     text = companion.read_text(encoding="utf-8")
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token_for_path(companion))
 
     by_id: dict[str, list[str]] = {}
     for cell in cells:
@@ -1084,7 +1087,7 @@ def read_companion_baselines(
             continue
         if not meta.for_slide:
             continue
-        body = cell.text_content()
+        body = cell.narrative_text()
         if body:
             by_id.setdefault(meta.for_slide, []).append(body)
 

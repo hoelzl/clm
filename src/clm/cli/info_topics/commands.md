@@ -5483,8 +5483,10 @@ sync-agents` → "Polishing speaker notes" for the agent loop):
   while polishable notes exist (work pending), `0` when there are none.
 - `task SLIDES --lang [--polish-level] [--slides-range]` — frame the notes
   cleanup as ONE JSON task document: instructions with the level prompt, one
-  row per notes-carrying slide (its `id:`/`pos:` handle, the current notes,
-  and the slide's content in **both language sides** for context — the split
+  row per notes-carrying slide (its `id:`/`pos:` handle, the current notes
+  as logical bullets — one line per bullet, child bullets indented two
+  spaces under their parent, wrapped continuations joined — and the slide's
+  content in **both language sides** for context — the split
   twin when one exists), `answer_schema`, and the freshness tokens
   (`source_fingerprint`, `twin_fingerprint`) that `accept` re-checks. No
   model, no API key. Exit `2` when no notes are found under `--lang` /

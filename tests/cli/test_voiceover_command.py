@@ -45,7 +45,8 @@ class TestExtractBaseline:
     def _cell(self, tags: list[str], text: str):
         cell = MagicMock()
         cell.metadata.tags = tags
-        cell.text_content = MagicMock(return_value=text)
+        # The baseline is the cell's logical-bullet narration (#1280).
+        cell.narrative_text = MagicMock(return_value=text)
         return cell
 
     def test_extracts_tagged_cells_only(self):

@@ -184,11 +184,13 @@ def _read_voiceover_for_slide(
 
     for sg in slide_groups:
         if sg.index == target_idx:
-            # Extract text from cells matching the target tag
+            # Extract text from cells matching the target tag, as logical
+            # bullets -- the form the LLM output it is diffed against takes
+            # (#1280).
             parts = []
             for cell in sg.notes_cells:
                 if tag in cell.metadata.tags:
-                    text = cell.text_content()
+                    text = cell.narrative_text()
                     if text:
                         parts.append(text)
             return "\n".join(parts) if parts else ""
