@@ -1884,6 +1884,54 @@ class TestPairedExtract:
         with pytest.raises(VoiceoverError, match="slide_id parity"):
             extract_voiceover_pair(de, en, mint_ids=False)
 
+    @staticmethod
+    def _cpp_pair(tmp_path: Path, *, de_ids=(None,), en_ids=(None,)) -> tuple[Path, Path]:
+        """A ``//`` (C++) split pair, one slide per id entry, one voiceover per half."""
+
+        def deck(lang: str, ids, heading: str, vo: str) -> str:
+            out = []
+            for sid in ids:
+                attr = f' slide_id="{sid}"' if sid else ""
+                out.append(
+                    f'// %% [markdown] lang="{lang}" tags=["slide"]{attr}\n// ## {heading}\n\n'
+                )
+            out.append(f'// %% [markdown] lang="{lang}" tags=["voiceover"]\n//\n// {vo}\n')
+            return "".join(out)
+
+        de = tmp_path / "slides_x.de.cpp"
+        en = tmp_path / "slides_x.en.cpp"
+        de.write_text(deck("de", de_ids, "Mein Thema", "VO DE"), encoding="utf-8", newline="\n")
+        en.write_text(deck("en", en_ids, "My Topic", "VO EN"), encoding="utf-8", newline="\n")
+        return de, en
+
+    def test_parity_check_reads_cpp_decks_with_their_token(self, tmp_path: Path):
+        # #1286: under the default ``#`` token a ``//`` deck parsed to no cells,
+        # so the parity check was vacuously true for every C-family pair.
+        from clm.slides.voiceover_tools import _slide_ids_in_parity
+
+        de, en = self._cpp_pair(tmp_path)  # id-less
+        assert not _slide_ids_in_parity(de, en)
+        de, en = self._cpp_pair(tmp_path, de_ids=("a", "b"), en_ids=("a", "b"))
+        assert _slide_ids_in_parity(de, en)
+        de, en = self._cpp_pair(tmp_path, de_ids=("a", "b"), en_ids=("a", "c"))
+        assert not _slide_ids_in_parity(de, en)
+
+    def test_parity_check_refuses_an_empty_parse(self, tmp_path: Path):
+        # No slide cells recognised on either half is not parity (#1286).
+        from clm.slides.voiceover_tools import _slide_ids_in_parity
+
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text('# %% [markdown] lang="de"\n# Text\n', encoding="utf-8")
+        en.write_text('# %% [markdown] lang="en"\n# Text\n', encoding="utf-8")
+        assert not _slide_ids_in_parity(de, en)
+
+    def test_mint_ids_false_rejects_id_less_cpp_pair(self, tmp_path: Path):
+        # The #162 guard must fire for ``//`` decks too (#1286).
+        de, en = self._cpp_pair(tmp_path)
+        with pytest.raises(VoiceoverError, match="slide_id parity"):
+            extract_voiceover_pair(de, en, mint_ids=False)
+
     def test_dry_run_and_real_report_same_ids(self, tmp_path: Path):
         # Per-half ids_generated is 0 on the paired path (the pre-mint owns id
         # minting, reported via ids_minted) — identical in dry-run and real, so a
