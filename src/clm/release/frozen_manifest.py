@@ -25,7 +25,7 @@ import json
 import logging
 from pathlib import Path
 
-from attrs import Factory, asdict, define, frozen
+from attrs import Factory, define, frozen
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,21 @@ class FrozenRecord:
     source_commit: str | None
     copied_at: str
     topic_digest: str
+    # Set by ``clm release adopt`` (issue #1140) when the adopted destination
+    # bytes differ from the build the topic was compared against: the record
+    # describes what students have, not what the build has. Omitted from the
+    # file when false, so ordinary sync records are unchanged.
+    differs_from_build: bool = False
+
+    def to_json(self) -> dict[str, object]:
+        data: dict[str, object] = {
+            "source_commit": self.source_commit,
+            "copied_at": self.copied_at,
+            "topic_digest": self.topic_digest,
+        }
+        if self.differs_from_build:
+            data["differs_from_build"] = True
+        return data
 
 
 @define
@@ -72,6 +87,7 @@ class FrozenManifest:
                 source_commit=rec.get("source_commit"),
                 copied_at=rec.get("copied_at", ""),
                 topic_digest=rec.get("topic_digest", ""),
+                differs_from_build=bool(rec.get("differs_from_build", False)),
             )
             for topic_id, rec in data.get("frozen", {}).items()
         }
@@ -88,7 +104,9 @@ class FrozenManifest:
             "channel": self.channel,
             "skeleton_frozen": self.skeleton_frozen,
             # Sorted so the published file is deterministic and diffs cleanly.
-            "frozen": {topic_id: asdict(self.frozen[topic_id]) for topic_id in sorted(self.frozen)},
+            "frozen": {
+                topic_id: self.frozen[topic_id].to_json() for topic_id in sorted(self.frozen)
+            },
         }
         path.write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",

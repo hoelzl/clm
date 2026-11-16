@@ -431,8 +431,12 @@ def apply_sync(
 _VCS_DIR_NAMES = frozenset({".git", ".svn", ".hg"})
 
 
-def _is_vcs_path(rel: str) -> bool:
+def is_vcs_path(rel: str) -> bool:
+    """Whether *rel* lies under a VCS metadata directory (never promoted)."""
     return any(part in _VCS_DIR_NAMES for part in PurePosixPath(rel).parts)
+
+
+_is_vcs_path = is_vcs_path
 
 
 def _copy_files(files: list[dict[str, Any]], source_root: Path, dest_root: Path) -> int:

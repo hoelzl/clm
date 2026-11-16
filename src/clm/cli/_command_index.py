@@ -129,6 +129,7 @@ COMMAND_PATHS: tuple[tuple[str, ...], ...] = (
     ("recordings", "submit"),
     ("release",),
     ("release", "add"),
+    ("release", "adopt"),
     ("release", "channels"),
     ("release", "provision"),
     ("release", "section"),

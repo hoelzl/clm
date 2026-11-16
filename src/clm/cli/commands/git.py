@@ -7,6 +7,7 @@ directories, enabling trainers to commit and push generated course content.
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -687,6 +688,177 @@ def _dedupe_shared_destinations(repos: list[OutputRepo]) -> list[OutputRepo]:
     return list(by_path.values())
 
 
+# =============================================================================
+# Release-channel remote guard (issue #1140, D6)
+# =============================================================================
+
+
+def read_origin_url(repo_path: Path, *, push: bool = False) -> str | None:
+    """The ``origin`` URL of the git working tree at *repo_path*, if any.
+
+    *push* reads the URL ``git push origin`` would use (``remote.origin.pushurl``
+    when set, else the fetch URL). Deliberately a plain subprocess, not
+    :func:`run_git`: this read-only lookup must answer truthfully under
+    ``--dry-run`` too, because the dry run's output has to name the remote
+    that would really be used. It keeps run_git's transport hardening.
+    """
+    if not (repo_path / ".git").exists():
+        return None
+    get_url = ["remote", "get-url", *(["--push"] if push else []), "origin"]
+    result = subprocess.run(
+        ["git", *_transport_safety_config_args(), "-C", str(repo_path), *get_url],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def normalize_remote_url(url: str, *, base: Path | None = None) -> str:
+    """A comparison key for a git remote URL (issue #1140).
+
+    ``https://host/group/repo.git``, ``ssh://git@host/group/repo`` and the
+    scp-like ``git@host:group/repo.git`` all name one repository and map to
+    the same key (``host/group/repo``, case-folded). Anything else is taken
+    as a local path (relative ones resolve against *base*, the working tree
+    the remote is configured in), so a clone of a local bare repo matches
+    the URL it was cloned from.
+    """
+    text = url.strip()
+    while text.endswith("/"):
+        text = text[:-1]
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    # scp-like ``[user@]host:path``; a one-letter "host" is a Windows drive.
+    scp = re.match(r"^(?:[\w.+-]+@)?([^:/\\@]{2,}):(?!//)(.*)$", text)
+    if scp:
+        return f"{scp.group(1)}/{scp.group(2).lstrip('/')}".casefold()
+    if "://" in text:
+        scheme, rest = text.split("://", 1)
+        if scheme.casefold() != "file":
+            host, _, path = rest.partition("/")
+            host = host.rsplit("@", 1)[-1].split(":", 1)[0]
+            return f"{host}/{path.lstrip('/')}".casefold()
+        text = rest
+        if re.match(r"^/[A-Za-z]:", text):
+            text = text[1:]
+    local = Path(text)
+    if not local.is_absolute() and base is not None:
+        local = base / local
+    return os.path.normcase(os.path.abspath(local)).replace("\\", "/").casefold()
+
+
+def release_channel_origins(spec_file: Path, channel_filter: str | None = None) -> dict[str, str]:
+    """Normalized remote URL -> channel address, for the spec's release channels.
+
+    Each channel contributes the ``origin`` its working tree actually has and
+    its derived / ``repo=`` URL (the one ``clm git init --channel`` would
+    use). Empty when the spec declares no ``<release-channels>``.
+    """
+    try:
+        repos = find_release_channel_repos(spec_file, channel_filter)
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
+    origins: dict[str, str] = {}
+    for repo in repos:
+        actual = read_origin_url(repo.path)
+        if actual:
+            origins.setdefault(normalize_remote_url(actual, base=repo.path), repo.target_name)
+        if repo.remote_url:
+            origins.setdefault(normalize_remote_url(repo.remote_url), repo.target_name)
+    return origins
+
+
+def all_output_target_repos(spec_file: Path) -> list[OutputRepo]:
+    """Every output-target working tree, distributed or not.
+
+    :func:`find_output_repos` skips non-distributed targets when listing all
+    of them -- including a release stream's source target (issue #292),
+    which is exactly the tree a migrated course used to push from.
+    """
+    spec = CourseSpec.from_file(spec_file)
+    if not spec.output_targets:
+        return find_output_repos(spec_file)
+    repos: list[OutputRepo] = []
+    for target_spec in spec.output_targets:
+        repos.extend(find_output_repos(spec_file, target_spec.name))
+    return repos
+
+
+class ChannelRemoteGuard:
+    """Refuses output-target pushes / remotes that hit a channel's origin (D6b).
+
+    After ``clm release adopt`` the channel repository holds the frozen
+    published state; pushing an output target there would deliver the
+    unfrozen build over it. Computed lazily -- nothing is read until an
+    output-target repo with a remote is checked -- and never applied to a
+    channel's own working tree.
+    """
+
+    def __init__(self, spec_file: Path, *, allow: bool) -> None:
+        self._spec_file = spec_file
+        self._allow = allow
+        self._origins: dict[str, str] | None = None
+        self._channel_paths: set[Path] = set()
+        self.refused = False
+
+    def _load(self) -> dict[str, str]:
+        if self._origins is None:
+            self._origins = release_channel_origins(self._spec_file)
+            if self._origins:
+                self._channel_paths = {
+                    r.path.resolve() for r in find_release_channel_repos(self._spec_file)
+                }
+        return self._origins
+
+    def channel_for(self, repo: OutputRepo, url: str | None) -> str | None:
+        """The channel whose origin *url* is, when *repo* is an output target."""
+        if self._allow or not url or repo.source != "output":
+            return None
+        origins = self._load()
+        if not origins or repo.path.resolve() in self._channel_paths:
+            return None
+        return origins.get(normalize_remote_url(url, base=repo.path))
+
+    def check(self, repo: OutputRepo, url: str | None, action: str) -> bool:
+        """``True`` when *action* may proceed; otherwise report and refuse."""
+        channel = self.channel_for(repo, url)
+        if channel is None:
+            return True
+        self.refused = True
+        click.echo(
+            f"  Refused: {url} is the origin of release channel '{channel}'. "
+            f"{action} would deliver the unfrozen build over the frozen cohort "
+            f"repository. Drop or change this target's <remote-path> (and remove "
+            f"the origin remote); pass --allow-channel-remote if this is really "
+            f"intended.",
+            err=True,
+        )
+        return False
+
+    def check_origin(self, repo: OutputRepo, action: str) -> bool:
+        """:meth:`check` against the ``origin`` *repo* actually has.
+
+        Reads the origin only when the spec has release channels at all, so
+        a course without ``<release-channels>`` pays nothing extra.
+        """
+        if self._allow or repo.source != "output" or not self._load():
+            return True
+        # The URL a push actually goes to: a pushurl wins over the fetch URL.
+        return self.check(repo, read_origin_url(repo.path, push=True), action)
+
+
+_allow_channel_remote_option = click.option(
+    "--allow-channel-remote",
+    is_flag=True,
+    help="Allow an output target to push to (or init with) a remote that is a "
+    "release channel's origin. Refused by default: after `clm release adopt` "
+    "that would overwrite the frozen cohort repository (issue #1140).",
+)
+
+
 def _stage_all_excluding_sidecars(repo_path: Path) -> None:
     """Stage every change except CLM's private build sidecars.
 
@@ -1051,6 +1223,7 @@ def git_group():
 @_all_channels_option
 @_all_option
 @click.option("--branch", default="master", help="Default branch name")
+@_allow_channel_remote_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def init(
     spec_file: Path,
@@ -1059,6 +1232,7 @@ def init(
     all_channels: bool,
     all_repos: bool,
     branch: str,
+    allow_channel_remote: bool,
     dry_run: bool,
 ):
     """Initialize git repositories in output directories.
@@ -1072,6 +1246,11 @@ def init(
     Use --channel NAME / --all-channels to initialize per-cohort release
     repositories instead of output targets (issue #208). Use --all to
     initialize output targets and every release channel in one pass.
+
+    An output target whose remote is a release channel's origin is refused
+    (issue #1140): after ``clm release adopt`` that repository is the frozen
+    cohort state, and an output tree wired to it would push the unfrozen
+    build over it. ``--allow-channel-remote`` overrides.
 
     \b
     Examples:
@@ -1097,8 +1276,16 @@ def init(
     click.echo(f"Initializing git repositories for {spec_file.name}...")
     click.echo()
 
+    guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
+
+        # Init only *uses* the derived remote when it adds or clones it: an
+        # existing repo with an origin already is left alone (push guards it).
+        uses_remote = not (repo.has_git and repo.has_remote())
+        if uses_remote and not guard.check(repo, repo.remote_url, "Adding it to this output tree"):
+            click.echo()
+            continue
 
         # Check if directory exists
         if not repo.path.exists():
@@ -1135,6 +1322,9 @@ def init(
 
         click.echo()
 
+    if guard.refused:
+        raise SystemExit(1)
+
 
 def _porcelain_changes(repo_path: Path) -> list[dict[str, str]]:
     """``git status --porcelain -z`` as rows: ``{"status": XY, "path": …}``.
@@ -1158,6 +1348,11 @@ def _porcelain_changes(repo_path: Path) -> list[dict[str, str]]:
                 i += 1
         changes.append(entry)
     return changes
+
+
+# Public names for ``clm release`` (cross-module private imports are banned).
+porcelain_changes = _porcelain_changes
+transport_safety_config_args = _transport_safety_config_args
 
 
 def _repo_status_payload(repo: OutputRepo) -> dict[str, object]:
@@ -1457,6 +1652,7 @@ def commit(
 @_channel_option
 @_all_channels_option
 @_all_option
+@_allow_channel_remote_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def push(
     spec_file: Path,
@@ -1465,6 +1661,7 @@ def push(
     channel: str | None,
     all_channels: bool,
     all_repos: bool,
+    allow_channel_remote: bool,
     dry_run: bool,
 ):
     """Push commits to remote.
@@ -1474,6 +1671,9 @@ def push(
     instead of output targets (issue #208). Use --all to push every distributed
     output target AND every release channel in one command — the single
     push-everything workflow.
+
+    An output target whose origin is a release channel's origin is refused
+    (issue #1140); ``--allow-channel-remote`` overrides.
 
     \b
     Examples:
@@ -1497,6 +1697,7 @@ def push(
         click.echo("No output directories found.")
         return
 
+    guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
 
@@ -1507,6 +1708,10 @@ def push(
 
         if not repo.has_remote():
             click.echo("  Skipped: No remote configured")
+            click.echo()
+            continue
+
+        if not guard.check_origin(repo, "Pushing this output tree"):
             click.echo()
             continue
 
@@ -1530,6 +1735,9 @@ def push(
 
         click.echo()
 
+    if guard.refused:
+        raise SystemExit(1)
+
 
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
@@ -1542,6 +1750,7 @@ def push(
 @_channel_option
 @_all_channels_option
 @_all_option
+@_allow_channel_remote_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def sync(
     spec_file: Path,
@@ -1552,6 +1761,7 @@ def sync(
     channel: str | None,
     all_channels: bool,
     all_repos: bool,
+    allow_channel_remote: bool,
     dry_run: bool,
 ):
     """Commit and push in one operation.
@@ -1564,6 +1774,8 @@ def sync(
     --channel NAME / --all-channels to sync per-cohort release repositories
     instead of output targets (issue #208). Use --all to commit-and-push every
     distributed output target AND every release channel in one command.
+    Like ``push``, an output target whose origin is a release channel's
+    origin is refused (issue #1140); ``--allow-channel-remote`` overrides.
 
     \b
     Examples:
@@ -1596,11 +1808,17 @@ def sync(
 
     errors_found = False
 
+    guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
 
         if not repo.has_git:
             click.echo("  Skipped: No git repository")
+            click.echo()
+            continue
+
+        if not guard.check_origin(repo, "Pushing this output tree"):
+            errors_found = True
             click.echo()
             continue
 
