@@ -145,3 +145,78 @@ def test_an_unknown_engine_name_is_a_usage_error(
     result = runner.invoke(slides_sync_group, ["report", str(pair[0])])
     assert result.exit_code == 2
     assert "CLM_SYNC_CORE" in result.output + _stderr(result)
+
+
+class TestIdentifyPerHalf:
+    """#1266: the core asks ``identify`` once per half for one handle; the
+    answer names its half with ``side`` beside the ``choice``. The shared
+    parser used to refuse that shape (exit 2), so it was unanswerable."""
+
+    @pytest.fixture
+    def swapped(self, tmp_path: Path, runner: CliRunner) -> Path:
+        from tests.slides.test_doc_pass import DE as DOC_DE
+        from tests.slides.test_doc_pass import EN as DOC_EN
+
+        de, en = tmp_path / "slides_t.de.py", tmp_path / "slides_t.en.py"
+        de.write_text(DOC_DE, encoding="utf-8", newline="\n")
+        en.write_text(DOC_EN, encoding="utf-8", newline="\n")
+        assert runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        cells = "# %%\nx = 1\n\n# %%\ny = 2\n"
+        # both halves swap the two code cells and edit both, differently
+        de.write_text(
+            DOC_DE.replace(cells, "# %%\ny = 20\n\n# %%\nx = 10\n"), encoding="utf-8", newline="\n"
+        )
+        en.write_text(
+            DOC_EN.replace(cells, "# %%\ny = 21\n\n# %%\nx = 11\n"), encoding="utf-8", newline="\n"
+        )
+        return de
+
+    @pytest.mark.usefixtures("sequence")
+    def test_identify_answers_name_their_half(
+        self, runner: CliRunner, swapped: Path, tmp_path: Path
+    ) -> None:
+        deck = _report(runner, swapped)["pairs"][0]
+        items = [i for i in deck["items"] if i["action"] == "identify"]
+        assert sorted((i["key"], i["side"]) for i in items) == [
+            ("seq:3", "de"),
+            ("seq:3", "en"),
+            ("seq:4", "de"),
+            ("seq:4", "en"),
+        ]
+        # every template of a per-half row carries that half
+        assert all(t["side"] == i["side"] for i in items for t in i["templates"])
+        # recorded x (seq:3) is now the 4th cell on both halves, y the 3rd
+        target = {"seq:3": "4", "seq:4": "3"}
+        decisions = [
+            {
+                "key": i["key"],
+                "action": "identify",
+                "choice": f"new:{i['side']}:deck:{target[i['key']]}",
+                "side": i["side"],
+            }
+            for i in items
+        ]
+        document = _document(tmp_path, deck["report_id"], *decisions)
+        result = runner.invoke(
+            slides_sync_group, ["apply", str(swapped), "--decisions", str(document), "--json"]
+        )
+        assert result.exit_code != 2, result.output + _stderr(result)
+        payload = _json_payload(result.output)
+        assert payload["rejected"] == []
+        answered = {
+            (i["key"], i["side"]): i["answer"]
+            for i in payload["items"]
+            if i["action"] == "identify"
+        }
+        # each half's row took its own answer, not the first one on the handle
+        assert answered == {
+            ("seq:3", "de"): "new:de:deck:4",
+            ("seq:4", "de"): "new:de:deck:3",
+            ("seq:3", "en"): "new:en:deck:4",
+            ("seq:4", "en"): "new:en:deck:3",
+        }
+        # with the cells identified, the core reaches the questions after them
+        assert {i["action"] for i in payload["items"] if i["answer"] is None} == {
+            "conflict_shared",
+            "order_decision",
+        }

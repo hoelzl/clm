@@ -2897,12 +2897,31 @@ class TestDecisionParsing:
         assert not decisions
         assert any("'side' must be 'de' or 'en'" in e for e in errors)
 
-    def test_side_requires_a_body(self):
-        decisions, errors = doc_apply.parse_decisions(
-            {"decisions": [{"key": "id:x", "choice": "confirm", "side": "de"}]}
+    def test_side_may_accompany_a_choice(self):
+        """#1266: an identify row is asked per half; its choice names the
+        half. Where a side is not meaningful, the executor rejects the row."""
+        decisions, errors = doc_apply.parse_decision_rows(
+            {
+                "decisions": [
+                    {"key": "seq:3", "choice": "new:de:deck:4", "side": "de"},
+                    {"key": "seq:3", "choice": "new:en:deck:4", "side": "en"},
+                ]
+            }
         )
-        assert not decisions
-        assert any("only accompanies a 'body'" in e for e in errors)
+        assert not errors
+        assert [(d.key, d.side) for d in decisions] == [("seq:3", "de"), ("seq:3", "en")]
+
+    def test_the_same_key_twice_on_one_side_is_a_duplicate(self):
+        decisions, errors = doc_apply.parse_decision_rows(
+            {
+                "decisions": [
+                    {"key": "seq:3", "choice": "removed", "side": "de"},
+                    {"key": "seq:3", "choice": "new:de:deck:4", "side": "de"},
+                ]
+            }
+        )
+        assert len(decisions) == 1
+        assert any("duplicate key on side 'de'" in e for e in errors)
 
     def test_valid_side_body_parses(self):
         decisions, errors = doc_apply.parse_decisions(
