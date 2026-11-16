@@ -4126,7 +4126,7 @@ including `[jupyter] kernel_python`.
 
 ### `clm cache` (CLM {version}+)
 
-Read-only build-cache inspection.
+Build-cache inspection (`explain`, read-only) and repair (`forget`).
 
 #### `clm cache explain SOURCE_FILE --spec SPEC`
 
@@ -4170,6 +4170,39 @@ directories are created.
 clm cache explain slides/.../slides_shared_ptr.cpp --spec cpp-einsteiger.xml
 clm cache explain slides_intro.py --spec course.xml -L de --format html --json
 ```
+
+#### `clm cache forget PATH... [--dry-run] [--json]`
+
+Deletes every cached result for the given files, so the next build
+regenerates them (CLM {version}, #1245). Use it when a cached result is
+wrong and every build keeps replaying it, e.g. a partially rendered
+diagram. Each PATH is a source file (a `.drawio` / PlantUML diagram or a
+slide deck: its `processed_files`, `processing_issues` and
+`executed_notebooks` rows, plus the `results_cache` rows of every output it
+produced) or a generated output file (its `results_cache` rows). All
+cached versions are removed; files on disk are left alone. No `--spec` is
+needed.
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Report the matching rows per table without deleting them |
+| `--json` | Output the report as JSON |
+
+The caches key on absolute paths: run it with the same global
+`--cache-db-path` / `--jobs-db-path` as your builds, in the checkout that
+ran them. A report of zero rows means nothing was cached under these paths.
+
+```bash
+clm cache forget slides/module_030_git/topic_400_git/drawio/merging.drawio
+clm cache forget slides/.../slides_intro.py --dry-run
+```
+
+Since CLM {version} the Draw.io worker also confirms each PNG before
+caching it: a render is accepted when it equals the image already at the
+output path (one export) or when two renders agree (two exports, the case
+for an edited diagram). If three renders all differ, the job fails, and the
+existing image and the cache are left unchanged. So after `forget`, a bad
+image still on disk is replaced by the next build.
 
 ### `clm db`
 

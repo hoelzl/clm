@@ -210,6 +210,36 @@ diagram identity fingerprints the PlantUML JAR / Draw.io executable
 caches; a binary replaced in place with identical size and mtime keeps
 the key.
 
+### Draw.io render verification — nothing unconfirmed is cached (#1245)
+
+A cache stores whatever the worker reports as a success, and a Draw.io
+export can succeed with a **partial** PNG: exit 0, correct dimensions,
+tiles of the diagram missing (seen under load, during a burst re-render
+after a repository move changed every absolute-path key). Once cached, every
+build replays it. So the worker confirms a PNG before writing or caching it
+(`_verified_render` in `workers/drawio/drawio_worker.py`):
+
+- equal to the image already at the output path (the tracked
+  `img-generated/` file) → accepted after **one** export: the common case
+  for an unchanged diagram re-rendered after a cache miss;
+- otherwise rendered again, and accepted when **two** renders agree: an
+  edited diagram, a new converter version, or a bad image on disk, which is
+  thereby replaced;
+- three mutually different renders → `NonReproducibleRenderError`: the job
+  fails, and the output file and caches stay unchanged.
+
+This relies on Draw.io PNG exports being byte-deterministic per environment
+(checked 2026-11-14: identical across runs in the 1.34.3 and 1.39.0 images,
+and natively on Windows, though the Windows bytes differ from Docker's).
+PDF is excluded (it embeds a creation timestamp); SVG is unverified. Every
+disagreement is logged as a warning; frequent warnings would be the signal
+to look at the cause (e.g. converter concurrency).
+
+**Recovering from a bad cached result:** `clm cache forget <file>` deletes
+every cached row for a source or output file in both databases (see
+`clm info commands`). Verification does not help here: a cache hit never
+reaches the worker.
+
 ## Where each cache is consulted during a build
 
 `execute_operation` (`infrastructure/backends/sqlite_backend.py`) is the choke
