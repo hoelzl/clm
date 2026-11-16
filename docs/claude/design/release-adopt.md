@@ -27,7 +27,8 @@ exists to avoid.
 
 - The `de` repo holds 2,438 manifest files: 114 topics with 1,576 files, plus
   **862 skeleton files** (`topic_id: null`). The skeleton is almost entirely
-  the C++ IDE export tree (#928): `code/external` (623 files),
+  the `code/` tree, copied by the spec's **global** `<dir-groups>`:
+  `code/external` (623 files),
   `code/completed` (171) and `code/starter_kits` (61), plus 7 config files.
 - The published repo is the build output directory itself. Right now the
   working tree (the current build) differs from published `HEAD` in 52
@@ -138,27 +139,27 @@ new topics, and `--refreeze` for deliberate corrections.
 | D6 | Guard against the old push path | **Two layers. (a) `adopt` removes the `origin` remote from any output-target working tree whose origin equals the channel's origin. It prints the removed URL and the `git remote add` command that restores it; `--keep-output-remote` opts out, and `--dry-run` only reports. (b) `clm git push` and `clm git init` in output-target mode refuse to push to, or re-add, a remote that is a release channel's origin; an override flag allows it** | Owner: a push of the output directory to that remote is far more likely a mistake than intended, even a manual one. Removing the remote alone doesn't last: `clm git init` re-adds `origin` from the target's `<remote-path>` (`_init_handle_existing_repo`), hence layer (b). The procedure also tells the author to drop or change the target's `<remote-path>` |
 | D7 | `source_commit` for adopted records | **`published:<dest HEAD sha>`** | It's honest: we don't know the source commit, and the field is informational only (never read) |
 
-### Open point the owner should weigh: the IDE-export skeleton
+### The `code/` skeleton (D4 background)
 
-The `code/` tree is topic-less in the manifest. `code/completed` holds the
-completed solutions for **every** topic, and `code/starter_kits` the
-starters. That's fine for this course, because the `shared` target already
-ships completed code. But it has two consequences under freezing:
+The `code/` tree is topic-less in the manifest because global `<dir-groups>`
+copy it. `code/completed` holds the completed solutions for **every** topic,
+and `code/starter_kits` the starters. That's fine for this course, because
+the `shared` target already ships completed code. But under freezing, new
+exercises added to `code/completed` or `code/starter_kits` after adoption
+reach students only if the file is **missing** in their repo. Presence-as-
+frozen delivers missing skeleton files only on a skeleton copy, and the
+skeleton is frozen after adopt. So in practice they reach students only via
+`--refreeze-skeleton`.
 
-- New exercises added to `code/completed` or `code/starter_kits` after
-  adoption reach students only if the file is **missing** in their repo
-  (presence-as-frozen delivers missing skeleton files only on a skeleton
-  copy, and the skeleton is frozen after adopt). So in practice they reach
-  students only via `--refreeze-skeleton`.
-- A per-topic ownership for the export tree would fix this properly: each
-  `code/completed/<topic>/…` would be owned by its topic and released with
-  it. That's a provenance-manifest change in the C++ IDE export (#928), and
-  much larger than adopt.
+clm already supports topic ownership for copied directories: a `<dir-group>`
+nested inside a `<topic>` records that topic in the manifest and keeps the
+output placement (#208). Using it for about 170 subdirs would scatter the
+`code/` layout over the spec, though.
 
-Decided: ship adopt with D4 as written. The per-topic ownership of the
-export tree is a separate issue. The owner noted that ownership must stay
-optional, because top-level material copied into the course (`code/external`,
-the build files) belongs to no topic.
+Decided: ship adopt with D4 as written. **#1288** adds an optional
+`<subdir topic="…">` owner to global dir-groups. The owner noted that
+ownership must stay optional, because top-level material copied into the
+course (`code/external`, the build files) belongs to no topic.
 
 ## Tests (when implemented)
 
