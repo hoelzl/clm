@@ -504,10 +504,15 @@ def _has_voiceover_cells(path: Path, *, include_notes: bool = False) -> bool:
 
 def _slide_start_ids_of(path: Path) -> list[str | None]:
     """Ordered ``slide_id``s of the slide/subslide cells in ``path`` (``None``
-    where a slide carries no id)."""
+    where a slide carries no id).
+
+    Parsed with the deck's own comment token: under the default ``#`` a ``//``
+    deck yields no cells at all, which made the parity check vacuously true
+    (#1286).
+    """
     return [
         c.metadata.slide_id
-        for c in parse_cells(path.read_text(encoding="utf-8"))
+        for c in parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path))
         if c.metadata.is_slide_start
     ]
 
@@ -516,10 +521,14 @@ def _slide_ids_in_parity(de_path: Path, en_path: Path) -> bool:
     """True iff both halves carry the **same** ordered ``slide_id``s with none
     missing — the precondition for skipping the EN-authority pre-mint
     (``mint_ids=False``). An id-less or divergent pair fails this, so the caller
-    refuses rather than letting the per-half mint diverge (#162)."""
+    refuses rather than letting the per-half mint diverge (#162).
+
+    A pair with no slide cells at all is *not* in parity: an empty parse can
+    only mean nothing was recognised, and ``all([])`` must not vouch for it
+    (#1286)."""
     de_ids = _slide_start_ids_of(de_path)
     en_ids = _slide_start_ids_of(en_path)
-    return de_ids == en_ids and all(de_ids)
+    return bool(de_ids) and de_ids == en_ids and all(de_ids)
 
 
 def _plan_extraction(
