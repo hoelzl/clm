@@ -106,6 +106,9 @@ def _copy_course(target: Path, *, with_committed_cassette: bool) -> Path:
     return target
 
 
+# load_fragile (#1040): mitmdump missed its 30 s startup under the 1.41.0
+# pre-release gate (-n 12); passes alone. See the PR for the evidence.
+@pytest.mark.load_fragile
 def test_record_then_replay_is_byte_identical(tmp_path: Path) -> None:
     """The issue's own acceptance path, end to end."""
     record_course = _copy_course(tmp_path / "record", with_committed_cassette=False)
@@ -141,6 +144,9 @@ def test_record_then_replay_is_byte_identical(tmp_path: Path) -> None:
     assert "Verification passed" in replayed.stdout
 
 
+# load_fragile (#1040): mitmdump missed its 30 s startup under the 1.41.0
+# pre-release gate (-n 12); passes alone. See the PR for the evidence.
+@pytest.mark.load_fragile
 def test_committed_cassette_replays_on_a_fresh_machine(tmp_path: Path) -> None:
     """No stub, no recording, no network: the committed cassette alone must
     carry a strict-replay build — the property that lets any machine rebuild

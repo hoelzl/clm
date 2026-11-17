@@ -220,6 +220,9 @@ def _fold_only_staging(canonical: Path) -> None:
     _fold_staging_to_canonical(canonical, staging[0])
 
 
+# load_fragile (#1040): mitmdump missed its 30 s startup under the 1.41.0
+# pre-release gate (-n 12); passes alone. See the PR for the evidence.
+@pytest.mark.load_fragile
 def test_proxy_starts_and_routes_traffic(
     upstream_server: str, cassette_path: Path, tmp_path: Path
 ) -> None:
@@ -237,6 +240,9 @@ def test_proxy_starts_and_routes_traffic(
     assert cassette_path.stat().st_size > 0
 
 
+# load_fragile (#1040): mitmdump missed its 30 s startup under the 1.41.0
+# pre-release gate (-n 12); passes alone. See the PR for the evidence.
+@pytest.mark.load_fragile
 def test_replay_serves_from_cassette_without_upstream_hit(
     upstream_server: str, cassette_path: Path, tmp_path: Path
 ) -> None:
@@ -264,6 +270,9 @@ def test_replay_serves_from_cassette_without_upstream_hit(
     assert _CountingHandler.upstream_hits == 1, "replay-mode request should not reach upstream"
 
 
+# load_fragile (#1040): mitmdump missed its 30 s startup under the 1.41.0
+# pre-release gate (-n 12); passes alone. See the PR for the evidence.
+@pytest.mark.load_fragile
 def test_replay_preserves_recorded_reason_phrase(
     upstream_server: str, cassette_path: Path, tmp_path: Path
 ) -> None:
