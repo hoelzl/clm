@@ -80,7 +80,7 @@ is controlled.
 To run the excluded tests on their own, or list them:
 
 ```bash
-uv run pytest -m load_fragile -n0                 # 8 tests, about 2 minutes
+uv run pytest -m load_fragile -n0                 # 12 tests, about 4 minutes
 uv run pytest --collect-only -q -m load_fragile
 ```
 
