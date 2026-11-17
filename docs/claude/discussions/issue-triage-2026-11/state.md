@@ -1,87 +1,119 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-16
-review-by: 2027-05-16
+updated: 2026-11-17
+review-by: 2027-05-17
 ---
 
 # State: open-issue triage and fix batch, November 2026
 
-S25. The owner asked for a triage of the open clm issues: which can be
-resolved now, which need design, which bring the most value. The agent
-then fixed them in parallel with subagents, and settled the remaining
-decisions with the owner. Task state is in the PRs and issues below.
-There is no handover.
+**S25.** The owner asked for a triage of the open clm issues: which can be
+resolved now, which need design, which bring the most value. The agent then
+fixed them in parallel with subagents, and settled the remaining decisions
+with the owner.
 
-## Settled
+**S26** resumed the thread. It covered #1280, #1270, the #955 follow-up, the
+design and implementation of #1140 (`clm release adopt`), and the migration
+of the CppCourses student repos to release channels.
 
-- **Order of work.** The agent proposed three groups of sync issues:
-  answer handling, regression tests on the sequence core, and fixes inside
-  the positional engine. The owner asked whether waiting for phase D (the
-  switch to the sequence core) would put the highest-priority fixes on hold
-  for two weeks. Result: groups 1 and 2 were done now, and group 3 waits
-  until after phase D. Positional-only fixes would be thrown away in
-  phase E.
-- **Agent correction, #1228.** The agent's triage listed #1228 (C++23) as
-  open work. The owner remembered it as largely done, and the code
-  confirmed this. The agent updated #1228 and #1163 with the owner's
-  permission.
-- **Agent correction, #1193.** The agent's triage called it trivial. Its
-  subagent found that `uv.lock` is shipped to students on purpose. The
-  owner closed it as intended.
-- **#1245** is covered by #1251 (S24, `drawio-render-integrity`).
+Task state is in the PRs and issues below; there is no handover. The adopt
+design and its field run are in `docs/claude/design/release-adopt.md`.
+
+## Settled (S25)
+
+- **Order of work.** Sync groups 1 and 2 were done in S25. Group 3, the
+  positional-engine defects, waits until after phase D, because
+  positional-only fixes would be thrown away in phase E.
+- **Agent corrections.**
+  - #1228 was already largely done, which the owner remembered.
+  - #1193: `uv.lock` ships to students on purpose; closed as intended.
 - **Decisions, all as the agent recommended.**
-  - #1216: the sequence path must lift the load-time `idless_anchor`
-    refusal. This is phase D work.
-  - #1195: keep the notebook-output epoch bump; the owner rebuilds.
+  - #1216: lift the `idless_anchor` refusal in phase D.
+  - #1195: keep the epoch bump.
   - #1090: closed, with follow-up #1270.
-- **Whisper default (#1105).** The owner had set
-  `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT` globally. A side agent warned
-  that a global non-default key re-transcribes every video, so the owner
-  deleted the variable and asked for a measured comparison instead. The
-  agent ran an A/B test on two German and two English lecture videos
-  (about 69 minutes). Results are in the comment on #1105.
-  - The faster-whisper default (`True`) looped (14 loop segments in one
-    English video), inserted clauses that were never spoken, and produced
-    the hallucination "ARD Text im Auftrag von Funk".
-  - `False` had no loops, and its word error rate against Auphonic fell
-    from 3.9% to 2.2%.
-  - The costs of `False` are longer German segments and some unpunctuated
-    stretches.
-  - The owner chose **option A**: `False` becomes the default, and the
-    `{}` cache key is kept. Old transcripts (decoded with `True`) are still
-    served; a video is redone with `--refresh-cache`. Option B, which
-    re-keys and re-transcribes everything, was rejected because it repeats
-    the mass re-transcription. Shipped in #1279.
-- **#1162 follow-up: show the model bullet structure.** The owner had no
-  strong intuition and asked for the agent's view. The agent recommended
-  logical bullets: nesting kept, continuation lines unwrapped, and the
-  writers re-wrap afterwards. The owner agreed. The agent found that inline
-  narration today reaches the model as a single space-joined line
-  (`_strip_code_comments`). Filed as #1280.
+- **Whisper (#1105).** A measured A/B made
+  `condition_on_previous_text=False` the default. The old cache key was kept
+  (option A), so there is no mass re-transcription. Shipped in #1279; the
+  numbers are on #1105.
+- **#1280.** Narration reaches the model as logical bullets.
+
+## Settled (S26)
+
+- **#1140, the seven decisions D1 to D7**, all as the agent recommended:
+  - a separate `adopt` command;
+  - adopt files that differ, with the digest taken from the destination;
+  - refuse a topic with missing files unless `--deliver-missing`;
+  - freeze `code/`, without making it evergreen;
+  - an explicit selector is required;
+  - guard the old push path;
+  - `source_commit = published:<sha>`.
+- **The owner's two extensions.**
+  - **D6:** adopt removes the output tree's `origin`. The agent added that
+    `clm git init` would re-add it from `<remote-path>`, so `init`, `push`
+    and `sync` also refuse a channel's origin unless overridden.
+  - **D4:** file the owning-topic question for exports. It became #1288,
+    with the owner's remark that ownership must be optional for top-level
+    material.
+- **The implementation's two deviations**, both confirmed by the owner:
+  - a run that adopts nothing records nothing, and does not freeze the
+    skeleton;
+  - guard refusals exit 1.
+- **The CppCourses migration.**
+  - **What happened:** all 114 topics were adopted in both languages, as
+    students had them. Of the 8 topics with real unpublished edits, the
+    owner shipped the generics decks (`function_templates`,
+    `class_templates`, `concepts`) and `my_vector_stl` now.
+  - **Deferred:** `exceptions_details`, `stack_unwinding`, `unique_ptr`,
+    `destruction`, and the six topics whose HTML differs only in printed
+    pointer addresses wait until the current cohort is done. The owner put
+    that one or two weeks after 2026-11-17.
+- **Agent correction, the "other checkout".** The agent read the student
+  repos being 4 commits ahead of the build tree as a second checkout. The
+  owner explained that an agent on this machine had pushed selected changes,
+  evidently from a temporary clone; no other clone with that origin exists.
+- **Agent correction, #1293.** The agent filed #1293 saying `push` and
+  `sync` exit 0 on failure. `sync` (and `release sync --push`) already
+  exited 1; the affected commands were `push`, `commit`, `reset` and `init`.
+- **#1293, fixed now.** The owner asked whether to fix it straight away;
+  it was small, so it was fixed in #1295.
 
 ## Shipped
 
-- **Agent-run PRs:** #1253–#1265, #1267–#1269, #1271, #1279, #1281.
-- **#1281** fixed master. #1241 (the static command index) and #1251
-  (`cache forget`) were merged without seeing each other, which is a
-  semantic merge conflict. The cause is commented on tracker issue #1272,
-  which the owner had closed once master CI was green again.
-- **Worktrees:** all of this session's worktrees and the four empty
-  leftover directories were removed at the owner's request.
-- **The save:** S25 was saved in #1282 and extended once, after #1272
-  was closed.
+- **S25:** #1253–#1265, #1267–#1269, #1271, #1279, #1281; saves #1282 and
+  #1283.
+- **S26 clm PRs:**
+
+  | PR | What |
+  |---|---|
+  | #1285 | #1280 |
+  | #1291 | #1270; item 4 is recorded on the issue as not measured |
+  | #1290 | #1286, the `//` parity check |
+  | #1287, #1289 | the adopt design |
+  | #1292 | `clm release adopt`; a Linux-only test assertion was fixed in CI |
+  | #1294 | the `--refreeze` synopsis |
+  | #1295 | #1293 |
+
+- **S26 issues filed:** #1284 (#955 follow-up), #1286, #1288, #1293.
+- **CppCourses:** #242 (the channels), #243 (the ledgers), #244
+  (`session-knowledge.md` rewritten for the release-channel workflow).
+- **Not yet in a PyPI release.** clm 1.40.0 reads the adopted freeze
+  record, so the deferred refreeze does not wait for a release.
 
 ## Open
 
-- Phase D carries #1216 and the sync group 3 fixes (positional-engine
-  defects).
-- #1280: narration given to the model as logical bullets.
-- #1270: the build-abort follow-ups to #1090.
-- From the triage, the issues that need design are unchanged. They are
-  listed in the transcript under "Needs design first".
+- **The deferred CppCourses refreeze**, after the cohort. The commands are
+  in CppCourses `session-knowledge.md`. Inferred but not exercised: a deck
+  added to a section changes that section's frozen `CMakeLists.txt`,
+  which then needs `--refreeze-skeleton`.
+- **Open issues:**
+  - #1284: reconcile the GitLab default branch after `git push --channel`;
+  - #1288: an optional owning topic for global dir-group subdirs;
+  - #1216 and sync group 3: phase D.
+- **The "needs design first" list from S25:** #1140 is done. The rest
+  (#1050, #1094/#1091, #1100/#1104 and the lower-urgency items) is
+  unchanged and is listed in the S25 transcript.
 
 ## Next boundary
 
-Phase D (the sequence-core default), after the dogfood window (2 weeks or
-50 passes, O4 in `sync-structural-core`).
+Either the deferred CppCourses refreeze, once the owner says the cohort has
+finished, or phase D after the dogfood window, whichever comes first.
