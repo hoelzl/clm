@@ -86,7 +86,9 @@ below work in either order (issue #868). If the remote project advertises a
 different default branch than the one pushed, `clm release provision` (step
 below) points it at the pushed branch, or warns naming the GitLab setting
 (*Settings > Repository > Branch defaults > Default branch*) when the token may
-not change it (issue #955).
+not change it (issue #955). With a GitLab token configured, the push that
+first creates the branch (`clm git push`/`sync --channel`, `clm release sync
+--push`) does the same, so a second provision run is not needed (issue #1284).
 
 ## 4. Release topics as their workshops wrap
 
@@ -210,7 +212,8 @@ skeleton file the cohort never received is delivered by it too.
 
 Global (skeleton) files — those not owned by any topic, such as shared data or
 dir-group content — are copied once on the first sync and then frozen with the
-rest of the skeleton. Some of them are *meant* to change over a cohort's
+rest of the skeleton. (A dir-group or subdir with a `topic` attribute is owned
+by that topic instead and releases with it; see the spec file reference.) Some of them are *meant* to change over a cohort's
 lifetime: a NEWS file, announcements, a schedule. Declare those as
 **evergreen** and every sync re-copies them whenever the built content differs
 from the cohort's copy:
@@ -305,6 +308,26 @@ distributed repos; the per-cohort freeze records (`.clm-released*.json`) are
 committed normally. A destination shared by several streams is one repo to
 `clm git`: `--all-channels` visits it once, and `clm git reset` on it discards
 the *other* stream's uncommitted promotions too.
+
+## Migrating a course that published by pushing an output target
+
+A course that so far published by `clm git push`-ing an output target (e.g. the
+`shared` target) can switch to release channels without changing anything
+students already have. Clone the published repo as the channel's working tree,
+then record its current state as released:
+
+```bash
+clm release adopt course.xml --channel de --all-present --dry-run   # report first
+clm release adopt course.xml --channel de --all-present
+```
+
+`adopt` never changes content. It freezes each topic as students have it
+(reporting which files differ from the current build), freezes the skeleton,
+and removes the old output tree's `origin` so it can no longer push to
+students; `clm git init`/`push`/`sync` also refuse a channel's remote on an
+output target. Later changes reach students through `clm release sync
+--refreeze`. The full procedure, including the spec edit, is in `clm info
+releases`.
 
 ## See also
 
