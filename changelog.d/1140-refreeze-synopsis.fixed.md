@@ -1,0 +1,1 @@
+- `clm info releases` now shows that `--refreeze` takes one topic per flag (`--refreeze a --refreeze b`); the old `--refreeze TOPIC_ID...` synopsis suggested space-separated ids, which click rejects.
