@@ -722,6 +722,7 @@ Copy additional directories (e.g., code examples) to output.
 | `include-root-files` | No | Also copy files from base path (default: `false`) |
 | `recursive` | No | Recurse into subdirectories (default: `true`) |
 | `lang` | No | `de` or `en`: copy this dir-group into that language's output only (since {version}). Unset (the default) copies it into every language. Any other value is a spec error. |
+| `topic` | No | Owning topic(s) of a **global** dir-group, for `clm release` (since {version}); also allowed on each `<subdir>`. See *Owning topics* below. |
 
 `<name>` accepts both shapes of the bilingual-or-simple convention:
 
@@ -781,6 +782,54 @@ lists each language's tree only under that language.
     <path>code</path>
 </dir-group>
 ```
+
+#### Owning topics for `clm release` (`topic`)
+
+By default a global dir-group's files belong to no topic: `clm release`
+treats them as **skeleton**, copied once when a channel starts and frozen
+after that. To ship per-topic code (completed solutions, starter kits) together
+with its topic instead, name an owner on the subdir, or on the whole group:
+
+```xml
+<dir-group include-root-files="true">
+    <name>code/completed</name>
+    <path>code/completed</path>
+    <subdirs>
+        <subdir topic="builder_pattern">builder</subdir>
+        <subdir topic="function_basics references">simple_examples</subdir>
+        <subdir>shared_utils</subdir>   <!-- no owner: stays skeleton -->
+    </subdirs>
+</dir-group>
+<dir-group topic="catch2_intro">     <!-- the whole group, root files included -->
+    <name>code/catch2_demo</name>
+    <path>code/catch2_demo</path>
+</dir-group>
+```
+
+- **The value is a space-separated list of candidate topic ids.** The owner is
+  the first candidate *in course order* whose section and subsection are
+  enabled; the order inside the attribute does not matter. A project used by
+  several topics usually lists all of them: it ships with the earliest one that
+  is enabled.
+- **One owner per file.** Changes a project gets for a later topic reach an
+  already-released channel only through `clm release sync --refreeze <owner>`.
+- **A subdir's `topic` overrides the group's.** Subdirs without their own
+  `topic` inherit the group's; the group's root files (`include-root-files`)
+  belong to the group's owner, or to no topic.
+- **No enabled candidate:** the subdir (or the whole group) is **not copied**,
+  the same rule as for a `<dir-group>` nested in a topic of a disabled section.
+  `clm validate` warns (`disabled_dir_group_owner`).
+- **An unknown topic id is a spec error** (`clm validate`:
+  `invalid_dir_group_owner`; `clm build` refuses the spec). `topic` on a
+  `<dir-group>` nested inside a `<topic>` is an error too: that topic owns it.
+- Ownership changes only the provenance manifest (and so what `clm release`
+  ships with which topic), never where the files are copied.
+- Aggregating build files kept in the skeleton (e.g. a `CMakeLists.txt` that
+  adds every project) must tolerate a project that has not been released yet,
+  e.g. `if (IS_DIRECTORY …) add_subdirectory(…) endif ()`.
+
+A `<dir-group>` nested inside a `<topic>` is another way to give it an owner;
+`topic` keeps a `code/` tree declared in one place.
 
 #### Duplicate destinations
 

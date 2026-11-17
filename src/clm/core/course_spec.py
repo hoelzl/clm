@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import ClassVar
 from xml.etree import ElementTree as ETree
 
-from attr import Factory, field, frozen
+from attr import Factory, evolve, field, frozen
 
 from clm.core.remote_url import validate_remote_url
 from clm.core.utils.text_utils import Text, sanitize_file_name
@@ -703,6 +703,11 @@ def find_subdirs(element: ETree.Element) -> list[str]:
     return [subdir_elem.text or "" for subdir_elem in subdirs]
 
 
+def _split_topic_candidates(value: str | None) -> tuple[str, ...]:
+    """Split a ``topic="a b c"`` attribute into its candidate topic ids (#1288)."""
+    return tuple((value or "").split())
+
+
 def element_text(element: ETree.Element, tag: str) -> str:
     child = element.find(tag)
     if child is not None:
@@ -1213,6 +1218,35 @@ class DirGroupSpec:
     # semantics as ``<channel lang>`` (#293); an unknown value is reported by
     # :meth:`CourseSpec.validate`.
     lang: str | None = None
+    # Optional owner of a *global* dir-group (issue #1288). The raw candidate
+    # lists come from ``<dir-group topic="a b">`` / ``<subdir topic="…">``;
+    # :meth:`CourseSpec.parse_dir_groups` resolves them to the first candidate
+    # (course order) in an enabled section. The group-level owner lands in
+    # ``section_id``/``topic_id`` (it owns the root files and a whole-directory
+    # copy); ``subdir_owners`` is aligned with ``subdirs`` and holds each
+    # subdir's resolved ``(section_id, topic_id)`` — ``(None, None)`` for an
+    # unowned subdir, which stays skeleton.
+    topic_candidates: tuple[str, ...] = ()
+    subdir_topic_candidates: tuple[tuple[str, ...], ...] | None = None
+    subdir_owners: tuple[tuple[str | None, str | None], ...] | None = None
+    # Problems found while resolving ownership: errors (an unknown topic id,
+    # ``topic`` on a topic-scoped dir-group) fail :meth:`CourseSpec.validate`;
+    # warnings name what is not copied because no candidate owner is enabled.
+    ownership_errors: tuple[str, ...] = ()
+    ownership_warnings: tuple[str, ...] = ()
+
+    def subdir_owner(self, index: int) -> tuple[str | None, str | None]:
+        """The ``(section_id, topic_id)`` owning ``subdirs[index]``.
+
+        Falls back to the dir-group's own ownership (a topic-scoped dir-group,
+        or a global one with a group-level ``topic``) when the subdir has no
+        owner of its own.
+        """
+        if self.subdir_owners is not None and index < len(self.subdir_owners):
+            owner = self.subdir_owners[index]
+            if owner[1] is not None:
+                return owner
+        return (self.section_id, self.topic_id)
 
     @classmethod
     def from_element(
@@ -1223,6 +1257,12 @@ class DirGroupSpec:
         topic_id: str | None = None,
     ):
         subdirs = find_subdirs(element)
+        subdirs_elem = element.find("subdirs")
+        subdir_topic_candidates = (
+            tuple(_split_topic_candidates(s.get("topic")) for s in subdirs_elem)
+            if subdirs_elem is not None
+            else None
+        )
         name = parse_multilang_element(element.find("name"), context="<dir-group>/<name>")
         include_root_files = element.get("include-root-files", "").lower() == "true"
         recursive = element.get("recursive", "").lower() != "false"
@@ -1268,7 +1308,14 @@ class DirGroupSpec:
             section_id=section_id,
             topic_id=topic_id,
             lang=element.get("lang", "").strip() or None,
+            topic_candidates=_split_topic_candidates(element.get("topic")),
+            subdir_topic_candidates=subdir_topic_candidates,
         )
+
+    @property
+    def has_ownership_candidates(self) -> bool:
+        """Whether the spec names a ``topic`` on the group or any subdir."""
+        return bool(self.topic_candidates) or any(self.subdir_topic_candidates or ())
 
     def output_languages(self, languages: Iterable[str]) -> list[str]:
         """The subset of ``languages`` this dir-group is copied into (#1031).
@@ -1277,6 +1324,120 @@ class DirGroupSpec:
         provenance manifest and ``clm validate``'s destination check share.
         """
         return [lang for lang in languages if self.lang is None or lang == self.lang]
+
+    @property
+    def label(self) -> str:
+        """A human-readable name for messages: the ``<name>``, else the path."""
+        return self.name.en or self.name.de or self.path or "."
+
+
+def _resolve_topic_candidates(
+    candidates: tuple[str, ...],
+    topic_order: list[tuple[str, str | None, bool]],
+    errors: list[str],
+    where: str,
+) -> tuple[str | None, str] | None:
+    """The first candidate, in course order, whose section is enabled (#1288).
+
+    Returns ``(section_id, topic_id)``, or ``None`` when every candidate is
+    disabled. An id that occurs nowhere in the spec is reported in *errors*
+    and otherwise ignored.
+    """
+    known = {topic_id for topic_id, _, _ in topic_order}
+    for candidate in candidates:
+        if candidate not in known:
+            errors.append(f"{where}: unknown topic id {candidate!r} in topic attribute")
+    wanted = set(candidates)
+    for topic_id, section_id, enabled in topic_order:
+        if enabled and topic_id in wanted:
+            return (section_id, topic_id)
+    return None
+
+
+def _resolve_dir_group_ownership(
+    spec: DirGroupSpec, topic_order: list[tuple[str, str | None, bool]]
+) -> DirGroupSpec:
+    """Resolve a dir-group's ``topic`` candidates into ownership (issue #1288).
+
+    A subdir (or a whole group) whose candidates are all disabled is not
+    copied, matching topic-scoped dir-groups in disabled sections. A group
+    whose ``<subdirs>`` are all dropped never falls back to the
+    whole-directory copy an empty ``<subdirs>`` would otherwise mean.
+    """
+    if not spec.has_ownership_candidates:
+        return spec
+    errors: list[str] = []
+    warnings: list[str] = []
+    label = f"<dir-group> '{spec.label}'"
+    if spec.topic_id is not None:
+        # A topic-scoped dir-group is owned by its enclosing <topic> already.
+        errors.append(
+            f"{label}: the topic attribute is only valid on a global <dir-groups> "
+            f"entry; this dir-group is nested in topic {spec.topic_id!r}"
+        )
+        return evolve(spec, ownership_errors=tuple(errors))
+
+    group_owner: tuple[str | None, str | None] = (None, None)
+    group_dropped = False
+    if spec.topic_candidates:
+        resolved = _resolve_topic_candidates(spec.topic_candidates, topic_order, errors, label)
+        if resolved is None:
+            if not errors:
+                group_dropped = True
+                warnings.append(
+                    f"{label}: no candidate topic ({' '.join(spec.topic_candidates)}) "
+                    f"is in an enabled section; the dir-group is not copied"
+                )
+        else:
+            group_owner = resolved
+
+    subdirs = spec.subdirs or []
+    candidates_per_subdir = spec.subdir_topic_candidates or tuple(() for _ in subdirs)
+    kept: list[str] = []
+    owners: list[tuple[str | None, str | None]] = []
+    for subdir, candidates in zip(subdirs, candidates_per_subdir, strict=False):
+        if candidates:
+            where = f"{label} <subdir> '{subdir}'"
+            n_errors = len(errors)
+            resolved = _resolve_topic_candidates(candidates, topic_order, errors, where)
+            if resolved is None:
+                if len(errors) == n_errors:
+                    warnings.append(
+                        f"{where}: no candidate topic ({' '.join(candidates)}) is in an "
+                        f"enabled section; the subdir is not copied"
+                    )
+                    continue
+                # Only unknown ids: keep copying it, unowned (the error fails
+                # the build anyway; validate must still see the subdir).
+                kept.append(subdir)
+                owners.append(group_owner)
+                continue
+            kept.append(subdir)
+            owners.append(resolved)
+        elif group_dropped:
+            continue
+        else:
+            kept.append(subdir)
+            owners.append(group_owner)
+
+    include_root_files = spec.include_root_files and not group_dropped
+    recursive = spec.recursive
+    if subdirs and not kept:
+        # Every subdir dropped: copy the root files only, never the whole tree.
+        recursive = False
+    elif not subdirs and group_dropped:
+        recursive = False
+    return evolve(
+        spec,
+        subdirs=kept if subdirs else spec.subdirs,
+        subdir_owners=tuple(owners) if subdirs else None,
+        section_id=group_owner[0],
+        topic_id=group_owner[1],
+        include_root_files=include_root_files,
+        recursive=recursive,
+        ownership_errors=tuple(errors),
+        ownership_warnings=tuple(warnings),
+    )
 
 
 # Valid values for output target configuration. ``speaker`` is the deprecated
@@ -2458,7 +2619,41 @@ class CourseSpec:
         if top is not None:
             for dg in top.findall("dir-group"):
                 dir_groups.append(DirGroupSpec.from_element(dg))
+        if any(dg.has_ownership_candidates for dg in dir_groups):
+            topic_order = CourseSpec._topic_order(root, keep_disabled=keep_disabled)
+            dir_groups = [_resolve_dir_group_ownership(dg, topic_order) for dg in dir_groups]
         return dir_groups
+
+    @staticmethod
+    def _topic_order(
+        root: ETree.Element, *, keep_disabled: bool
+    ) -> list[tuple[str, str | None, bool]]:
+        """Every topic of the spec in course order as ``(topic_id, section_id, enabled)``.
+
+        Disabled sections and subsections are included with ``enabled=False``
+        (or ``True`` under *keep_disabled*, which treats the whole spec as
+        enabled), so dir-group ownership (#1288) can tell an unknown topic id
+        from one that is merely disabled.
+        """
+        order: list[tuple[str, str | None, bool]] = []
+        for section_elem in root.findall("sections/section"):
+            section_disabled = (
+                section_elem.attrib.get("enabled") or ""
+            ).strip().lower() == "false" and not keep_disabled
+            section_id = section_elem.attrib.get("id") or None
+            enabled_topics = {
+                id(t)
+                for t in CourseSpec._iter_topic_elements(section_elem, keep_disabled=keep_disabled)
+            }
+            for topic_elem in CourseSpec._iter_topic_elements(section_elem, keep_disabled=True):
+                topic_id = (topic_elem.attrib.get("id") or "").strip() or (
+                    topic_elem.text or ""
+                ).strip()
+                if not topic_id:
+                    continue
+                enabled = not section_disabled and id(topic_elem) in enabled_topics
+                order.append((topic_id, section_id, enabled))
+        return order
 
     @staticmethod
     def parse_output_targets(root: ETree.Element) -> list[OutputTargetSpec]:
@@ -2853,6 +3048,7 @@ class CourseSpec:
         errors: list[str] = []
 
         for dir_group in self.dictionaries:
+            errors.extend(dir_group.ownership_errors)
             if dir_group.lang is not None and dir_group.lang not in VALID_LANGUAGES:
                 errors.append(
                     f"<dir-group> '{dir_group.name.en or dir_group.name.de or dir_group.path}': "
@@ -3311,6 +3507,10 @@ SPEC_ELEMENT_ATTRIBUTES: dict[str, frozenset[str]] = {
     "prog-lang": frozenset({"standard"}),
     "block": frozenset({"units", "form", "status", "standalone", "pace"}),
     "agenda": frozenset(),
+    # ``topic`` names the owning topic(s) of a global dir-group or one of its
+    # subdirs (issue #1288); a misspelling would silently leave it skeleton.
+    "dir-group": frozenset({"include-root-files", "recursive", "lang", "topic"}),
+    "subdir": frozenset({"topic"}),
     "agenda-targets": frozenset({"unit-minutes", "units-per-day", "days-per-week", "units-total"}),
 }
 

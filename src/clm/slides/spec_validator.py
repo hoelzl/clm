@@ -307,6 +307,25 @@ def validate_spec(
     # Dir-group path checks
     course_root = slides_dir.parent
     for dg in spec.dictionaries:
+        # Dir-group ownership (issue #1288): an unknown topic id is an error
+        # (the build refuses it too); a subdir whose candidate owners are all
+        # disabled is not copied, which deserves a warning.
+        for message in dg.ownership_errors:
+            findings.append(
+                SpecFinding(severity="error", type="invalid_dir_group_owner", message=message)
+            )
+        for message in dg.ownership_warnings:
+            findings.append(
+                SpecFinding(
+                    severity="warning",
+                    type="disabled_dir_group_owner",
+                    message=message,
+                    suggestion=(
+                        "Enable the section, or list another candidate topic in the "
+                        "topic attribute (the first enabled one in course order owns it)."
+                    ),
+                )
+            )
         dg_path = course_root / dg.path
         if not dg_path.exists():
             findings.append(
