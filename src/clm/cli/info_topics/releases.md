@@ -219,7 +219,7 @@ mode):
 
 ```
 clm release sync SPEC --channel NAME [--dry-run] [--push] [-m MESSAGE]
-clm release sync SPEC --channel NAME --refreeze TOPIC_ID... [--push]
+clm release sync SPEC --channel NAME --refreeze TOPIC_ID [--refreeze TOPIC_ID ...] [--push]
 clm release sync SPEC --channel NAME --refreeze-all [--push]
 clm release sync SPEC --channel NAME --evergreen PATTERN [--push]
 clm release sync SPEC --channel NAME --refreeze-skeleton PATTERN [--push]
