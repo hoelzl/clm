@@ -446,6 +446,7 @@ Each directory group specifies a set of directories to copy to the output.
 | `include-root-files` | No | Attribute to include files from the base path (default: `false`) |
 | `recursive` | No | Attribute to control recursive directory copying (default: `true`) |
 | `lang` | No | `de` or `en`: copy the group into that language's output only (default: every language) |
+| `topic` | No | Owning topic(s) of a global dir-group for `clm release`; also allowed on each `<subdir>` (see below) |
 
 #### Basic Usage
 
@@ -494,6 +495,30 @@ attribute:
 Topic assets follow a related file-name rule: `img/demo.de.mp4` or
 `img/diagram.en.png` is copied only into that language's output. See
 `clm info spec-files` and `clm info slide-format` for details.
+
+#### Owning Topics for Releases
+
+Files of a global dir-group belong to no topic, so `clm release` freezes them
+into the skeleton after a channel's first sync. To release per-topic code
+(completed solutions, starter kits) together with its topic, name an owner:
+
+```xml
+<dir-group include-root-files="true">
+    <name>code/completed</name>
+    <path>code/completed</path>
+    <subdirs>
+        <subdir topic="builder_pattern">builder</subdir>
+        <subdir topic="function_basics references">simple_examples</subdir>
+        <subdir>shared_utils</subdir>
+    </subdirs>
+</dir-group>
+```
+
+`topic` lists candidate topic ids; the first one in course order whose section
+is enabled owns the files. With no enabled candidate the subdir is not copied,
+and an unknown topic id is a spec error. A `topic` on the `<dir-group>` itself
+covers the whole group (root files included); a subdir's own `topic` wins.
+Details: `clm info spec-files`.
 
 #### Including Root Files with Subdirectories
 

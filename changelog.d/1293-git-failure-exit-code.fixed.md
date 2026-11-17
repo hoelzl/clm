@@ -1,1 +1,0 @@
-- `clm git push`, `commit`, `reset` and `init` now exit 1 when a git step fails (a rejected or unreachable push, a failed commit, fetch, reset, init or remote add). They used to print `Error: ...` and exit 0, so scripts and agents took a failed push for a landed one. Every selected repository is still processed; the exit code reflects the whole run (#1293).

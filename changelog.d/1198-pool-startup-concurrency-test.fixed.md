@@ -1,1 +1,0 @@
-- **The parallel worker-startup test no longer asserts wall-clock time (#1198).** `test_pool_manager_parallel_startup_overlaps` (renamed from `..._performance`) used to require a mocked Docker startup to finish in under 5 s, which took 25 s under load. It now checks that all eight mocked startups are in flight at the same time, and has dropped its `load_fragile` marker.

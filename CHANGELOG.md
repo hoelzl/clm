@@ -9,6 +9,185 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.41.0] - 2026-11-17
+
+### Added
+
+- The faster-whisper decoder settings that guard against repetition loops and
+  silence hallucinations are configurable: `CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT`,
+  `CLM_WHISPER_NO_SPEECH_THRESHOLD` and `CLM_WHISPER_COMPRESSION_RATIO_THRESHOLD`
+  (used by `clm harvest`, `clm voiceover` and the MCP transcribe tool). The defaults
+  are faster-whisper's own, so nothing changes unless a variable is set; a non-default
+  value is part of the transcript and alignment cache keys (#1105).
+
+- `clm release adopt SPEC --channel NAME (TOPIC_IDS | --section SEL | --all-present)`
+  migrates a course that published by pushing an output target's repo to release
+  channels: it freezes the topics the cohort repository already holds, without
+  copying. Each file is classified `same` / `differs` / `missing` against the
+  current build; an adopted topic's digest comes from the destination's bytes,
+  `source_commit` is `published:<dest HEAD>`, and differing topics carry
+  `differs_from_build`. Topics with missing files are refused unless
+  `--deliver-missing` (copies only the missing files, never overwrites). The
+  skeleton is marked frozen without copying. Adopt removes the `origin` remote of
+  output-target working trees that point at the channel's origin and prints the
+  restore command (`--keep-output-remote` keeps it); `--dry-run` / `--json`
+  preview the plan. In output-target mode, `clm git init` / `push` / `sync` now
+  refuse a remote that is a release channel's origin (`--allow-channel-remote`
+  overrides). Procedure in `clm info releases` (#1140).
+
+- `clm slides sync apply --decisions` accepts a `replace` answer,
+  `{"key": "id:x", "replace": [["old", "new"], ...]}`: a `body` given as edits
+  of the target cell's current text, for small changes to an existing twin.
+  Pairs apply in order and each `old` must match exactly once (overlapping
+  matches count). Otherwise the row is rejected and none of it is written.
+  The answer is offered wherever `body` is on `translate_edit` (no `side`) and
+  on id-keyed `verify_translation` / `verify_cold` (`side` required), and it
+  goes through the same guards as `body`. `report --json` lists it in
+  `answers` and `templates`. Both engines; on the sequence core it applies to
+  `translate_edit` (#1171).
+
+- `clm slides sync report --json`: a `translate_edit` or `verify_translation`
+  row whose base was recovered (`base_ref`) now also carries `edit_committed`:
+  `true` when the edit is already in a commit, `false` when it exists only in
+  the working tree. It is judged against the bundle as committed at `HEAD`, so
+  an unrelated later commit does not count. The field is absent whenever
+  `base_ref` is (#1191).
+
+- `No such command 'X'` now suggests where a command of that name lives in another group: `clm course outline` and `clm outline` print `Did you mean: clm export outline`, listing every match (and near misses across groups). The hint is built from a static command index (`scripts/update_cli_command_index.py` regenerates it), so the error path still imports no command module. (#1241)
+
+- **`clm cache forget PATH...` drops every cached result for a file** (#1245). It accepts a source file (a diagram or slide deck) or a generated output, and removes all cached versions from both `clm_cache.db` and `clm_jobs.db`, including the job-cache rows of the outputs a source produced. `--dry-run` reports what would be deleted and `--json` emits the report. It replaces hand-written SQL when a wrong result keeps being replayed.
+
+- `clm git push`/`sync --channel` and `clm release sync --push` now point a
+  channel's GitLab `default_branch` at the branch the push just created, for
+  channels with `<share-with>` and when a GitLab token is configured (#1284).
+  A new cohort's project no longer keeps advertising `main` after the first
+  push of `master`, and no second `clm release provision` run is needed.
+  Routine pushes make no API call; a refusal is a warning and never changes
+  the exit code.
+
+- **Owning topics for global dir-groups** (#1288): `<dir-group topic="…">` and
+  `<subdir topic="…">` name the topic(s) that own a global dir-group's files,
+  so `clm release` ships per-topic code (completed solutions, starter kits)
+  with its topic instead of freezing it into the skeleton. The value lists
+  candidate topics; the first one in course order whose section is enabled
+  owns the files, and with none enabled the subdir is not copied. An unknown
+  topic id is a spec error; `clm validate` reports `invalid_dir_group_owner`
+  and `disabled_dir_group_owner`.
+
+### Changed
+
+- Speech recognition with faster-whisper no longer conditions each window on
+  the previous window's text (`CLM_WHISPER_CONDITION_ON_PREVIOUS_TEXT` now
+  defaults to `false`; set it to `1` for the old behaviour). On German and English
+  lecture recordings the old default produced repetition loops, invented clauses
+  and outro hallucinations, and the new one lowered the word error rate. Cached
+  transcripts are kept: a video is decoded with the new default the next time it
+  is transcribed, or now with `clm harvest --refresh-cache`. The cleanup step also
+  flags the German subtitle-credit hallucination "ARD Text im Auftrag von Funk"
+  (#1105).
+
+- `clm slides sync apply --decisions`: a decision row with a field other than
+  `key`, `action`, `choice`, `body` and `side` now refuses the document (exit 2,
+  naming the row and the field) instead of being silently ignored, so a typo
+  beside a valid answer is visible. Every `clm slides sync report --json` item
+  now also carries `templates`: one ready-to-fill decision row per entry of
+  `answers`, naming the field each answer needs (`choice`, or `body` plus
+  `side` where required). `answers` is unchanged. Both engines (#1189).
+
+### Fixed
+
+- **Build-end cache cleanup no longer reads the whole cache DB (#1090).** The retention prunes of `processed_files` and `executed_notebooks` ranked versions with a whole-table window. In both tables the large blob column sits before the columns the window reads, so every build end, aborted builds included, read the entire `clm_cache.db`. On a 7 GB cache that took 99 s, and several minutes on aborted builds, with no output after the summary. New covering indexes, `idx_processed_files_prune` and `idx_executed_notebooks_prune`, make both prunes index-only scans. On a 1.7 GiB synthetic cache the `processed_files` prune went from 3.2 s to 0.4 s, and the one-time index build on the first run took 5 s. The cleanup now prints `Pruning old cache versions...`, and adds "may take a while" only on the run that builds the indexes. Versions with the same `created_at` now keep the later insert.
+
+- `clm info releases` now shows that `--refreeze` takes one topic per flag (`--refreeze a --refreeze b`); the old `--refreeze TOPIC_ID...` synopsis suggested space-separated ids, which click rejects.
+
+- The narrative-cell writers behind `clm slides polish accept`, `clm voiceover sync`
+  and `clm harvest autopilot` (`update_narrative` and the companion writer) no longer
+  turn every line into its own bullet: wrapped continuation lines and indented child
+  bullets are kept, and every bullet is wrapped to the deck style through the same
+  helper `clm harvest accept` uses, so re-writing an unchanged cell is byte-identical.
+  `update_narrative` also keeps the blank separator after a replaced cell (#1162).
+
+- `clm slides sync apply`: a `body` + `side` answer on an id'd localized member
+  that frames no question is now the German-only fix: it writes the named half
+  and records the member (a `rewrite_side` result row), on both the default
+  engine and the sequence core. It used to report `already_applied` with exit
+  0 and write nothing. A `body` on such a member is `already_applied` only when
+  the cell already reads as that body; without `side`, or on a shared cell, an
+  id-less handle or a one-sided member, it is `rejected` with the reason. An
+  answer that only a mechanical row on its handle matched is no longer
+  dropped silently, and on the sequence core a rejected answer now exits 1
+  (#1182).
+
+- Sync docs: `apply --help` and `commands.md` show `report_id` in the
+  decision-document shape. `remove_localized_side` and its answers are
+  documented. `clm info sync-agents` has a table mapping each `answers` entry
+  to its decision row, separates the title macro (a synced member) from
+  `# %%` header attributes (`vo_anchor` is not synced by the default engine),
+  and no longer contradicts itself on what `--dry-run` verifies (#1188).
+
+- C++ code export: a statement that starts with an expression character
+  (`++n;`, `*p = 1;`, `(void)x;`) right after a function body or another block
+  now becomes its own item and moves into the slide function, instead of
+  staying attached to the function before it. Brace initializers, lambdas and
+  class bodies still continue into what follows. Bumps the notebook output
+  epoch (#1195).
+
+- **Recordings dashboard: Restore now updates the committed recordings ledger**
+  (#1196). Restoring an older take used to change only the files and the local
+  state file, so the ledger (and `clm recordings report`) still described the
+  replaced take. The restored take now becomes the part's ledger entry, the
+  replaced one moves to `superseded`, and a deck `ack` given after the replaced
+  take was recorded is dropped, the same rule as `clm recordings invalidate`.
+
+- **The parallel worker-startup test no longer asserts wall-clock time (#1198).** `test_pool_manager_parallel_startup_overlaps` (renamed from `..._performance`) used to require a mocked Docker startup to finish in under 5 s, which took 25 s under load. It now checks that all eight mocked startups are in flight at the same time, and has dropped its `load_fragile` marker.
+
+- `clm calendar generate|check|status|push --channel` now finds a cohort calendar shared by a bilingual cohort's channels: after `<channel>.calendar.toml` it tries the cohort stem derived from the ledger name (`release/materials-ml-2026-10-de.txt` → `release/ml-2026-10.calendar.toml`) and the channel name without its `-<lang>` suffix, accepts the cohort stem itself (`--channel ml-2026-10`), and lists every path tried when none exists (#1205).
+
+- **`scripts/clean_transcript.py` no longer cleans harness rows as dialogue
+  (#1219, #1213).** Claude sessions: `api-request-blob` rows (request copies
+  that duplicated every turn and leaked skill bodies as owner text) are
+  dropped, and a subagent hand-back queued as an `<agent-message>` becomes a
+  one-line `[Subagent hand-back]` stub instead of an owner message. Hermes
+  sessions: rows that compaction re-inserted (same role, content and tool-call
+  ids, in one timestamp batch) are dropped, and harness notices stored as user
+  rows (delegation results, background-process notices, a preserved task list)
+  are dropped, with a skill invocation kept as a `[skill] <name>` stub. The
+  header's "Content through" boundary now comes from the newest dialogue
+  record's own timestamp, printed in UTC, instead of the file's mtime (Claude)
+  or the session start (Hermes); a fallback says which source it used.
+
+- **A partial Draw.io PNG is no longer cached as a success** (#1245). Under load, an export could exit 0 with the right dimensions but parts of the diagram missing, and every later build then replayed it. The worker now accepts a PNG only when it equals the image already at the output path (one export) or when two renders agree (two exports). Three mutually different renders fail the job and leave the existing image and the cache untouched. A bad image already on disk is replaced the next time the diagram is rendered.
+
+- `clm slides sync apply` on the sequence core (`CLM_SYNC_CORE=sequence`): an `identify` answer can now name its half with `side` beside the `choice`, so an identify question asked on both halves for one handle is answerable through the CLI. The shared parser used to refuse the whole document (exit 2). `side` beside a `choice` on any other row now rejects that one row on both engines, and identify rows' `templates` carry their `side`. (#1266)
+
+- **No worker jobs are submitted after a build aborts (#1270).** When one operation of a stage failed, its sibling submissions already queued on the backend's submit thread still ran and created jobs after the abort, which were never counted or processed. The first failing operation now tells the backend to discard in-flight submissions, which are dropped before their jobs-DB INSERT.
+- **A course file deleted during a build is reported as a user error (#1270).** A file under the course root (a topic supporting file, the slide file, a diagram source) that vanished between course load and processing aborted the build as an `[Infrastructure]` error. The abort is now a `[User]` error that names the missing file and says to restore it or remove its references. The error category stays `build_aborted`. Missing files outside the course (e.g. clm's own templates) and aborts that also involve another failure keep the infrastructure label.
+- **One worker-stop line at build teardown (#1270).** The log showed "Stopped 10 workers" and then "Stopped 0 worker(s)": the second line read the worker list after it had been cleared. Only the `pool_stopped` event line ("Worker pool stopped (N worker(s) in Xs)") remains; the pool manager logs its own count only when some workers failed to stop.
+
+- **Narration reaches the model as logical bullets.** The existing notes and
+  voiceover that `clm slides polish` (`task` and `autopilot`), `clm voiceover sync`
+  and `clm harvest autopilot` hand to the LLM used to be one run-on paragraph per
+  cell: every line's comment prefix was stripped, all lines were joined with a space,
+  and markdown (backticks, bold) was removed. They are now one line per bullet, child
+  bullets indented two spaces under their parent and wrapped continuation lines
+  joined, with markdown kept verbatim — the same bullet model the writers use since
+  #1162, which re-wrap the answer. Companion baselines get the same form, and a `//`
+  (C-family) companion file's baselines are now read at all (it used to be parsed
+  with the `#` token and yielded no baseline). The prompt text changes once; there is
+  no LLM response cache keyed on it (#1280).
+
+- `extract_voiceover_pair(..., mint_ids=False)` (`clm.slides.voiceover_tools`): the slide-id parity guard (#162) now reads C-family decks (`//` cell markers) with their own comment token. Before, it parsed them with `#`, found no slides and treated every `//` pair as already in parity, so an id-less C++/C#/Java/TypeScript pair skipped the EN-authority pre-mint and the two halves could mint diverging ids. A pair with no recognised slide cells no longer counts as in parity. The CLI always pre-mints (`mint_ids=True`), so only direct API callers were affected (#1286).
+
+- The provenance manifest now lists the root files (`include-root-files`) of a
+  dir-group that has `<subdirs>` or `recursive="false"`, so `clm release`
+  ships them as skeleton. Before, they were never walked and reached a
+  manifest only when another dir-group happened to cover the whole output
+  root (#1288).
+
+- `clm git push`, `commit`, `reset` and `init` now exit 1 when a git step fails (a rejected or unreachable push, a failed commit, fetch, reset, init or remote add). They used to print `Error: ...` and exit 0, so scripts and agents took a failed push for a landed one. Every selected repository is still processed; the exit code reflects the whole run (#1293).
+
+- `clm release provision` now reconciles each provisioned GitLab project's `default_branch` with the branch the channel working tree pushed (a fresh project may advertise `main` while `clm git init` pushes `master`, leaving the web UI empty and a bare clone with nothing checked out). When the token may not change it, or the branch is not on the remote yet, provision warns and names the project setting to change by hand (#955).
+
 ## [1.40.0] - 2026-11-14
 
 ### Added
