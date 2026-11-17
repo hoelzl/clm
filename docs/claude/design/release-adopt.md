@@ -218,3 +218,40 @@ above:
 - D6a and D6b also match `remote.origin.pushurl`, the URL a push really uses.
 - A destination with uncommitted changes gets a warning: the digest covers
   the working tree while `source_commit` names HEAD.
+
+## Field run: CppCourses migration (2026-11-16/17)
+
+The motivating course was migrated with this command. A clm dev checkout ran
+adopt; the installed 1.40.0 was used for the read-back check. Course-side
+records: CppCourses PRs #242 (the channels), #243 (the ledgers) and #244 (its
+`session-knowledge.md`).
+
+- **Setup as the procedure says.** `lang`-scoped channels `de` and `en` on
+  `source-target="shared"`, with `repo=` naming the existing student repos.
+  Each channel is a hand clone (ssh URL) in a gitignored `release-repos/`.
+  The shared target's `<remote-path>` was dropped. A fresh full build of
+  current master came first (387 files, 0 errors).
+- **Result, the same for both languages.** 114 of 114 topics adopted, 0
+  missing, 0 refused. 14 topics (50 files) differed from the build. The one
+  skeleton file the destination lacked (Catch2's
+  `SelfTest.vcxproj.user`) stayed undelivered.
+- **What `differs` meant in practice.** Six topics differed only in their
+  Completed HTML, and only in printed pointer addresses. That is rebuild
+  noise: executed C++ prints heap and stack addresses. Eight had real
+  unpublished edits. So the differs report needs a human read; a raw count
+  overstates what a refreeze would change for students.
+- **The owner's choice.** Refreeze 4 of the 8 now (`function_templates`,
+  `class_templates`, `concepts`, `my_vector_stl`). Hold the rest, including
+  the noise-only topics, until the cohort finishes. The refreeze changed
+  exactly the 28 differing files of those topics per language, and nothing
+  in the skeleton.
+- **The student repos were 4 commits ahead of the build tree's clone.** An
+  agent had pushed selected changes from a temporary clone. A migration
+  must therefore clone the remote and must not trust the output tree's view
+  of what students have. Constraint 1 above (a separate clone) covers this.
+- **Compatibility.** clm 1.40.0 reads the adopted `.clm-released.json`
+  (`release status`, `release sync --dry-run`). Later refreezes do not need
+  the release that contains adopt.
+- **Doc trap found.** The `clm info releases` synopsis showed
+  `--refreeze TOPIC_ID...`, but the option takes one topic per flag.
+  Fixed in #1294.
