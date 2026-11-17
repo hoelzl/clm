@@ -1,7 +1,7 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-17
+updated: 2026-11-18
 review-by: 2027-05-17
 ---
 
@@ -15,6 +15,11 @@ with the owner.
 **S26** resumed the thread. It covered #1280, #1270, the #955 follow-up, the
 design and implementation of #1140 (`clm release adopt`), and the migration
 of the CppCourses student repos to release channels.
+
+**S27** resumed it. It covered #1288 (owning topics for global dir-group
+subdirs), #1284 (GitLab default branch after `git push --channel`), the 1.41.0
+release, and the owning-topic annotation of CppCourses with two follow-up
+issues there.
 
 Task state is in the PRs and issues below; there is no handover. The adopt
 design and its field run are in `docs/claude/design/release-adopt.md`.
@@ -77,6 +82,38 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
 - **#1293, fixed now.** The owner asked whether to fix it straight away;
   it was small, so it was fixed in #1295.
 
+## Settled (S27)
+
+- **#1288, five decisions** (recorded on the issue):
+  1. one owner per subdir. The owner's extension: the value is a candidate
+     list, and the **first candidate in course order whose section is enabled**
+     owns the files, so a project still ships when its earliest section is
+     disabled. The agent judged that freezing raised no complication (the
+     owner is resolved per build, and frozen topics are never re-read);
+  2. a subdir with no enabled candidate is not copied (a warning);
+  3. an unknown topic id is a spec error;
+  4. frozen channels: turning ownership on moves nothing by itself; owned
+     files follow their topic's `--refreeze` (documented in `releases.md`);
+  5. annotate CppCourses `completed` and `starter_kits`.
+- **The rule for projects** (owner): a shipped project the slides don't
+  point to is a bug; the slides must at least say where students find it.
+  Some shipped projects may be unused.
+- **CppCourses mapping** (owner):
+  - keep the 16 unreferenced projects for now, unowned; the C++ course
+    revision before the next cohort settles them;
+  - the IDE topics (`vs vscode clion`) are candidate owners of
+    `hello_world` (ahead of `docker_images`), `hello_world_sk` and
+    `fizz_buzz_sk`;
+  - track it as one CppCourses issue, plus a revision issue that also covers
+    more modern C++.
+- **Release 1.41.0** at the owner's request, after #1288 and #1284.
+- **Agent correction, the C++ toolchain.** In #246 the agent claimed the
+  container's GCC 12 lacks `<format>`/`<print>`, from a CMake comment. During
+  this save it found that the course image ships g++ 15 (clm
+  `docker/README.md`), so both headers already work in the notebooks; the
+  constraint is the students' local compilers. It posted a correction comment
+  on #246 (the issue body still has the wrong sentence).
+
 ## Shipped
 
 - **S25:** #1253–#1265, #1267–#1269, #1271, #1279, #1281; saves #1282 and
@@ -96,8 +133,19 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
 - **S26 issues filed:** #1284 (#955 follow-up), #1286, #1288, #1293.
 - **CppCourses:** #242 (the channels), #243 (the ledgers), #244
   (`session-knowledge.md` rewritten for the release-channel workflow).
-- **Not yet in a PyPI release.** clm 1.40.0 reads the adopted freeze
-  record, so the deferred refreeze does not wait for a release.
+- **S27 clm PRs:** #1298 (#1288), #1299 (#1284), #1300 (5 mitmproxy
+  replay tests marked `load_fragile`: they missed the 30 s `mitmdump` start
+  under the full pre-release run and passed alone), #1301 (release 1.41.0,
+  published to PyPI and GitHub 2026-11-17; one CI worker crash on an
+  already-`load_fragile` test passed on rerun).
+- **S27 CppCourses:** issue #245 (owner mapping) with PR #247 (open, for
+  owner review; no CI checks run on it): 10 `<subdir topic>` entries and a
+  `session-knowledge.md` note. Issue #246: the course revision (unreferenced
+  projects, modern C++).
+- All nine owner topics were already frozen in both channels, so #247
+  changes nothing for students today. A future `--refreeze` of `vs`/
+  `vscode`/`clion`, `catch2` or `program_structure` now also replaces
+  starter kits students write code in.
 
 ## Open
 
@@ -105,15 +153,17 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   in CppCourses `session-knowledge.md`. Inferred but not exercised: a deck
   added to a section changes that section's frozen `CMakeLists.txt`,
   which then needs `--refreeze-skeleton`.
-- **Open issues:**
-  - #1284: reconcile the GitLab default branch after `git push --channel`;
-  - #1288: an optional owning topic for global dir-group subdirs;
-  - #1216 and sync group 3: phase D.
+- **CppCourses PR #247** awaits the owner's review and merge.
+- **CppCourses #246**, the course revision before the next cohort. It also
+  holds the idea of a `clm validate` check that an owning topic's slides
+  mention its project; not filed in clm yet, depends on #246.
+- **Open issues:** #1216 and sync group 3: phase D.
 - **The "needs design first" list from S25:** #1140 is done. The rest
   (#1050, #1094/#1091, #1100/#1104 and the lower-urgency items) is
   unchanged and is listed in the S25 transcript.
 
 ## Next boundary
 
-Either the deferred CppCourses refreeze, once the owner says the cohort has
-finished, or phase D after the dogfood window, whichever comes first.
+The S27 discussion ended with both CppCourses issues filed. Next: either the
+deferred CppCourses refreeze, once the owner says the cohort has finished, a
+"needs design" item, or phase D after the dogfood window.
