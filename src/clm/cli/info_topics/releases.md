@@ -91,6 +91,14 @@ spec's next build replaces it.
 ```
 
 `topic_id: null` entries are skeleton/global files not owned by any topic.
+Files of a global `<dir-group>` are skeleton unless the dir-group or the
+subdir names an owning `topic` (CLM {version}+, see `clm info spec-files`);
+owned files ship and refreeze with that topic. Turning on ownership in a
+course whose channels already synced moves nothing by itself: files now owned
+by a frozen topic stay as students have them until that topic's `--refreeze`;
+files owned by a topic not yet released are copied (overwriting a copy already
+present) when it is released. Enabling a section can move a shared project to
+an earlier candidate topic, which then ships and refreezes it.
 `failed_topics` lists topics whose build errored; they are refused by sync until
 the next successful build.
 

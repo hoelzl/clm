@@ -250,7 +250,9 @@ def _enumerate_dir_group_outputs(
     we walk each plausible output directory (every language × public/speaker)
     and record the files actually found on disk; placements the build did not
     produce simply have no directory. Ownership comes from the recorded
-    ``DirGroup.spec`` (``None``/``None`` for a global ``<dir-groups>`` entry).
+    ``DirGroup.spec``: the enclosing topic of a topic-scoped dir-group, or the
+    resolved ``topic`` of a global one and its subdirs (#1288); ``None``/``None``
+    for an unowned global entry, which is skeleton.
 
     The walk applies the same ignore filter as the build's dir-group copy
     (:func:`is_ignored_path_in_output_tree`): the copy never produces files
@@ -259,35 +261,63 @@ def _enumerate_dir_group_outputs(
     build output and must not enter the manifest (issue #302), where the
     release sync would promote it into cohort repos.
     """
+    # (out_dir, section_id, topic_id, lang, recurse). Owned directories are
+    # walked first: the manifest keeps the first entry per path, so an owned
+    # subdir must win over an unowned walk that overlaps it — e.g. a global
+    # dir-group with an empty ``<name>`` that walks the whole output root
+    # (issue #1288).
+    owned: list[tuple[Path, str | None, str | None, str, bool]] = []
+    unowned: list[tuple[Path, str | None, str | None, str, bool]] = []
     for dir_group in course.dir_groups:
         spec = dir_group.spec
-        section_id = spec.section_id if spec is not None else None
-        topic_id = spec.topic_id if spec is not None else None
         # A ``lang``-scoped dir-group (#1031) is enumerated for its language
         # only: a ``de``/``en`` pair sharing one ``<name>`` would otherwise
         # claim each other's files.
         for lang in dir_group.output_languages(target.languages):
             for is_speaker in (False, True):
-                for out_dir in dir_group.output_dirs(
+                out_dirs = dir_group.output_dirs(
                     is_speaker, lang, target.output_root, skip_toplevel=target.is_explicit
-                ):
-                    if not out_dir.is_dir():
-                        continue
-                    for path in sorted(out_dir.rglob("*")):
-                        if not path.is_file():
-                            continue
-                        if is_ignored_path_in_output_tree(path.relative_to(out_dir)):
-                            continue
-                        yield (
-                            path,
-                            {
-                                "section_id": section_id,
-                                "topic_id": topic_id,
-                                "kind": None,
-                                "format": "dir-group",
-                                "language": lang,
-                            },
-                        )
+                )
+                for index, out_dir in enumerate(out_dirs):
+                    if spec is None:
+                        section_id, topic_id = None, None
+                    elif spec.subdirs:
+                        section_id, topic_id = spec.subdir_owner(index)
+                    else:
+                        section_id, topic_id = spec.section_id, spec.topic_id
+                    bucket = owned if topic_id is not None else unowned
+                    bucket.append((out_dir, section_id, topic_id, lang, True))
+                if dir_group.base_path is not None:
+                    # Root files (``include-root-files``) sit directly in the
+                    # group's output dir, outside every subdir walk; before
+                    # #1288 they reached the manifest only by accident.
+                    group_dir = dir_group.output_path(
+                        is_speaker, lang, target.output_root, skip_toplevel=target.is_explicit
+                    )
+                    section_id = spec.section_id if spec is not None else None
+                    topic_id = spec.topic_id if spec is not None else None
+                    bucket = owned if topic_id is not None else unowned
+                    bucket.append((group_dir, section_id, topic_id, lang, False))
+
+    for out_dir, section_id, topic_id, lang, recurse in (*owned, *unowned):
+        if not out_dir.is_dir():
+            continue
+        candidates = out_dir.rglob("*") if recurse else out_dir.iterdir()
+        for path in sorted(candidates):
+            if not path.is_file():
+                continue
+            if is_ignored_path_in_output_tree(path.relative_to(out_dir)):
+                continue
+            yield (
+                path,
+                {
+                    "section_id": section_id,
+                    "topic_id": topic_id,
+                    "kind": None,
+                    "format": "dir-group",
+                    "language": lang,
+                },
+            )
 
 
 def hash_file(path: Path) -> str:
