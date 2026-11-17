@@ -4318,6 +4318,14 @@ Manage git repositories for course output directories.
 | `git sync SPEC_FILE -m MSG` | Commit and push in one operation |
 | `git reset SPEC_FILE` | Reset to remote tracking branch |
 
+**Exit codes.** `init`, `commit`, `push`, `sync` and `reset` work through every
+selected repository even when one fails, then exit `1` if any git step failed
+(a rejected or unreachable push, a failed commit, fetch or reset, a failed
+init or remote add) or a repo was refused by the release-channel guard;
+otherwise `0`. Skipped repos (no repository, no remote, nothing to commit)
+do not count as failures. Before CLM {version} only `sync` and guard refusals
+exited non-zero (issue #1293).
+
 Key options for `git commit`, `git push`, and `git sync`:
 
 | Option | Commands | Description |

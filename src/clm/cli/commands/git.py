@@ -1131,46 +1131,54 @@ def init_repo_from_remote(repo: OutputRepo, branch: str) -> bool:
 # =============================================================================
 
 
-def _init_handle_existing_repo(repo: OutputRepo) -> None:
+def _init_handle_existing_repo(repo: OutputRepo) -> bool:
     """Handle init for a repo that already has a .git directory.
 
     If the remote exists but isn't configured locally, add it.
-    Otherwise skip with an informative message.
+    Otherwise skip with an informative message. Returns ``False`` when a git
+    step failed (issue #1293).
     """
     if not repo.remote_url:
         click.echo("  Already initialized (no remote configured)")
-        return
+        return True
 
     if repo.has_remote():
         click.echo("  Already initialized")
-        return
+        return True
 
     # Local repo exists but has no remote — check if remote is available
     if remote_exists(repo.remote_url):
-        run_git(repo.path, "remote", "add", "origin", repo.remote_url)
+        result = run_git(repo.path, "remote", "add", "origin", repo.remote_url)
+        if result.returncode != 0:
+            click.echo(f"  Error: Failed to add remote: {result.stderr.strip()}", err=True)
+            return False
         click.echo(f"  Added remote: {repo.remote_url}")
     else:
         click.echo("  Already initialized (remote not yet created)")
         click.echo(f"  Remote URL: {repo.remote_url}")
         click.echo("  Run 'clm git init' again after creating the remote repository.")
+    return True
 
 
-def _init_create_new_repo(repo: OutputRepo, branch: str) -> None:
-    """Handle init for a repo that has no .git directory yet."""
+def _init_create_new_repo(repo: OutputRepo, branch: str) -> bool:
+    """Handle init for a repo that has no .git directory yet.
+
+    Returns ``False`` when initializing or cloning failed (issue #1293).
+    """
     if not repo.remote_url:
         click.echo("  Creating local-only repository...")
-        init_repo_fresh(repo, branch)
-    elif not remote_exists(repo.remote_url):
+        return init_repo_fresh(repo, branch)
+    if not remote_exists(repo.remote_url):
         click.echo("  Creating local-only repository (remote not found)...")
-        init_repo_fresh(repo, branch)
+        ok = init_repo_fresh(repo, branch)
         click.echo(f"  Remote URL: {repo.remote_url}")
         click.echo("  Run 'clm git init' again after creating the remote repository.")
-    elif not remote_has_commits(repo.remote_url):
+        return ok
+    if not remote_has_commits(repo.remote_url):
         click.echo("  Creating repository with empty remote...")
-        init_repo_fresh(repo, branch)
-    else:
-        # Remote exists with commits — recovery mode
-        init_repo_from_remote(repo, branch)
+        return init_repo_fresh(repo, branch)
+    # Remote exists with commits — recovery mode
+    return init_repo_from_remote(repo, branch)
 
 
 # =============================================================================
@@ -1276,6 +1284,7 @@ def init(
     click.echo(f"Initializing git repositories for {spec_file.name}...")
     click.echo()
 
+    failed = False
     guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
@@ -1315,14 +1324,18 @@ def init(
 
         if repo.has_git:
             # Local repo already exists — check if we need to add a remote
-            _init_handle_existing_repo(repo)
+            ok = _init_handle_existing_repo(repo)
         else:
             # No local repo — determine initialization mode
-            _init_create_new_repo(repo, branch)
+            ok = _init_create_new_repo(repo, branch)
+        if not ok:
+            failed = True
 
         click.echo()
 
-    if guard.refused:
+    # A git failure on one repo does not stop the others, but the command
+    # still fails as a whole so scripts notice (issue #1293).
+    if guard.refused or failed:
         raise SystemExit(1)
 
 
@@ -1593,6 +1606,7 @@ def commit(
         click.echo("No output directories found.")
         return
 
+    failed = False
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
 
@@ -1641,8 +1655,13 @@ def commit(
                 click.echo(f"  Committed: {message}")
         else:
             click.echo(f"  Error: {result.stderr.strip()}", err=True)
+            failed = True
 
         click.echo()
+
+    # Keep going past a failed repo, but fail the command (issue #1293).
+    if failed:
+        raise SystemExit(1)
 
 
 @git_group.command()
@@ -1697,6 +1716,7 @@ def push(
         click.echo("No output directories found.")
         return
 
+    failed = False
     guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
@@ -1732,10 +1752,13 @@ def push(
                 click.echo(f"  Pushed to origin/{branch}")
         else:
             click.echo(f"  Error: {result.stderr.strip()}", err=True)
+            failed = True
 
         click.echo()
 
-    if guard.refused:
+    # A failed push does not stop the remaining repos, but the command fails
+    # as a whole so scripts and agents notice (issue #1293).
+    if guard.refused or failed:
         raise SystemExit(1)
 
 
@@ -1893,6 +1916,7 @@ def reset(
         click.echo("No output directories found.")
         return
 
+    failed = False
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
 
@@ -1913,6 +1937,7 @@ def reset(
         result = run_git(repo.path, "fetch", "origin")
         if result.returncode != 0:
             click.echo(f"  Error fetching: {result.stderr.strip()}", err=True)
+            failed = True
             click.echo()
             continue
 
@@ -1923,8 +1948,14 @@ def reset(
             click.echo("  Reset complete")
         else:
             click.echo(f"  Error: {result.stderr.strip()}", err=True)
+            failed = True
 
         click.echo()
+
+    # A failed fetch/reset must not read as a clean reset (issue #1293).
+    if failed:
+        click.echo("Reset failed for at least one repository (see errors above).", err=True)
+        raise SystemExit(1)
 
     click.echo("Next steps:")
     click.echo(f"  1. clm build {spec_file}")
