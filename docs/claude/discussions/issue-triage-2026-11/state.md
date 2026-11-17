@@ -112,7 +112,7 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   this save it found that the course image ships g++ 15 (clm
   `docker/README.md`), so both headers already work in the notebooks; the
   constraint is the students' local compilers. It posted a correction comment
-  on #246 (the issue body still has the wrong sentence).
+  on #246 and, at the owner's request, fixed the issue body too.
 
 ## Shipped
 
