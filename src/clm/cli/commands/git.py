@@ -716,6 +716,170 @@ def read_origin_url(repo_path: Path, *, push: bool = False) -> str | None:
     return result.stdout.strip() or None
 
 
+def channel_gitlab_project(repo: OutputRepo) -> tuple[str, str] | None:
+    """``(api base URL, project path)`` of a channel repo's GitLab project.
+
+    The working tree's actual ``origin`` wins over the derived URL (issue
+    #322), which stays the fallback for a repo not yet initialized. ``None``
+    when neither parses as a GitLab remote. Shared by ``clm release
+    provision`` and ``clm git push --channel`` (issue #1284) so both decide
+    "which project" the same way. Read-only and dry-run-independent.
+    """
+    from clm.infrastructure.gitlab_api import parse_gitlab_remote
+
+    return parse_gitlab_remote(read_origin_url(repo.path) or repo.remote_url or "")
+
+
+def checked_out_branch(repo_path: Path) -> str | None:
+    """The branch checked out at *repo_path*, if it has commits.
+
+    Read-only and dry-run-independent. An unborn branch (``git init`` without
+    a commit) or a detached HEAD yields ``None``: there is nothing pushed for
+    a remote default branch to point at.
+    """
+    if not (repo_path / ".git").exists():
+        return None
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(repo_path), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    if git("rev-parse", "--verify", "-q", "HEAD").returncode != 0:
+        return None
+    result = git("symbolic-ref", "--short", "-q", "HEAD")
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _has_remote_tracking_branch(repo_path: Path, branch: str) -> bool:
+    """Whether ``refs/remotes/origin/<branch>`` exists locally.
+
+    Read before a push to tell a push that *creates* the remote branch (no
+    tracking ref yet) from a routine one. Read-only and dry-run-independent.
+    Deliberately not git's ``[new branch]`` push message, which is localized.
+    """
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_path),
+            "rev-parse",
+            "--verify",
+            "-q",
+            f"refs/remotes/origin/{branch}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def share_with_channel_refs(spec_file: Path) -> set[str]:
+    """Refs (``stream/channel``) of the release channels that declare ``<share-with>``.
+
+    ``<share-with>`` is what marks a channel as hosted on GitLab, so it gates
+    every GitLab API call (``clm release provision``, and the default-branch
+    reconcile after ``clm git push --channel``, issue #1284).
+    """
+    spec = CourseSpec.from_file(spec_file)
+    return {
+        release_channel_ref(block, ch)
+        for block, ch in spec.iter_release_channels()
+        if ch.share_with
+    }
+
+
+class DefaultBranchReconciler:
+    """Point a channel's GitLab ``default_branch`` at the branch just pushed (#1284).
+
+    ``clm release provision`` runs before the first push, when the branch is
+    not on the remote yet, so it can only warn; without this a new cohort's
+    project kept advertising ``main`` after ``clm git push --channel`` pushed
+    ``master``. The reconcile runs only for a channel that declares
+    ``<share-with>``, only when this push created the remote branch, and only
+    when a GitLab token is configured (no token: silent — pushing works with
+    plain git credentials). Problems are warnings and never change the push's
+    exit code.
+    """
+
+    def __init__(self, spec_file: Path) -> None:
+        self._spec_file = spec_file
+        self._share_refs: set[str] | None = None
+        self._token: str | None = None
+        self._token_loaded = False
+
+    def wants(self, repo: OutputRepo) -> bool:
+        """Whether *repo* is a channel repo whose channel declares ``<share-with>``."""
+        if repo.source != "channel":
+            return False
+        if self._share_refs is None:
+            # The spec already parsed when the repos were selected.
+            self._share_refs = share_with_channel_refs(self._spec_file)
+        refs = {repo.target_name, *repo.shared_refs}
+        return bool(refs & self._share_refs)
+
+    def _get_token(self) -> str | None:
+        if not self._token_loaded:
+            from clm.cli.env_loading import load_env_files
+            from clm.infrastructure.gitlab_api import gitlab_token
+
+            # Same token lookup as ``clm release provision``: the project's
+            # .env counts, an exported value wins.
+            load_env_files(self._spec_file.resolve().parent)
+            self._token = gitlab_token()
+            self._token_loaded = True
+        return self._token
+
+    def after_push(self, repo: OutputRepo, branch: str, *, created: bool, dry_run: bool) -> None:
+        """Reconcile after a successful push of *branch* (see the class docstring)."""
+        if not created or not self.wants(repo):
+            return
+        project = channel_gitlab_project(repo)
+        if project is None:
+            return
+        base_url, project_path = project
+        if dry_run:
+            click.echo(
+                f"  Would point the GitLab default branch of {project_path} at "
+                f"{branch!r} (first push of this branch; needs a GitLab token)."
+            )
+            return
+        token = self._get_token()
+        if token is None:
+            return
+        from clm.infrastructure.gitlab_api import (
+            DEFAULT_BRANCH_SETTING,
+            GitLabApiError,
+            reconcile_default_branch,
+        )
+
+        try:
+            status, previous = reconcile_default_branch(base_url, project_path, branch, token)
+        except GitLabApiError as exc:
+            message = str(exc)
+            if DEFAULT_BRANCH_SETTING not in message:
+                message += f" Set {DEFAULT_BRANCH_SETTING} by hand if needed."
+            click.echo(f"  WARNING: default branch not reconciled: {message}", err=True)
+            return
+        if status == "updated":
+            click.echo(
+                f"  GitLab default branch of {project_path} set to {branch!r} (was {previous!r})."
+            )
+        elif status == "not-pushed":
+            click.echo(
+                f"  WARNING: GitLab does not list branch {branch!r} of {project_path} yet; "
+                f"its default branch is still {previous!r}. Re-run `clm release provision` "
+                f"or set {DEFAULT_BRANCH_SETTING} by hand.",
+                err=True,
+            )
+
+
 def normalize_remote_url(url: str, *, base: Path | None = None) -> str:
     """A comparison key for a git remote URL (issue #1140).
 
@@ -907,6 +1071,7 @@ def commit_and_push_repo(
     amend: bool = False,
     force_with_lease: bool = False,
     remote_ahead_hint: list[str] | None = None,
+    reconciler: "DefaultBranchReconciler | None" = None,
 ) -> bool:
     """Stage (sidecar-excluded), commit, and push one already-initialized repo.
 
@@ -927,10 +1092,12 @@ def commit_and_push_repo(
     ``force_with_lease=True`` whenever ``amend`` is given); this helper does not
     re-derive that coupling. ``remote_ahead_hint`` is an optional list of command
     lines printed (indented, to stderr) under "To resolve:" when a non-force push
-    is blocked because the remote is ahead.
+    is blocked because the remote is ahead. ``reconciler`` points a channel's
+    GitLab default branch at a branch this push created (issue #1284).
     """
     has_remote = repo.has_remote()
     branch = get_current_branch(repo.path)
+    creates_branch = has_remote and not _has_remote_tracking_branch(repo.path, branch)
 
     # Refuse to clobber an ahead remote unless we are explicitly force-pushing.
     if has_remote and not force_with_lease:
@@ -993,6 +1160,10 @@ def commit_and_push_repo(
                 click.echo(f"  Force-pushed to origin/{branch}")
             else:
                 click.echo(f"  Pushed to origin/{branch}")
+            if reconciler is not None:
+                reconciler.after_push(
+                    repo, branch, created=creates_branch, dry_run=_dry_run_mode.get()
+                )
         else:
             click.echo(f"  Error pushing: {result.stderr.strip()}", err=True)
             return False
@@ -1718,6 +1889,7 @@ def push(
 
     failed = False
     guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
+    reconciler = DefaultBranchReconciler(spec_file)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
 
@@ -1737,6 +1909,8 @@ def push(
 
         # Get current branch
         branch = get_current_branch(repo.path)
+        # No tracking ref yet: this push creates the remote branch (#1284).
+        creates_branch = not _has_remote_tracking_branch(repo.path, branch)
 
         # Push
         push_args = ["push"]
@@ -1750,6 +1924,7 @@ def push(
                 click.echo(f"  Force-pushed to origin/{branch}")
             else:
                 click.echo(f"  Pushed to origin/{branch}")
+            reconciler.after_push(repo, branch, created=creates_branch, dry_run=dry_run)
         else:
             click.echo(f"  Error: {result.stderr.strip()}", err=True)
             failed = True
@@ -1832,6 +2007,7 @@ def sync(
     errors_found = False
 
     guard = ChannelRemoteGuard(spec_file, allow=allow_channel_remote)
+    reconciler = DefaultBranchReconciler(spec_file)
     for repo in repos:
         click.echo(f"[{repo.display_name}] {repo.path}")
 
@@ -1858,6 +2034,7 @@ def sync(
             amend=amend,
             force_with_lease=force_with_lease,
             remote_ahead_hint=remote_ahead_hint,
+            reconciler=reconciler,
         ):
             errors_found = True
 

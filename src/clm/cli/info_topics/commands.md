@@ -4326,6 +4326,18 @@ otherwise `0`. Skipped repos (no repository, no remote, nothing to commit)
 do not count as failures. Before CLM {version} only `sync` and guard refusals
 exited non-zero (issue #1293).
 
+**GitLab default branch (CLM {version}+, issue #1284).** When `push` or `sync`
+(and `clm release sync --push`) *creates* a channel repo's branch on the
+remote — no `origin/<branch>` tracking ref existed before the push — and the
+channel declares `<share-with>`, clm points the GitLab project's
+`default_branch` at that branch, the same reconcile `clm release provision`
+does. It needs `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN` (exported or in the project's
+`.env`); without one it says nothing, since pushing only needs git
+credentials. Routine pushes make no API call. A refused change (Maintainer
+rights needed) prints a warning naming *Settings > Repository > Branch
+defaults > Default branch*; it never changes the exit code. `--dry-run`
+prints what it would do and calls nothing.
+
 Key options for `git commit`, `git push`, and `git sync`:
 
 | Option | Commands | Description |
