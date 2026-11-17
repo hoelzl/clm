@@ -286,7 +286,11 @@ points the GitLab project's `default_branch` at that branch once the branch
 is on the remote (`--dry-run` previews it). If the token may not change the
 setting (it needs Maintainer rights), or the branch is not pushed yet,
 provision prints a warning naming the setting — *Settings > Repository >
-Branch defaults > Default branch* — and still exits 0.
+Branch defaults > Default branch* — and still exits 0. Since provision
+usually runs before the first push, the push that creates the branch
+(`clm git push`/`sync --channel`, `clm release sync --push`) does the same
+reconcile when a GitLab token is configured (CLM {version}+, issue #1284), so
+no second provision run is needed.
 
 Sync actions per topic:
 

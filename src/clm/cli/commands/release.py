@@ -22,8 +22,11 @@ import click
 from attrs import frozen
 
 from clm.cli.commands.git import (
+    DefaultBranchReconciler,
     OutputRepo,
     all_output_target_repos,
+    channel_gitlab_project,
+    checked_out_branch,
     commit_and_push_repo,
     find_release_channel_repos,
     normalize_remote_url,
@@ -418,60 +421,14 @@ def _push_channel_repo(
         repo,
         message or _default_push_message(channel_name, result),
         remote_ahead_hint=remote_ahead_hint,
+        # A spec-resolved channel gets the GitLab default-branch reconcile
+        # (issue #1284); an explicit --dest has no channel to gate it on.
+        reconciler=DefaultBranchReconciler(spec_file)
+        if channel and spec_file is not None
+        else None,
     )
     if not ok:
         raise SystemExit(1)
-
-
-def _actual_origin_url(repo: OutputRepo) -> str | None:
-    """The ``origin`` URL the channel working tree actually has, if any.
-
-    Deliberately not :func:`clm.cli.commands.git.run_git`: that helper mocks
-    out commands under the ``clm git`` dry-run ContextVar, but this read-only
-    lookup must run even in (someone else's, or provision's own) dry-run mode
-    — the dry-run *output* has to name the project that would really be
-    shared.
-    """
-    if not repo.has_git:
-        return None
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "-C", str(repo.path), "remote", "get-url", "origin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
-
-
-def _local_branch(repo: OutputRepo) -> str | None:
-    """The branch checked out in the channel working tree, if it has commits.
-
-    Read-only and dry-run-independent, like :func:`_actual_origin_url`. An
-    unborn branch (``git init`` without a commit) or a detached HEAD yields
-    ``None``: there is nothing pushed for the remote default to point at.
-    """
-    if not repo.has_git:
-        return None
-    import subprocess
-
-    def git(*args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", "-C", str(repo.path), *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    if git("rev-parse", "--verify", "-q", "HEAD").returncode != 0:
-        return None
-    result = git("symbolic-ref", "--short", "-q", "HEAD")
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
 
 
 @release_group.command("provision")
@@ -515,7 +472,6 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         GitLabApiError,
         gitlab_token,
         gitlab_token_var,
-        parse_gitlab_remote,
         reconcile_default_branch,
         share_project_with_group,
     )
@@ -558,9 +514,7 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         # and a repo whose name does not follow the derived convention would
         # otherwise be provisioned against a nonexistent project. The derived
         # URL remains the fallback for repos not yet initialized/pushed.
-        remote = None
-        if repo is not None:
-            remote = parse_gitlab_remote(_actual_origin_url(repo) or repo.remote_url or "")
+        remote = channel_gitlab_project(repo) if repo is not None else None
         if remote is None:
             click.echo(
                 f"[{ref}] skipped: no GitLab remote URL could be derived "
@@ -569,7 +523,7 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
             )
             continue
         base_url, project_path = remote
-        branch = _local_branch(repo) if repo is not None else None
+        branch = checked_out_branch(repo.path) if repo is not None else None
         if branch is not None:
             branch_work.setdefault((base_url, project_path), (ref, base_url, project_path, branch))
         for share in ch.share_with:
