@@ -4818,6 +4818,55 @@ The old `clm voiceover` names were
 deleted, not aliased — see `clm info migration`. `clm voiceover` keeps only
 the text-layer verbs `extract` / `inline` / `inline-notes`.
 
+#### Addressing a course: `--spec` (CLM {version}+)
+
+Instead of a deck path and video files, `report`, `task`, `accept` and
+`verify` take `--spec SPEC`: decks resolve through the spec exactly as the
+build resolves them, and videos through the recordings tree the recording
+workflow writes:
+
+```
+<recordings root>/final/<output-dir-name[lang]>/<section name[lang]>/<NN deck title>[ (part N)|(Teil N)].<ext>
+```
+
+```
+clm harvest report --spec SPEC --lang {de|en} [--section S] [--topic T] [--deck STEM] [--recordings-root DIR] [--resolve-only] [--unharvested] [--json]
+clm harvest task   --spec SPEC --topic T [--deck STEM] --lang {de|en} [--slide ID] [--kind …] [--recordings-root DIR]
+clm harvest accept --spec SPEC --topic T [--deck STEM] [--lang {de|en}] --answer FILE|- [--record] …
+clm harvest verify --spec SPEC --topic T [--deck STEM] [--lang {de|en}] [--json]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--spec PATH` | Course spec; replaces the DECK (and VIDEO) arguments. Giving both is an error |
+| `--topic ID` | An **exact** topic id (never a suffix or pattern); required for `task`/`accept`/`verify` |
+| `--deck STEM` | The deck file stem (`slides_intro`) when the topic holds several decks; an ambiguous topic is refused |
+| `--section S` | `report` only: a section id, or the 1-based position of a section without an id |
+| `--recordings-root DIR` | The recordings root (default: `recordings.root_dir` from the CLM config) |
+| `--resolve-only` | `report` only: list each deck and its videos; no transcription |
+| `--unharvested` | `report` only: skip decks whose current videos already left `harvest:<video-fingerprint>` provenance in the deck's sync ledger |
+| `--lang` | `accept`/`verify`: which half to address (default `de`; either half loads the pair) |
+
+Video parts are ordered by part number; a gap in the numbering is a note
+(`clm recordings invalidate` never renumbers). An unnumbered file next to
+numbered parts, or two files for one part, is an error for that deck.
+`--transcript`/`--alignment` are single-video inputs and are refused with
+`--spec`; videos outside the recordings tree keep the DECK VIDEO form.
+
+`report --spec` reports every recorded deck of the course in one envelope
+(`"verb": "batch-report"`): per deck its `section`, `topic_id`, `deck`,
+`videos`, `parts`, `notes`, a `status` — `actionable`, `nothing`,
+`harvested` (`--unharvested`), `recorded` (`--resolve-only`),
+`no_recording` or `error` — and either the deck's ordinary report under
+`report` plus the follow-up `task` command under `next`, or the `error`. A
+deck that fails does not stop the batch. `summary` counts the statuses and,
+for an unfiltered run, lists `unclaimed_videos`: files in the course's
+recordings tree no deck matches (usually a deck renamed or retitled after
+its recording).
+
+**Exit codes (`report --spec`):** `0` nothing to harvest · `1` at least one
+deck actionable · `2` spec/usage error, or any deck failed.
+
 #### `clm harvest report`
 
 Run the full deterministic tier (cached) and report, slide by slide, what
@@ -4826,6 +4875,7 @@ Read-only; no model; no API key. Also the human dry-run.
 
 ```
 clm harvest report SLIDES VIDEO... --lang {de|en} [OPTIONS]
+clm harvest report --spec SPEC --lang {de|en} [OPTIONS]   # every recorded deck, see above
 ```
 
 `SLIDES` must be the recorded-language half of a split pair; the whole
@@ -4885,6 +4935,7 @@ Read-only; no model.
 
 ```
 clm harvest task SLIDES VIDEO... --lang {de|en} [--slide ID] [--kind curate|translate]
+clm harvest task --spec SPEC --topic T [--deck STEM] --lang {de|en} [--slide ID] [--kind curate|translate]
 clm harvest task SLIDES --lang {de|en} --kind port --source OLDER_FILE [--slide ID]
 clm harvest task SLIDES --lang {de|en} --kind compare --source OLDER_FILE [--slide ID]
 ```
@@ -4945,6 +4996,7 @@ produce historical exports, comparison reports, or alignment sidecars.
 
 ```
 clm harvest accept SLIDES --answer FILE|- [--slide ID] [--record] [--dry-run] [--json]
+clm harvest accept --spec SPEC --topic T [--deck STEM] --answer FILE|- [...]
 ```
 
 Validation (all-or-nothing; nothing is written on failure): answer schema
@@ -4988,6 +5040,7 @@ One-sided narrative members are **not** failures — they are listed as
 
 ```
 clm harvest verify SLIDES [--json]
+clm harvest verify --spec SPEC --topic T [--deck STEM] [--json]
 ```
 
 **Exit codes:** `0` pass (pending twins allowed) · `2` structural errors.

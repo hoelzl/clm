@@ -26,6 +26,46 @@ clm harvest report DECK VIDEO… --lang de --json     # what did the recording s
 
 Work on a branch; every `accept` is atomic (all files or nothing).
 
+For the recordings of a whole course, address decks through the spec
+instead (next section): `DECK VIDEO…` is for videos outside the
+recordings tree.
+
+## Addressing decks through the spec
+
+Prefer `--spec` over deck paths and video globs: decks then resolve through
+the spec exactly as the build resolves them, and videos through the
+recordings tree (`final/<course>/<section>/<NN title>[ (part N)].mp4`), in
+part order. A glob such as `topic_*_strings` once matched `c_strings` before
+`strings`, and a whole report ran against the wrong deck.
+
+```
+clm harvest report --spec SPEC --lang en --resolve-only    # check the mapping first: cheap
+clm harvest report --spec SPEC --lang en --unharvested --json
+→ for each deck with "status": "actionable": run its "next" command with --slide ID
+    clm harvest task --spec SPEC --topic T [--deck STEM] --lang en --slide ID
+    clm harvest accept --spec SPEC --topic T [--deck STEM] --answer answer.json --record
+→ clm harvest verify --spec SPEC --topic T [--deck STEM]
+```
+
+- `--topic` is an exact topic id. A topic with several decks needs
+  `--deck STEM`; the commands refuse to guess.
+- Narrow the batch with `--section` (id, or 1-based position) or `--topic`.
+- `--resolve-only` costs nothing; a full batch transcribes every recorded
+  deck that is not cached yet (GPU minutes per video). Run it first and
+  read the `notes` (part gaps) and `error` entries.
+- A deck's `status`: `actionable` (its `report` has work; `next` is the
+  task command), `nothing`, `harvested` (skipped by `--unharvested`),
+  `recorded` (`--resolve-only`), `no_recording`, `error` (one deck failing
+  never stops the batch; exit 2 tells you to look).
+- `--unharvested` keys on the `harvest:<video-fingerprint>` provenance that
+  `accept --record` leaves in the sync ledger. A deck whose harvest
+  accepted nothing, or whose members a later sync write re-banked, is
+  reported again; that errs on the safe side.
+- `summary.unclaimed_videos` lists recordings no deck matches: a deck
+  renamed or retitled after its recording. Re-point it by hand; do not
+  harvest it into a guessed deck.
+- Videos outside the recordings tree keep the per-deck form below.
+
 ## Reading the report
 
 `report` runs the cached deterministic tier and emits one item per slide,
