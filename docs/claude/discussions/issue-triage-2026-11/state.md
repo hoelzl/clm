@@ -20,7 +20,8 @@ of the CppCourses student repos to release channels.
 subdirs), #1284 (GitLab default branch after `git push --channel`), the 1.41.0
 release, and the owning-topic annotation of CppCourses with two follow-up
 issues there. After the first save it ranked the "needs design" items and
-designed and shipped #1104 (harvest addressed through the course spec).
+designed and shipped #1104 (harvest addressed through the course spec),
+closed the stale CI trackers and released 1.42.0.
 
 Task state is in the PRs and issues below; there is no handover. The adopt
 design and its field run are in `docs/claude/design/release-adopt.md`.
@@ -168,6 +169,10 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   18 tests, field-checked on cpp-for-programmers EN (63 of 114 decks mapped
   to all 89 videos; a real `strings` report, exit 1). The MCP harvest tools
   stay per-deck (a possible follow-up).
+- **S27, third part:** #1296 and #1278 closed as stale at the owner's
+  request; **clm 1.42.0 released** (PR #1306, GitHub release
+  2026-11-18 03:04 UTC, wheel and sdist on PyPI). It carries #1104; the
+  local gate passed (17,682) and CI was green.
 - All nine owner topics were already frozen in both channels, so #247
   changes nothing for students today. A future `--refreeze` of `vs`/
   `vscode`/`clion`, `catch2` or `program_structure` now also replaces
@@ -186,14 +191,11 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
 - **Open issues:** #1216 and sync group 3: phase D.
 - **Design items:** the S27 ranking above; #1104 is done, #1050 (with
   #1252) and #1002 are next in the agent's order.
-- **#1296 and #1278** (master-red and nightly trackers) are stale: master
-  and the nightly have been green since. The agent asked whether to close
-  them; not answered.
-- **Release:** #1104 ships with the next clm release; until then the
-  `--spec` options work only from a clm checkout.
+- **Upgrade:** the owner's installed clm needs upgrading to 1.42.0 to use
+  `clm harvest … --spec`.
 
 ## Next boundary
 
-S27 ended with #1104 merged. Next: the next design item (#1050 with #1252,
+S27 ended with 1.42.0 released. Next: the next design item (#1050 with #1252,
 or #1002), the deferred CppCourses refreeze once the cohort has finished,
 or phase D after the dogfood window.
