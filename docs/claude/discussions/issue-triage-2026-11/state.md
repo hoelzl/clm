@@ -173,6 +173,14 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   request; **clm 1.42.0 released** (PR #1306, GitHub release
   2026-11-18 03:04 UTC, wheel and sdist on PyPI). It carries #1104; the
   local gate passed (17,682) and CI was green.
+- **Agent correction, the third save.** It went wrong: the transcript
+  missed the first commit and the first push sent master's commit. The
+  owner suggested a script blocking file access for the `agent` account;
+  the agent first agreed, then found its own error: a `cd` into the save
+  worktree had not carried over, so its commits landed on the main
+  checkout's local `master` (and `master`'s upstream was rewired). Nothing
+  reached remote `master` except through PR #1307; the agent restored
+  `master` and saved a memory (use absolute paths or `git -C`).
 - All nine owner topics were already frozen in both channels, so #247
   changes nothing for students today. A future `--refreeze` of `vs`/
   `vscode`/`clion`, `catch2` or `program_structure` now also replaces
