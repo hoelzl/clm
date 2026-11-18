@@ -36,6 +36,14 @@ from pathlib import Path
 import click
 
 from clm.cli._default_verb_group import DefaultVerbGroup, DefaultVerbLazyGroup
+from clm.cli.commands._harvest_spec import (
+    check_addressing,
+    recordings_root_or_exit,
+    resolve_one_or_exit,
+    run_batch_report,
+    spec_address_options,
+    videos_or_exit,
+)
 
 
 @click.group("harvest", cls=DefaultVerbLazyGroup)
@@ -159,6 +167,17 @@ def _pipeline_options(f):
     return f
 
 
+#: accept/verify: which half --spec resolves to. The bundle covers both halves,
+#: so the choice never changes what is written or checked.
+_spec_lang_option = click.option(
+    "--lang",
+    type=click.Choice(["de", "en"]),
+    default="de",
+    show_default=True,
+    help="With --spec: the language half to address (either half loads the pair).",
+)
+
+
 def _load_bundle_or_exit(slides: Path):
     """The v3 deck bundle: both languages + companions, the identity source."""
     from clm.slides.doc_lenses import DocLensError, load_bundle
@@ -189,8 +208,13 @@ def _run_pipeline_artifacts(
     whisper_model: str,
     backend_name: str,
     device: str,
+    resolved_videos: list[Path] | None = None,
 ):
-    """Run the cached deterministic tier; returns (slide_groups, artifacts)."""
+    """Run the cached deterministic tier; returns (slide_groups, artifacts).
+
+    *resolved_videos* (from ``--spec`` addressing) bypasses the glob expansion
+    of the positional VIDEO arguments: those paths are exact, in part order.
+    """
     from clm.cli.commands._video_args import expand_video_args
     from clm.core.slide_text.slide_parser import parse_slides
     from clm.voiceover.cache import CachePolicy
@@ -202,7 +226,7 @@ def _run_pipeline_artifacts(
     )
 
     policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
-    video_paths = expand_video_args(videos)
+    video_paths = resolved_videos if resolved_videos is not None else expand_video_args(videos)
 
     # The recorded-language view the OCR matcher and aligner key on.
     slide_groups = parse_slides(slides, lang)
@@ -241,6 +265,7 @@ def _build_report_data(
     whisper_model: str,
     backend_name: str,
     device: str,
+    resolved_videos: list[Path] | None = None,
 ) -> dict:
     from clm.voiceover.harvest import build_report
 
@@ -254,6 +279,7 @@ def _build_report_data(
         whisper_model,
         backend_name,
         device,
+        resolved_videos=resolved_videos,
     )
     return build_report(bundle, slide_groups, artifacts, lang=lang, video_paths=video_paths)
 
@@ -264,14 +290,26 @@ def _build_report_data(
 
 
 @harvest_group.command("report")
-@click.argument("slides", type=click.Path(exists=True, path_type=Path))
-@click.argument("videos", nargs=-1, required=True, type=str)
+@click.argument("slides", required=False, type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=False, type=str)
 @_pipeline_options
+@spec_address_options(batch=True, recordings=True)
+@click.option(
+    "--resolve-only",
+    is_flag=True,
+    help="With --spec: list each deck and its videos; no transcription, no report.",
+)
+@click.option(
+    "--unharvested",
+    is_flag=True,
+    help="With --spec: skip decks whose current videos are already harvested "
+    "(their sync ledger records harvest:<video-fingerprint>).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the JSON report envelope.")
 @click.pass_context
 def harvest_report_cmd(
     ctx,
-    slides: Path,
+    slides: Path | None,
     videos: tuple[str, ...],
     lang: str,
     as_json: bool,
@@ -280,6 +318,13 @@ def harvest_report_cmd(
     whisper_model: str,
     backend_name: str,
     device: str,
+    spec_file: Path | None,
+    topic: str | None,
+    deck_filter: str | None,
+    section: str | None,
+    recordings_root: Path | None,
+    resolve_only: bool,
+    unharvested: bool,
 ):
     """What did the recording say, slide by slide? (read-only)
 
@@ -291,15 +336,85 @@ def harvest_report_cmd(
     class: no_existing_vo | transcript_adds_material | covered |
     unmatched_slide (plus unmatched_speech per unassigned segment).
 
+    With `--spec SPEC` instead of DECK and VIDEOS, reports every recorded deck
+    of the course (narrow with --section/--topic/--deck): decks resolve
+    through the spec and their videos through the recordings tree
+    (`final/<course>/<section>/<NN title>[ (part N)].mp4`). One envelope
+    lists each deck with a status (actionable | nothing | harvested |
+    recorded | no_recording | error) and the follow-up `task` command.
+    `--resolve-only` shows the mapping without transcribing.
+
     \b
     Exit codes:
       0  nothing to harvest (all covered / silent)
       1  actionable items (new material or unmatched speech)
-      2  error (unreadable deck, non-normalized bundle, bad inputs)
+      2  error (unreadable deck, non-normalized bundle, bad inputs;
+         with --spec: any deck that failed)
 
     No model, no key, no writes — also the human dry-run.
     """
     from clm.voiceover.harvest import report_exit_code
+
+    check_addressing(
+        slides,
+        spec_file,
+        topic=topic,
+        deck=deck_filter,
+        section=section,
+        recordings_root=recordings_root,
+        resolve_only=resolve_only,
+        unharvested=unharvested,
+    )
+    if spec_file is not None:
+        if transcript_override is not None or alignment_override is not None:
+            raise click.UsageError(
+                "--transcript/--alignment are single-video inputs; use the DECK VIDEO form"
+            )
+
+        def build_one(found) -> dict:
+            from clm.slides.doc_lenses import load_bundle
+
+            bundle = load_bundle(found.deck)
+            if bundle.outcome.deck is None:
+                refusal = bundle.outcome.refusal
+                reasons = (
+                    "; ".join(f"[{r.code}] {r.detail}" for r in refusal.reasons) if refusal else ""
+                )
+                raise ValueError(
+                    f"the deck bundle is not normalized ({reasons}); "
+                    "run `clm slides normalize` on the pair first"
+                )
+            return _build_report_data(
+                ctx,
+                bundle,
+                found.deck,
+                (),
+                lang,
+                None,
+                None,
+                whisper_model,
+                backend_name,
+                device,
+                resolved_videos=found.videos,
+            )
+
+        run_batch_report(
+            ctx,
+            spec_file=spec_file,
+            lang=lang,
+            topic=topic,
+            section=section,
+            deck_filter=deck_filter,
+            cli_root=recordings_root,
+            resolve_only=resolve_only,
+            unharvested=unharvested,
+            as_json=as_json,
+            build_report=build_one,
+        )
+        return
+    assert slides is not None
+    if not videos:
+        raise click.UsageError("missing VIDEO arguments (or use --spec)")
 
     bundle = _load_bundle_or_exit(slides)
     report = _build_report_data(
@@ -327,9 +442,10 @@ def harvest_report_cmd(
 
 
 @harvest_group.command("task")
-@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("slides", required=False, type=click.Path(exists=True, path_type=Path))
 @click.argument("videos", nargs=-1, required=False, type=str)
 @_pipeline_options
+@spec_address_options(recordings=True)
 @click.option(
     "--slide",
     default=None,
@@ -353,7 +469,7 @@ def harvest_report_cmd(
 @click.pass_context
 def harvest_task_cmd(
     ctx,
-    slides: Path,
+    slides: Path | None,
     videos: tuple[str, ...],
     lang: str,
     slide: str | None,
@@ -364,6 +480,10 @@ def harvest_task_cmd(
     whisper_model: str,
     backend_name: str,
     device: str,
+    spec_file: Path | None,
+    topic: str | None,
+    deck_filter: str | None,
+    recordings_root: Path | None,
 ):
     """Frame one slide's judgment as a task document (read-only).
 
@@ -379,18 +499,41 @@ def harvest_task_cmd(
     bullet-relation labeling for each matched pair — answered through
     `harvest compare-accept`. Both need --source and no VIDEO arguments.
 
+    With `--spec SPEC --topic T [--deck STEM]` instead of DECK and VIDEOS, the
+    deck resolves through the spec and (curate/translate) its videos through
+    the recordings tree, in part order — the command `harvest report --spec`
+    prints for each actionable deck.
+
     \b
     Exit codes: 0 tasks emitted (possibly zero in the sweep) · 2 error /
     the named slide cannot be framed.
     """
     from clm.slides.agent_task import envelope
 
+    check_addressing(
+        slides, spec_file, topic=topic, deck=deck_filter, recordings_root=recordings_root
+    )
+    resolved_videos: list[Path] | None = None
+    if spec_file is not None:
+        if kind in ("port", "compare"):
+            slides = resolve_one_or_exit(spec_file, lang, topic, deck_filter).deck
+        else:
+            if transcript_override is not None or alignment_override is not None:
+                raise click.UsageError(
+                    "--transcript/--alignment are single-video inputs; use the DECK VIDEO form"
+                )
+            root = recordings_root_or_exit(recordings_root)
+            found = resolve_one_or_exit(spec_file, lang, topic, deck_filter, root)
+            slides = found.deck
+            resolved_videos = videos_or_exit(found)
+    assert slides is not None
+
     if kind in ("port", "compare"):
         _emit_revision_tasks(ctx, slides, videos, lang, slide, kind, source_path)
         return
     if source_path is not None:
         raise click.UsageError("--source only applies to --kind port/compare")
-    if not videos:
+    if not videos and resolved_videos is None:
         raise click.UsageError("curate/translate tasks need at least one VIDEO argument")
 
     from clm.voiceover.harvest_task import TaskUnavailable, build_tasks
@@ -407,6 +550,7 @@ def harvest_task_cmd(
         whisper_model,
         backend_name,
         device,
+        resolved_videos=resolved_videos,
     )
     deck = bundle.outcome.deck
     assert deck is not None
@@ -627,7 +771,9 @@ def harvest_compare_accept_cmd(
 
 
 @harvest_group.command("accept")
-@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("slides", required=False, type=click.Path(exists=True, path_type=Path))
+@spec_address_options()
+@_spec_lang_option
 @click.option(
     "--answer",
     "answer_src",
@@ -644,12 +790,16 @@ def harvest_compare_accept_cmd(
 @click.option("--dry-run", is_flag=True, help="Validate and report; write nothing.")
 @click.option("--json", "as_json", is_flag=True, help="Emit the JSON outcome envelope.")
 def harvest_accept_cmd(
-    slides: Path,
+    slides: Path | None,
     answer_src: str,
     slide: str | None,
     record: bool,
     dry_run: bool,
     as_json: bool,
+    spec_file: Path | None,
+    topic: str | None,
+    deck_filter: str | None,
+    lang: str,
 ):
     """Validate a bullet-list answer and write it through the v3 model.
 
@@ -666,7 +816,14 @@ def harvest_accept_cmd(
     ledger record was refused by the structural gate (or the ledger write
     failed) · 2 rejected / error (a failed deck write is rolled back and
     rejects).
+
+    `--spec SPEC --topic T [--deck STEM]` addresses the deck instead of DECK.
     """
+    check_addressing(slides, spec_file, topic=topic, deck=deck_filter)
+    if spec_file is not None:
+        slides = resolve_one_or_exit(spec_file, lang, topic, deck_filter).deck
+    assert slides is not None
+
     from clm.slides.agent_task import (
         EXIT_CLEAN,
         EXIT_ERROR,
@@ -750,9 +907,18 @@ def harvest_accept_cmd(
 
 
 @harvest_group.command("verify")
-@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("slides", required=False, type=click.Path(exists=True, path_type=Path))
+@spec_address_options()
+@_spec_lang_option
 @click.option("--json", "as_json", is_flag=True, help="Emit the JSON verdict.")
-def harvest_verify_cmd(slides: Path, as_json: bool):
+def harvest_verify_cmd(
+    slides: Path | None,
+    as_json: bool,
+    spec_file: Path | None,
+    topic: str | None,
+    deck_filter: str | None,
+    lang: str,
+):
     """Structural post-check on the pair (v3 lens + the deck-halves write gate).
 
     Runs the v3 lens gate (the whole bundle must parse back — refusals are
@@ -764,9 +930,16 @@ def harvest_verify_cmd(slides: Path, as_json: bool):
     project the companions and read that same state as an id-asymmetry error,
     which is exactly the "corruption" misreading harvest must avoid — §6.)
 
+    `--spec SPEC --topic T [--deck STEM]` addresses the deck instead of DECK.
+
     \b
     Exit codes: 0 pass (pending twins allowed) · 2 structural errors.
     """
+    check_addressing(slides, spec_file, topic=topic, deck=deck_filter)
+    if spec_file is not None:
+        slides = resolve_one_or_exit(spec_file, lang, topic, deck_filter).deck
+    assert slides is not None
+
     from clm.slides.doc_lenses import DocLensError, load_bundle
     from clm.slides.sync_verify import gate_deck_halves
 
