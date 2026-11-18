@@ -89,6 +89,36 @@ clm harvest accept slides_intro.de.py --answer answer.json --record
 clm harvest verify slides_intro.de.py --json
 ```
 
+### Harvesting a whole course (`--spec`)
+
+For recordings made with the recording workflow, address decks through the
+course spec instead of deck paths and video files. The decks resolve as the
+build resolves them. The videos come from the recordings tree,
+`final/<course>/<section>/<NN title>[ (part N)].mp4`, with multi-part
+videos in part order:
+
+```bash
+# Check which videos belong to which deck (no transcription):
+clm harvest report --spec course-specs/my-course.xml --lang en --resolve-only
+
+# Report every recorded deck that has not been harvested yet:
+clm harvest report --spec course-specs/my-course.xml --lang en --unharvested --json
+
+# Work on one deck; --topic is an exact topic id:
+clm harvest task   --spec course-specs/my-course.xml --topic strings --lang en --slide ID
+clm harvest accept --spec course-specs/my-course.xml --topic strings --answer answer.json --record
+clm harvest verify --spec course-specs/my-course.xml --topic strings
+```
+
+The batch report gives each deck a status (`actionable`, `nothing`,
+`harvested`, `recorded`, `no_recording` or `error`) and, for an actionable
+deck, the `task` command to run next. A deck that fails doesn't stop the
+run. `--section` and `--topic` narrow it, and `--deck STEM` picks one deck
+when a topic holds several. The recordings root defaults to
+`recordings.root_dir` in the CLM configuration (`--recordings-root`
+overrides it). Videos outside the recordings tree keep the per-deck form
+above. Details: `clm info commands` and `clm info harvest-agents`.
+
 The transcript is cleaned when it is read: Whisper repetition loops (the
 same sentence three or more times in a row) are collapsed to one
 occurrence, and segments that look like hallucinations — low confidence,
