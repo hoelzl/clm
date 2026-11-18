@@ -19,7 +19,8 @@ of the CppCourses student repos to release channels.
 **S27** resumed it. It covered #1288 (owning topics for global dir-group
 subdirs), #1284 (GitLab default branch after `git push --channel`), the 1.41.0
 release, and the owning-topic annotation of CppCourses with two follow-up
-issues there.
+issues there. After the first save it ranked the "needs design" items and
+designed and shipped #1104 (harvest addressed through the course spec).
 
 Task state is in the PRs and issues below; there is no handover. The adopt
 design and its field run are in `docs/claude/design/release-adopt.md`.
@@ -114,6 +115,25 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   constraint is the students' local compilers. It posted a correction comment
   on #246 and, at the owner's request, fixed the issue body too.
 
+- **Design priorities (S27, second part).** The agent ranked the open
+  design items; the owner picked the first. The ranking, for a later pick:
+  1. #1104 with #1100 and #1056, harvest over a whole course (done: #1104);
+  2. #1050 configurable output root, with #1252 (`clm cache relocate` now,
+     root-relative keys decided together with #1050);
+  3. #1002 `clm course rename-topic`, timed by the C++ revision (#246);
+  - #1163 (agenda Word export) moves up if an AZAV certification is near;
+    #1094/#1091 are discussion-sized; #964, #1197, #1006, #919, #800 low.
+  Sync phase D is not a design item but remains the highest-leverage work.
+- **#1104, eight decisions D1–D8**, all as the agent recommended (recorded
+  on the issue): videos only from the recordings layout computed from the
+  spec as the dashboard does (not the per-machine state file, not globs);
+  `--spec` addressing on `report`/`task`/`accept`/`verify`, batch only for
+  `report`; exact topic ids, sections by id or 1-based position; parts by
+  number, gaps are notes, unnumbered-plus-numbered is a deck error; one
+  envelope, a failing deck never stops the batch, exit 2 if any failed;
+  `--resolve-only`; `--unharvested` from the sync ledger's
+  `harvest:<fingerprint>` provenance (replacing `--since`); docs.
+
 ## Shipped
 
 - **S25:** #1253–#1265, #1267–#1269, #1271, #1279, #1281; saves #1282 and
@@ -142,6 +162,12 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   owner review; no CI checks run on it): 10 `<subdir topic>` entries and a
   `session-knowledge.md` note. Issue #246: the course revision (unreferenced
   projects, modern C++).
+- **S27, second part:** PR #1302 and #1303 (the first save and its state
+  fix); PR #1304 (#1104, merged 2026-11-18, not yet in a release): the
+  batch `report --spec`, `--spec --topic [--deck]` on the single-deck verbs,
+  18 tests, field-checked on cpp-for-programmers EN (63 of 114 decks mapped
+  to all 89 videos; a real `strings` report, exit 1). The MCP harvest tools
+  stay per-deck (a possible follow-up).
 - All nine owner topics were already frozen in both channels, so #247
   changes nothing for students today. A future `--refreeze` of `vs`/
   `vscode`/`clion`, `catch2` or `program_structure` now also replaces
@@ -158,12 +184,16 @@ design and its field run are in `docs/claude/design/release-adopt.md`.
   holds the idea of a `clm validate` check that an owning topic's slides
   mention its project; not filed in clm yet, depends on #246.
 - **Open issues:** #1216 and sync group 3: phase D.
-- **The "needs design first" list from S25:** #1140 is done. The rest
-  (#1050, #1094/#1091, #1100/#1104 and the lower-urgency items) is
-  unchanged and is listed in the S25 transcript.
+- **Design items:** the S27 ranking above; #1104 is done, #1050 (with
+  #1252) and #1002 are next in the agent's order.
+- **#1296 and #1278** (master-red and nightly trackers) are stale: master
+  and the nightly have been green since. The agent asked whether to close
+  them; not answered.
+- **Release:** #1104 ships with the next clm release; until then the
+  `--spec` options work only from a clm checkout.
 
 ## Next boundary
 
-The S27 discussion ended with both CppCourses issues filed. Next: either the
-deferred CppCourses refreeze, once the owner says the cohort has finished, a
-"needs design" item, or phase D after the dogfood window.
+S27 ended with #1104 merged. Next: the next design item (#1050 with #1252,
+or #1002), the deferred CppCourses refreeze once the cohort has finished,
+or phase D after the dogfood window.
