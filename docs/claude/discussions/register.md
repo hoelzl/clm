@@ -1,8 +1,8 @@
 ---
 status: active
 owner: maintainers
-updated: 2026-11-18
-review-by: 2027-05-18
+updated: 2026-11-20
+review-by: 2027-05-20
 ---
 # Register: discussions index
 
@@ -48,6 +48,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | `issue-triage-2026-11` (S27, second part) | After the first save: the owner had the #246 body corrected (not only commented), asked what was left, then asked for the most valuable design items. The agent found #1296/#1278 stale, ranked #1104 (with #1100/#1056), #1050 (with #1252) and #1002, with #1163 date-dependent; the owner picked #1104. The agent measured the code (the recordings layout, the ledger without video paths, the per-machine state file, part gaps from `invalidate`) and proposed D1–D8; the owner accepted them all, and the agent recorded and implemented them in one PR, field-checked on the real course | Settled — #1104 shipped (PR #1304); #1050/#1252 and #1002 next in the ranking; closing #1296/#1278 awaits the owner | PRs #1303, #1304; issue #1104 (decision comment); CppCourses #246 (body corrected) | S27 |
 | `issue-triage-2026-11` (S27, third part) | After the second save the owner asked to close the two stale CI trackers and to cut a release; the agent closed them with comments and released 1.42.0 (gate, bump, merge-commit PR, release workflow, PyPI check). Nothing new on the decisions | Settled — 1.42.0 released; #1296 and #1278 closed | PR #1306; issues #1296, #1278 | S27 |
 | `issue-triage-2026-11` (S27, fourth part) | The third save misfired. The owner offered a file-blocking script as the cause; the agent first accepted it, then found the real cause in its own work: a `cd` into the worktree had not persisted, so the save commits went to the main checkout's `master`. Correction worth keeping: verify before accepting a plausible external explanation | Settled — `master` restored; PR #1307's content verified on master; memory `feedback_worktree_cwd_drift` | PR #1307 | S27 |
+| `http-replay-kernel-proxy` | #1309: a replay build exported the proxy to every kernel, but only `http-replay` topics were tagged, so other topics hit the catch-all cassette and strict-mode 404s. The agent proposed starting non-opted-in kernels with the recorded pre-proxy env (rejecting a "passthrough" tag for every kernel); the owner said "Please implement this". Correction from the adversarial review: decide on opt-in, not on whether a tag was injected, or an opted-in deck with a missing cassette reaches the live network | Settled — fixed; epoch bumped to 5; old Docker images need a rebuild | PR #1311; issue #1309 | S28 |
 
 ### Dropped threads / corrections worth keeping
 
@@ -284,6 +285,7 @@ the reasons behind it are in `README.md`; the save procedure is
 | S27 (second part) | 2026-11-17/18 | `issue-triage-2026-11/transcripts/2026-11-17-s27.md` | 5.99 MB → 61 kchar (98:1); the cleaner accepted the overwrite, so no earlier dialogue line was lost | 10 / 99 (303 tool stubs; 5 harness-authored turns and 1,552 records dropped; one owner block typed mid-turn) | same Claude Code session `60d4a2b6-65d4-4c14-9535-a1b36eafd62d.jsonl`, re-cleaned | content through 2026-11-18 02:10 UTC — extends the row above with the #246 body fix, the design ranking, #1104's decisions and implementation, the #1304 merge, and the start of this save; supersedes the earlier boundary. Checked for e-mail addresses, home paths and token patterns: none |
 | S27 (third part) | 2026-11-17/18 | `issue-triage-2026-11/transcripts/2026-11-17-s27.md` | 6.33 MB → 66 kchar (96:1); the cleaner accepted the overwrite, so no earlier dialogue line was lost | 11 / 111 (326 tool stubs; 6 harness-authored turns and 1,688 records dropped; one owner block typed mid-turn) | same Claude Code session `60d4a2b6-65d4-4c14-9535-a1b36eafd62d.jsonl`, re-cleaned | content through 2026-11-18 03:11 UTC — extends the row above with the closing of #1296/#1278, the 1.42.0 release and the start of this save; supersedes the earlier boundary. Checked for e-mail addresses, home paths and token patterns: none |
 | S27 (fourth part) | 2026-11-17/18 | `issue-triage-2026-11/transcripts/2026-11-17-s27.md` | 70.6 kchar; the cleaner accepted the overwrite, so no earlier dialogue line was lost | 12 / 120 (339 tool stubs; 7 harness-authored turns and 1,770 records dropped; one owner block typed mid-turn) | same Claude Code session `60d4a2b6-65d4-4c14-9535-a1b36eafd62d.jsonl`, re-cleaned | content through 2026-11-18 03:43 UTC — extends the row above with the misfired save, the owner's suggestion, the agent's correction and the repair, and the start of this save; supersedes the earlier boundary. Checked for e-mail addresses, home paths and token patterns: none |
+| S28 | 2026-11-20 | `http-replay-kernel-proxy/transcripts/2026-11-20-s28.md` | 3.04 MB → 17 kchar (178:1) | 2 / 27 (106 tool stubs; 4 harness-authored turns and 608 records dropped; the compaction summary is absent, as it should be) | Claude Code session `28215699-80ba-4c6a-9131-2b8a8352a448.jsonl` (slug `c--Users-tc-Programming-Python-Projects-clm` under the `.claude-cam` projects root; the audit needs `--claude-projects`), cleaned directly, no manual stripping | content through 2026-11-20 16:26 UTC: the investigation, the proposal, the implementation report; the `/save-discussion` request, the #1311 merge and this save are covered by state.md. Checked for e-mail addresses, home paths and token patterns: none |
 
 ### Deliberately skipped
 
@@ -316,3 +318,4 @@ the reasons behind it are in `README.md`; the save procedure is
 | 2026-11-18 (at S27's second part) | none | The audit with `--claude-projects` lists no unsaved session; nothing to skip |
 | 2026-11-18 (at S27's third part) | none | The audit with `--claude-projects` lists no unsaved session; nothing to skip |
 | 2026-11-18 (at S27's fourth part) | none | The audit with `--claude-projects` lists no unsaved session; nothing to skip |
+| 2026-11-20 (at S28) | none | The audit with `--claude-projects` lists only the session being saved; nothing to skip |
