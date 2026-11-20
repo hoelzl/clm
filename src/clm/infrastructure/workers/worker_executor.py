@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -99,8 +100,25 @@ def _notebook_worker_jupyter_env() -> dict[str, str]:
     }
 
 
+def _docker_config_proxy_env(docker_client: Any) -> dict[str, str]:
+    """The proxy env docker-py adds to every container it creates.
+
+    ``containers.run`` defaults to ``use_config_proxy=True``, which prepends
+    the ``proxies`` section of ``~/.docker/config.json`` (``HTTP(S)_PROXY``,
+    ``NO_PROXY`` and lower-case twins) to the container environment — so that
+    is the proxy a container has *before* the replay setup overrides it.
+    Best-effort: ``_proxy_configs`` is docker-py internals, and an empty
+    result just means "no config proxy".
+    """
+    try:
+        return dict(docker_client.api._proxy_configs.get_environment())
+    except Exception:  # noqa: BLE001 — absent/changed internals: no config proxy
+        return {}
+
+
 def _mitmproxy_docker_env(
     host_environ: dict[str, str],
+    container_preproxy_env: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, str], tuple[str, str] | None]:
     """Container env additions + CA bind-mount for the mitmproxy transport (#165 P4).
 
@@ -126,6 +144,12 @@ def _mitmproxy_docker_env(
       (#355) selects its injection path by this value, so passing it keeps
       such images on the cassette-routing tag bootstrap. Current images
       ignore it (the tag bootstrap is the only injection path).
+
+    - records, in ``proxy_env.PREPROXY_ENV_VAR``, what each overridden
+      variable held in the container before (``container_preproxy_env``:
+      docker-py's config-file proxy, see :func:`_docker_config_proxy_env`),
+      so the worker launches kernels of topics that did NOT opt into
+      http-replay without the replay proxy (issue #1309).
 
     The second return value is ``(host_ca_path, container_ca_path)`` for the
     read-only bind mount, or ``None`` when no usable host CA bundle is found.
@@ -169,6 +193,21 @@ def _mitmproxy_docker_env(
         env["SSL_CERT_FILE"] = _MITM_CA_CONTAINER_PATH
         env["REQUESTS_CA_BUNDLE"] = _MITM_CA_CONTAINER_PATH
         env["CURL_CA_BUNDLE"] = _MITM_CA_CONTAINER_PATH
+
+    # Issue #1309: a kernel of a topic that did not opt into http-replay is
+    # launched with these variables restored. The host's own environment
+    # never reaches a container; what it would otherwise have is docker-py's
+    # config-file proxy (``container_preproxy_env``). The routing variable
+    # stays: it is not a network setting.
+    from clm.infrastructure.http_replay_mitm.proxy_env import (
+        PREPROXY_ENV_VAR,
+        encode_preproxy_env,
+    )
+
+    env[PREPROXY_ENV_VAR] = encode_preproxy_env(
+        container_preproxy_env or {},
+        (k for k in env if k != "CLM_HTTP_REPLAY_TRANSPORT"),
+    )
     return env, mount
 
 
@@ -615,7 +654,11 @@ class DockerWorkerExecutor(WorkerExecutor):
             # No-op unless the host activated the transport
             # (CLM_HTTP_REPLAY_TRANSPORT=mitmproxy).
             mitm_env, mitm_mount = (
-                _mitmproxy_docker_env(dict(os.environ)) if worker_type == "notebook" else ({}, None)
+                _mitmproxy_docker_env(
+                    dict(os.environ), _docker_config_proxy_env(self.docker_client)
+                )
+                if worker_type == "notebook"
+                else ({}, None)
             )
             if mitm_env:
                 environment.update(mitm_env)

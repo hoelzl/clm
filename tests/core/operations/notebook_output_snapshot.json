@@ -1,23 +1,24 @@
 {
-  "epoch": 4,
+  "epoch": 5,
   "decision": {
-    "action": "bump",
-    "reason": ""
+    "action": "keep",
+    "reason": "#1309 review fixes; NOTEBOOK_OUTPUT_EPOCH already bumped to 5 earlier in this same PR"
   },
   "sources": {
     "clm/core/cpp_export_files.py": "32d55d727cc7b300dd1d966f5898c481c28f7af12402818b27f4744849866f6c",
     "clm/core/cross_references.py": "0b293a27219c07cd011498a703aa641c00070d18c7e085681759f0ba731d3643",
     "clm/core/messaging/notebook_classes.py": "7ac69fbeb88bb70bd77c1af0ba8674d48e625152aa157b8b0461efbc5f605f00",
-    "clm/core/operations/process_notebook.py": "7865e4f78df704509fac02fd8a7d07410e611ba608cfa1578e04573906950fc6",
+    "clm/core/operations/process_notebook.py": "c31668754a6f6845a22bf35f3d35584a8ac9254b4da534f2c1289c4ab645dd43",
     "clm/core/tags.py": "f28e6bdacdc89f7223d851a85ff16eb5623f745b8b28080d1f7cdf036516ea85",
     "clm/core/utils/prog_lang_utils.py": "013245bc21585d3d23f8475f259473e982cb8947d8fed49e94df0ffa23950207",
     "clm/core/utils/text_utils.py": "b30fbd3fe330f86ea369adc22845371e43a41dcbde2f967b7632713658cb9cd7",
     "clm/core/workshop_scope.py": "4256bb2c5fa92f10608e8c8982e4b3dd6886b29dd23f4ac39e1a1f50103f5fe5",
     "clm/infrastructure/http_replay_mitm/__init__.py": "c2bfe0c6d6e7d03b0feb2394c1ca49e2a1e9dc5c04a26ea2a62725d008498b6b",
-    "clm/infrastructure/http_replay_mitm/addon.py": "6caffbb189394cc7099755dbd3a2b0d101ade5e87d823413f7efb64c05ea883f",
+    "clm/infrastructure/http_replay_mitm/addon.py": "d621913b42abd01e89a0b9aee8a920b990fc91dc88fe883d6ca94e0772993617",
     "clm/infrastructure/http_replay_mitm/cassette_format.py": "4aa1a2e21c38a26e4f0653c02d6017acdfeea70a736c3e5791487d22473a108e",
     "clm/infrastructure/http_replay_mitm/cassette_staging.py": "c84c487f8083de07bcd8e7a3194a84d614ada8f4905b3d6c629017a018128357",
     "clm/infrastructure/http_replay_mitm/http_replay_cassette.py": "a020f2b17a60b97ee242baa9392f8bd4da3399172453c2922561c4bfb1e6c9d4",
+    "clm/infrastructure/http_replay_mitm/proxy_env.py": "0b417021afad99e7f39fea79753d4f32552e781bd251d810b985486b0ac82586",
     "clm/infrastructure/http_replay_mitm/proxy_manager.py": "95e6d8f2169791eeb572ca8a18b0e628d081154fbd69a6cbe0f9edf9e2401311",
     "clm/infrastructure/http_replay_mitm/trace_log.py": "6d9cca375ac17f1546c56aee662b7548a00e859a79416426d085bd27b51fd7aa",
     "clm/infrastructure/http_replay_mitm/vcr_format.py": "27214d50caaceec6d5c251e83c276b1e3f3408efcd225956debafe8e1c64c1d9",
@@ -27,7 +28,7 @@
     "clm/workers/notebook/commented_installs.py": "8c056e6e8a36aaae61ec7772fee7ad74fd23fb7e364694b9bff1463b343e2ed2",
     "clm/workers/notebook/cpp_code_analysis.py": "3846a565133337ddf8e2ecbad1d4f3bf1255e0f0ca20d4f58f37c2df8983f400",
     "clm/workers/notebook/cpp_code_emitter.py": "3a6fa932a274ac771448e2c88e756f8ca189ad3ca9d0ff9829cf9d937b3ea507",
-    "clm/workers/notebook/notebook_processor.py": "91ec2a220e04ee281adb560bef00736fd7cae8ca2ec044a14d691092a7b3e006",
+    "clm/workers/notebook/notebook_processor.py": "168cf385f02bbcecc90dd855a1e02f3ed4cb2eee493e5f0cf5038fad2215723a",
     "clm/workers/notebook/notebook_worker.py": "2172eef7ff46264cc7c912906c7439c40895e5f82e970aaff3eea8c0b5505ae5",
     "clm/workers/notebook/output_spec.py": "92a341dade00736476a2c1ac42920569725f31f4609fd60a1575dd9e229c2698",
     "clm/workers/notebook/utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

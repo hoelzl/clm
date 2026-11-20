@@ -81,6 +81,16 @@ request) when this happens. If you hit it, switch the deck to a covered
 client library (or file an issue to extend the tag bootstrap to the stack
 you need).
 
+Only kernels of opted-in topics see the proxy. A notebook of a topic
+**without** `http-replay` runs its kernel with the proxy variables and CA
+bundle restored to their values from before the build set them up (#1309),
+so its traffic goes straight to the network exactly as in a build without
+replay: it is never recorded, never refused, and never triggers the
+untagged-flow warning. In Docker mode a non-opted-in kernel gets back the
+proxy from the Docker client's `~/.docker/config.json`, if any. This needs a
+worker running a CLM that includes #1309: a Docker image built from an older
+CLM still sends those kernels through the replay proxy.
+
 ## Opting a topic in
 
 Mark the topic in your course spec:
