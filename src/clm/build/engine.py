@@ -26,7 +26,7 @@ subprocesses inherit the replay-transport settings.
 import logging
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Any, Literal
@@ -204,6 +204,61 @@ def _mitm_ca_dir() -> Path:
     return Path(platformdirs.user_data_dir("clm", appauthor=False)) / "mitm-ca"
 
 
+def _export_mitmproxy_env(environ: MutableMapping[str, str], proxy: str, bundle: Path) -> None:
+    """Point ``environ`` (the host's ``os.environ``) at the replay proxy.
+
+    Direct workers and their kernels inherit it. First records what the
+    overridden variables held before, in ``proxy_env.PREPROXY_ENV_VAR``, so a
+    kernel of a topic that did NOT opt into http-replay can be launched
+    without the proxy (issue #1309). An existing marker is kept: nothing
+    restores ``os.environ`` after a build, so a second in-process build would
+    otherwise record the *previous* build's proxy as the "original" value.
+    """
+    from clm.infrastructure.http_replay_mitm.proxy_env import (
+        HOST_PROXY_ENV_KEYS,
+        PREPROXY_ENV_VAR,
+        encode_preproxy_env,
+    )
+
+    if PREPROXY_ENV_VAR not in environ:
+        environ[PREPROXY_ENV_VAR] = encode_preproxy_env(environ, HOST_PROXY_ENV_KEYS)
+    environ.update(
+        {
+            "HTTP_PROXY": proxy,
+            "HTTPS_PROXY": proxy,
+            "http_proxy": proxy,
+            "https_proxy": proxy,
+            "SSL_CERT_FILE": str(bundle),
+            "REQUESTS_CA_BUNDLE": str(bundle),
+            "CURL_CA_BUNDLE": str(bundle),
+            # Notebooks can run pip (e.g. jupytext reactivates `# !pip
+            # install` cells via comment_magics). Any pip inheriting this env
+            # would otherwise send its weekly self-version-check to
+            # pypi.org through the replay proxy as an untagged flow.
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        }
+    )
+
+
+def _snapshot_mitmproxy_env(environ: Mapping[str, str]) -> dict[str, str | None]:
+    """The values ``_export_mitmproxy_env`` may override, for :func:`_restore_env`."""
+    from clm.infrastructure.http_replay_mitm.proxy_env import (
+        HOST_PROXY_ENV_KEYS,
+        PREPROXY_ENV_VAR,
+    )
+
+    return {key: environ.get(key) for key in (*HOST_PROXY_ENV_KEYS, PREPROXY_ENV_VAR)}
+
+
+def _restore_env(environ: MutableMapping[str, str], snapshot: Mapping[str, str | None]) -> None:
+    """Put every key of ``snapshot`` back (``None`` = remove it)."""
+    for key, value in snapshot.items():
+        if value is None:
+            environ.pop(key, None)
+        else:
+            environ[key] = value
+
+
 def _maybe_start_mitmproxy_transport(
     mode: str | None, jobs_db_path: Path, worker_config: object | None = None
 ):
@@ -308,22 +363,7 @@ def _maybe_start_mitmproxy_transport(
     bundle.write_bytes(Path(certifi.where()).read_bytes() + b"\n" + ca.read_bytes())
 
     proxy = manager.proxy_url
-    _os.environ.update(
-        {
-            "HTTP_PROXY": proxy,
-            "HTTPS_PROXY": proxy,
-            "http_proxy": proxy,
-            "https_proxy": proxy,
-            "SSL_CERT_FILE": str(bundle),
-            "REQUESTS_CA_BUNDLE": str(bundle),
-            "CURL_CA_BUNDLE": str(bundle),
-            # Notebooks can run pip (e.g. jupytext reactivates `# !pip
-            # install` cells via comment_magics). Any pip inheriting this env
-            # would otherwise send its weekly self-version-check to
-            # pypi.org through the replay proxy as an untagged flow.
-            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-        }
-    )
+    _export_mitmproxy_env(_os.environ, proxy, bundle)
     logger.info(
         "mitmproxy transport active: proxy=%s mode=%s cassette=%s ca_bundle=%s",
         proxy,
@@ -2209,6 +2249,10 @@ async def _run_build_impl(
     # mitmdump). ``worker_config`` lets it bind 0.0.0.0 when Docker workers
     # will reach it via host.docker.internal.
     course_uses_http_replay = any(getattr(f, "http_replay", False) for f in course.files)
+    # The proxy setup overrides these in ``os.environ``; put them back when
+    # the proxy stops, so a later in-process build (MCP server, test session)
+    # neither inherits a dead proxy nor records it as "pre-proxy" (#1309).
+    mitm_env_snapshot = _snapshot_mitmproxy_env(_os.environ)
     mitm_manager = (
         _maybe_start_mitmproxy_transport(
             config.http_replay_mode, config.jobs_db_path, worker_config=worker_config
@@ -2334,6 +2378,7 @@ async def _run_build_impl(
                 mitm_manager.stop()
             except Exception as e:
                 logger.error(f"Failed to stop mitmproxy: {e}", exc_info=True)
+            _restore_env(_os.environ, mitm_env_snapshot)
             # The addon wrote per-(topic,language,kind) staging cassettes as it
             # recorded; now that the proxy has flushed and exited, mark this
             # build's staging files complete and fold them into their canonical

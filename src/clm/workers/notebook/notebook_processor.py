@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from hashlib import sha3_224
 from pathlib import Path, PurePath, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import jupytext.config as jupytext_config  # type: ignore[import-untyped]
 import psutil  # type: ignore[import-untyped]
@@ -383,6 +383,34 @@ if _clm_strace_dir:
 
     _clm_st_atexit.register(_clm_strace_close)
 """
+
+
+def _opted_into_http_replay(payload: NotebookPayload) -> bool:
+    """Whether the notebook's topic opted into http-replay this build.
+
+    Any non-empty mode other than ``disabled`` counts — including one this
+    worker does not recognise, so an unknown mode fails closed (the kernel
+    keeps the proxy env and strict refusal applies), never open.
+    """
+    mode = payload.http_replay_mode
+    return bool(mode) and mode != "disabled"
+
+
+def _kernel_env_for_non_opted_in_notebook() -> dict[str, str] | None:
+    """Kernel env for a notebook whose topic did not opt into http-replay.
+
+    While a build runs the replay proxy, the worker's environment points every
+    HTTP client at it (Direct: inherited from the host; Docker: set per
+    container). A kernel of a topic that did not opt into ``http-replay``
+    would reach the proxy untagged — recorded into the machine-local
+    catch-all in recording modes and refused with a ``clm_replay_miss`` 404
+    in strict ones (issue #1309). Returns that kernel's environment with the
+    proxy variables restored to their pre-proxy values, or ``None`` (inherit)
+    when no replay proxy is active.
+    """
+    from clm.infrastructure.http_replay_mitm.proxy_env import preproxy_kernel_env
+
+    return preproxy_kernel_env(os.environ)
 
 
 def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str, *, trace_dir: str = "") -> None:
@@ -768,6 +796,7 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
         self,
         processor: "NotebookProcessor",
         *args,
+        kernel_env: dict[str, str] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -777,6 +806,25 @@ class TrackingExecutePreprocessor(ExecutePreprocessor):
         # stable "N/total" denominator without us threading it through the
         # public API.
         self._total_cells: int | None = None
+        # Explicit environment for the kernel process, or ``None`` to inherit
+        # the worker's (jupyter_client's default). Set for a notebook whose
+        # topic did not opt into http-replay while the replay proxy is active,
+        # so its kernel runs without the proxy env (issue #1309).
+        self.kernel_env = kernel_env
+
+    def _with_kernel_env(self, kwargs: dict) -> dict:
+        if self.kernel_env is not None and "env" not in kwargs:
+            kwargs = {**kwargs, "env": dict(self.kernel_env)}
+        return kwargs
+
+    # nbclient's sync ``start_new_kernel`` is ``run_sync`` of the *base*
+    # class's coroutine, so it would bypass an async-only override: route
+    # both entry points through the env injection.
+    def start_new_kernel(self, **kwargs: Any) -> None:
+        super().start_new_kernel(**self._with_kernel_env(kwargs))
+
+    async def async_start_new_kernel(self, **kwargs: Any) -> None:
+        await super().async_start_new_kernel(**self._with_kernel_env(kwargs))
 
     def preprocess(
         self, nb: NotebookNode, resources: dict | None = None, km=None
@@ -1829,6 +1877,7 @@ class NotebookProcessor:
         payload: NotebookPayload,
         loop: asyncio.AbstractEventLoop,
         source_dir: Path | None,
+        kernel_env: dict[str, str] | None = None,
     ) -> None:
         """Execute notebook with supporting files at the given path.
 
@@ -1841,6 +1890,8 @@ class NotebookProcessor:
             payload: Notebook payload
             loop: Event loop for running executor
             source_dir: Source directory if using source mount (for logging)
+            kernel_env: Explicit kernel environment, or ``None`` to inherit
+                the worker's (see :func:`_kernel_env_for_non_opted_in_notebook`)
         """
         last_error: Exception | None = None
         attempts_made = 0
@@ -1874,6 +1925,7 @@ class NotebookProcessor:
                 timeout=cell_timeout,
                 startup_timeout=300,
                 allow_errors=payload.skip_errors,
+                kernel_env=kernel_env,
             )
             try:
 
@@ -2162,6 +2214,20 @@ class NotebookProcessor:
                 try:
                     # To silence warnings about frozen modules...
                     os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
+                    # A notebook of a topic that did not opt into http-replay
+                    # must not reach the replay proxy at all: launch its
+                    # kernel with the pre-proxy network env (issue #1309).
+                    # ``None`` = inherit. Decided by the opt-in, NOT by whether
+                    # a tag was injected: an opted-in notebook without a tag
+                    # (a ``replay`` build whose cassette is missing) keeps the
+                    # proxy, so strict modes still refuse its traffic instead
+                    # of letting it reach the live network. Computed after the
+                    # line above so the kernel still gets that flag.
+                    kernel_env = (
+                        None
+                        if _opted_into_http_replay(payload)
+                        else _kernel_env_for_non_opted_in_notebook()
+                    )
                     with warnings.catch_warnings():
                         warnings.filterwarnings(
                             "ignore",
@@ -2198,7 +2264,13 @@ class NotebookProcessor:
                             path = Path(temp_dir)
                             await self.write_other_files(cid, path, payload)
                             await self._execute_notebook_with_path(
-                                cid, path, processed_nb, payload, loop, source_dir
+                                cid,
+                                path,
+                                processed_nb,
+                                payload,
+                                loop,
+                                source_dir,
+                                kernel_env=kernel_env,
                             )
                 except Exception as e:
                     file_name = payload.input_file_name

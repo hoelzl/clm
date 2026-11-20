@@ -600,8 +600,15 @@ class ClmReplayAddon:
             )
         logger.warning(
             "%s: %s %s reached the replay proxy without an X-CLM-Cassette routing "
-            "tag; %s. Only %s clients are tag-routed by the kernel bootstrap. "
-            "Further untagged flows this build are not logged.",
+            "tag; %s. Likely causes: a notebook of an http-replay topic sent it "
+            "through a client the kernel bootstrap does not tag-route (only %s "
+            "are; e.g. urllib.request or raw urllib3), or a subprocess such as "
+            "pip or curl that honours HTTP(S)_PROXY; or a worker (e.g. an old "
+            "Docker image) running a clm that predates issue #1309, whose "
+            "kernels of topics WITHOUT http-replay also inherit the proxy. Set "
+            "CLM_HTTP_REPLAY_TRACE=1 to "
+            "find the originating kernel. Further untagged flows this build are "
+            "not logged.",
             UNTAGGED_FLOW_SENTINEL,
             flow.request.method,
             flow.request.pretty_url,

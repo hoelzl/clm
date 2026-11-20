@@ -2,6 +2,26 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## HTTP replay leaves topics without `http-replay` off the proxy (#1309, {version})
+
+**Behavior change, no spec change.** A build that runs the replay proxy used
+to point *every* notebook kernel at it, but only kernels of topics with
+`http-replay="yes"` tag their requests. A deck in any other topic (for
+example `tiktoken` downloading its encoding into a cold cache) therefore
+reached the proxy untagged: the build log showed a misleading
+`CLM-HTTP-REPLAY-UNTAGGED` warning, the request was recorded into the
+machine-local scratch cassette, and strict modes (`replay`, `once`) refused
+it with a `clm_replay_miss` 404, failing a deck that never opted into replay.
+Kernels of such topics now start with the network environment the build was
+started with (proxy variables and CA bundle restored), in Direct and Docker
+mode.
+
+What to do: nothing. Workarounds added only to avoid that failure (such as
+pinning `TIKTOKEN_CACHE_DIR` so the download never happens) can stay or go.
+A remaining `CLM-HTTP-REPLAY-UNTAGGED` warning now always comes from a topic
+that opted into replay: a client CLM does not tag, a subprocess such as
+`pip` or `curl`, or a Docker image with an older CLM.
+
 ## Notebook worker images: Ubuntu 26.04, g++ 15, CUDA 13 (#1228, {version})
 
 **Image change, no spec change.** Both notebook worker image variants now sit
